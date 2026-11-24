@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import type { ReadStream } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { MAX_RUN_DEPTH, baselineKeyFor, type FileInputMember } from "@argent/registry";
 import {
   prepareFileInputs,
   applyClientFileDirectives,
@@ -9,7 +11,9 @@ import {
   CLIENT_FILE_MARKER,
   type FileInputSpec,
   type FileInputWire,
+  type PrepareFileInputsOptions,
 } from "../src/file-inputs.js";
+import { collectFlowMembers, collectStepMembers } from "../src/flow-files.js";
 
 let tmpDir: string;
 
@@ -92,14 +96,14 @@ describe("prepareFileInputs", () => {
     });
   });
 
-  it("derives a new target param from a multi-param template (flow_file)", async () => {
+  it("derives a new target param from a multi-param template (e2e_test_file)", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });
     const flowPath = path.join(flowsDir, "my-flow.yaml");
     await fs.writeFile(flowPath, "steps: []\n");
 
     const specs: FileInputSpec[] = [
-      { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+      { target: "e2e_test_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
     ];
     const out = (await prepareFileInputs(
       specs,
@@ -110,8 +114,8 @@ describe("prepareFileInputs", () => {
     // Source params stay strings; the derived target carries the wrapper.
     expect(out.project_root).toBe(tmpDir);
     expect(out.name).toBe("my-flow");
-    expect(out.flow_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: flowPath });
-    expect((out.flow_file as FileInputWire).content).toBeDefined();
+    expect(out.e2e_test_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: flowPath });
+    expect((out.e2e_test_file as FileInputWire).content).toBeDefined();
   });
 
   it("skips a spec whose referenced params are absent (live-capture mode)", async () => {
@@ -123,16 +127,63 @@ describe("prepareFileInputs", () => {
     expect(out).toBe(args);
   });
 
+  it("does not derive e2e_test_file when the superseding e2e_test_path source is set (skipWhenSet)", async () => {
+    const flowsDir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(flowsDir, { recursive: true });
+    const savedPath = path.join(flowsDir, "my-flow.yaml");
+    await fs.writeFile(savedPath, "steps: []\n");
+    const explicitPath = path.join(tmpDir, "explicit.yaml");
+    await fs.writeFile(explicitPath, "steps: []\n");
+
+    const specs: FileInputSpec[] = [
+      { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", optional: true },
+      {
+        target: "e2e_test_file",
+        path: "${project_root}/.argent/flows/${name}.yaml",
+        kind: "file",
+        skipWhenSet: "e2e_test_path",
+      },
+    ];
+
+    // Dual-source misuse: e2e_test_file must not be derived — even though the
+    // saved flow exists — so the server's exactly-one validation, not this
+    // boundary's file resolution, diagnoses the call.
+    const both = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir, e2e_test_path: explicitPath },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(both.e2e_test_file).toBeUndefined();
+    expect(both.e2e_test_path).toMatchObject({ [FILE_INPUT_MARKER]: true, path: explicitPath });
+
+    // "" is still a provided source to the server's `=== undefined`
+    // dual-source check, so it must suppress the derivation the same way.
+    const emptySource = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir, e2e_test_path: "" },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(emptySource.e2e_test_file).toBeUndefined();
+
+    // Name-only calls keep deriving the wrapper exactly as before.
+    const nameOnly = (await prepareFileInputs(
+      specs,
+      { name: "my-flow", project_root: tmpDir },
+      { includeContent: true }
+    )) as Record<string, unknown>;
+    expect(nameOnly.e2e_test_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: savedPath });
+  });
+
   it("respects an explicitly set derived target (server-side override)", async () => {
     const specs: FileInputSpec[] = [
-      { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+      { target: "e2e_test_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
     ];
     const out = (await prepareFileInputs(
       specs,
-      { name: "f", project_root: tmpDir, flow_file: "/server/side/flow.yaml" },
+      { name: "f", project_root: tmpDir, e2e_test_file: "/server/side/flow.yaml" },
       { includeContent: true }
     )) as Record<string, unknown>;
-    expect(out.flow_file).toBe("/server/side/flow.yaml");
+    expect(out.e2e_test_file).toBe("/server/side/flow.yaml");
   });
 
   it("still sends a path-only wrapper for an unreadable file", async () => {
@@ -216,6 +267,32 @@ describe("prepareFileInputs — tar-upload kind", () => {
     ).rejects.toThrow(/failed/i);
   });
 
+  it("destroys the archive stream when fetch refuses the connection before reading it", async () => {
+    const appDir = path.join(tmpDir, "MyApp.app");
+    await fs.mkdir(appDir);
+    await fs.writeFile(path.join(appDir, "Info.plist"), "<plist/>");
+
+    let body: ReadStream | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        body = init.body as unknown as ReadStream;
+        return Promise.reject(new Error("connect ECONNREFUSED 127.0.0.1:9"));
+      })
+    );
+
+    await expect(
+      prepareFileInputs(
+        specs,
+        { appPath: appDir },
+        { includeContent: true, uploadEndpoint: { url: "http://127.0.0.1:9", token: "" } }
+      )
+    ).rejects.toThrow(/ECONNREFUSED/);
+
+    // The archive is deleted in `finally`; its stream must not keep the fd open.
+    expect(body?.destroyed).toBe(true);
+  });
+
   it("skips upload and sends a path-only wrapper when the path is not local", async () => {
     // A path that exists only on the remote host (e.g. pre-uploaded to the VM).
     const remotePath = path.join(tmpDir, "not", "on", "this", "machine", "MyApp.app");
@@ -251,6 +328,441 @@ describe("prepareFileInputs — tar-upload kind", () => {
       mtimeMs: expect.any(Number),
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("prepareFileInputs — collect: flow", () => {
+  const specs: FileInputSpec[] = [
+    { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
+  ];
+  let project: string;
+  let flows: string;
+
+  beforeEach(async () => {
+    // realpath: members name real paths, and macOS spells the temp dir through /var.
+    project = await fs.realpath(tmpDir);
+    flows = path.join(project, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const flowYaml = (...steps: string[]): string =>
+    `steps:\n${steps.map((step) => `  - ${step}`).join("\n")}\n`;
+
+  /** The members sent with the flow `root` in the flows dir over a link. */
+  async function membersOf(
+    root: string,
+    opts: Partial<PrepareFileInputsOptions> = {}
+  ): Promise<FileInputMember[]> {
+    const out = (await prepareFileInputs(
+      specs,
+      { e2e_test_path: path.join(flows, root), project_root: project },
+      { includeContent: true, collectMembers: collectFlowMembers, ...opts }
+    )) as Record<string, FileInputWire>;
+    return out.e2e_test_path!.members!;
+  }
+
+  const names = (members: FileInputMember[]): string[] =>
+    members.map((member) => path.basename(member.canonical!));
+
+  it("sends a run: chain as deep as the runner resolves it, and no deeper", async () => {
+    const last = MAX_RUN_DEPTH + 1;
+    for (let i = 0; i <= last; i++) {
+      await fs.writeFile(
+        path.join(flows, `n${i}.yaml`),
+        i < last ? flowYaml(`echo: n${i}`, `run: n${i + 1}.yaml`) : flowYaml("echo: bottom")
+      );
+    }
+
+    // The runner resolves n20 only to check for a cycle, then stops for depth,
+    // so a cycle that closes there is reported as one; it never asks for n21.
+    expect(names(await membersOf("n0.yaml"))).toEqual(
+      Array.from({ length: MAX_RUN_DEPTH }, (_, i) => `n${i + 1}.yaml`)
+    );
+  });
+
+  it("finds the run: targets of a flow whose first line is indented deeper than the rest", async () => {
+    await fs.writeFile(path.join(flows, "main.yaml"), "\n    steps:\n  - run: frag.yaml\n");
+    await fs.writeFile(path.join(flows, "frag.yaml"), flowYaml("echo: frag"));
+
+    expect(names(await membersOf("main.yaml"))).toEqual(["frag.yaml"]);
+  });
+
+  it("sends each resolution once, so a cycle ends", { timeout: 5_000 }, async () => {
+    // Each file names the other two, so a walk that repeats a resolution
+    // doubles at every hop and does not end in time.
+    await fs.writeFile(path.join(flows, "a.yaml"), flowYaml("run: b.yaml", "run: c.yaml"));
+    await fs.writeFile(path.join(flows, "b.yaml"), flowYaml("run: a.yaml", "run: c.yaml"));
+    await fs.writeFile(path.join(flows, "c.yaml"), flowYaml("run: a.yaml", "run: b.yaml"));
+
+    // b names a, so the runner resolves a again to see the cycle: a is a member too.
+    expect(names(await membersOf("a.yaml"))).toEqual(["b.yaml", "c.yaml", "a.yaml"]);
+  });
+
+  it("logs each member under the [e2e-files] tag, an e2e test member as `e2e test`", async () => {
+    vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
+    try {
+      await fs.writeFile(path.join(flows, "frag.yaml"), flowYaml("echo: frag"));
+      await fs.writeFile(
+        path.join(flows, "main.yaml"),
+        flowYaml("run: frag.yaml", "snapshot: home")
+      );
+      const baselines = path.join(
+        flows,
+        "__baselines__",
+        baselineKeyFor(path.join(flows, "main.yaml"), "main")
+      );
+      await fs.mkdir(baselines, { recursive: true });
+      const png = path.join(baselines, "home__ios-390x844.png");
+      await fs.writeFile(png, "png");
+      const log: string[] = [];
+
+      await membersOf("main.yaml", { log: (line) => log.push(line) });
+
+      expect(log).toEqual([
+        `[e2e-files] e2e test ${path.join(flows, "frag.yaml")}: inline 22`,
+        `[e2e-files] baseline ${png}: inline 3`,
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sums the inline bytes over the closure, and uploads the members past 256 KiB", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ uploadId: "u-1" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    // A YAML comment pads each fragment to 100 KiB: two fit the budget, the third does not.
+    for (const name of ["f1", "f2", "f3"]) {
+      await fs.writeFile(
+        path.join(flows, `${name}.yaml`),
+        `${flowYaml(`echo: ${name}`)}# ${"x".repeat(100 * 1024)}\n`
+      );
+    }
+    await fs.writeFile(
+      path.join(flows, "main.yaml"),
+      flowYaml("run: f1.yaml", "run: f2.yaml", "run: f3.yaml")
+    );
+
+    const members = await membersOf("main.yaml", {
+      uploadEndpoint: { url: "https://sim.example", token: "tok", formats: ["zstd", "gzip"] },
+    });
+
+    expect(members.map((m) => (m.content !== undefined ? "inline" : m.uploadId))).toEqual([
+      "inline",
+      "inline",
+      "u-1",
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sim.example/upload",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "content-type": "application/zstd" }),
+      })
+    );
+  });
+});
+
+describe("prepareFileInputs — relative paths", () => {
+  const previousCwd = process.cwd();
+  let cwd: string;
+
+  beforeEach(async () => {
+    process.chdir(tmpDir);
+    cwd = process.cwd();
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves a relative file against the caller's working directory", async () => {
+    await fs.writeFile(path.join(cwd, "baseline.png"), "png");
+    const specs: FileInputSpec[] = [
+      { target: "baselinePath", path: "${baselinePath}", kind: "file" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { baselinePath: "./baseline.png" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.baselinePath).toEqual({
+      [FILE_INPUT_MARKER]: true,
+      path: path.join(cwd, "baseline.png"),
+      size: 3,
+      mtimeMs: (await fs.stat(path.join(cwd, "baseline.png"))).mtimeMs,
+    });
+  });
+
+  it.each(["ok.yaml/", "ok.yaml/."])(
+    "keeps the directory requirement of the relative path %s",
+    async (e2eTestPath) => {
+      await fs.writeFile(path.join(cwd, "ok.yaml"), "steps: []\n");
+      const specs: FileInputSpec[] = [
+        { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file" },
+      ];
+
+      const out = (await prepareFileInputs(
+        specs,
+        { e2e_test_path: e2eTestPath },
+        { includeContent: true }
+      )) as Record<string, FileInputWire>;
+
+      expect(out.e2e_test_path!.path).toBe(`${path.join(cwd, "ok.yaml")}${path.sep}`);
+      expect(out.e2e_test_path!.size).toBeUndefined();
+      expect(out.e2e_test_path!.content).toBeUndefined();
+    }
+  );
+
+  it("leaves the caller's args as they were", async () => {
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe" },
+    ];
+    const args = { project_root: "." };
+
+    const out = (await prepareFileInputs(specs, args, { includeContent: false })) as Record<
+      string,
+      FileInputWire
+    >;
+
+    expect(out.project_root!.path).toBe(cwd);
+    expect(args).toEqual({ project_root: "." });
+  });
+
+  it("prefixes a path with a .. segment instead of collapsing it", async () => {
+    await fs.mkdir(path.join(cwd, "sub"));
+    await fs.writeFile(path.join(cwd, "app.apk"), "apk");
+    process.chdir(path.join(cwd, "sub"));
+    const specs: FileInputSpec[] = [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: "../app.apk" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath!.path).toBe(`${path.join(cwd, "sub")}${path.sep}../app.apk`);
+    expect(out.appPath!.size).toBe(3);
+  });
+
+  it("uploads a relative app over a link under its absolute path", async () => {
+    await fs.writeFile(path.join(cwd, "app.apk"), "apk-bytes");
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ uploadId: "u-rel" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const specs: FileInputSpec[] = [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { appPath: "app.apk" },
+      { includeContent: true, uploadEndpoint: { url: "https://sim.example", token: "tok" } }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.appPath).toMatchObject({ path: path.join(cwd, "app.apk"), uploadId: "u-rel" });
+  });
+
+  it("resolves a derived target and leaves its source params as written", async () => {
+    await fs.mkdir(path.join(cwd, ".argent", "flows"), { recursive: true });
+    await fs.writeFile(path.join(cwd, ".argent", "flows", "f.yaml"), "steps: []\n");
+    const specs: FileInputSpec[] = [
+      { target: "e2e_test_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { name: "f", project_root: "." },
+      { includeContent: false }
+    )) as Record<string, unknown>;
+
+    expect(out.project_root).toBe(".");
+    expect((out.e2e_test_file as FileInputWire).path).toBe(
+      path.join(cwd, ".argent", "flows", "f.yaml")
+    );
+  });
+
+  it("collects a relative flow's members over a link", async () => {
+    const flows = path.join(cwd, ".argent", "flows");
+    await fs.mkdir(flows, { recursive: true });
+    await fs.writeFile(path.join(flows, "main.yaml"), "steps:\n  - run: frag.yaml\n");
+    await fs.writeFile(path.join(flows, "frag.yaml"), "steps:\n  - echo: hi\n");
+    const specs: FileInputSpec[] = [
+      { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { e2e_test_path: ".argent/flows/main.yaml", project_root: cwd },
+      { includeContent: true, collectMembers: collectFlowMembers }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.e2e_test_path!.members!.map((m) => m.canonical)).toEqual([
+      path.join(flows, "frag.yaml"),
+    ]);
+  });
+
+  it("collects a recorded step's files for a relative project_root over a link", async () => {
+    await fs.writeFile(path.join(cwd, "baseline.png"), "png");
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      {
+        project_root: ".",
+        name: "rec",
+        command: "screenshot-diff",
+        args: JSON.stringify({ baselinePath: path.join(cwd, "baseline.png") }),
+      },
+      {
+        includeContent: true,
+        collectStepMembers,
+        toolFileInputs: () => [{ target: "baselinePath", path: "${baselinePath}", kind: "file" }],
+      }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe(cwd);
+    expect(out.project_root!.members!.map((m) => [m.role, m.key])).toEqual([
+      ["tool", path.join(cwd, "baseline.png")],
+    ]);
+  });
+
+  it("sends no step files for a project_root with a .. segment, which the tool-server refuses", async () => {
+    await fs.mkdir(path.join(cwd, "sub"));
+    await fs.writeFile(path.join(cwd, "baseline.png"), "png");
+    process.chdir(path.join(cwd, "sub"));
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      {
+        project_root: "..",
+        name: "rec",
+        command: "screenshot-diff",
+        args: JSON.stringify({ baselinePath: path.join(cwd, "baseline.png") }),
+      },
+      {
+        includeContent: true,
+        collectStepMembers,
+        toolFileInputs: () => [{ target: "baselinePath", path: "${baselinePath}", kind: "file" }],
+      }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe(`${path.join(cwd, "sub")}${path.sep}..`);
+    expect(out.project_root!.members).toEqual([]);
+  });
+
+  it("sends a Windows path as written on another OS, for the tool-server to refuse", async () => {
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { project_root: "C:\\work\\app" },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe("C:\\work\\app");
+  });
+
+  it.each([
+    "~/app",
+    "~",
+    "$HOME/app",
+    "${HOME}/app",
+    "$1/app",
+    "$(pwd)/app",
+    "`pwd`/app",
+    "%USERPROFILE%\\app",
+    "file:///work/app",
+    "proj/$APP/x",
+    "proj/%APPDIR%/x",
+    "file:/work/app",
+  ])("sends %s as written, for the tool-server to refuse", async (projectRoot) => {
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { project_root: projectRoot },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe(projectRoot);
+  });
+
+  it.each(["app~", "a$/b", "50%/app", "apps/my:app"])(
+    "resolves the relative path %s",
+    async (projectRoot) => {
+      const specs: FileInputSpec[] = [
+        { target: "project_root", path: "${project_root}", kind: "probe" },
+      ];
+
+      const out = (await prepareFileInputs(
+        specs,
+        { project_root: projectRoot },
+        { includeContent: false }
+      )) as Record<string, FileInputWire>;
+
+      expect(out.project_root!.path).toBe(path.join(cwd, projectRoot));
+    }
+  );
+
+  it.each([
+    ["..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
+    ["C:..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
+    ["D:build\\..\\app.apk", "D:\\build\\..\\app.apk"],
+  ])("finds a .. segment written with Windows separators in %s", async (appPath, sent) => {
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ ...path.win32, default: path.win32 }));
+    vi.spyOn(process, "cwd").mockReturnValue("C:\\work\\app");
+    try {
+      const { prepareFileInputs: prepareOnWindows } = await import("../src/file-inputs.js");
+      const specs: FileInputSpec[] = [
+        { target: "appPath", path: "${appPath}", kind: "tar-upload" },
+      ];
+
+      const out = (await prepareOnWindows(specs, { appPath }, { includeContent: false })) as Record<
+        string,
+        FileInputWire
+      >;
+
+      expect(out.appPath!.path).toBe(sent);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it.each([
+    ["\\team\\app", "D:\\team\\app"],
+    ["\\team\\$archive", "D:\\team\\$archive"],
+    ["/team/app", "D:\\team\\app"],
+    ["\\team\\..\\app", "D:\\team\\..\\app"],
+    ["C:\\team\\app", "C:\\team\\app"],
+    ["\\\\server\\share\\app", "\\\\server\\share\\app"],
+  ])("on Windows, sends %s on the caller's drive", async (projectRoot, sent) => {
+    vi.resetModules();
+    vi.doMock("node:path", () => ({ ...path.win32, default: path.win32 }));
+    vi.spyOn(process, "cwd").mockReturnValue("D:\\work");
+    try {
+      const { callerPath: callerPathOnWindows } = await import("../src/file-inputs.js");
+
+      expect(callerPathOnWindows(projectRoot)).toBe(sent);
+    } finally {
+      vi.doUnmock("node:path");
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
   });
 });
 

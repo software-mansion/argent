@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 
 let wss: WebSocketServer;
@@ -245,5 +246,112 @@ describe("CDPClient", () => {
     expect(evalParams?.awaitPromise).toBe(false);
 
     await client.disconnect();
+  });
+
+  // Failure-signal classification: each CDP transport fault must carry its own
+  // precise code instead of surfacing as an unclassified plain Error (which
+  // telemetry buckets under REGISTRY_SERVICE_INITIALIZATION_FAILED / unknown).
+  describe("failure signal classification", () => {
+    async function rejection(p: Promise<unknown>): Promise<unknown> {
+      try {
+        await p;
+      } catch (err) {
+        return err;
+      }
+      throw new Error("expected the promise to reject");
+    }
+
+    it("send before connect rejects with DEBUGGER_CDP_NOT_CONNECTED", async () => {
+      const client = new CDPClient(`ws://localhost:${port}`);
+      // never connect()ed
+      const err = await rejection(client.send("Runtime.enable"));
+      expect((err as Error).message).toBe("CDP not connected");
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED,
+        failure_stage: "debugger_cdp_send",
+        error_kind: "network",
+      });
+    });
+
+    it("an unanswered request rejects with DEBUGGER_CDP_REQUEST_TIMEOUT", async () => {
+      const client = new CDPClient(`ws://localhost:${port}`);
+      await client.connect();
+      // The server never replies — the per-request timer must fire.
+      const err = await rejection(client.send("Runtime.enable", {}, 50));
+      expect((err as Error).message).toMatch(/CDP request Runtime\.enable \(id=\d+\) timed out/);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+        failure_stage: "debugger_cdp_send",
+        error_kind: "timeout",
+      });
+      await client.disconnect();
+    });
+
+    it("an unanswered binding rejects with DEBUGGER_CDP_BINDING_TIMEOUT and paused-vs-frozen recovery", async () => {
+      const client = new CDPClient(`ws://localhost:${port}`);
+      await client.connect();
+      const ws = await waitForServer();
+      // The evaluate is answered, the binding never fires — exactly what a
+      // runtime paused at a breakpoint does, since the script is dispatched
+      // with awaitPromise off.
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString());
+        ws.send(JSON.stringify({ id: msg.id, result: { result: { value: "ok" } } }));
+      });
+
+      const err = await rejection(client.evaluateWithBinding("s()", "req-t", { timeout: 50 }));
+      const message = (err as Error).message;
+      expect(message).toContain("Binding response for requestId=req-t timed out");
+      // Without recovery guidance an agent reads this as transient and
+      // retry-loops, each pass waiting out the full timeout.
+      expect(message).toMatch(/paused at a breakpoint/);
+      expect(message).toMatch(/resume/);
+      expect(message).toMatch(/restart the app/);
+      expect(message).toMatch(/Do not retry in a loop/);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+        failure_stage: "debugger_cdp_binding",
+        error_kind: "timeout",
+      });
+      await client.disconnect();
+    });
+
+    it("server close mid-request rejects the pending send with DEBUGGER_CDP_CONNECTION_CLOSED", async () => {
+      const client = new CDPClient(`ws://localhost:${port}`);
+      await client.connect();
+      const ws = await waitForServer();
+      ws.on("message", () => ws.close());
+      const err = await rejection(client.send("Runtime.enable"));
+      expect((err as Error).message).toBe("CDP connection closed");
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
+        failure_stage: "debugger_cdp_lifecycle",
+        error_kind: "network",
+      });
+    });
+
+    it("connect to a dead port rejects with a classified connect-stage code", async () => {
+      // Grab a port nothing listens on: bind an ephemeral server, then close it.
+      const deadPort = await new Promise<number>((resolve) => {
+        const probe = new WebSocketServer({ port: 0 }, () => {
+          const p = (probe.address() as { port: number }).port;
+          probe.close(() => resolve(p));
+        });
+      });
+      const client = new CDPClient(`ws://localhost:${deadPort}`);
+      const err = await rejection(client.connect());
+      const signal = getFailureSignal(err);
+      // ECONNREFUSED surfaces via the error handler (CONNECT_FAILED); some
+      // stacks deliver only a close (SOCKET_CLOSED_BEFORE_OPEN). Either way the
+      // stage must be the connect stage and the kind network.
+      expect([
+        FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
+        FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN,
+      ]).toContain(signal?.error_code);
+      expect(signal).toMatchObject({
+        failure_stage: "debugger_cdp_connect",
+        error_kind: "network",
+      });
+    });
   });
 });

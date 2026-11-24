@@ -18,7 +18,10 @@ const telemetryMock = vi.hoisted(() => ({
   })),
   track: vi.fn(),
   shutdown: vi.fn().mockResolvedValue(undefined),
-  warmTelemetryIdentity: vi.fn().mockResolvedValue(undefined),
+  // Never settles, so `start()` attaches the store-event relays and then parks:
+  // the HTTP server never binds and shutdown never runs, so the relays stay
+  // registered for the duration of the test with no exit race.
+  warmTelemetryIdentity: vi.fn(() => new Promise<void>(() => {})),
   aiTelemetryFromMeta: vi.fn(() => ({})),
 }));
 
@@ -36,6 +39,16 @@ vi.mock("@argent/registry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/registry")>();
   return { ...actual, attachRegistryLogger: vi.fn() };
 });
+// start() gates its event log on the `tool-server-event-log` flag, which the
+// real reader resolves from a project-scoped .argent/flags.json first and the
+// developer's ~/.argent/flags.json second. Left live, a developer who enables
+// that documented flag fails these tests — and createToolServerEventLog opens
+// the log with a truncating write, so their real event log is emptied before
+// start() throws. Pin it off.
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  return { ...actual, isFlagEnabled: vi.fn(() => false) };
+});
 vi.mock("../src/utils/setup-registry", () => ({
   createRegistry: vi.fn(() => registryMock),
 }));
@@ -43,13 +56,10 @@ vi.mock("../src/http", () => ({ createHttpApp: vi.fn(() => httpHandleMock) }));
 vi.mock("../src/utils/update-checker", () => ({
   startUpdateChecker: vi.fn(() => ({ dispose: vi.fn() })),
 }));
-// The watcher's `ready` never settles, so `start()` attaches the store-event
-// relays and then parks: the HTTP server never binds and shutdown never runs, so
-// the relays stay registered for the duration of the test with no exit race.
 vi.mock("../src/utils/simulator-watcher", () => ({
   startSimulatorWatcher: vi.fn(() => ({
     stop: vi.fn(),
-    ready: new Promise<void>(() => {}),
+    ready: Promise.resolve(),
   })),
 }));
 
@@ -71,7 +81,7 @@ describe("tool-server Lens telemetry relay wiring", () => {
     // Clean slate: no relays from a prior import of this singleton in-process.
     variantProposalStore.events.removeAllListeners();
 
-    start(); // attaches the relays synchronously; watcher never settles.
+    start(); // attaches the relays synchronously; identity warm-up never settles.
 
     telemetryMock.track.mockClear();
 

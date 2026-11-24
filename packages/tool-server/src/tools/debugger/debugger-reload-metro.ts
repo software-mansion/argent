@@ -1,16 +1,18 @@
 import { z } from "zod";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
 });
 
@@ -27,18 +29,21 @@ export const debuggerReloadMetroTool: ToolDefinition<
 > = {
   id: "debugger-reload-metro",
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.<flag:macos-apps> A Mac app reload targets only that app. If it fails, restart the app. A shared Metro reload would also reload other apps.</flag:macos-apps>`,
   zodSchema,
-  // Metro-only: Chromium loads from disk, not from a bundler. The closest
-  // analog (Page.reload against the renderer) would behave differently enough
-  // — preserving the URL but re-fetching index.html, blowing away in-memory
-  // app state — that calling it under the same tool name would mislead. If we
-  // want that on Chromium later, it deserves its own tool.
+  interaction: {
+    startedMsg: () => "Reloading the app through Metro",
+    completedMsg: () => "Reloaded the app through Metro",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to reload the app through Metro: ${failureSignal.error_code}`,
+  },
+  // RN-only: reloading a Chromium page is a different operation from restarting
+  // the Metro bundle, so it would need its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
-  async execute(services, _params) {
+  async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
@@ -47,8 +52,6 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
         api.cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(() => {})
       );
 
-    // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
-    // Triggers a full JS execution context teardown and restart without touching the native shell.
     const context = {
       deviceName: api.deviceName,
       appName: api.appName,
@@ -59,12 +62,26 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
       await api.cdp.send("Page.reload");
       void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
-    } catch {
-      // Fall through to HTTP fallback
+    } catch (err) {
+      // Metro's HTTP /reload reaches every app on this Metro. A Mac app often
+      // shares its Metro with a simulator of the same project, so a reload of the
+      // Mac app must not reload that simulator too.
+      if (canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX)) {
+        throw new FailureError(
+          `Failed to reload the Mac app: CDP Page.reload failed (${
+            err instanceof Error ? err.message : String(err)
+          }). argent does not fall back to Metro's HTTP /reload for a Mac app, because ` +
+            `that reloads every app on this Metro. Restart the app (restart-app) instead.`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_RELOAD_FAILED,
+            failure_stage: "debugger_reload_metro",
+            failure_area: "tool_server",
+            error_kind: "network",
+          }
+        );
+      }
     }
 
-    // Fallback: Metro's HTTP /reload endpoint (RN CLI classic, older Expo setups).
-    // Not always present — Expo SDK 52+ / RN 0.76+ may not expose it.
     const res = await fetch(`http://127.0.0.1:${port}/reload`, {
       method: "POST",
     });

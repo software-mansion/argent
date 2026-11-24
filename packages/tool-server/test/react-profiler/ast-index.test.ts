@@ -1,8 +1,20 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { afterEach, describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { buildAstIndexWithDiagnostics } from "../../src/utils/react-profiler/pipeline/06-resolve/ast-index";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function makeTempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 /**
  * react-profiler-component-source returned found:false for every component in a
@@ -15,7 +27,7 @@ import { buildAstIndexWithDiagnostics } from "../../src/utils/react-profiler/pip
  */
 describe("buildAstIndexWithDiagnostics", () => {
   it("indexes export-default-function, plain-function, and arrow TSX components", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-"));
+    const dir = makeTempDir("ast-index-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "foo.tsx"),
@@ -37,13 +49,111 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("Baz")?.line).toBe(5);
   });
 
+  it("indexes a file over the parser's default 32 KB buffer, non-ASCII text included", async () => {
+    const dir = makeTempDir("ast-index-big-");
+    writeFileSync(
+      join(dir, "Screen.tsx"),
+      "// żółć 日本語 🚀 filler line for size\n".repeat(1200) +
+        "export function BigScreen() { return <View />; }\n"
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.get("BigScreen")?.line).toBe(1201);
+  });
+
+  it("leaves test files and mocks out: a mock named View is not the app's View", async () => {
+    const dir = makeTempDir("ast-index-tests-");
+    mkdirSync(join(dir, "__mocks__"), { recursive: true });
+    mkdirSync(join(dir, "__tests__"), { recursive: true });
+    const mock = (name: string) => `export function ${name}() { return <Text />; }\n`;
+    writeFileSync(join(dir, "feed.test.tsx"), mock("InTestFile"));
+    writeFileSync(join(dir, "feed.spec.tsx"), mock("InSpecFile"));
+    writeFileSync(join(dir, "__mocks__", "native.tsx"), mock("InMocks"));
+    writeFileSync(join(dir, "__tests__", "helper.tsx"), mock("InTests"));
+    writeFileSync(join(dir, "Latest.tsx"), mock("RealScreen"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()]).toEqual(["RealScreen"]);
+  });
+
+  it("leaves out a file too large to be a screen someone wrote", async () => {
+    const dir = makeTempDir("ast-index-huge-");
+    writeFileSync(
+      join(dir, "generated.tsx"),
+      `// ${"x".repeat(600_000)}\nfunction NotAScreen() { return <View />; }\n`
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("NotAScreen")).toBe(false);
+  });
+
+  it("skips a file too deep to walk instead of losing the whole index", async () => {
+    const dir = makeTempDir("ast-index-deep-");
+    writeFileSync(join(dir, "generated.js"), `export const n = ${"1+".repeat(16_000)}1;\n`);
+    writeFileSync(join(dir, "Screen.tsx"), "export function Screen() { return <View />; }\n");
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("Screen")).toBe(true);
+  });
+
+  it("leaves large plain .ts files out: they hold data, and walking them is slow", async () => {
+    const dir = makeTempDir("ast-index-big-ts-");
+    writeFileSync(
+      join(dir, "messages.ts"),
+      `export const messages = ${JSON.stringify("x".repeat(40_000))};\n` +
+        "export function NotAScreen() { return null; }\n"
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.has("NotAScreen")).toBe(false);
+  });
+
+  it("leaves a .js file over 32 KB out: it may be a minified bundle, whose names are not components", async () => {
+    // Minified code names its functions E, A, T, G. Indexed, those names made a
+    // library's `G` the app's own, and its 50-line snippet 144 KB of one file.
+    const dir = makeTempDir("ast-index-minified-");
+    const minified = `var x=${JSON.stringify("x".repeat(40_000))};function G(){return x}function E(){return G}\n`;
+    writeFileSync(join(dir, "bundle.js"), minified);
+    writeFileSync(join(dir, "Screen.jsx"), minified.replace("function G", "function BigJsx"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["BigJsx", "E"]);
+    expect(res.index.get("E")?.file).toBe(join(dir, "Screen.jsx"));
+  });
+
+  it("indexes every component of a .js file with JSX, not just those before the first tag", async () => {
+    // Expo's App.js: with the TypeScript grammar the parse broke at the first JSX
+    // tag, so only components declared above it were indexed.
+    const dir = makeTempDir("ast-index-js-");
+    writeFileSync(
+      join(dir, "App.js"),
+      [
+        `function Row({ now }) { return <Text>{now}</Text>; }`,
+        `function Header({ now }) { return <Text>{now}</Text>; }`,
+        `const Screen = () => <View><Header now={1} /><Row now={1} /></View>;`,
+        `export default function App() { return <Screen />; }`,
+        ``,
+      ].join("\n")
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["App", "Header", "Row", "Screen"]);
+  });
+
   it("indexes memo()/forwardRef()/React.memo()/nested-wrapped components", async () => {
     // Regression: wrapped components are declared `const X = memo(...)`, whose
     // value node is a call_expression (not arrow/function), so they were missed
     // entirely and returned found:false — and profiler findings are
     // disproportionately memo-wrapped. memo => isMemoized true; forwardRef alone
     // => false.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-wrap-"));
+    const dir = makeTempDir("ast-index-wrap-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "wrapped.tsx"),
@@ -74,7 +184,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // were thrown away, so a lookup could hand back the wrong platform variant's
     // source. Now the base file is the deterministic primary and the variants
     // are surfaced under otherMatches.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup-"));
+    const dir = makeTempDir("ast-index-dup-");
     mkdirSync(join(dir, "components"), { recursive: true });
     const base = join(dir, "components", "List.tsx");
     const web = join(dir, "components", "List.web.tsx");
@@ -96,7 +206,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // Only platform variants — there is no base file to prefer, so the tie
     // breaks on path (walk-order independent) rather than whatever the directory
     // happened to yield first.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup2-"));
+    const dir = makeTempDir("ast-index-dup2-");
     mkdirSync(join(dir, "components"), { recursive: true });
     const android = join(dir, "components", "List.android.tsx");
     const ios = join(dir, "components", "List.ios.tsx");
@@ -112,7 +222,7 @@ describe("buildAstIndexWithDiagnostics", () => {
   });
 
   it("omits otherMatches when a component name is unique", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-uniq-"));
+    const dir = makeTempDir("ast-index-uniq-");
     writeFileSync(join(dir, "Solo.tsx"), `export function Solo() { return <View>x</View>; }\n`);
 
     const res = await buildAstIndexWithDiagnostics(dir);
@@ -126,7 +236,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     // (not an inline `const X = memo(...)`). The decoy `memo(Ghost)` lives only
     // in a comment and a string literal — tree-sitter never emits a call node
     // there, so Ghost stays unmemoized. The old raw-source regex flagged it.
-    const dir = mkdtempSync(join(tmpdir(), "ast-index-memo-ref-"));
+    const dir = makeTempDir("ast-index-memo-ref-");
     mkdirSync(join(dir, "components"), { recursive: true });
     writeFileSync(
       join(dir, "components", "ref.tsx"),

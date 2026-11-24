@@ -1,9 +1,39 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
-import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import {
+  jsRuntimeDebuggerBlueprint,
+  type JsRuntimeDebuggerApi,
+} from "../../src/blueprints/js-runtime-debugger";
+import {
+  reactProfilerSessionBlueprint,
+  type ReactProfilerSessionApi,
+} from "../../src/blueprints/react-profiler-session";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { scopeTempHome } from "../helpers/temp-home";
+
+const SIM_UDID = "5C1B6E9A-0D2F-4A47-9E3B-7A1D2C3E4F50";
+
+vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-devices")>()),
+  listIosSimulators: async () => [
+    { udid: SIM_UDID, name: "iPhone 16 Pro Max", state: "Booted", runtime: "iOS-26-4" },
+  ],
+}));
+
+// A name match is kept only once the runtime's device log confirms it. The
+// mock Metro writes no log, so the confirmation is stubbed; the confirmation
+// itself is covered in name-match-confirmation.test.ts.
+vi.mock("../../src/utils/debugger/device-name", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/debugger/device-name")>()),
+  runtimeRunsOn: async () => ({ verdict: "yes" as const }),
+}));
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-metro-multidevice-home-");
 
 /**
  * End-to-end regression for the "multiple debuggers all resolve to the same
@@ -20,13 +50,26 @@ let mockPort: number;
 let registry: Registry;
 
 const DEVICES = [
-  { logicalDeviceId: "logical-aaa", deviceName: "iPhone 16 Pro Max" },
-  { logicalDeviceId: "logical-bbb", deviceName: "Pixel 9" },
+  { logicalDeviceId: "logical-aaa", deviceName: "iPhone 16 Pro Max", platform: "ios" },
+  { logicalDeviceId: "logical-bbb", deviceName: "Pixel 9", platform: "android" },
 ];
+/** One app on both devices, as when one project runs on iOS and Android. */
+const APP_ID = "com.example.app";
 
-function handleCDPMessage(ws: WebSocket, raw: string) {
+function handleCDPMessage(ws: WebSocket, raw: string, logicalDeviceId: string | null) {
   const { id, method } = JSON.parse(raw) as { id: number; method: string };
   switch (method) {
+    case "ReactNativeApplication.enable": {
+      const device = DEVICES.find((d) => d.logicalDeviceId === logicalDeviceId);
+      ws.send(
+        JSON.stringify({
+          method: "ReactNativeApplication.metadataUpdated",
+          params: { appIdentifier: APP_ID, platform: device?.platform, deviceName: "unused" },
+        })
+      );
+      ws.send(JSON.stringify({ id, result: {} }));
+      break;
+    }
     case "Debugger.enable":
       ws.send(JSON.stringify({ id, result: { debuggerId: "mock" } }));
       ws.send(
@@ -79,9 +122,14 @@ beforeAll(async () => {
     });
 
     wss = new WebSocketServer({ server: mockServer });
-    wss.on("connection", (ws) => ws.on("message", (raw) => handleCDPMessage(ws, raw.toString())));
+    wss.on("connection", (ws, req) => {
+      const logicalDeviceId = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+        "device"
+      );
+      ws.on("message", (raw) => handleCDPMessage(ws, raw.toString(), logicalDeviceId));
+    });
 
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });
@@ -89,6 +137,7 @@ beforeAll(async () => {
 
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerTool(debuggerConnectTool);
 });
 
@@ -118,5 +167,27 @@ describe("multi-device debugger routing (mock Metro, two devices)", () => {
     await expect(
       registry.invokeTool("debugger-connect", { port: mockPort, device_id: "not-a-real-device" })
     ).rejects.toThrow(/No debugger target matches device_id "not-a-real-device"/);
+  });
+
+  it("records the app and platform each runtime reports, which Metro's list does not carry", async () => {
+    const ios = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:logical-aaa`
+    );
+    const android = await registry.resolveService<ReactProfilerSessionApi>(
+      `ReactProfilerSession:${mockPort}:logical-bbb`
+    );
+
+    expect(ios.runtimeApp).toEqual({ appId: APP_ID, platform: "ios" });
+    // The React profiler reads it from its session.
+    expect(android.runtimeApp).toEqual({ appId: APP_ID, platform: "android" });
+  });
+
+  it("routes a simulator UDID to the Metro device with the simulator's name", async () => {
+    const connected = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: SIM_UDID,
+    })) as Record<string, unknown>;
+
+    expect(connected.logicalDeviceId).toBe("logical-aaa");
   });
 });

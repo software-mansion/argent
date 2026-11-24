@@ -44,6 +44,7 @@ import {
   TraceProcessorUnavailableError,
 } from "@argent/native-devtools-android";
 import { nativeProfilerAnalyzeTool } from "../src/tools/profiler/native-profiler/native-profiler-analyze";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler-session";
 
 const runTpQueryMock = runTpQuery as unknown as ReturnType<typeof vi.fn>;
@@ -90,12 +91,21 @@ async function buildSessionWithTrace(): Promise<{
     captureProcess: null,
     traceFile: tracePath,
     exportedFiles: { pftrace: tracePath },
+    disposed: false,
     profilingActive: false,
     wallClockStartMs: null,
     parsedData: null,
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingAppPid: null,
+    recordingAppEnded: false,
+    appEndedDuringCapture: false,
+    exportSkipReason: null,
+    recordedMs: null,
+    stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     recordingTimeout: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,
@@ -111,6 +121,11 @@ async function buildSessionWithTrace(): Promise<{
 
 describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () => {
   beforeEach(() => {
+    // The analyze path's dependency gate resolves a real `adb` off PATH,
+    // $ANDROID_HOME and the default SDK locations, so without priming these
+    // tests pass only on a machine that has the Android SDK installed.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["adb"]);
     runTpQueryMock.mockReset();
     // Default: the engine loads fine. The banner test overrides this.
     ensureReadyMock.mockReset();

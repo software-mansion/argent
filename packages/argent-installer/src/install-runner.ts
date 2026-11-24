@@ -1,17 +1,21 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
+  globalCommandOptions,
   globalInstallCommand,
   localInstallCommand,
   projectInstallCommand,
   formatShellCommand,
+  shellQuotePath,
   resolveProjectRoot,
   hasProjectPackageJson,
   isGloballyInstalled,
@@ -20,6 +24,7 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
@@ -34,8 +39,8 @@ import {
 } from "./init-telemetry.js";
 
 // Step 0 — ensure argent is installed for the chosen mode and return the
-// resolved version. Exits the process on a fatal install failure or a cancelled
-// global-install prompt (each emitting its own terminal telemetry first).
+// resolved version. Exits the process on a fatal install failure, after
+// emitting its terminal telemetry.
 export async function runInstall(args: {
   installMode: InstallMode;
   fromTar: string | null;
@@ -53,9 +58,14 @@ export async function runInstall(args: {
   return runGlobal({ fromTar, nonInteractive, version: args.version, tel });
 }
 
-// ── Local (committable devDependency) ─────────────────────────────────────────
+// A --from tarball or folder made absolute, since the package manager may run
+// elsewhere; any other value is a package spec and passes through.
+function installSpec(fromTar: string): string {
+  return fs.existsSync(fromTar) ? path.resolve(fromTar) : fromTar;
+}
+
 // Exits the process on a missing package.json or a failed/empty install — the
-// caller proceeds only once the dep is verified on disk (or is a known PnP
+// caller proceeds only once the dep is verified on disk (or is a Yarn PnP
 // layout, which has no node_modules).
 async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry }): Promise<void> {
   const { fromTar, tel } = opts;
@@ -77,9 +87,8 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   }
 
   // Reuse only when the project's OWN package.json declares the dep AND it is
-  // on disk. Mere resolvability (isLocallyInstalled) could be a hoisted or
-  // transitive copy the manifest never backs — teammates' `npm install`
-  // wouldn't get argent. Declared but not materialized falls through to install.
+  // on disk: mere resolvability could be a hoisted or transitive copy the
+  // manifest never backs, so teammates' `npm install` wouldn't get argent.
   if (isDeclaredLocally(projectRoot) && isLocallyInstalled(projectRoot) && !fromTar) {
     const startedAt = performance.now();
     p.log.info(`${PACKAGE_NAME} is already a devDependency ${pc.dim(`(${projectRoot})`)}.`);
@@ -88,10 +97,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   }
 
   const pm = detectProjectPackageManager(projectRoot);
-  const installTarget = fromTar ?? PACKAGE_NAME;
-  // Declared but not materialized (fresh clone): run the plain project install,
-  // which honors the committed version pin — `add` would resolve to @latest and
-  // silently rewrite the team's pin.
+  const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
+  // Declared but not materialized (fresh clone): the plain project install
+  // honors the committed pin — `add` would resolve to @latest and rewrite it.
   const materializeOnly = isDeclaredLocally(projectRoot) && !fromTar;
   const cmd = materializeOnly ? projectInstallCommand(pm) : localInstallCommand(pm, installTarget);
   const cmdStr = formatShellCommand(cmd);
@@ -102,10 +110,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
       : `Adding ${PACKAGE_NAME} to devDependencies (${pm})...`
   );
   const startedAt = performance.now();
-  // Success is decided from the DISK, not the exit code (see runTrustingDisk —
-  // pnpm 10+ exits non-zero on blocked build scripts). isYarnPnp covers PnP
-  // layouts with no node_modules; otherwise a missing node_modules entry means
-  // the add really failed — don't write a config that runs a missing binary.
+  // Success is decided from the DISK, not the exit code (pnpm 10+ exits
+  // non-zero on blocked build scripts); isYarnPnp covers layouts with no
+  // node_modules. Never write a config that runs a missing binary.
   const attempt = (): Promise<{ landed: boolean; exitError: Error | null }> =>
     runTrustingDisk(
       () => runShellCommand(cmd, { cwd: projectRoot }),
@@ -115,14 +122,12 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   let retryCount = 0;
   let { landed, exitError: installError } = await attempt();
 
-  // The project's package manager isn't on this machine at all (e.g. a cloned
-  // pnpm repo where only npm is installed). Deterministic — don't retry; fail
-  // with a message that names the real problem, because the generic "install
-  // manually" advice fails the same way in the user's shell. POSIX spawns the
-  // manager directly (ENOENT); Windows goes through cmd.exe (see
-  // runShellCommand), which exits 9009 — cmd.exe's locale-independent
-  // command-not-found code (its "is not recognized" stderr text is localized,
-  // so it can't be matched).
+  // The project's package manager isn't on this machine at all. Deterministic
+  // — don't retry, and don't give the generic "install manually" advice, which
+  // fails the same way in the user's shell. POSIX spawns the manager directly
+  // (ENOENT); Windows goes through cmd.exe, which exits 9009 — its
+  // locale-independent command-not-found code ("is not recognized" is
+  // localized).
   const isMissingBinaryError = (err: Error | null): boolean =>
     err !== null &&
     ((err as NodeJS.ErrnoException).code === "ENOENT" ||
@@ -130,32 +135,24 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   const missingBinary = !landed && isMissingBinaryError(installError);
 
   // A signal-terminated install is a cancellation, not a transient failure —
-  // retrying would silently spawn a second full install after the user (or CI
-  // supervisor) killed the first one. Interactive Ctrl-C never reaches here
-  // (clack's raw-mode stdin turns it into a keypress that exits argent), but a
-  // signal-delivered SIGINT/SIGTERM (CI, `kill`, a timeout wrapper) surfaces
-  // as `code null` + signal on the child.
+  // retrying would spawn a second full install after the user or CI killed the
+  // first one. A signal-delivered SIGINT/SIGTERM (CI, `kill`, a timeout
+  // wrapper) surfaces as `code null` + signal on the child.
   const wasInterrupted = (err: Error | null): boolean =>
     err instanceof ShellCommandError && (err.signal !== null || err.exitCode === null);
   const interrupted = !landed && wasInterrupted(installError);
 
   if (!landed && installError && !missingBinary && !interrupted) {
-    // The package manager ran and failed. Retry once before giving up: first
-    // attempts fail on transient registry/network errors (argent is a large
-    // download) and on pnpm's own first-run state mutations (e.g. it may write
-    // build-script policy stubs and exit non-zero), where an identical rerun
-    // succeeds.
+    // The package manager ran and failed. Retry once: first attempts fail on
+    // transient registry/network errors, where an identical rerun succeeds.
     spinner.message(`${pm} failed — retrying once...`);
     retryCount = 1;
     lastAttemptStartedAt = performance.now();
     ({ landed, exitError: installError } = await attempt());
   }
 
-  // Retry visibility for the failure funnel: retry_count tells whether (and
-  // how often) the retry fires and helps, and last_attempt_duration_ms keeps
-  // the per-attempt duration fingerprint usable when duration_ms spans both
-  // attempts (the fast-fail cluster that motivated the retry was identified
-  // by exactly that signature).
+  // Failure-funnel visibility: duration_ms spans both attempts, so
+  // last_attempt_duration_ms keeps the per-attempt fingerprint usable.
   const attemptTelemetry = (): { retry_count: number; last_attempt_duration_ms: number } => ({
     retry_count: retryCount,
     last_attempt_duration_ms: performance.now() - lastAttemptStartedAt,
@@ -183,7 +180,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
           ? `${installError}`
           : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
       );
-      p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+      p.log.info(
+        `Install manually with: ${pc.cyan(`cd ${shellQuotePath(projectRoot)} && ${cmdStr}`)}`
+      );
     }
     await tel.trackPackageAction(
       "fresh_install",
@@ -205,8 +204,6 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   );
 
   if (installError) {
-    // Installed, but the package manager exited non-zero — almost always pnpm's
-    // blocked build scripts; point pnpm users at the optional approve-builds step.
     p.log.warn(pc.dim(`${pm} exited non-zero but ${PACKAGE_NAME} is installed — continuing.`));
     if (pm === "pnpm") {
       p.log.info(
@@ -222,7 +219,6 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
   await tel.trackPackageAction("fresh_install", startedAt, true, undefined, attemptTelemetry());
 }
 
-// ── Global (PATH binary) ──────────────────────────────────────────────────────
 async function runGlobal(opts: {
   fromTar: string | null;
   nonInteractive: boolean;
@@ -232,25 +228,28 @@ async function runGlobal(opts: {
   const { fromTar, nonInteractive, tel } = opts;
   let version = opts.version;
   const globallyInstalled = isGloballyInstalled();
+  const pm = detectGlobalPackageManager();
 
   if (!globallyInstalled) {
-    // No consent prompt here: the install-mode step directly above is where
-    // the user chose "Globally" (or passed --global), and that choice IS the
-    // consent to install the missing package — a second "install it?" select
-    // reads as the same question asked twice.
+    // No consent prompt here: choosing "Globally" (or --global) in the
+    // install-mode step directly above IS the consent to install it.
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const pm = detectPackageManager();
-    const installTarget = fromTar ?? PACKAGE_NAME;
+    const installTarget = fromTar ? installSpec(fromTar) : PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     const packageActionStartedAt = performance.now();
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed globally."));
+      if (!isGloballyInstalled()) {
+        p.log.warn(
+          `${pc.cyan("argent")} is not on PATH, so editors can't start it. Add your package manager's global bin directory to PATH.`
+        );
+      }
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
@@ -270,36 +269,33 @@ async function runGlobal(opts: {
   }
 
   if (fromTar) {
-    // Developer-only reinstall path; it is not a product install decision.
-    const pm = detectPackageManager();
-    const cmd = globalInstallCommand(pm, fromTar);
+    // Developer-only reinstall (`--from`) — not a product install decision, so
+    // no decision event.
+    const cmd = globalInstallCommand(pm, installSpec(fromTar));
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing from ${fromTar}...`);
     try {
-      await runShellCommand(cmd);
+      await runShellCommand(cmd, globalCommandOptions(pm));
       spinner.stop(pc.green("Installed from tarball."));
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.finalize(INSTALL_FROM_TAR_PACKAGE_FAILED);
       process.exit(1);
     }
     return version;
   }
 
-  // Already installed → offer an interactive update.
-  //
   // Compare the registry against the GLOBAL install's version, never the
   // running package's: under `npx ... init` the running package is the npx
-  // cache — always latest — which would mask a stale global binary (the bug
-  // topology.ts's getGloballyInstalledVersion exists for). That global version
-  // also becomes this run's version — it is the install the written configs
-  // run. If it can't be read (Windows argent.cmd wrapper hides the owning
-  // package — see getGloballyInstalledPackageRoot), say so and skip the check
-  // rather than fall back to the running package's version.
+  // cache — always latest — which would mask a stale global binary. That
+  // global version also becomes this run's version, since it is the install
+  // the written configs run. If it can't be read (a Windows argent.cmd wrapper
+  // hides the owning package), say so and skip the check rather than fall back
+  // to the running package's version.
   const globalVersion = getGloballyInstalledVersion();
   version = globalVersion ?? version;
   const packageActionStartedAt = performance.now();
@@ -325,8 +321,8 @@ async function runGlobal(opts: {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
     if (nonInteractive) {
-      // A --yes/CI install implicitly skips the update; emit the same
-      // update_decision as the other branches so the upgrade funnel isn't blind.
+      // Emit the same update_decision as the interactive branches so the
+      // upgrade funnel isn't blind to --yes/CI runs.
       track("installation:update_decision", {
         from_major: fromMajor,
         to_major: toMajor,
@@ -358,26 +354,25 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
         const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
         updateSpinner.start(`Updating to v${latest}...`);
         const updateStartedAt = performance.now();
         try {
-          await runShellCommand(cmd);
+          await runShellCommand(cmd, globalCommandOptions(pm));
           updateSpinner.stop(pc.green(`Updated to v${latest}.`));
           version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
           await tel.trackPackageAction("init_triggered_update", updateStartedAt, true);
 
-          // Re-sync and prune argent skills in every scope that tracks them —
-          // the only point in init that surfaces orphans from the old version
+          // Re-sync and prune skills in every scope that tracks them — the
+          // only point in init that surfaces orphans from the old version
           // before Step 2's single-scope `skills add`.
           reportSkillRefresh(resolveProjectRoot(process.cwd()), "installer_skills_refresh");
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);
-          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
           await tel.trackPackageAction(
             "update_failed",
             updateStartedAt,

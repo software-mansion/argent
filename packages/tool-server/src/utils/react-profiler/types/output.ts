@@ -1,20 +1,13 @@
 export type ReRenderReason =
-  | "parent"
-  | "props"
-  | "hooks"
-  | "context"
-  | "state"
-  | "force_update"
-  | "unknown";
+  "parent" | "props" | "hooks" | "context" | "state" | "force_update" | "unknown";
 
 export interface HotCommitComponentEntry {
   name: string;
   selfDurationMs: number; // total across all instances in this commit
-  // Inclusive render time: self + entire subtree owned by this component.
-  // Do NOT sum this column across siblings — parent time already includes children.
+  // Inclusive: self + subtree, of the largest instance. Never sum: instances and rows nest.
   actualDurationMs: number;
-  count: number; // number of fiber instances (>1 = list items etc.)
-  isFirstMount?: boolean; // true = initial render (mount), not a re-render
+  count: number; // fiber instances with this name (>1 = list items)
+  isFirstMount?: boolean; // only when every instance in the group was a mount
   reason?: ReRenderReason;
   topChangedProps?: string[];
   topChangedHookNames?: string[];
@@ -25,29 +18,27 @@ export interface CpuCommitHotspot {
   name: string;
   selfMs: number;
   totalMs: number;
+  nodeId: number;
   url?: string;
   lineNumber?: number;
 }
 
 export interface HotCommitSummary {
   commitIndex: number;
-  // ms since profile-start (React DevTools sets this as
-  // `performance.now() - profilingStartTime`, NOT absolute perf.now).
+  // ms since profile start, not absolute performance.now()
   timestampMs: number;
   totalRenderMs: number;
   isMargin: boolean;
   tier: "hot" | "warm" | null; // null = margin; hot = >50ms, warm = 16-50ms
-  isInitialRender?: boolean; // true when the commit is dominated by first-mount renders
+  isInitialRender?: boolean; // first-mount self time exceeds half the commit
   rootCauseComponent?: string;
   rootCauseReason?: ReRenderReason;
   rootCauseChangedProps?: string[];
   rootCauseChangedHookNames?: string[];
-  components: HotCommitComponentEntry[]; // grouped by name, sorted by selfDurationMs DESC (capped at 15)
-  totalComponentCount: number; // total before cap (for "... and N more" display)
-  cpuHotspots?: CpuCommitHotspot[]; // top JS functions by self-time during this commit's time window
-  // ms of actualDuration from fibers whose display name could not be resolved at stop time
-  // (transient components unmounted before react-profiler-stop ran). When non-zero, the
-  // per-component breakdown is incomplete — this is the size of the hole.
+  components: HotCommitComponentEntry[]; // grouped by name, self-time DESC, capped at 15
+  totalComponentCount: number; // before the cap; drives the "... and N more" line
+  cpuHotspots?: CpuCommitHotspot[]; // top JS functions by self time in this commit's window
+  // self time of fibers whose name was lost before stop — the hole in `components`
   unattributedMs?: number;
   unattributedFiberCount?: number;
 }
@@ -77,6 +68,7 @@ export interface ComponentFinding {
     isMemoized: boolean;
     hasUseCallback: boolean;
     hasUseMemo: boolean;
+    otherMatches?: Array<{ file: string; line: number }>;
   };
   sourceSnippet?: string;
 }

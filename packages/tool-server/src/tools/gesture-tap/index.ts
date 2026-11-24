@@ -2,51 +2,70 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { getViewport, tapAt, toPoints } from "../../utils/ios-device/runner-commands";
+import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import {
+  HARMONY_INTERACTION_TIMEOUT_MS,
+  assertHarmonyDisplayReady,
+  harmonyDisplay,
+  holdUitestQueue,
+  HARMONY_DISPLAY_TIMEOUT_MS,
+  remainingBudget,
+  toDevicePoint,
+} from "../../utils/harmony-uitest";
+import { ensureDep } from "../../utils/check-deps";
+import { InvalidToolInputError, isFlagOffered, MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
+import { macosAppServices, macosClick, requireMacosApp } from "../../utils/macos-input";
+import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import { sendCommand } from "../../utils/simulator-client";
 import {
   describeVerify,
+  joinWarnings,
   runWithDeliveryVerification,
   type DeliveryCheck,
 } from "../../utils/touch-verification";
-import { sleep } from "../../utils/timing";
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
-  x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
-  y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
-  clickCount: z
-    .number()
-    .int()
-    .min(1)
-    .max(10)
-    .optional()
-    .describe(
-      "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
-        "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
-        "CDP clickCount so dblclick actually fires. Default 1."
-    ),
-  verify: z
-    .boolean()
-    .optional()
-    .describe(
-      describeVerify("tap", {
-        prefix: "iOS/Android: ",
-        tail:
-          "It is a frame-diff heuristic: unrelated animation can mask a dropped touch, and a " +
-          "control with no visible effect can look dropped. Chromium taps are acked by CDP, so " +
-          "verify:true just returns verified:true there.",
-      })
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Result extends DeliveryCheck {
   tapped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this tap, so the foreground screen changed as a side
+   * effect. Set only when true.
+   */
+  reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the tap went to the cover panel. Says why and what to check.
+   * Also carries the delivery-check warning (see `DeliveryCheck`).
+   */
+  warning?: string;
+}
+
+function tapDescription(params: Params, tense: "present" | "past"): string {
+  const count = params.clickCount ?? 1;
+  const action =
+    count === 1
+      ? tense === "present"
+        ? "Tapping"
+        : "Tapped"
+      : count === 2
+        ? tense === "present"
+          ? "Double-tapping"
+          : "Double-tapped"
+        : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
+
+  const button = params.button === "right" ? " with the right button" : "";
+  const modifiers = params.modifiers?.length
+    ? ` holding ${[...new Set(params.modifiers)].join("+")}`
+    : "";
+  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)${button}${modifiers}`;
 }
 
 const capability: ToolCapability = {
@@ -54,11 +73,12 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  harmony: { device: true },
+  macos: { app: true, catalyst: true },
 };
 
-// One press-release is 50ms; taps in a multi-tap gesture are 100ms apart —
-// comfortably inside the OS double-tap window (~300ms on both platforms and
-// in Chromium's click counter), which separate tool calls could not guarantee.
+// Timings keep a multi-tap inside the OS double-tap window, which separate
+// tool calls could not guarantee.
 const TAP_HOLD_MS = 50;
 const MULTI_TAP_GAP_MS = 100;
 
@@ -72,8 +92,7 @@ async function tapChromium(
   const pxX = Math.max(0, Math.min(vp.width, x * vp.width));
   const pxY = Math.max(0, Math.min(vp.height, y * vp.height));
   await api.dispatchMouseEvent({ type: "mouseMoved", x: pxX, y: pxY });
-  // The browser's click counter drives dblclick: each press carries the
-  // running count (1, then 2, …), the way a real mouse reports it.
+  // dblclick fires off the escalating clickCount, not off timing.
   for (let i = 1; i <= clickCount; i++) {
     if (i > 1) await sleep(MULTI_TAP_GAP_MS);
     await api.dispatchMouseEvent({ type: "mousePressed", x: pxX, y: pxY, clickCount: i });
@@ -82,44 +101,215 @@ async function tapChromium(
   }
 }
 
+/** A count of 2 uses `uitest`'s native `doubleClick`; separate clicks are a round trip apart. */
+async function tapHarmony(
+  connectKey: string,
+  x: number,
+  y: number,
+  clickCount: number,
+  signal?: AbortSignal
+): Promise<void> {
+  // One deadline for the whole multi-tap.
+  const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
+  // Prefilter without queueing; the trusted check is inside the hold.
+  const display = await harmonyDisplay(connectKey);
+  assertHarmonyDisplayReady(display, "tap");
+  await holdUitestQueue(
+    connectKey,
+    deadline,
+    async (ui) => {
+      const live = await harmonyDisplay(
+        connectKey,
+        Math.min(
+          HARMONY_DISPLAY_TIMEOUT_MS,
+          remainingBudget(connectKey, deadline, "the display re-read")
+        )
+      );
+      assertHarmonyDisplayReady(live, "tap");
+      const point = toDevicePoint(x, y, live);
+      if (clickCount === 2) {
+        await ui.touch("doubleClick", point);
+        return;
+      }
+      for (let i = 0; i < clickCount; i++) {
+        if (i > 0) await sleep(MULTI_TAP_GAP_MS);
+        await ui.touch("click", point);
+      }
+    },
+    signal
+  );
+}
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+    ),
+  x: z.number().min(0).max(1).describe("Horizontal position: 0 = left edge, 1 = right edge."),
+  y: z.number().min(0).max(1).describe("Vertical position: 0 = top edge, 1 = bottom edge."),
+  clickCount: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe(
+      "Number of taps/clicks dispatched as ONE gesture inside the OS double-tap window (2 = double-tap / " +
+        "double-click), which two separate tap calls cannot guarantee. On physical iOS, higher counts " +
+        "loop single taps, which a double-tap recognizer may pair.<flag:harmonyos> On HarmonyOS they " +
+        "land as separate taps.</flag:harmonyos> Default 1."
+    ),
+  verify: z
+    .boolean()
+    .optional()
+    .describe(
+      describeVerify("tap", {
+        tail:
+          "iOS simulator and Android only. It is a frame-diff heuristic: unrelated animation can " +
+          "mask a dropped touch, and a control with no visible effect can look dropped.",
+      })
+    ),
+  button: z
+    .enum(["left", "right"])
+    .optional()
+    .describe(
+      'Mouse button, Mac app only: "right" is a right-click, for example to open a context menu; ' +
+        'any other device refuses it. Default "left".'
+    )
+    .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
+  modifiers: z
+    .array(z.enum(MACOS_MODIFIERS))
+    .max(MACOS_MODIFIERS.length)
+    .optional()
+    .describe(
+      "Keys held throughout a click or multi-click gesture. Mac apps only. An empty list leaves the click unmodified."
+    )
+    .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Press the device screen (iOS simulator, Android emulator, or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
-Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
-Set clickCount: 2 for a double-tap / double-click — the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
-Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On iOS/Android taps are automatically delivery-verified until one is confirmed landed (a wedged iOS simulator can accept touches but silently drop them) — usually just the first tap per device session, but a tap that changes nothing keeps the check on, since that repeat is the wedge signal: when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning'. The warning only names recover-touch-injection on a local iOS simulator, and only once a no-change repeats or verify:true was passed; a first automatic no-change is deliberately soft, since many controls have no visible effect. Pass verify:true to force the check on any tap, verify:false to skip it. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
-Before tapping, determine the correct coordinates by using discovery tools — pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
-  alwaysLoad: true,
-  searchHint: "tap press button element device simulator emulator chromium touch down up click",
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.
+If a modifier click returns \`MACOS_APP_LIBRARY_OUTDATED\`, the tool stopped before clicking. Run \`restart-app\` to reload the library, then retry. If the error persists, use an Argent build with modifier-click support.</flag:macos-apps>
+Use when tapping a button, link, or any tappable element on the screen.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator or Android, taps are checked against the screen until one changes it: verified: false and a warning mean the screen did not change (see the verify parameter). Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
+Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
   zodSchema,
+  alwaysLoad: true,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
+  searchHint:
+    "tap press button element device simulator emulator chromium<flag:macos-apps> mac</flag:macos-apps> touch down up click<flag:macos-apps> right-click context menu modifier command shift option control cmd-click shift-click multiple selection</flag:macos-apps>",
+  interaction: {
+    startedMsg: ({ params }) => tapDescription(params, "present"),
+    completedMsg: ({ params }) => tapDescription(params, "past"),
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to tap at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%): ${failureSignal.error_code}`,
+  },
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
+    if (device.platform === "macos") {
+      return macosAppServices(device);
+    }
+    // Refused in `execute`, without starting a backend for a tap that never runs.
+    if (params.button === "right" || params.modifiers?.length) return {};
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (isIosPhysicalDevice(device)) {
+      return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+    }
+    // No simulator-server controller exists for HarmonyOS.
+    if (device.platform === "harmony") return {};
     return { simulatorServer: simulatorServerRef(device) };
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
     const device = resolveDevice(params.udid);
-    // Re-stamped at the first Down: a verified tap captures a frame first, and
-    // profiler annotations anchor on this timestamp.
-    let timestampMs = Date.now();
+    const timestampMs = Date.now();
     const clickCount = params.clickCount ?? 1;
+    if (device.platform === "macos") {
+      const app = requireMacosApp(services, "gesture-tap", device);
+      await macosClick(app, params.x, params.y, {
+        clickCount,
+        button: params.button,
+        modifiers: params.modifiers,
+      });
+      return { tapped: true, timestampMs };
+    }
+    // The other backends would land a right-click as a plain tap.
+    if (params.button === "right") {
+      // gesture-custom has a backend on iOS and Android only.
+      const refusal =
+        device.platform === "chromium"
+          ? `<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>: argent ` +
+            `does not support a right-click on a chromium app yet.`
+          : `<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>: ${device.platform} ` +
+            `${device.kind} takes no right-click.` +
+            (device.platform === "harmony"
+              ? ""
+              : ` To open a context menu on a touch screen, press and hold: gesture-custom with ` +
+                `a Down, then an Up after 800 ms.`);
+      throw new InvalidToolInputError(
+        renderFlagGated(
+          `gesture-tap button "right" is a mouse right-click${refusal}`,
+          isFlagOffered
+        )
+      );
+    }
+    if (params.modifiers?.length) {
+      const refusal =
+        device.platform === "chromium"
+          ? `<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>: argent ` +
+            `does not support modifier keys in a tap on a chromium app yet.`
+          : `<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>: ${device.platform} ` +
+            `${device.kind} takes no modifier keys in a tap.`;
+      throw new InvalidToolInputError(
+        renderFlagGated(
+          `gesture-tap modifiers hold keyboard keys through a mouse click${refusal}`,
+          isFlagOffered
+        )
+      );
+    }
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
+      // Mouse dispatch stalls at ~5s per event on a hidden window.
+      await assertChromiumWindowVisible(chromium, "tap");
       await tapChromium(chromium, params.x, params.y, clickCount);
-      // CDP awaits each mouse event, so a Chromium tap is delivery-confirmed by
-      // construction; there is no injection failure mode to check for.
-      return { tapped: true, timestampMs, ...(params.verify ? { verified: true } : {}) };
+      return { tapped: true, timestampMs };
+    }
+    if (isIosPhysicalDevice(device)) {
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+      const point = toPoints(viewport, params.x, params.y);
+      // The whole count is one runner command: a double-tap must be the native one, and any loop
+      // above 2 stays on-device (single taps either way, but without wire round trips between them).
+      const tap = await tapAt(runner, bundleId, point, clickCount);
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the tap then finds it foreground.
+      const reactivated = viewport.reactivated === true || tap.reactivated;
+      return { tapped: true, timestampMs, ...(reactivated ? { reactivated: true as const } : {}) };
+    }
+    if (device.platform === "harmony") {
+      await ensureDep("hdc");
+      await tapHarmony(harmonyConnectKey(device.id), params.x, params.y, clickCount, ctx?.signal);
+      return { tapped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    let warning: string | undefined;
+    // Re-stamped at the first Down: a verified tap captures a frame first, and
+    // profiler annotations anchor on this timestamp.
+    let injectedAtMs = timestampMs;
     const injectTaps = async () => {
-      timestampMs = Date.now();
+      injectedAtMs = Date.now();
       for (let i = 1; i <= clickCount; i++) {
         if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-        sendCommand(api, {
+        const down = await sendCommand(api, {
           cmd: "touch",
           type: "Down",
           x: params.x,
@@ -127,8 +317,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
           second_x: null,
           second_y: null,
         });
+        warning ??= down.warning;
         await sleep(TAP_HOLD_MS);
-        sendCommand(api, {
+        await sendCommand(api, {
           cmd: "touch",
           type: "Up",
           x: params.x,
@@ -139,6 +330,12 @@ Before tapping, determine the correct coordinates by using discovery tools — p
       }
     };
     const check = await runWithDeliveryVerification(api, params.verify, injectTaps, device);
-    return { tapped: true, timestampMs, ...check };
+    warning = joinWarnings(warning, check.warning);
+    return {
+      tapped: true,
+      timestampMs: injectedAtMs,
+      ...(check.verified !== undefined ? { verified: check.verified } : {}),
+      ...(warning !== undefined ? { warning } : {}),
+    };
   },
 };

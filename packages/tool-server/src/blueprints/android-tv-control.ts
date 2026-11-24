@@ -1,6 +1,7 @@
 import {
   TypedEventEmitter,
   type DeviceInfo,
+  type Registry,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
@@ -8,43 +9,57 @@ import {
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
   labelOf,
+  type ParsedXmlNode,
 } from "../tools/describe/platforms/android/uiautomator-parser";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
+import { androidDevtoolsRef, type AndroidDevtoolsApi } from "./android-devtools";
 
 export const ANDROID_TV_CONTROL_NAMESPACE = "AndroidTvControl";
 
 // DeviceInfo-via-options pattern, matching the other Android/Apple blueprints.
 type AndroidTvControlFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;
+  /** Reads the hierarchy through the android-devtools helper; see `readHierarchy`. */
+  readHelperHierarchy?: () => Promise<string>;
 };
 
 /**
- * Build the `ServiceRef` for the Android TV control service keyed by a resolved
- * `DeviceInfo`. The factory verifies the target really is an Android TV
- * (leanback) device — `resolveDevice` only classifies by serial shape and tags
- * every Android target `platform: "android"`, so the runtime-kind check lives
- * in the factory (mirroring `tvControlRef` on the tvOS side).
+ * `ServiceRef` for the Android TV control service. The leanback check happens in
+ * the factory, not here (mirroring `tvControlRef` on the tvOS side). With a
+ * registry, describe reads through the android-devtools helper first.
  */
-export function androidTvControlRef(device: DeviceInfo): {
+export function androidTvControlRef(
+  device: DeviceInfo,
+  registry?: Registry
+): {
   urn: string;
   options: AndroidTvControlFactoryOptions;
 } {
   return {
     urn: `${ANDROID_TV_CONTROL_NAMESPACE}:${device.id}`,
-    options: { device },
+    options: registry
+      ? { device, readHelperHierarchy: () => readHelperHierarchy(registry, device) }
+      : { device },
   };
 }
 
-// D-pad / system keyevents. Android TV is driven entirely through the remote's
-// directional pad — there is no touch — so the full TV-remote vocabulary maps
-// onto Android KEYCODE_* values:
-//   back → BACK; menu → KEYCODE_MENU (the options-menu affordance, distinct from
-//   back). The media-transport and volume keys map onto the standard Android
-//   media/volume keycodes, all of which `adb input keyevent` accepts.
+// Resolved per read, not held: the registry respawns a helper that exited or
+// was disposed, and a helper that can't start fails just this read.
+async function readHelperHierarchy(registry: Registry, device: DeviceInfo): Promise<string> {
+  const ref = androidDevtoolsRef(device);
+  const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+  // clearCache: describe is re-read right after each tv-remote press, and a
+  // cached read can serve the focus from before it.
+  const { xml } = await devtools.getHierarchy({ clearCache: true });
+  return xml;
+}
+
+// android.view.KeyEvent keycodes for the TV-remote vocabulary (`adb input keyevent`).
 const KEYEVENTS: Record<TvDirection, number> = {
   up: 19, // KEYCODE_DPAD_UP
   down: 20, // KEYCODE_DPAD_DOWN
@@ -64,8 +79,7 @@ const KEYEVENTS: Record<TvDirection, number> = {
   mute: 164, // KEYCODE_VOLUME_MUTE
 };
 
-// One parsed focusable node. A TV surface is focus-driven (no tap coordinates),
-// so we keep only what the focus view renders — no pixel geometry.
+// One parsed node. A TV surface is focus-driven, so no pixel geometry is kept.
 interface TvNode {
   label: string;
   value: string;
@@ -77,24 +91,43 @@ interface TvNode {
   pkg: string;
 }
 
-// `attrIsTrue` and `labelOf` (the content-desc-vs-text label contract) are
-// shared with the phone describe parser so the two stay in lockstep — imported
-// from uiautomator-parser rather than re-implemented here.
-
 function valueOf(attrs: Record<string, string>): string {
   const cd = (attrs["content-desc"] ?? "").trim();
   const text = (attrs.text ?? "").trim();
-  // When both are populated and differ, content-desc is the label and text is
-  // the value (an editable field with a placeholder + typed content). When only
-  // one is set it's already the label, so there's no separate value.
+  // content-desc is the label, so `text` is a distinct value only when both are
+  // set and differ (an editable field with a placeholder + typed content).
   return cd && text && cd !== text ? text : "";
 }
 
+// AccessibilityWindowInfo.TYPE_INPUT_METHOD.
+const WINDOW_TYPE_INPUT_METHOD = "2";
+
+function hasFocusedNode(node: ParsedXmlNode): boolean {
+  return attrIsTrue(node.attrs, "focused") || node.children.some(hasFocusedNode);
+}
+
 /**
- * Walk a parsed uiautomator tree collecting the focused node and every
- * focusable node. Unlike `parseUiAutomatorDump` (which drops the `focused`
- * attribute and normalises to the describe contract), the focus walk needs the
- * raw `focused` flag, so this is a dedicated lightweight pass.
+ * The window the remote drives. The helper reads every interactive window, its
+ * roots tagged `window-type` and topmost first, and the window under a dialog
+ * keeps its view focus, so the topmost window holding focus wins. That is the
+ * on-screen keyboard while it is up: the D-pad moves between its keys, so they
+ * are the focusable set. A tree with no tagged roots (a dump, or the helper's
+ * active-window fallback) is already one window.
+ */
+function activeWindow(root: ParsedXmlNode): ParsedXmlNode {
+  const windows = root.children.filter((c) => c.attrs["window-type"] !== undefined);
+  if (windows.length === 0) return root;
+  return (
+    windows.find(hasFocusedNode) ??
+    windows.find((w) => w.attrs["window-type"] !== WINDOW_TYPE_INPUT_METHOD) ??
+    windows[0]!
+  );
+}
+
+/**
+ * Collect the focused node and every focusable node, from the window holding
+ * focus. `parseUiAutomatorDump` reads every window, so the focus walk needs its
+ * own pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
@@ -102,12 +135,13 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
   let focused: TvNode | null = null;
   if (!root) return { focused, focusable };
 
-  const stack = [root];
+  const stack = [activeWindow(root)];
   while (stack.length > 0) {
     const node = stack.pop()!;
-    // Push children in reverse so they pop back in document order — the agent
-    // sees focusables in the same top-to-bottom / left-to-right order the dump
-    // lists them, which matches how D-pad focus traverses them.
+    // `uiautomator dump` leaves out a node the user can't see and everything
+    // under it; the helper keeps it and marks it, so skip it the same way.
+    if (node.attrs["visible-to-user"] === "false") continue;
+    // Push children in reverse so they pop back in document order.
     for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
 
     const attrs = node.attrs;
@@ -116,9 +150,8 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
     if (!isFocusable && !isFocused) continue;
 
     const label = labelOf(attrs);
-    // A focusable node with no label is a layout focus-trap, not something the
-    // agent can identify — skip it for the focusable list (but still honour it
-    // as the focused node so describe can report "focused but unlabelled").
+    // An unlabelled focusable is a layout focus-trap: kept out of `focusable`,
+    // but still reported as the focused node.
     const className = attrs.class ?? "";
     const tvNode: TvNode = {
       label,
@@ -169,7 +202,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
           `Use androidTvControlRef(device) when registering the service ref.`
       );
     }
-    const { device } = opts;
+    const { device, readHelperHierarchy } = opts;
     if (typeof device.id !== "string" || device.id.length === 0) {
       throw new Error(
         `${ANDROID_TV_CONTROL_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
@@ -178,9 +211,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
     const serial = device.id;
 
     // resolveDevice classifies by serial shape alone and tags every Android
-    // target `platform: "android"`, so confirm this is actually a leanback (TV)
-    // device here. Yields a clear error when someone points a tv-* tool at a
-    // phone/tablet emulator.
+    // target `platform: "android"`, so confirm leanback here.
     const kind = await getAndroidRuntimeKind(serial);
     if (kind === undefined) {
       throw new Error(
@@ -189,8 +220,8 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       );
     }
     if (kind !== "tv") {
-      // Wrong device class — UnsupportedOperationError so http.ts maps it to 400,
-      // not 500 (which invites retries of a wrong target). Mirrors the tvOS twin.
+      // UnsupportedOperationError so http.ts maps it to 400, not a 500 that
+      // reads as transient and invites retries of a wrong target.
       throw new UnsupportedOperationError(
         "tv-remote",
         device,
@@ -203,29 +234,52 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
 
     async function dumpHierarchy(): Promise<string> {
       // Per-call dump path so concurrent calls on the same serial don't race on
-      // a shared /sdcard file (one call's cat reading the other's mid-write).
-      // /data/local/tmp is world-writable on every Android we support; trailing
-      // `; rm -f` (not `&&`) so cleanup fires even when dump/cat fails.
+      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
+      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
       const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
       const raw = (
-        await adbExecOutBinary(
-          serial,
-          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-          { timeoutMs: 20_000 }
+        await withUiautomatorLock(serial, () =>
+          adbExecOutBinary(
+            serial,
+            `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+            { timeoutMs: 20_000 }
+          )
         )
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
+        const output = raw.trim().slice(0, 200);
+        const killed = uiautomatorKilledMessage(output, serial);
+        if (killed) throw new Error(killed);
         throw new Error(
-          `uiautomator could not capture the screen: ${raw.trim().slice(0, 200)}. ` +
+          `uiautomator could not capture the screen: ${output}. ` +
             `The device may be locked or showing a secure overlay — take a screenshot to confirm.`
         );
       }
       return raw;
     }
 
+    // The helper first, `uiautomator dump` on any error. They can't both run:
+    // the helper holds the device's UiAutomation connection, and a dump taken
+    // while it does is killed (#1316). The helper's XML is the same format,
+    // with the focusable / focused / selected attributes collectTvNodes reads.
+    async function readHierarchy(): Promise<string> {
+      if (readHelperHierarchy) {
+        try {
+          return await readHelperHierarchy();
+        } catch (err) {
+          console.debug(
+            `[android-tv-control] devtools helper failed, falling back to uiautomator dump: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      }
+      return dumpHierarchy();
+    }
+
     async function read(): Promise<{ focused: TvNode | null; focusable: TvNode[] }> {
-      return collectTvNodes(await dumpHierarchy());
+      return collectTvNodes(await readHierarchy());
     }
 
     async function pressKey(direction: TvDirection): Promise<void> {
@@ -248,24 +302,14 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       },
 
       async type(text: string): Promise<void> {
-        // Same on-device `input text` sink as the Android phone path
-        // (utils/android-input): a newline would truncate the input line, an
-        // emoji crashes `sendText`, and other non-ASCII is silently dropped —
-        // so run the same printable-ASCII guard for the same clean input
-        // rejection (InvalidToolInputError → 400) instead of a raw adb 500.
+        // `input text` cannot type a newline, crashes on emoji and silently
+        // drops other non-ASCII — reject up front as a 400, not a raw adb 500.
         assertTypeableAndroidText(text);
-        // `input text` decodes the two-char sequence "%s" back into a space on
-        // the device — and a bare space is an argument separator — so the old
-        // `replace(/ /g, "%s")` was not round-trip safe: a user string that
-        // already contained "%s" came out with a stray space and no error.
-        //
-        // Instead, send real spaces as KEYCODE_SPACE keyevents (never emitting
-        // "%s" ourselves) and type each space-free word through the shared
-        // `injectAndroidText`, which owns the `%`-adjacency handling (a
-        // user-supplied "%s" is split across separate `input text` calls and
-        // arrives verbatim) and the shell quoting. An empty word is a no-op
-        // inside `injectAndroidText`, so consecutive/leading/trailing spaces
-        // round-trip as bare KEYCODE_SPACE presses.
+        // `input text` decodes "%s" back into a space on the device, and a bare
+        // space is an argument separator — so spaces go as KEYCODE_SPACE
+        // keyevents and each space-free word through `injectAndroidText`, which
+        // owns the `%`-adjacency handling and the shell quoting. An empty word
+        // is a no-op there, so repeated/leading/trailing spaces round-trip.
         const KEYCODE_SPACE = 62;
         const words = text.split(" ");
         for (let i = 0; i < words.length; i++) {
@@ -276,15 +320,13 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         }
       },
 
-      // Android TV reads the live hierarchy on every describe (no cached
-      // daemon), so there is no stale-cache class of bug to recover from.
+      // Android TV reads the live hierarchy on every describe — no cache to drop.
       async recycleAx(): Promise<void> {},
     };
 
     const instance: ServiceInstance<TvControlApi> = {
       api,
-      // Stateless: every method is a fresh adb shell-out, so there is nothing to
-      // tear down. Present to satisfy the ServiceInstance contract.
+      // Stateless: every call is a fresh adb shell-out, so nothing to tear down.
       dispose: async () => {},
       events,
     };

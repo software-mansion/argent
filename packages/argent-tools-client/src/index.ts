@@ -5,6 +5,7 @@ export {
   readAllToolsServerStates,
   stateFileForBundle,
   buildToolsServerEnv,
+  resolveToolsServerNode,
   spawnToolsServer,
   findFreePort,
   isToolsServerHealthy,
@@ -26,6 +27,8 @@ export {
 
 export {
   createToolsClient,
+  errorBodyMessage,
+  secretsTransportRefusal,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
@@ -33,12 +36,15 @@ export {
   type CreateToolsClientOptions,
 } from "./tools-client.js";
 
+export { ToolInvocationError } from "./errors.js";
+
+export { canonicalToolId } from "@argent/registry";
+
 export {
   readLinkConfig,
   writeLinkConfig,
   clearLinkConfig,
   getResolvedToolsUrl,
-  isRemoteRouted,
   formatLinkUrl,
   parseLinkUrl,
   parseLinkTarget,
@@ -58,6 +64,7 @@ export {
   artifactsRoot,
   ARTIFACT_MARKER,
   type ArtifactHandle,
+  type ArtifactKind,
   type MaterializeContext,
   type MaterializedImage,
 } from "./artifacts.js";

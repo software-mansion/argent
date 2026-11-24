@@ -1,5 +1,11 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { ServiceState, isLiveServiceState } from "./types";
+export {
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
+  LINKED_CALL_HEADER,
+  ServiceState,
+  isLiveServiceState,
+} from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,
@@ -22,24 +28,75 @@ export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type {
   ArtifactHandle,
   ArtifactEntry,
+  ArtifactKind,
   ArtifactListItem,
   RegisterArtifactOptions,
 } from "./artifacts";
 export {
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
+  FLOW_NAME_PATTERN,
+  FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_EXTENSIONS,
+  SCRIPT_FILE_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
+  hasToolFileExtension,
+  isClientFileArgument,
+  isUnexpandedPath,
+  toolStepFiles,
 } from "./file-inputs";
+export { LAUNCH_PLATFORMS, SELECTABLE_PLATFORMS } from "./flow-platforms";
+export type { SelectablePlatform } from "./flow-platforms";
 export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
+  ToolStepFile,
 } from "./file-inputs";
+export {
+  baselineKeyFor,
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
+  collectFlowRequests,
+  completeRunExtension,
+  flowMemberKey,
+  flowYamlSource,
+  MAX_RUN_DEPTH,
+  nestedFlowTarget,
+  resolveFlowRelativeFile,
+} from "./flow-file-refs";
+export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export {
+  E2E_DIR,
+  E2E_DIRS,
+  LEGACY_E2E_DIRS,
+  e2eDirFor,
+  e2eDirProject,
+  e2eDirsFor,
+  e2eFileCandidates,
+  e2eRunFallbackDirs,
+  e2eShadowWarning,
+  pickE2eFile,
+  resolveE2eFile,
+} from "./e2e-dirs";
+export type { ResolvedE2eFile } from "./e2e-dirs";
 export { parseURN } from "./urn";
+export {
+  TOOL_ID_ALIASES,
+  TOOL_PARAM_ALIASES,
+  ToolParamAliasError,
+  canonicalToolArgs,
+  canonicalToolId,
+  toolParamAliases,
+  withFormerParamSpecs,
+} from "./tool-ids";
 export {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -70,6 +127,6 @@ export type {
 } from "./errors";
 export { FAILURE_CODES } from "./failure-codes";
 export type { FailureCode } from "./failure-codes";
-export { Registry } from "./registry";
+export { Registry, describeParamIssues } from "./registry";
 export { attachRegistryLogger } from "./logger";
 export { zodObjectToJsonSchema } from "./zod-to-json-schema";

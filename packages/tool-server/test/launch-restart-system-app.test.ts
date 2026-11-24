@@ -50,14 +50,23 @@ function makeNativeApi(): NativeDevtoolsApi {
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => null,
     isConnected: () => false,
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
-    requiresAppRestart: async () => false,
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    appConnectionState: async () => "connected",
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
@@ -121,4 +130,31 @@ describe("launch-app / restart-app — Apple system apps stay launchable (real p
       )
     ).resolves.toEqual({ restarted: true, bundleId: SYSTEM_APP });
   });
+});
+
+describe("launch-app / restart-app - simctl launch waits for an injection attempt in flight", () => {
+  const launches = () =>
+    execFileMock.mock.calls.filter(([, args]) => (args as readonly string[]).includes("launch"));
+
+  for (const [name, createTool] of [
+    ["launch-app", createLaunchAppTool],
+    ["restart-app", createRestartAppTool],
+  ] as const) {
+    it(`${name} does not run simctl launch before a pending ensureEnvReady resolves`, async () => {
+      let arm!: () => void;
+      const api = {
+        ...makeNativeApi(),
+        ensureEnvReady: () => new Promise<void>((resolve) => (arm = resolve)),
+      };
+      const tool = createTool({ resolveService: vi.fn(async () => api) } as any);
+
+      const run = tool.execute!({}, { udid: IOS_UDID, bundleId: "com.example.app" });
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      expect(launches()).toHaveLength(0);
+
+      arm();
+      await run;
+      expect(launches()).toHaveLength(1);
+    });
+  }
 });

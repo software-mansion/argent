@@ -1,10 +1,3 @@
-/**
- * Verbose error message returned when the React DevTools hook is missing.
- * Exported so the tool layer can recognise the same diagnosis without string
- * matching on bespoke phrasings. Mirrored by `react-profiler-start` so the
- * operator sees one consistent explanation regardless of which entry point
- * they hit first.
- */
 export const INSPECT_NO_DEVTOOLS_HOOK_ERROR =
   "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
   "Component inspection requires a development build with React DevTools enabled. " +
@@ -22,43 +15,50 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
   "Wait for the app to render its first frame and retry.";
 
 /**
- * Generate a JS script that calls getInspectorDataForViewAtPoint at (x, y)
- * and pushes the result via __argent_callback binding with a requestId
- * for correlation.
+ * JS script that calls getInspectorDataForViewAtPoint at (x, y) and pushes the
+ * component chain back through the __argent_callback binding, tagged with
+ * requestId for correlation.
  *
- * Uses data.closestInstance (the fiber at the touch point) and walks UP the
- * fiber tree via .return pointers. This is more robust than searching globally
- * by name — it correctly resolves fibers when multiple components share a name
- * (e.g. several <Button /> instances in different parents).
+ * Walks up from data.closestInstance via .return pointers, so components
+ * sharing a name still resolve to the right instance. RN 0.81+ returns no
+ * closestInstance and data.componentStack (a string) is parsed instead.
  *
- * Supports both Fabric (new architecture) and Paper (old architecture), across
- * RN versions whose getInspectorDataForViewAtPoint contract differs:
- * - Anchor: Fabric uses the host fiber's public instance; Paper anchors at the
- *   FiberRoot container (its native tag) because the first host fiber is often a
- *   sibling subtree that does not contain the point, so findSubviewIn would
- *   resolve nothing. (Older Paper builds without a containerTag fall back to the
- *   host fiber, recognised via stateNode.canonical or stateNode._nativeTag.)
- * - Result: older RN returns a walkable data.closestInstance; RN 0.81+ returns
- *   data.componentStack (a stack string) instead -- both are handled.
+ * Hit-test anchor: Fabric uses the host fiber's public instance; Paper uses the
+ * FiberRoot container tag, because its first host fiber is often a sibling
+ * subtree that does not contain the point (Paper builds without a containerTag
+ * fall back to the host fiber).
  *
- * Source resolution: tries _debugStack first (bundled frame needing symbolication),
- * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
- * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
- * with `original: true` since they already contain the real source path.
+ * (x, y) are screen points. Both architectures hit-test in the React Native root
+ * view's own points. With subtractRootOffset (a Mac app, whose x and y count from
+ * the window's corner, title bar included), the script subtracts the root view's
+ * offset in the window: the title bar height in a react-native-macos window. On
+ * Fabric that is the anchor's measureInWindow minus its page position. Paper's
+ * measureInWindow counts from the window's content view, below the title bar, so
+ * there the offset is the window height (Dimensions 'window', the window frame)
+ * minus the height of a root container that fills the content view's width from
+ * its top-left corner; any other root keeps (0, 0). JS cannot read the content view's
+ * height, so a native view below the root (a footer) counts as title bar: the tool
+ * text sends callers to describe. Other platforms pass the point
+ * as given: on Android an edge-to-edge app's viewport offset is minus the status bar.
  *
- * Production-build guards: dereferencing __REACT_DEVTOOLS_GLOBAL_HOOK__ blindly
- * would throw `Cannot read property 'renderers' of undefined` on release builds
- * where DevTools is stripped. The script reports these conditions through the
- * same __argent_callback error channel as `no host fiber`, so the tool surfaces
- * a verbose diagnostic instead of a generic TypeError.
+ * Frames come from _debugStack (bundled, needs symbolication) or _debugSource,
+ * which is already a real source path and is flagged `original: true`.
+ *
+ * Missing hook / renderer / fiber root report through the same callback error
+ * channel instead of throwing, so a release build yields a diagnosis rather
+ * than a TypeError.
  */
-export function makeInspectScript(x: number, y: number, requestId: string): string {
+export function makeInspectScript(
+  x: number,
+  y: number,
+  requestId: string,
+  opts: { subtractRootOffset?: boolean } = {}
+): string {
   const noHookMsg = JSON.stringify(INSPECT_NO_DEVTOOLS_HOOK_ERROR);
   const noRendererMsg = JSON.stringify(INSPECT_NO_RENDERER_ERROR);
   const noRootMsg = JSON.stringify(INSPECT_NO_FIBER_ROOT_ERROR);
-  // JSON.stringify yields a valid JS string literal — escapes quotes/newlines
-  // that a bare '${requestId}' would inject raw (consistent with the network
-  // detail script; requestId is a randomUUID today, so this is defense-in-depth).
+  // Escape as a JS string literal (as the network detail script does);
+  // requestId is a randomUUID today, so this is defense-in-depth.
   const ridLiteral = JSON.stringify(requestId);
   return `(function() {
   function __argent_fail(msg) {
@@ -215,18 +215,75 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   // pre-container-anchor code did, rather than reporting no host fiber).
   var inspectRef = null;
   var foundAnchor = false;
+  var hostFiberForOffset = null;
   var containerInfo = root.current && root.current.stateNode && root.current.stateNode.containerInfo;
   if (!useFabric && containerInfo && typeof containerInfo.containerTag === 'number') {
     inspectRef = { _nativeTag: containerInfo.containerTag, _internalFiberInstanceHandleDEV: root.current };
     foundAnchor = true;
   } else {
     var hostFiber = findHostFiber(root.current.child, 0);
-    if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; }
+    if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; hostFiberForOffset = hostFiber; }
   }
   if (!foundAnchor) { __argent_callback(JSON.stringify({requestId:${ridLiteral},type:'inspect_result',error:'no host fiber'})); return; }
 
+  // A react-native export (UIManager, Dimensions) found among Metro's modules,
+  // the way debugger-component-tree finds them.
+  function findRNExport(name) {
+    if (typeof __r !== 'function') return null;
+    if (typeof __r.getModules === 'function') {
+      var _mods = __r.getModules();
+      for (var _entry of _mods) {
+        if (!_entry[1].isInitialized) continue;
+        try { var m = __r(_entry[0]); if (m && m[name]) return m[name]; } catch (e) {}
+      }
+      return null;
+    }
+    for (var i = 0; i < 300; i++) {
+      try { var m2 = __r(i); if (m2 && m2[name]) return m2[name]; } catch (e) {}
+    }
+    return null;
+  }
+
+  // Calls done(dx, dy) with the root view's offset in the window, or (0, 0)
+  // when it is not wanted or cannot be measured (no measure API).
+  function withRootOffset(done) {
+    var _called = false;
+    function finish(dx, dy) { if (_called) return; _called = true; done(dx, dy); }
+    if (!${opts.subtractRootOffset ? "true" : "false"} || !inspectRef) { finish(0, 0); return; }
+    if (!useFabric) {
+      // Only the root container fills the content view, so a host-fiber anchor
+      // (no containerTag) gives no title bar height.
+      var _uim = containerInfo && typeof containerInfo.containerTag === 'number' ? findRNExport('UIManager') : null;
+      var _dims = _uim ? findRNExport('Dimensions') : null;
+      var _win = _dims && typeof _dims.get === 'function' ? _dims.get('window') : null;
+      if (!_uim || typeof _uim.measureInWindow !== 'function' || !_win || !(_win.width > 0)) { finish(0, 0); return; }
+      setTimeout(function() { finish(0, 0); }, 600);
+      try {
+        _uim.measureInWindow(containerInfo.containerTag, function(cx, cy, cw, ch) {
+          var _bar = _win.height - ch;
+          var _fills = Math.abs(cx) < 1 && Math.abs(cy) < 1 && Math.abs(cw - _win.width) <= 1;
+          finish(0, _fills && _bar > 0 && _bar <= 120 ? _bar : 0);
+        });
+      } catch (e) { finish(0, 0); }
+      return;
+    }
+    var anchorNode = hostFiberForOffset && hostFiberForOffset.stateNode && hostFiberForOffset.stateNode.node;
+    if (typeof inspectRef.measureInWindow !== 'function' || !anchorNode ||
+        typeof nativeFabricUIManager.measure !== 'function') { finish(0, 0); return; }
+    setTimeout(function() { finish(0, 0); }, 600);
+    try {
+      inspectRef.measureInWindow(function(wx, wy) {
+        nativeFabricUIManager.measure(anchorNode, function(_x, _y, _w, _h, px, py) {
+          finish(wx - px, wy - py);
+        });
+      });
+    } catch (e) { finish(0, 0); }
+  }
+
+  withRootOffset(function(dx, dy) {
+  try {
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
-    inspectRef, ${Math.round(x)}, ${Math.round(y)},
+    inspectRef, Math.round(${x} - dx), Math.round(${y} - dy),
     function(data) {
       var items = [];
       var fiber = data.closestInstance;
@@ -254,6 +311,10 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
       __argent_callback(JSON.stringify({ requestId:${ridLiteral}, type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
     }
   );
+  } catch (e) {
+    __argent_fail('Inspect script crashed: ' + (e && e.message ? e.message : String(e)));
+  }
+  });
   return 'ok';
   } catch (e) {
     __argent_fail('Inspect script crashed: ' + (e && e.message ? e.message : String(e)));

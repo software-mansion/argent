@@ -1,0 +1,202 @@
+/**
+ * Tunables and predicates for what the MCP layer appends after a successful
+ * interaction tool call: the auto-screenshot and the auto-describe element
+ * tree. Each has its own tool list and opt-out flag.
+ */
+
+import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
+
+export const AUTO_SCREENSHOT_TOOLS = new Set([
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-scroll",
+  "gesture-drag",
+  "gesture-custom",
+  "gesture-pinch",
+  "gesture-rotate",
+  "button",
+  "keyboard",
+  "paste",
+  "rotate",
+  "fold",
+  "tv-remote",
+  "launch-app",
+  "restart-app",
+  "open-url",
+  "describe",
+  "run-sequence",
+  // A wait is almost always followed by a look at the screen it waited for.
+  "await-ui-element",
+  "file-panel",
+  "menu-bar",
+]);
+
+/**
+ * Per-tool cap (ms) on the `await-screen-idle` wait before capturing; the poll
+ * usually returns well under it. Doubles as a blind sleep when the tool-server
+ * offers no `await-screen-idle`.
+ */
+export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
+  "launch-app": 3000,
+  "restart-app": 3000,
+  "open-url": 2000,
+  "gesture-swipe": 1500,
+  "gesture-scroll": 1500,
+  "gesture-drag": 1500,
+  "gesture-custom": 1500,
+  "gesture-tap": 1500,
+  "gesture-pinch": 1500,
+  "gesture-rotate": 1500,
+  // Only the settle after the last step; each step is an in-app action.
+  "run-sequence": 3000,
+  "button": 1500,
+  "tv-remote": 1500,
+  "rotate": 1000,
+  // The fold tool already waits for the panel hand-over; the cap covers the
+  // repaint after it.
+  "fold": 1500,
+  "keyboard": 300,
+  "paste": 300,
+  "describe": 100,
+  // The wait returns on the first match, often mid-transition; the cap must
+  // leave `await-screen-idle` room to see two identical reads.
+  "await-ui-element": 1500,
+};
+
+const DEFAULT_DELAY_MS = 1400;
+
+/**
+ * The most the screenshot and the element tree may take together once the
+ * settle wait is over; the settle call gets this on top of its own cap. A
+ * capture call that times out is not sent again: the tool-server keeps reading
+ * after the adapter gives up, so a retry queues behind the read it abandoned.
+ * A frozen helper on a Huawei phone made the four retries of `describe` take
+ * two minutes.
+ * In the telemetry of the 14 days to 2026-10-28, 15 s cuts off 0.05-0.35% of
+ * `describe` calls on iOS and Android, and 2.3% on Android TV emulators.
+ */
+export const CAPTURE_TIMEOUT_MS = 15_000;
+
+// Opt-out only: the `disable-auto-screenshot` flag is off by default.
+// `options` lets tests point flag storage at a temp dir.
+export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
+  return !isFlagEnabled("disable-auto-screenshot", options);
+}
+
+/**
+ * Tools whose result gets the accessibility element tree appended, so the
+ * agent has fresh tap frames without a separate `describe` round-trip.
+ * Independent of AUTO_SCREENSHOT_TOOLS; `describe` is absent because its own
+ * result already is the tree.
+ */
+export const AUTO_DESCRIBE_TOOLS = new Set([
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-scroll",
+  "gesture-drag",
+  "gesture-custom",
+  "gesture-pinch",
+  "gesture-rotate",
+  "button",
+  "keyboard",
+  "paste",
+  "rotate",
+  "fold",
+  "tv-remote",
+  "launch-app",
+  "restart-app",
+  "open-url",
+  "run-sequence",
+  "await-ui-element",
+  "file-panel",
+  "menu-bar",
+]);
+
+// Opt-out only: the `disable-auto-describe` flag is off by default.
+export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
+  return !isFlagEnabled("disable-auto-describe", options);
+}
+
+/**
+ * Appended instead of the screenshot and element tree while a profiler records
+ * on the call's device (the tool-server flags the call's envelope).
+ */
+export const PROFILING_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
+
+/** Header line that introduces the element tree appended after an action. */
+export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
+
+export function shouldAutoDescribe(toolName: string, args?: unknown): boolean {
+  const canonical = normalizeToolName(toolName);
+  return AUTO_DESCRIBE_TOOLS.has(canonical) && !isListCall(canonical, args);
+}
+
+/**
+ * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
+ * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
+ * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
+ * on.
+ */
+const SECRET_PLACEHOLDER_MARKER = "{{secret:";
+
+/**
+ * Deep-scan tool args for a secret placeholder; when one is present the
+ * auto-screenshot must be skipped, because a non-secure-entry field would hand
+ * the resolved plaintext back to the model as pixels. JSON.stringify reaches
+ * nested shapes (run-sequence steps) without knowing each tool's schema.
+ */
+export function containsSecretPlaceholder(args: unknown): boolean {
+  try {
+    return JSON.stringify(args)?.includes(SECRET_PLACEHOLDER_MARKER) ?? false;
+  } catch {
+    // Unserializable args can't have come from an MCP request; fail safe.
+    return true;
+  }
+}
+
+export function getUdidFromArgs(args: unknown): string | undefined {
+  if (
+    args &&
+    typeof args === "object" &&
+    "udid" in args &&
+    typeof (args as { udid: unknown }).udid === "string"
+  ) {
+    return (args as { udid: string }).udid;
+  }
+  return undefined;
+}
+
+/** Strip the client's `mcp__server__` prefix so the allow-list sees canonical names. */
+export function normalizeToolName(name: string): string {
+  const idx = name.lastIndexOf("__");
+  return idx === -1 ? name : name.slice(idx + 2);
+}
+
+export function shouldAutoScreenshot(toolName: string, args?: unknown): boolean {
+  const canonical = normalizeToolName(toolName);
+  return (
+    canonical !== "screenshot" &&
+    AUTO_SCREENSHOT_TOOLS.has(canonical) &&
+    !isListCall(canonical, args)
+  );
+}
+
+/** `menu-bar` and `file-panel` only read with `action: "list"`. */
+function isListCall(canonical: string, args: unknown): boolean {
+  return (
+    (canonical === "menu-bar" || canonical === "file-panel") &&
+    (args as { action?: unknown } | null | undefined)?.action === "list"
+  );
+}
+
+export function getAutoScreenshotDelayMs(toolName: string): number {
+  const canonical = normalizeToolName(toolName);
+  const base = AUTO_SCREENSHOT_DELAY_MS_BY_TOOL[canonical] ?? DEFAULT_DELAY_MS;
+  const envOverride = process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
+  if (envOverride) {
+    const envMs = parseInt(envOverride, 10);
+    if (!Number.isNaN(envMs)) return Math.max(base, envMs);
+  }
+  return base;
+}

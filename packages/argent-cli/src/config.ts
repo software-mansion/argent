@@ -1,18 +1,16 @@
-// Universal configuration CLI for argent: the `argent config` command with
-// `list` / `get` / `set` / `unset` subcommands.
-//
-// This is the single front door for the schema-driven config system in
-// `@argent/configuration-core`. New configurations are added by registering
-// them in the schema (CONFIG_SCHEMA) — they show up here automatically, with no
-// new top-level `argent` command. Values with a dedicated lifecycle command
-// (e.g. telemetry) are surfaced read-only and point the user at that command.
+// The `argent config` CLI over the schema-driven config system in
+// `@argent/configuration-core`. Registering a key in CONFIG_SCHEMA is enough to
+// surface it here. Keys with a `manageCommand` (e.g. telemetry) stay read-only
+// and point the user at that command.
 
 import * as path from "node:path";
 import pc from "picocolors";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   CONFIG_SCHEMA,
   configDir,
-  findProjectRoot,
+  getConfigDefinition,
   getConfigValueByKey,
   getConfigValueAtScope,
   setConfigValue,
@@ -49,8 +47,6 @@ export function config(argv: string[]): void {
   }
 }
 
-// ── list ───────────────────────────────────────────────────────────────────
-
 function cmdList(argv: string[]): void {
   if (wantsHelp(argv)) {
     console.log(`Usage: argent config list [--json]
@@ -59,7 +55,11 @@ Show every recognized configuration value, its effective (merged) value, and
 the raw value stored at each scope.`);
     return;
   }
-  const json = argv.includes("--json");
+  const { positionals, json } = parseArgs(argv, LIST_OPTIONS);
+  if (positionals.length > 0) {
+    console.error(`Error: unexpected extra argument "${positionals[0]}".`);
+    process.exit(2);
+  }
   const entries = listConfig();
 
   if (json) {
@@ -84,12 +84,12 @@ the raw value stored at each scope.`);
 
 function scopeDetail(e: ConfigEntryView): string {
   const parts: string[] = [`scopes: ${e.scopes.join(", ")}`];
+  // The description alone can't say it: a list-valued key reads like a string one.
+  if (e.expected) parts.push(`value: ${e.expected}${e.example ? `, e.g. ${e.example}` : ""}`);
   if (e.project !== undefined) parts.push(`project=${formatValuePlain(e.project)}`);
   if (e.global !== undefined) parts.push(`global=${formatValuePlain(e.global)}`);
   return parts.join("  ·  ");
 }
-
-// ── get ────────────────────────────────────────────────────────────────────
 
 function cmdGet(argv: string[]): void {
   if (wantsHelp(argv)) {
@@ -99,7 +99,7 @@ Print a configuration value. Without --scope, prints the effective value after
 merging project and global. With --scope, prints only that scope's stored value.`);
     return;
   }
-  const { positionals, scope, json } = parseArgs(argv);
+  const { positionals, scope, json } = parseArgs(argv, GET_OPTIONS);
   const key = positionals[0];
   if (!key) {
     console.error("Error: `argent config get` requires a <key>.");
@@ -126,8 +126,6 @@ merging project and global. With --scope, prints only that scope's stored value.
   }
 }
 
-// ── set ────────────────────────────────────────────────────────────────────
-
 function cmdSet(argv: string[]): void {
   if (wantsHelp(argv)) {
     console.log(`Usage: argent config set <key> <value> [--scope global|project]
@@ -137,7 +135,7 @@ write <project-root>/.argent/config.json. Booleans, numbers, and JSON arrays are
 parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a string.`);
     return;
   }
-  const { positionals, scope } = parseArgs(argv);
+  const { positionals, scope } = parseArgs(argv, WRITE_OPTIONS);
   const key = positionals[0];
   const rawValue = positionals[1];
   if (!key || rawValue === undefined) {
@@ -150,19 +148,19 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
-    // Echo the normalized value that was actually stored (asString trims,
-    // asStringArray drops blanks, …), not the raw CLI input.
+    // Report the value as normalized on write (trimmed, blanks dropped), not the input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
+    const restart = restartHint(key);
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
-    reportError(err);
+    // Built here, not in reportError: only this frame knows the value and scope typed.
+    reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
   }
 }
-
-// ── unset ──────────────────────────────────────────────────────────────────
 
 function cmdUnset(argv: string[]): void {
   if (wantsHelp(argv)) {
@@ -172,7 +170,7 @@ Remove a configuration value at a scope (default global). Falls back to the
 other scope / the default on the next read.`);
     return;
   }
-  const { positionals, scope } = parseArgs(argv);
+  const { positionals, scope } = parseArgs(argv, WRITE_OPTIONS);
   const key = positionals[0];
   if (!key) {
     console.error("Error: `argent config unset` requires a <key>.");
@@ -184,7 +182,7 @@ other scope / the default on the next read.`);
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
     const removed = unsetConfigValue(key, targetScope);
     if (removed && warning) console.error(pc.yellow(warning));
@@ -193,12 +191,12 @@ other scope / the default on the next read.`);
         ? `Unset ${pc.bold(key)} (${scopeLabel(targetScope)}).`
         : pc.dim(`${key} was not set at ${targetScope} scope.`)
     );
+    const restart = removed ? restartHint(key) : null;
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
     reportError(err);
   }
 }
-
-// ── shared helpers ───────────────────────────────────────────────────────────
 
 interface ParsedArgs {
   positionals: string[];
@@ -206,88 +204,60 @@ interface ParsedArgs {
   json: boolean;
 }
 
-function parseArgs(argv: string[]): ParsedArgs {
-  const positionals: string[] = [];
-  let scope: FlagScope | null = null;
-  let json = false;
+const SCOPE_OPTION = { kind: "value", choices: ["global", "project"] } as const;
+const JSON_OPTION = { kind: "boolean" } as const;
+const LIST_OPTIONS = { json: JSON_OPTION } as const satisfies OptionSpecs;
+const GET_OPTIONS = { scope: SCOPE_OPTION, json: JSON_OPTION } as const satisfies OptionSpecs;
+const WRITE_OPTIONS = { scope: SCOPE_OPTION } as const satisfies OptionSpecs;
 
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i]!;
-    if (tok === "--json") {
-      json = true;
-      continue;
-    }
-    if (tok === "--scope") {
-      scope = parseScope(argv[++i]);
-      continue;
-    }
-    if (tok.startsWith("--scope=")) {
-      scope = parseScope(tok.slice("--scope=".length));
-      continue;
-    }
-    if (tok.startsWith("--")) {
-      console.error(`Error: unknown flag "${tok}".`);
-      process.exit(2);
-    }
-    positionals.push(tok);
+function parseArgs(argv: string[], specs: OptionSpecs): ParsedArgs {
+  try {
+    const { positionals, options } = parseCommandArgs(argv, specs);
+    return {
+      positionals,
+      scope: (options.scope as FlagScope | undefined) ?? null,
+      json: options.json === true,
+    };
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}.`);
+    process.exit(2);
   }
-  return { positionals, scope, json };
-}
-
-function parseScope(raw: string | undefined): FlagScope {
-  if (raw === "global" || raw === "project") return raw;
-  console.error(`Error: --scope must be "global" or "project"${raw ? `, got "${raw}"` : ""}.`);
-  process.exit(2);
 }
 
 function wantsHelp(argv: string[]): boolean {
   return argv.includes("--help") || argv.includes("-h");
 }
 
-/**
- * `(global)` for the global scope; `(project: /resolved/root)` for the project
- * scope, so a write always shows which directory "project" resolved to.
- */
+/** Names the resolved root for `project`, so a write shows which directory it meant. */
 function scopeLabel(scope: FlagScope): string {
   if (scope === "global") return "global";
   return `project: ${path.dirname(configDir("project"))}`;
 }
 
-/**
- * A stderr warning when "project" scope resolves somewhere surprising: to the
- * home directory (where the project config file IS the global one — `~/.argent`
- * itself is a project marker, so any non-project cwd under $HOME lands here),
- * or to the bare cwd because no marker was found up to the fs root. Must be
- * called BEFORE the write — a project-scope `set` creates `.argent` in the
- * resolved root, which would make the no-marker case undetectable afterwards.
- */
-function degenerateProjectScopeWarning(scope: FlagScope): string | null {
-  if (scope !== "project") return null;
-  const projDir = configDir("project");
-  if (path.resolve(projDir) === path.resolve(configDir("global"))) {
-    return (
-      `WARNING: no project found between ${process.cwd()} and your home directory — ` +
-      `"project" scope resolved to the home directory, so this writes the GLOBAL ` +
-      `config file (${path.join(projDir, "config.json")}).`
-    );
-  }
-  if (findProjectRoot(process.cwd()) === null) {
-    return (
-      `WARNING: no project markers (.argent, .git, package.json) found above ` +
-      `${process.cwd()} — treating it as the project root and creating ` +
-      `${path.join(projDir, "config.json")}.`
-    );
-  }
-  return null;
+function projectConfigWarning(scope: FlagScope): string | null {
+  return degenerateProjectScopeWarning(scope, path.join(configDir("project"), "config.json"));
 }
 
-/** JSON for arrays/objects, the bare string for strings, `String()` otherwise. */
+/**
+ * Every other key takes effect without a restart, but the tool-server applies
+ * `android.adbServerPort` once, at start: the adb server is its connection to
+ * every Android device, so a change waits for a restart.
+ */
+function restartHint(key: string): string | null {
+  if (key !== "android.adbServerPort") return null;
+  return (
+    `The tool-server reads ${key} only when it starts. Apply the change with ` +
+    `\`argent server stop\`: this stops it for every session, and the next tool call starts it again.`
+  );
+}
+
 function formatValuePlain(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value);
 }
 
-/** Colorized variant for the human list view (booleans green/red). */
+/** Colorized variant for the human list view. */
 function formatValue(value: unknown): string {
   if (value === undefined) return pc.dim("(unset)");
   if (typeof value === "boolean" && process.stdout.isTTY) {
@@ -296,7 +266,34 @@ function formatValue(value: unknown): string {
   return formatValuePlain(value);
 }
 
-function reportError(err: unknown): never {
+/** Quote so a pasted suggestion stores what it shows: bare `~`/brackets are eaten by the shell. */
+function quoteForShell(value: string): string {
+  if (/^[A-Za-z0-9._/@:+-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The command the user probably meant, or null. Only offered for the one
+ * mechanical case: a single item given where a list-valued key was expected.
+ * Nothing is written on their behalf — the command is printed for them to run.
+ */
+function suggestCorrectedSet(
+  err: unknown,
+  key: string,
+  rawValue: string,
+  scope: FlagScope | null
+): string | null {
+  if (!(err instanceof ConfigValidationError)) return null;
+  const def = getConfigDefinition(key);
+  if (!def) return null;
+  // A successful parse of the wrapped value is the confidence test.
+  const wrapped = def.parse([rawValue]);
+  if (wrapped === undefined) return null;
+  const scopeFlag = scope ? ` --scope ${scope}` : "";
+  return `argent config set ${key} ${quoteForShell(JSON.stringify([rawValue]))}${scopeFlag}`;
+}
+
+function reportError(err: unknown, suggest?: () => string | null): never {
   if (err instanceof ConfigManagedElsewhereError) {
     console.error(`Error: ${err.message} Use \`${err.command}\` instead.`);
   } else if (
@@ -308,18 +305,42 @@ function reportError(err: unknown): never {
     if (err instanceof UnknownConfigKeyError) {
       console.error(`Run \`argent config list\` to see available keys.`);
     }
+    if (err instanceof ConfigValidationError) {
+      const corrected = suggest?.() ?? null;
+      if (corrected) {
+        console.error(`Did you mean: ${corrected}`);
+      } else if (err.example) {
+        console.error(`Example: argent config set ${err.key} ${quoteForShell(err.example)}`);
+      }
+      console.error(`Run \`argent config list\` to see each key's expected value.`);
+    }
   } else {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
   }
   process.exit(2);
 }
 
+// Greedy word wrap to the 80-column width the rest of the usage text is written for.
+function wrapText(text: string, indent: string, width = 80): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (line && indent.length + line.length + 1 + word.length > width) {
+      lines.push(indent + line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(indent + line);
+  return lines;
+}
+
 function printUsage(): void {
-  const keys = CONFIG_SCHEMA.map((d) => d.key);
-  const maxKey = keys.reduce((m, k) => Math.max(m, k.length), 0);
   const keyLines = CONFIG_SCHEMA.map((d) => {
-    const managed = d.manageCommand ? pc.dim(` [managed by \`${d.manageCommand}\`]`) : "";
-    return `  ${d.key.padEnd(maxKey)}  ${d.description}${managed}`;
+    const lines = [`  ${d.key}`, ...wrapText(d.description, "      ")];
+    if (d.manageCommand) lines.push(pc.dim(`      [managed by \`${d.manageCommand}\`]`));
+    return lines.join("\n");
   });
 
   console.log(`Usage: argent config <command> [options]
@@ -336,7 +357,7 @@ Commands:
   unset <key>          Remove a value at a scope (default global)
 
 Recognized keys:
-${keyLines.join("\n")}
+${keyLines.join("\n\n")}
 
 Run \`argent config <command> --help\` for command-specific help.`);
 }

@@ -8,9 +8,14 @@ import { cleanupStaleMcpConfigs } from "../src/init-stale-config.js";
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Same pattern as mcp-configs.test.ts: redirect homedir() to a temp path so
 // hidden-scope probes (~/.claude.json, VS Code user profile) never touch the
-// real home directory.
+// real home directory. On Windows the VS Code probe does not go through
+// homedir() at all — vscodeUserDirs() reads %APPDATA% there — so the beforeEach
+// below pins that as well. Without it the two user-profile tests write their
+// one-entry fixture over the developer's own Code\User\mcp.json and then
+// assert that remove() deleted it.
 
 let homedirOverride: string | undefined;
+let originalAppData: string | undefined;
 
 vi.mock("node:os", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:os")>();
@@ -21,15 +26,15 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 // The cleanup policy's "provably dead" check probes PATH via
-// isGloballyInstalled; pin it per test instead of depending on whether the
+// isArgentOnPath; pin it per test instead of depending on whether the
 // machine running the suite has argent installed.
-let globallyInstalled = false;
+let argentOnPath = false;
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/utils.js")>();
   return {
     ...original,
-    isGloballyInstalled: vi.fn(() => globallyInstalled),
+    isArgentOnPath: vi.fn(() => argentOnPath),
   };
 });
 
@@ -51,9 +56,13 @@ function writeJsonFile(filePath: string, data: unknown): void {
 const claude = getAdapterByName("Claude Code")!;
 const cursor = getAdapterByName("Cursor")!;
 const vscode = getAdapterByName("VS Code")!;
-const windsurf = getAdapterByName("Windsurf")!;
+const windsurf = getAdapterByName("Devin Desktop")!;
 
 const ARGENT_GLOBAL_ENTRY = { type: "stdio", command: "argent", args: ["mcp"] };
+const PINNED_GLOBAL_ENTRY = {
+  command: "/opt/homebrew/bin/node",
+  args: ["/opt/homebrew/lib/node_modules/@swmansion/argent/dist/cli.js", "mcp"],
+};
 
 function claudeJsonPath(): string {
   return path.join(home, ".claude.json");
@@ -66,11 +75,15 @@ beforeEach(() => {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(root, { recursive: true });
   homedirOverride = home;
-  globallyInstalled = false;
+  originalAppData = process.env.APPDATA;
+  process.env.APPDATA = path.join(home, "AppData", "Roaming");
+  argentOnPath = false;
 });
 
 afterEach(() => {
   homedirOverride = undefined;
+  if (originalAppData === undefined) delete process.env.APPDATA;
+  else process.env.APPDATA = originalAppData;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -170,6 +183,20 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(findings[0].location).toContain(link);
   });
 
+  it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+    "matches a project key that differs from the root only in case",
+    () => {
+      const key = root.toUpperCase();
+      writeJsonFile(claudeJsonPath(), {
+        projects: { [key]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
+      });
+
+      const findings = claude.findShadowingConfigs!(root, "local");
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toContain(key);
+    }
+  );
+
   it("returns nothing and never writes when ~/.claude.json is malformed", () => {
     fs.writeFileSync(claudeJsonPath(), "{ this is not json");
 
@@ -266,6 +293,30 @@ describe("vscodeAdapter.findShadowingConfigs", () => {
     expect(fs.existsSync(userMcpJsonPath())).toBe(false);
   });
 
+  it("resolves the user profile from %APPDATA% on Windows", () => {
+    // vscodeUserDirs() reads process.platform at call time and takes a %APPDATA%
+    // branch that never touches homedir(), so this is the one arm the homedir
+    // mock cannot reach — and the arm whose remove() deletes a real user's
+    // mcp.json. Without this the branch can be deleted with every suite green.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const appDataMcpJson = path.join(process.env.APPDATA!, "Code", "User", "mcp.json");
+      writeJsonFile(appDataMcpJson, {
+        servers: { argent: { type: "stdio", command: "argent", args: ["mcp"] } },
+      });
+
+      const findings = vscode.findShadowingConfigs!(root, "local");
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toBe(appDataMcpJson);
+    } finally {
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    }
+  });
+
   it("returns nothing when no user-profile config exists", () => {
     expect(vscode.findShadowingConfigs!(root, "local")).toHaveLength(0);
   });
@@ -275,7 +326,7 @@ describe("vscodeAdapter.findShadowingConfigs", () => {
 
 describe("cleanupStaleMcpConfigs", () => {
   it("auto-removes a Claude local-scope entry even when argent is on PATH", async () => {
-    globallyInstalled = true;
+    argentOnPath = true;
     writeJsonFile(claudeJsonPath(), {
       projects: { [root]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
     });
@@ -297,7 +348,7 @@ describe("cleanupStaleMcpConfigs", () => {
   it("keeps a custom-command Claude local-scope override (warns instead of removing)", async () => {
     // A deliberate dev override (`claude mcp add`): local scope outranking the
     // committed entry is its point — the sweep must flag it, never delete it.
-    globallyInstalled = true;
+    argentOnPath = true;
     writeJsonFile(claudeJsonPath(), {
       projects: {
         [root]: {
@@ -321,7 +372,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("removes a dead bare-argent global entry on a local install (confirmed)", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -340,7 +391,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("skips (and warns about) cross-project removals in a non-interactive run", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -361,7 +412,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("stays quiet about a WORKING env-tuned stock entry (argent on PATH)", async () => {
-    globallyInstalled = true;
+    argentOnPath = true;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, {
       mcpServers: {
@@ -384,7 +435,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("treats a legacy ARGENT_MCP_LOG-only entry as argent's own (removable when dead)", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     // The shape argent <= 0.9.x wrote: a log path cannot make the dead
     // command resolvable, so it must go through the dead-confirm queue like
@@ -413,7 +464,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("never treats an env-carrying bare-argent entry as provably dead", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     // The env (an nvm PATH) is exactly what can make `argent` resolvable in
     // the client even though this shell's probe misses it.
@@ -442,7 +493,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("leaves a working bare-argent global entry alone, silently", async () => {
-    globallyInstalled = true;
+    argentOnPath = true;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -459,7 +510,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("warns about (but never removes) a custom-command global entry", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, {
       mcpServers: { argent: { command: "node", args: ["/old/checkout/cli.js", "mcp"] } },
@@ -481,7 +532,7 @@ describe("cleanupStaleMcpConfigs", () => {
   it("sweeps dead global entries of detected-but-not-written adapters", async () => {
     // Windsurf has no project config, so local mode drops it from the written
     // set — its dead global entry must still be pruned via the detected set.
-    globallyInstalled = false;
+    argentOnPath = false;
     const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
     writeJsonFile(windsurfGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -499,7 +550,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("does not sweep global entries on a global-mode install", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -550,6 +601,39 @@ describe("cleanupStaleMcpConfigs", () => {
     expect(result.lines).toHaveLength(0);
   });
 
+  it("stays silent about the pinned global entry when the project path is the global path", async () => {
+    // Global `init` run from $HOME: Cursor's project file is ~/.cursor/mcp.json.
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: PINNED_GLOBAL_ENTRY } });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "global",
+      scope: "global",
+      effectiveRoot: home,
+    });
+
+    expect(result.lines).toHaveLength(0);
+  });
+
+  it("stays silent about a pinned global entry on a local install", async () => {
+    argentOnPath = true;
+    writeJsonFile(path.join(home, ".cursor", "mcp.json"), {
+      mcpServers: { argent: PINNED_GLOBAL_ENTRY },
+    });
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+    });
+
+    expect(result.lines).toHaveLength(0);
+  });
+
   it("survives an adapter whose shadow probe throws", async () => {
     const throwing = {
       ...claude,
@@ -571,7 +655,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("asks once before cross-project removals, listing each entry", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
     const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
@@ -600,7 +684,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("keeps every dead global entry when the confirmation is declined", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const cursorGlobal = path.join(home, ".cursor", "mcp.json");
     writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
 
@@ -621,7 +705,7 @@ describe("cleanupStaleMcpConfigs", () => {
   it("never prompts for project-confined removals", async () => {
     // Claude's local-scope entry is keyed to this project; removing it cannot
     // affect other workspaces, so it must not be gated on the confirmation.
-    globallyInstalled = true;
+    argentOnPath = true;
     writeJsonFile(claudeJsonPath(), {
       projects: { [root]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
     });
@@ -641,7 +725,7 @@ describe("cleanupStaleMcpConfigs", () => {
   });
 
   it("gates a dead VS Code user-profile entry behind the confirmation", async () => {
-    globallyInstalled = false;
+    argentOnPath = false;
     const base =
       process.platform === "darwin"
         ? path.join(home, "Library", "Application Support")

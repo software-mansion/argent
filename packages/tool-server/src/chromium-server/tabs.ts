@@ -1,15 +1,16 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
+import { sleep } from "../utils/timing";
 import { browserWebSocketUrl, listPageTargets, type CdpTarget } from "./cdp-session";
 
 export interface TabInfo {
-  /** Stable per-session handle: `t1`, `t2`, … Never reused within a session. */
+  /** Stable per-session handle (`t1`, `t2`, …); never reused. */
   tabId: string;
   /** Underlying CDP target id. */
   targetId: string;
   title: string;
   url: string;
-  /** True for the tab the page-scoped tools (describe/tap/evaluate/…) act on. */
+  /** True for the tab the page-scoped tools act on. */
   active: boolean;
   /** Optional user-assigned label, usable interchangeably with `tabId`. */
   label?: string;
@@ -19,11 +20,11 @@ export interface TabsManager {
   /** Enumerate page targets (browser tabs / BrowserWindows) with stable ids. */
   list(): Promise<TabInfo[]>;
   /**
-   * Make `ref` (a `tabId` or a label) the active tab. Re-points the shared page
-   * CDP session so every other tool follows. No-op if already active.
+   * Make `ref` (a `tabId` or a label) active, re-pointing the shared page CDP
+   * session so every other tool follows.
    */
   select(ref: string): Promise<TabInfo[]>;
-  /** Open a new tab/page (optionally at `url`, optionally labelled) and, by default, activate it. */
+  /** Open a new tab/page and, unless `activate` is false, make it active. */
   open(opts?: { url?: string; label?: string; activate?: boolean }): Promise<TabInfo[]>;
   /** Close a tab (`ref` = tabId or label; defaults to the active tab). */
   close(ref?: string): Promise<TabInfo[]>;
@@ -38,18 +39,27 @@ interface TabsManagerDeps {
   /** Target id the `cdp` client is connected to at construction (the initial active tab). */
   initialTargetId: string;
   /**
-   * Called after the active tab changes (post-`reconnect`). Used by the server
-   * to re-enable core domains and refresh the cached viewport for the new page.
+   * Called after the active tab changes (post-`reconnect`) so the server can
+   * re-prime everything bound to the old page.
    */
   onActivated: () => Promise<void>;
+  /** Whether network conditions are set, so a new tab must wait for them before loading. */
+  networkThrottled: () => boolean;
 }
+
+const isHttpUrl = (url: string | undefined): url is string => /^https?:/i.test(url ?? "");
+
+const isBlank = (url: string) => url === "" || url === "about:blank";
+
+const TYPED_LOAD_TIMEOUT_MS = 120_000;
+const HISTORY_RESET_ATTEMPTS = 20;
+const HISTORY_RESET_RETRY_MS = 100;
 
 export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   const { cdp, port } = deps;
 
-  // Stable tabId ↔ CDP targetId mapping. tabIds are minted once and never
-  // reused, so a script/agent can keep referring to `t2` even as other tabs
-  // open and close (mirrors the `@eN` element-ref convention).
+  // tabIds are minted once and never reused, so a caller can keep referring to
+  // `t2` as other tabs open and close.
   const targetToTab = new Map<string, string>();
   const labelToTab = new Map<string, string>();
   const tabToLabel = new Map<string, string>();
@@ -102,9 +112,7 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   }
 
   function resolveTargetId(ref: string, targets: CdpTarget[]): string {
-    // A label?
     const byLabel = labelToTab.get(ref);
-    // A tabId (directly, or resolved from the label)?
     const wantTabId = byLabel ?? ref;
     for (const t of targets) {
       if (targetToTab.get(t.id) === wantTabId) return t.id;
@@ -149,7 +157,7 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
 
   async function withBrowserClient<T>(fn: (browser: CDPClient) => Promise<T>): Promise<T> {
     // Target.createTarget / closeTarget are browser-level commands, so they need
-    // the browser endpoint rather than a page session. Use a short-lived client.
+    // the browser endpoint rather than a page session.
     const browser = new CDPClient(await browserWebSocketUrl(port), { sendOrigin: false });
     await browser.connect();
     try {
@@ -159,25 +167,61 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     }
   }
 
+  /**
+   * Loads `url` as a typed address, then drops the blank page the tab started
+   * on from its history. Chrome rejects the history reset until the load commits.
+   */
+  async function loadAsTyped(targetId: string, url: string): Promise<void> {
+    await cdp.send("Page.navigate", { url, transitionType: "typed" }, TYPED_LOAD_TIMEOUT_MS);
+    for (let attempt = 0; attempt < HISTORY_RESET_ATTEMPTS; attempt++) {
+      if (activeTargetId !== targetId) return;
+      const reset = await cdp.send("Page.resetNavigationHistory").then(
+        () => true,
+        () => false
+      );
+      if (reset) return;
+      await sleep(HISTORY_RESET_RETRY_MS);
+    }
+  }
+
   async function open(opts?: {
     url?: string;
     label?: string;
     activate?: boolean;
   }): Promise<TabInfo[]> {
-    const url = opts?.url ?? "about:blank";
+    const requestedUrl = opts?.url;
+    const activating = opts?.activate !== false;
+    const deferLoad = activating && isHttpUrl(requestedUrl) && deps.networkThrottled();
+    const url = deferLoad ? "about:blank" : (requestedUrl ?? "about:blank");
     const created = await withBrowserClient(async (browser) => {
-      const out = (await browser.send("Target.createTarget", { url })) as { targetId?: string };
+      let out: { targetId?: string };
+      try {
+        out = (await browser.send("Target.createTarget", { url })) as { targetId?: string };
+      } catch (err) {
+        // Electron embeds a renderer but no browser shell, so it rejects this
+        // with a bare "Not supported". The underlying error is kept so a
+        // different cause (dropped connection, refused url) stays legible.
+        throw new FailureError(
+          `Could not open a tab: ${err instanceof Error ? err.message : String(err)}. ` +
+            `An Electron app has no browser-level target creation, so a tab cannot be made from ` +
+            `outside it — have the app open one (e.g. \`window.open()\` through ` +
+            `\`debugger-evaluate\`) and it will show up in \`chromium-tabs list\`. ` +
+            `The list, select and close actions are unaffected.`,
+          {
+            error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
+            failure_stage: "chromium_tab_open",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          }
+        );
+      }
       if (!out.targetId)
         throw new FailureError("Target.createTarget returned no targetId.", {
           error_code: FAILURE_CODES.CHROMIUM_TAB_OPEN_FAILED,
           failure_stage: "chromium_tab_open",
           failure_area: "tool_server",
-          // The CDP command round-tripped but its response was missing the
-          // expected targetId — a malformed payload from a source we don't own,
-          // classified `unknown` like the other CDP-command failures in this
-          // server (CHROMIUM_SCREENSHOT_FAILED, the viewport/storage evals).
-          // `network`/`invalid_response` is reserved for the HTTP /json
-          // discovery layer, which has a genuine fetch transport.
+          // A malformed CDP response, not a transport failure:
+          // `network`/`invalid_response` is reserved for the HTTP /json layer.
           error_kind: "unknown",
         });
       return out.targetId;
@@ -187,21 +231,25 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       labelToTab.set(opts.label, tabId);
       tabToLabel.set(tabId, opts.label);
     }
-    if (opts?.activate !== false) {
-      // The new target needs a moment to appear in /json/list with a WS URL.
-      const targets = await listTargets();
-      await activate(created, targets);
-      return targets.map(toInfo);
-    }
-    return list();
+    if (activating) await activate(created, await listTargets());
+    if (deferLoad) loadAsTyped(created, requestedUrl).catch(() => {});
+    const tabs = await list();
+    return tabs.map((tab) =>
+      tab.targetId === created && requestedUrl && isBlank(tab.url)
+        ? { ...tab, url: requestedUrl }
+        : tab
+    );
   }
 
   async function close(ref?: string): Promise<TabInfo[]> {
     const targets = await listTargets();
     const targetId = ref ? resolveTargetId(ref, targets) : activeTargetId;
+    if (targetId === activeTargetId) {
+      const fallback = targets.find((t) => t.id !== targetId && t.webSocketDebuggerUrl);
+      if (fallback) await activate(fallback.id, targets);
+    }
     await withBrowserClient((browser) => browser.send("Target.closeTarget", { targetId }));
 
-    // Forget the closed tab's id/label.
     const tabId = targetToTab.get(targetId);
     targetToTab.delete(targetId);
     if (tabId) {
@@ -212,15 +260,8 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       }
     }
 
-    // If we closed the active tab, fall back to another live page so the
-    // page-scoped tools keep working.
-    if (targetId === activeTargetId) {
-      const remaining = (await listTargets()).filter((t) => t.id !== targetId);
-      if (remaining.length > 0) {
-        await activate(remaining[0]!.id, remaining);
-      }
-    }
-    return list();
+    const remaining = (await listTargets()).filter((t) => t.id !== targetId);
+    return remaining.map(toInfo);
   }
 
   return {

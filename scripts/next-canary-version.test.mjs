@@ -12,7 +12,7 @@ test("increments the counter within the same base", () => {
 });
 
 test("resets to 0 when the base advances (a new stable shipped)", () => {
-  // 0.13.1 is now stable; its old 0.13.1-next.* belong to a finished line.
+  // The 0.13.1-next.* belong to a finished line, so the counter restarts.
   assert.equal(
     computeCanaryVersion(["0.13.0", "0.13.1-next.0", "0.13.1-next.1", "0.13.1"]),
     "0.13.2-next.0"

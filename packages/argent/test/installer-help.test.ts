@@ -102,7 +102,6 @@ describe("installerHelpRequested", () => {
     expect(installerHelpRequested("run", ["gesture-tap", "--help"])).toBe(false);
     expect(installerHelpRequested("tools", ["--help"])).toBe(false);
     expect(installerHelpRequested("server", ["-h"])).toBe(false);
-    expect(installerHelpRequested("mcp", ["--help"])).toBe(false);
     // A non-installer command must not be intercepted via the bareword either.
     expect(installerHelpRequested("run", ["help"])).toBe(false);
   });
@@ -115,7 +114,7 @@ describe("installerHelpRequested", () => {
 describe("isInstallerCommand", () => {
   it("recognizes exactly the installer command set", () => {
     expect([...INSTALLER_COMMANDS].sort()).toEqual(
-      ["init", "install", "remove", "uninstall", "update"].sort()
+      ["init", "install", "mcp", "remove", "uninstall", "update"].sort()
     );
     for (const command of INSTALLER_COMMANDS) {
       expect(isInstallerCommand(command)).toBe(true);
@@ -124,7 +123,6 @@ describe("isInstallerCommand", () => {
 
   it("rejects non-installer and undefined commands", () => {
     expect(isInstallerCommand("run")).toBe(false);
-    expect(isInstallerCommand("mcp")).toBe(false);
     expect(isInstallerCommand(undefined)).toBe(false);
   });
 });
@@ -159,6 +157,7 @@ describe("printInstallerHelp", () => {
     expect(init).toContain("Options:");
     expect(init).toContain("--yes, -y");
     expect(init).toContain("--no-telemetry");
+    expect(init).toContain("--no-allowlist");
     expect(init).toContain("--from <path>");
     expect(init).toContain("--global");
     expect(init).toContain("--local");
@@ -185,19 +184,6 @@ describe("printInstallerHelp", () => {
     expect(remove).toContain("Run `argent uninstall --help` to see its options.");
     expect(remove).not.toContain("Options:");
   });
-
-  it("only writes to stdout (no wizard / prompt / network)", () => {
-    // The whole contract of the help path is that it is side-effect-free. This
-    // asserts the function writes to console.log and returns nothing — not how
-    // many calls it batches the output into, which is an implementation
-    // detail. The end-to-end guarantee (config left untouched) is covered in
-    // cli-dispatch.test.ts.
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const result = printInstallerHelp("uninstall");
-    expect(result).toBeUndefined();
-    expect(spy).toHaveBeenCalled();
-    spy.mockRestore();
-  });
 });
 
 describe("INSTALLER_COMMAND_META", () => {
@@ -221,5 +207,55 @@ describe("INSTALLER_COMMAND_META", () => {
         expect(meta.options.length).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe("mcp is intercepted like the installers", () => {
+  // `argent mcp --help` used to start the stdio server, which then blocked
+  // reading JSON-RPC from stdin — the reason this command joined the set.
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], so the last two rows both read `treats "--foo"` — the opposite of
+  // what they assert.
+  it.each([
+    [["--help"]],
+    [["-h"]],
+    [["-H"]],
+    [["--HELP"]],
+    [["-help"]],
+    [["—help"]],
+    [["–help"]],
+    [["--help=x"]],
+    [["help"]],
+    [["HELP"]],
+    [["--foo", "--help"]],
+    [["--foo", "help"]],
+  ])("treats %j as a help request", (rest) => {
+    expect(installerHelpRequested("mcp", rest)).toBe(true);
+  });
+
+  it("leaves a real server launch alone", () => {
+    // Every generated editor config invokes a bare `argent mcp`.
+    expect(installerHelpRequested("mcp", [])).toBe(false);
+  });
+
+  it.each([[["--helpme"]], [["/help"]], [["--metro-port", "8082"]]])(
+    "does not treat %j as a help request",
+    (rest) => {
+      expect(installerHelpRequested("mcp", rest)).toBe(false);
+    }
+  );
+
+  it("documents itself without inviting the reader to run it blind", () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m) => void logs.push(String(m)));
+    printInstallerHelp("mcp");
+    spy.mockRestore();
+    const out = logs.join("\n");
+
+    expect(out).toContain("Usage: argent mcp");
+    expect(out).toContain("JSON-RPC");
+    // The whole point: say why running it by hand looks like a hang.
+    expect(out).toContain("hung");
+    expect(out).toContain("--help, -h");
   });
 });

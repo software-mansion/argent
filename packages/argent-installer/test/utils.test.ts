@@ -28,6 +28,20 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     default: { ...actual, execSync: execSyncMock },
     execSync: execSyncMock,
+    // A win32-stubbed PATH probe runs `where`, which macOS and Linux lack. Like
+    // `where`, it also matches `<name>.exe`.
+    execFileSync: ((bin: string, args: string[], opts: object) => {
+      if (bin !== "where") return actual.execFileSync(bin, args, opts);
+      const found = [args[0]!, `${args[0]}.exe`].flatMap((name) => {
+        try {
+          return [String(actual.execFileSync("which", ["-a", name], opts))];
+        } catch {
+          return [];
+        }
+      });
+      if (found.length === 0) throw new Error(`where: ${args[0]} not found`);
+      return found.join("");
+    }) as typeof actual.execFileSync,
   };
 });
 
@@ -35,9 +49,16 @@ import {
   readJson,
   writeJson,
   copyDir,
+  findRetiredFiles,
+  hashBundledContent,
+  removeRetiredFiles,
+  RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
   dirExists,
   detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
+  globalCommandOptions,
   globalUninstallCommand,
   formatShellCommand,
   getGlobalSkillLockPath,
@@ -46,9 +67,9 @@ import {
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
   localInstallCommand,
@@ -148,20 +169,397 @@ describe("writeJson", () => {
 // ── copyDir ───────────────────────────────────────────────────────────────────
 
 describe("copyDir", () => {
-  it("returns false when source does not exist", () => {
-    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBe(false);
-  });
-
-  it("copies directory recursively", () => {
+  // Two files and a nested directory, matching the shape of the bundled
+  // rules/agents trees this copies in practice.
+  function stageSource(): string {
     const src = path.join(tmpDir, "src");
-    const dest = path.join(tmpDir, "dest");
     fs.mkdirSync(path.join(src, "sub"), { recursive: true });
     fs.writeFileSync(path.join(src, "a.txt"), "hello");
     fs.writeFileSync(path.join(src, "sub", "b.txt"), "world");
+    return src;
+  }
 
-    expect(copyDir(src, dest)).toBe(true);
+  it("returns null when source does not exist", () => {
+    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBeNull();
+  });
+
+  // A release that dropped every agent: the copy must not leave an empty
+  // .claude/agents behind, nor report one as written.
+  it("returns null and creates nothing when the source holds no files", () => {
+    const src = path.join(tmpDir, "src");
+    fs.mkdirSync(path.join(src, "sub"), { recursive: true });
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBeNull();
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it("copies directory recursively and reports where it wrote", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBe(dest);
     expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("hello");
     expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Symlinked destinations (issue #701): the canonical copy lives in one
+  // harness-neutral directory and each vendor path is a link at it, so the copy
+  // has to write *through* the link instead of trying to replace it.
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked destinations", () => {
+    it("writes through a symlinked destination, leaving the link intact", () => {
+      const src = stageSource();
+      const real = path.join(tmpDir, "canonical");
+      const link = path.join(tmpDir, "dest");
+      fs.mkdirSync(real);
+      fs.symlinkSync("canonical", link);
+
+      expect(copyDir(src, link)).toBe(fs.realpathSync(real));
+      expect(fs.readFileSync(path.join(real, "a.txt"), "utf8")).toBe("hello");
+      expect(fs.readFileSync(path.join(real, "sub", "b.txt"), "utf8")).toBe("world");
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+
+    it("writes through a symlinked subdirectory of the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      const real = path.join(tmpDir, "canonical-sub");
+      fs.mkdirSync(dest);
+      fs.mkdirSync(real);
+      fs.symlinkSync("../canonical-sub", path.join(dest, "sub"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(path.join(real, "b.txt"), "utf8")).toBe("world");
+      expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("hello");
+      expect(fs.lstatSync(path.join(dest, "sub")).isSymbolicLink()).toBe(true);
+    });
+
+    // A single symlinked file is the layout a dotfile manager produces when the
+    // directory has to stay real because it holds the user's own agents too.
+    it("writes through a symlinked file in the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      const canonical = path.join(tmpDir, "canonical", "a.txt");
+      fs.mkdirSync(path.join(tmpDir, "canonical"));
+      fs.mkdirSync(dest);
+      fs.writeFileSync(canonical, "stale");
+      fs.symlinkSync(path.join("..", "canonical", "a.txt"), path.join(dest, "a.txt"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(canonical, "utf8")).toBe("hello");
+      expect(fs.lstatSync(path.join(dest, "a.txt")).isSymbolicLink()).toBe(true);
+    });
+
+    it("creates the target of a dangling destination link", () => {
+      const src = stageSource();
+      const link = path.join(tmpDir, "dest");
+      fs.symlinkSync("canonical", link);
+
+      copyDir(src, link);
+
+      expect(fs.readFileSync(path.join(tmpDir, "canonical", "a.txt"), "utf8")).toBe("hello");
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    });
+
+    // The case that aborted the whole process before: fs.cp does not throw on a
+    // dangling link it must turn into a directory, it terminates the runtime.
+    it("creates the target of a dangling link nested in the destination", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      fs.mkdirSync(dest);
+      fs.symlinkSync(path.join("..", "canonical-sub"), path.join(dest, "sub"));
+
+      copyDir(src, dest);
+
+      expect(fs.readFileSync(path.join(tmpDir, "canonical-sub", "b.txt"), "utf8")).toBe("world");
+    });
+
+    // A relative link target resolves against the directory the link really
+    // lives in — here `dotfiles/claude`, not the `home/.claude` path we were
+    // handed — so `..` has to be walked from the real parent.
+    it("resolves a dangling relative target from behind a symlinked parent", () => {
+      const src = stageSource();
+      fs.mkdirSync(path.join(tmpDir, "dotfiles", "claude"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "dotfiles", "shared"), { recursive: true });
+      fs.mkdirSync(path.join(tmpDir, "home"), { recursive: true });
+      fs.symlinkSync(path.join("..", "dotfiles", "claude"), path.join(tmpDir, "home", ".claude"));
+      fs.symlinkSync(
+        path.join("..", "shared", "rules"),
+        path.join(tmpDir, "dotfiles", "claude", "rules")
+      );
+
+      const written = copyDir(src, path.join(tmpDir, "home", ".claude", "rules"));
+
+      expect(written).toBe(path.join(fs.realpathSync(tmpDir), "dotfiles", "shared", "rules"));
+      expect(fs.existsSync(path.join(tmpDir, "home", ".claude", "rules", "a.txt"))).toBe(true);
+    });
+
+    it("follows a chain of destination links to its end", () => {
+      const src = stageSource();
+      const real = path.join(tmpDir, "canonical");
+      fs.mkdirSync(real);
+      fs.symlinkSync("canonical", path.join(tmpDir, "hop"));
+      fs.symlinkSync("hop", path.join(tmpDir, "dest"));
+
+      expect(copyDir(src, path.join(tmpDir, "dest"))).toBe(fs.realpathSync(real));
+      expect(fs.readFileSync(path.join(real, "a.txt"), "utf8")).toBe("hello");
+    });
+
+    // Completing a link is a courtesy for a canonical directory the user has
+    // already made — not a licence to build a tree wherever a link points.
+    it("refuses a dangling link whose parent does not exist, creating nothing", () => {
+      const src = stageSource();
+      const link = path.join(tmpDir, "dest");
+      fs.symlinkSync(path.join("nowhere", "canonical"), link);
+
+      expect(() => copyDir(src, link)).toThrow();
+      expect(fs.existsSync(path.join(tmpDir, "nowhere"))).toBe(false);
+    });
+
+    // Guards a design that resolved these itself and handed the result to
+    // fs.cp, which terminates the runtime on a dangling link rather than
+    // throwing. Left to fs.cp, a leaf link is a plain catchable error.
+    it("reports a dangling chain on a destination file without crashing", () => {
+      const src = stageSource();
+      const dest = path.join(tmpDir, "dest");
+      fs.mkdirSync(path.join(tmpDir, "neutral"), { recursive: true });
+      fs.mkdirSync(dest);
+      fs.symlinkSync(path.join("..", "neutral", "a.txt"), path.join(dest, "a.txt"));
+      fs.symlinkSync(path.join("..", "gone", "a.txt"), path.join(tmpDir, "neutral", "a.txt"));
+
+      expect(() => copyDir(src, dest)).toThrow();
+    });
+
+    it("refuses a destination link pointing at a file, without touching it", () => {
+      const src = stageSource();
+      const file = path.join(tmpDir, "occupied");
+      const link = path.join(tmpDir, "dest");
+      fs.writeFileSync(file, "mine");
+      fs.symlinkSync("occupied", link);
+
+      expect(() => copyDir(src, link)).toThrow(expect.objectContaining({ code: "EEXIST" }));
+      expect(fs.readFileSync(file, "utf8")).toBe("mine");
+    });
+  });
+
+  it("overwrites an existing destination on a repeat copy", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+    copyDir(src, dest);
+    fs.writeFileSync(path.join(src, "a.txt"), "second");
+
+    copyDir(src, dest);
+
+    expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("second");
+    expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Nothing sensible asks for this, but the walk must not chase its own output
+  // down an unbounded path, and must not truncate a file by copying it over
+  // itself.
+  it("does not burrow when the destination is inside the source", () => {
+    const src = stageSource();
+
+    copyDir(src, path.join(src, "sub"));
+
+    expect(fs.existsSync(path.join(src, "sub", "sub", "sub"))).toBe(false);
+    expect(fs.readFileSync(path.join(src, "a.txt"), "utf8")).toBe("hello");
+    expect(fs.readFileSync(path.join(src, "sub", "b.txt"), "utf8")).toBe("world");
+  });
+
+  // Creating a directory is what fs.cp cannot survive, so the copy does it.
+  it("reports an unwritable destination instead of dying", () => {
+    const src = stageSource();
+    const dest = path.join(tmpDir, "dest");
+    fs.mkdirSync(dest);
+    fs.chmodSync(dest, 0o555);
+
+    try {
+      expect(() => copyDir(src, dest)).toThrow(expect.objectContaining({ code: "EACCES" }));
+    } finally {
+      fs.chmodSync(dest, 0o755);
+    }
+  });
+});
+
+// ── Retired bundled files ─────────────────────────────────────────────────────
+
+describe("RETIRED_BUNDLED_PATHS", () => {
+  // A retired file the bundle still ships has to be listed as it ships now, or
+  // copies of this version would stay once the bundle drops it.
+  it("lists the hash of every retired file the bundle still ships", () => {
+    for (const [kind, dir] of [
+      ["agents", AGENTS_DIR],
+      ["rules", RULES_DIR],
+    ] as const) {
+      for (const { path: relativePath, shipped } of RETIRED_BUNDLED_PATHS[kind]) {
+        const file = path.join(dir, ...relativePath.split("/"));
+        if (!fs.existsSync(file)) continue;
+        const content = fs.readFileSync(file, "utf8");
+        expect(shipped, relativePath).toContain(hashBundledContent(content));
+      }
+    }
+  });
+});
+
+describe("RETIRED_GLOBAL_RULES", () => {
+  // The project rule a local init at the home dir copies into ~/.claude/rules
+  // must not read as a retired global one.
+  it("does not list the rule the bundle ships now", () => {
+    for (const { path: relativePath, shipped } of RETIRED_GLOBAL_RULES) {
+      const file = path.join(RULES_DIR, ...relativePath.split("/"));
+      if (!fs.existsSync(file)) continue;
+      expect(shipped, relativePath).not.toContain(
+        hashBundledContent(fs.readFileSync(file, "utf8"))
+      );
+    }
+  });
+});
+
+describe("findRetiredFiles / removeRetiredFiles", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const retired = [
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [hashBundledContent(INSPECTOR)],
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [hashBundledContent(CHECKLIST)],
+    },
+  ];
+  let bundle: string;
+  let target: string;
+
+  function put(filePath: string, contents: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, contents);
+  }
+
+  function stageRetired(targetDir: string): void {
+    put(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    put(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function removeAllFound(targetDir: string) {
+    return removeRetiredFiles(targetDir, findRetiredFiles(retired, bundle, targetDir));
+  }
+
+  beforeEach(() => {
+    // A release that no longer ships either retired file.
+    bundle = path.join(tmpDir, "bundle");
+    put(path.join(bundle, "argent-other.md"), "other");
+    target = path.join(tmpDir, ".claude", "agents");
+  });
+
+  it("finds copies of retired files the bundle no longer ships", () => {
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([
+      { relativePath: "argent-environment-inspector.md", sha256: hashBundledContent(INSPECTOR) },
+      {
+        relativePath: "references/quality-control-checklist.md",
+        sha256: hashBundledContent(CHECKLIST),
+      },
+    ]);
+  });
+
+  it("reads a copy with CRLF line endings as the version shipped", () => {
+    put(path.join(target, "argent-environment-inspector.md"), INSPECTOR.replace(/\n/g, "\r\n"));
+
+    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([
+      { relativePath: "argent-environment-inspector.md" },
+    ]);
+  });
+
+  // An edited copy and the user's own file look alike: both may hold their work.
+  it("does not list a file at a retired path that matches no shipped version", () => {
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
+    put(path.join(target, "references", "quality-control-checklist.md"), "# My own checklist\n");
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+  });
+
+  it("does not list a retired file while the bundle still ships it", () => {
+    put(path.join(bundle, "argent-environment-inspector.md"), INSPECTOR);
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target).map((f) => f.relativePath)).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds nothing when the target dir is missing", () => {
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(false);
+  });
+
+  it("removes the files, then the dirs that leaves empty, up to the target itself", () => {
+    stageRetired(target);
+
+    expect(removeAllFound(target)).toEqual({
+      removedPaths: ["argent-environment-inspector.md", "references/quality-control-checklist.md"],
+      removedRoot: true,
+    });
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(true);
+  });
+
+  it("keeps the user's own files and every dir that still holds one", () => {
+    stageRetired(target);
+    put(path.join(target, "my-agent.md"), "mine");
+    put(path.join(target, "references", "my-notes.md"), "mine");
+
+    expect(removeAllFound(target)).toMatchObject({ removedRoot: false });
+    expect(fs.readdirSync(target).sort()).toEqual(["my-agent.md", "references"]);
+    expect(fs.readdirSync(path.join(target, "references"))).toEqual(["my-notes.md"]);
+  });
+
+  it("keeps a file that changed after it was found", () => {
+    stageRetired(target);
+    const found = findRetiredFiles(retired, bundle, target);
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}Changed meanwhile.\n`);
+
+    expect(removeRetiredFiles(target, found).removedPaths).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+    expect(fs.existsSync(path.join(target, "argent-environment-inspector.md"))).toBe(true);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("works through a linked target and keeps the link and the dir it leads to", () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), target);
+
+      expect(removeAllFound(target)).toEqual({
+        removedPaths: [
+          "argent-environment-inspector.md",
+          "references/quality-control-checklist.md",
+        ],
+        removedRoot: false,
+      });
+      expect(fs.readdirSync(canonical)).toEqual([]);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    });
+
+    it("removes the copy a linked file leads to, and the link left dangling", () => {
+      const shared = path.join(tmpDir, "shared", "argent-environment-inspector.md");
+      const link = path.join(target, "argent-environment-inspector.md");
+      put(shared, INSPECTOR);
+      put(path.join(target, "my-agent.md"), "mine");
+      fs.symlinkSync(path.join("..", "..", "shared", "argent-environment-inspector.md"), link);
+
+      expect(removeAllFound(target).removedPaths).toEqual(["argent-environment-inspector.md"]);
+      expect(fs.existsSync(shared)).toBe(false);
+      expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+    });
   });
 });
 
@@ -222,6 +620,74 @@ describe("resolveProjectRoot", () => {
     expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
   });
 
+  it("does not treat the home directory's global editor config as a project root", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "argent-test");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".git"), { recursive: true });
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+
+    expect(resolveProjectRoot(projectRoot, home)).toBe(projectRoot);
+  });
+
+  it("still finds a project root between the start directory and home", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "app");
+    const nestedDir = path.join(projectRoot, "src");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir, home)).toBe(projectRoot);
+  });
+
+  it("returns the home directory when started there", () => {
+    const home = path.join(tmpDir, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+
+    expect(resolveProjectRoot(home, home)).toBe(home);
+  });
+
+  // process.cwd() is physical; HOME may name it through a link.
+  describe.skipIf(process.platform === "win32")("home reached through a symlink", () => {
+    it.each([
+      ["HOME is itself a symlink", "realhome", "realhome", "home"],
+      ["an ancestor of HOME is a symlink", "var/home/u", "var/home", "home/u"],
+    ])("stops at home when %s", (_shape, physicalHome, linkTarget, homeVar) => {
+      const realHome = path.join(fs.realpathSync(tmpDir), physicalHome);
+      const projectRoot = path.join(realHome, "Dev", "argent-test");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+      fs.symlinkSync(linkTarget, path.join(tmpDir, "home"));
+
+      expect(resolveProjectRoot(projectRoot, path.join(tmpDir, homeVar))).toBe(projectRoot);
+    });
+
+    it("stops at home when the start directory names it through the link", () => {
+      const realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+      const projectRoot = path.join(tmpDir, "home", "Dev", "argent-test");
+      fs.mkdirSync(projectRoot, { recursive: true });
+
+      expect(resolveProjectRoot(projectRoot, realHome)).toBe(projectRoot);
+    });
+  });
+
+  it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+    "stops at home when HOME differs from the on-disk case",
+    () => {
+      const home = path.join(fs.realpathSync(tmpDir), "home");
+      const projectRoot = path.join(home, "Dev", "argent-test");
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
+
+      expect(resolveProjectRoot(projectRoot, home.toUpperCase())).toBe(projectRoot);
+    }
+  );
+
   it("recognizes opencode.jsonc as a project root marker", () => {
     const projectRoot = path.join(tmpDir, "project");
     const nestedDir = path.join(projectRoot, "src");
@@ -247,8 +713,13 @@ describe("detectPackageManager", () => {
     expect(detectPackageManager()).toBe("npm");
   });
 
-  it("returns yarn for yarn agent", () => {
-    process.env.npm_config_user_agent = "yarn/4.0.0";
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64";
+    expect(detectPackageManager()).toBe("yarn");
+  });
+
+  it("returns yarn for a Yarn 2+ agent", () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
     expect(detectPackageManager()).toBe("yarn");
   });
 
@@ -260,6 +731,329 @@ describe("detectPackageManager", () => {
   it("returns bun for bun agent", () => {
     process.env.npm_config_user_agent = "bun/1.0.0";
     expect(detectPackageManager()).toBe("bun");
+  });
+});
+
+// ── detectGlobalPackageManager ────────────────────────────────────────────────
+
+describe("detectGlobalPackageManager", () => {
+  const original = process.env.npm_config_user_agent;
+  const originalPath = process.env.PATH;
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-global-pm-")));
+    fs.mkdirSync(path.join(dir, "bin"));
+    process.env.PATH = [path.join(dir, "bin"), "/usr/bin", "/bin"].join(path.delimiter);
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = original;
+    process.env.PATH = originalPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function setAgent(agent: string | undefined): void {
+    if (agent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = agent;
+  }
+
+  function putGlobalOnPath(packageParent: string): void {
+    const pkg = path.join(dir, packageParent, "@swmansion", "argent");
+    fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+    fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+    fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+    fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(dir, "bin", "argent"));
+  }
+
+  function putScriptOnPath(body: string): void {
+    fs.writeFileSync(path.join(dir, "bin", "argent"), `#!/bin/sh\nexit 0\n${body}\n`);
+    fs.chmodSync(path.join(dir, "bin", "argent"), 0o755);
+  }
+
+  const LAUNCHERS: Array<[string, string | undefined]> = [
+    ["no", undefined],
+    ["an npm", "npm/11.6.2 node/v24.14.1 darwin arm64"],
+    ["a Yarn 1", "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64"],
+    ["a Yarn 2+", "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64"],
+    ["a pnpm", "pnpm/9.0.0 npm/? node/v24.14.1 darwin arm64"],
+    ["a bun", "bun/1.3.10 npm/? node/v24.14.1 darwin arm64"],
+  ];
+
+  it.each([
+    ["no", undefined, "npm"],
+    ["an npm", "npm/11.6.2 node/v24.14.1 darwin arm64", "npm"],
+    ["a Yarn 1", "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64", "yarn"],
+    ["a Yarn 2+", "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64", "npm"],
+    ["a pnpm", "pnpm/9.0.0 npm/? node/v24.14.1 darwin arm64", "pnpm"],
+    ["a bun", "bun/1.3.10 npm/? node/v24.14.1 darwin arm64", "bun"],
+  ])("returns %s launcher's own manager with no global install", (_launcher, agent, expected) => {
+    setAgent(agent);
+    expect(detectGlobalPackageManager()).toBe(expected);
+  });
+
+  describe.skipIf(process.platform === "win32")("the global's owner, whatever the launcher", () => {
+    it.each(LAUNCHERS)("returns npm over npm's layout under %s launcher", (_launcher, agent) => {
+      setAgent(agent);
+      putGlobalOnPath("lib/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each(LAUNCHERS)("returns bun over bun's folder under %s launcher", (_launcher, agent) => {
+      setAgent(agent);
+      putGlobalOnPath(".bun/install/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("bun");
+    });
+
+    it.each(LAUNCHERS)(
+      "returns yarn over Yarn classic's folder under %s launcher",
+      (_launcher, agent) => {
+        setAgent(agent);
+        putGlobalOnPath(".config/yarn/global/node_modules");
+        expect(detectGlobalPackageManager()).toBe("yarn");
+      }
+    );
+
+    it("returns bun over a global in a BUN_INSTALL_GLOBAL_DIR folder", () => {
+      putGlobalOnPath("bun-global/node_modules");
+      fs.writeFileSync(path.join(dir, "bun-global", "bun.lock"), "{}");
+      expect(detectGlobalPackageManager()).toBe("bun");
+    });
+
+    it("returns pnpm over a shim into a pnpm global-dir", () => {
+      const pkg = path.join(dir, "gd", "5", ".pnpm", "a@1", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(path.join(dir, "gd", "5", "pnpm-lock.yaml"), "");
+      putScriptOnPath(
+        'exec node "$basedir/../gd/5/.pnpm/a@1/node_modules/@swmansion/argent/dist/cli.js" "$@"'
+      );
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
+    it("returns pnpm over a pnpm 11 shim into a global-dir, whose package lives in its store", () => {
+      const stored = path.join(
+        dir,
+        "store",
+        "v11",
+        "links",
+        "h",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(stored, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(stored, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(stored, "dist", "cli.js"), "");
+      const scope = path.join(dir, "gd", "v11", "61e7", "node_modules", "@swmansion");
+      fs.mkdirSync(scope, { recursive: true });
+      fs.symlinkSync(stored, path.join(scope, "argent"));
+      fs.writeFileSync(path.join(dir, "gd", "v11", "61e7", "pnpm-lock.yaml"), "");
+      putScriptOnPath(`# cmd-shim-target=${path.join(scope, "argent", "dist", "cli.js")}`);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
+    it.each(LAUNCHERS)("returns pnpm over a pnpm shim under %s launcher", (_launcher, agent) => {
+      setAgent(agent);
+      putScriptOnPath(
+        'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"'
+      );
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+  });
+
+  describe.skipIf(process.platform === "win32")("npm's layout behind a link", () => {
+    // <dir>/prefix is an npm prefix: bin/argent links into lib/node_modules.
+    beforeEach(() => {
+      const pkg = path.join(dir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "prefix", "bin"));
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.symlinkSync(
+        "../lib/node_modules/@swmansion/argent/dist/cli.js",
+        path.join(dir, "prefix", "bin", "argent")
+      );
+    });
+
+    it.each(LAUNCHERS)(
+      "returns npm through a linked PATH directory under %s launcher",
+      (_l, agent) => {
+        setAgent(agent);
+        fs.symlinkSync(path.join(dir, "prefix", "bin"), path.join(dir, "linked-bin"));
+        process.env.PATH = [path.join(dir, "linked-bin"), "/usr/bin", "/bin"].join(path.delimiter);
+        expect(detectGlobalPackageManager()).toBe("npm");
+      }
+    );
+
+    it("returns npm through a relative link inside a linked PATH directory", () => {
+      // A stow-style folded dir: the link's `..` steps from its real directory.
+      fs.mkdirSync(path.join(dir, "dotfiles", "bin"), { recursive: true });
+      fs.symlinkSync("../../prefix/bin/argent", path.join(dir, "dotfiles", "bin", "argent"));
+      fs.symlinkSync(path.join(dir, "dotfiles", "bin"), path.join(dir, "stowed-bin"));
+      process.env.PATH = [path.join(dir, "stowed-bin"), "/usr/bin", "/bin"].join(path.delimiter);
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each(LAUNCHERS)("returns npm through a link to npm's bin under %s launcher", (_l, agent) => {
+      setAgent(agent);
+      fs.symlinkSync(path.join(dir, "prefix", "bin", "argent"), path.join(dir, "bin", "argent"));
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "returns pnpm over a pnpm shim that fails when run, from its target alone",
+    () => {
+      const pkg = path.join(
+        dir,
+        "pnpm",
+        "global",
+        "v11",
+        "h",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(
+        path.join(dir, "bin", "argent"),
+        `#!/bin/sh\nexit 1\n# cmd-shim-target=${path.join(pkg, "dist", "cli.js")}\n`
+      );
+      fs.chmodSync(path.join(dir, "bin", "argent"), 0o755);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    }
+  );
+
+  describe.skipIf(process.platform === "win32")("Yarn 2+ agent over a global on PATH", () => {
+    beforeEach(() => {
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    });
+
+    it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+      "returns npm over npm's layout behind a PATH entry in another case",
+      () => {
+        // npm links the bin relatively, so realpath keeps the case PATH spells.
+        const pkg = path.join(dir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+        fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+        fs.mkdirSync(path.join(dir, "prefix", "bin"));
+        fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+        fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+        fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+        fs.symlinkSync(
+          "../lib/node_modules/@swmansion/argent/dist/cli.js",
+          path.join(dir, "prefix", "bin", "argent")
+        );
+        process.env.PATH = `${path.join(dir, "PREFIX", "bin")}:/usr/bin:/bin`;
+        expect(detectGlobalPackageManager()).toBe("npm");
+      }
+    );
+
+    it("returns npm over an `npm link`ed checkout", () => {
+      putGlobalOnPath("checkout");
+      fs.mkdirSync(path.join(dir, "lib", "node_modules", "@swmansion"), { recursive: true });
+      fs.symlinkSync(
+        path.join(dir, "checkout", "@swmansion", "argent"),
+        path.join(dir, "lib", "node_modules", "@swmansion", "argent")
+      );
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each([
+      ["Yarn classic's default folder", ".config/yarn/global/node_modules"],
+      ["a custom Yarn classic global-folder", "yg/node_modules"],
+    ])("returns yarn over a global in %s, which npm would duplicate", (_shape, parent) => {
+      putGlobalOnPath(parent);
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    function putShimFirst(exitCode: number): void {
+      const shims = path.join(dir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), `#!/bin/sh\nexit ${exitCode}\n`);
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      process.env.PATH = `${shims}:${process.env.PATH}`;
+    }
+
+    it("returns yarn over Yarn classic's global behind a stale version-manager shim", () => {
+      putShimFirst(127);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns npm over a live version-manager shim, whatever is behind it", () => {
+      putShimFirst(0);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each([
+      [
+        "pnpm 11+",
+        'exec node "$basedir_abs/../global/v11/3aa0b3/node_modules/@swmansion/argent/dist/cli.js" "$@"',
+      ],
+      ["pnpm 9", 'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"'],
+    ])("returns pnpm over a %s global's shim", (_shape, line) => {
+      putScriptOnPath(line);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
+    it("returns yarn over a live shim that runs a package outside npm's layout", () => {
+      putScriptOnPath('exec node "$basedir/../Data/global/node_modules/.bin/argent" "$@"');
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns npm over a live binary shim", () => {
+      putScriptOnPath(`# node_modules/@swmansion/argent\n${"#".repeat(70 * 1024)}`);
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    describe("on Windows", () => {
+      function putWindowsShim(binDir: string, body: string, name = "argent"): void {
+        fs.mkdirSync(path.join(dir, binDir), { recursive: true });
+        fs.writeFileSync(path.join(dir, binDir, name), body);
+        fs.chmodSync(path.join(dir, binDir, name), 0o755);
+        process.env.PATH = `${path.join(dir, binDir)}:/usr/bin:/bin`;
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it("returns npm over npm's shim beside its node_modules", () => {
+        const pkg = path.join(dir, "npm", "node_modules", "@swmansion", "argent");
+        fs.mkdirSync(pkg, { recursive: true });
+        fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+        putWindowsShim("npm", '@"%dp0%\\node_modules\\@swmansion\\argent\\dist\\cli.js" %*');
+        expect(detectGlobalPackageManager()).toBe("npm");
+      });
+
+      it("returns yarn over Yarn classic's shim", () => {
+        putWindowsShim("Yarn/bin", '@"%~dp0\\..\\Data\\global\\node_modules\\.bin\\argent.cmd" %*');
+        expect(detectGlobalPackageManager()).toBe("yarn");
+      });
+
+      it("returns bun over bun's .exe shim beside its .bunx", () => {
+        putWindowsShim(".bun/bin", "MZ", "argent.exe");
+        fs.writeFileSync(path.join(dir, ".bun", "bin", "argent.bunx"), "");
+        expect(detectGlobalPackageManager()).toBe("bun");
+      });
+
+      it("returns pnpm over pnpm's shim", () => {
+        putWindowsShim(
+          "pnpm",
+          '@"%~dp0\\global\\5\\node_modules\\@swmansion\\argent\\dist\\cli.js" %*'
+        );
+        expect(detectGlobalPackageManager()).toBe("pnpm");
+      });
+    });
   });
 });
 
@@ -320,6 +1114,55 @@ describe("globalUninstallCommand", () => {
   });
 });
 
+describe("globalCommandOptions", () => {
+  const saved = {
+    home: process.env.HOME,
+    agent: process.env.npm_config_user_agent,
+    prefix: process.env.npm_config_prefix,
+  };
+  afterEach(() => {
+    for (const [key, value] of [
+      ["HOME", saved.home],
+      ["npm_config_user_agent", saved.agent],
+      ["npm_config_prefix", saved.prefix],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("keeps the caller's cwd and env for npm", () => {
+    expect(globalCommandOptions("npm")).toEqual({});
+  });
+
+  it.each(["yarn", "pnpm", "bun"] as const)("runs %s in the home dir", (pm) => {
+    delete process.env.npm_config_user_agent;
+    expect(globalCommandOptions(pm)).toEqual({ cwd: os.homedir() });
+  });
+
+  it.skipIf(process.platform === "win32")("keeps the caller's cwd when home is missing", () => {
+    delete process.env.npm_config_user_agent;
+    process.env.HOME = path.join(os.tmpdir(), "argent-no-such-home");
+    expect(globalCommandOptions("yarn")).toEqual({});
+  });
+
+  it("drops the prefix npm exec exports from yarn's env, not from pnpm's", () => {
+    process.env.npm_config_user_agent = "npm/11.6.2 node/v24.14.1 darwin arm64";
+    process.env.npm_config_prefix = "/opt/homebrew";
+    const yarn = globalCommandOptions("yarn");
+    expect(yarn.env).toBeDefined();
+    expect(yarn.env).not.toHaveProperty("npm_config_prefix");
+    expect(yarn.env?.npm_config_user_agent).toBe(process.env.npm_config_user_agent);
+    expect(globalCommandOptions("pnpm").env).toBeUndefined();
+  });
+
+  it("keeps a prefix set outside npm exec", () => {
+    delete process.env.npm_config_user_agent;
+    process.env.npm_config_prefix = "/opt/homebrew";
+    expect(globalCommandOptions("yarn").env).toBeUndefined();
+  });
+});
+
 // ── formatShellCommand ───────────────────────────────────────────────────────
 
 describe("formatShellCommand", () => {
@@ -333,22 +1176,6 @@ describe("formatShellCommand", () => {
     expect(
       formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
     ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
-  });
-});
-
-// ── Bundled paths ─────────────────────────────────────────────────────────────
-
-describe("bundled paths", () => {
-  it("SKILLS_DIR is a string ending with skills", () => {
-    expect(SKILLS_DIR).toMatch(/skills$/);
-  });
-
-  it("RULES_DIR is a string ending with rules", () => {
-    expect(RULES_DIR).toMatch(/rules$/);
-  });
-
-  it("AGENTS_DIR is a string ending with agents", () => {
-    expect(AGENTS_DIR).toMatch(/agents$/);
   });
 });
 
@@ -463,7 +1290,7 @@ describe("listArgentSkillsInLock", () => {
       JSON.stringify({
         version: 1,
         skills: {
-          "argent-create-flow": {},
+          "argent-create-e2e": {},
           "argent-old-workflow": {}, // still in lock even if no longer bundled
           "some-other-skill": {},
           "vercel-labs/agent-skills": {},
@@ -471,7 +1298,7 @@ describe("listArgentSkillsInLock", () => {
       })
     );
     // Result is sorted so callers can rely on a stable order.
-    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-e2e", "argent-old-workflow"]);
   });
 
   it("returns an empty list when the lock has no skills object", () => {
@@ -558,6 +1385,67 @@ describe("isOnline", () => {
 
 // ── isSkillsCliAvailable ─────────────────────────────────────────────────────
 
+describe("npxChildEnv", () => {
+  const SKIP_SUBMODULE_CONFIG = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "submodule.packages/argent-private.update",
+    GIT_CONFIG_VALUE_0: "none",
+  };
+
+  it("drops npm_config_package so a nested npx installs the package it is asked for", () => {
+    // `npx --package @swmansion/argent -- argent init` exports this to argent (#1335).
+    const env = npxChildEnv({
+      PATH: "/usr/bin",
+      npm_config_package: "@swmansion/argent@latest",
+      npm_config_yes: "true",
+    });
+
+    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true", ...SKIP_SUBMODULE_CONFIG });
+  });
+
+  it("matches the variable name case-insensitively", () => {
+    const env = npxChildEnv({ NPM_CONFIG_PACKAGE: "@swmansion/argent", HOME: "/home/u" });
+
+    expect(env).toEqual({ HOME: "/home/u", ...SKIP_SUBMODULE_CONFIG });
+  });
+
+  it("tells git to skip the private submodule the pinned skills source carries", () => {
+    // skills 1.8.0+ inits submodules after the clone; the SSH one hangs on a
+    // host-key prompt behind the spinner on machines without github.com known.
+    expect(npxChildEnv({})).toEqual(SKIP_SUBMODULE_CONFIG);
+  });
+
+  it("appends after git config entries the caller already set", () => {
+    const env = npxChildEnv({
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+    });
+
+    expect(env).toEqual({
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "http.proxy",
+      GIT_CONFIG_VALUE_0: "http://proxy:3128",
+      GIT_CONFIG_KEY_1: "submodule.packages/argent-private.update",
+      GIT_CONFIG_VALUE_1: "none",
+    });
+  });
+
+  it("starts the git config entries over when the inherited count is not one git accepts", () => {
+    for (const bogus of ["", "abc", "-1", "1.5"]) {
+      expect(npxChildEnv({ GIT_CONFIG_COUNT: bogus })).toEqual(SKIP_SUBMODULE_CONFIG);
+    }
+  });
+
+  it("does not modify the environment it was given", () => {
+    const source = { npm_config_package: "@swmansion/argent" };
+
+    npxChildEnv(source);
+
+    expect(source).toEqual({ npm_config_package: "@swmansion/argent" });
+  });
+});
+
 describe("isSkillsCliAvailable", () => {
   beforeEach(() => {
     execSyncMock.mockReset();
@@ -574,6 +1462,22 @@ describe("isSkillsCliAvailable", () => {
     expect(cmd).toBe("npx --force --no-install skills --version");
   });
 
+  it("runs the probe without an inherited npm_config_package", () => {
+    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
+    const original = process.env.npm_config_package;
+    process.env.npm_config_package = "@swmansion/argent@latest";
+    try {
+      isSkillsCliAvailable();
+    } finally {
+      if (original === undefined) delete process.env.npm_config_package;
+      else process.env.npm_config_package = original;
+    }
+
+    const opts = execSyncMock.mock.calls[0]![1] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env).toBeDefined();
+    expect(opts.env).not.toHaveProperty("npm_config_package");
+  });
+
   it("returns false when the probe throws (skills CLI not in npx cache)", () => {
     execSyncMock.mockImplementation(() => {
       throw new Error("command failed");
@@ -588,8 +1492,7 @@ describe("isSkillsCliAvailable", () => {
     isSkillsCliAvailable();
 
     const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
+      { stdio?: [unknown, unknown, unknown] } | undefined;
     expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   });
 
@@ -601,6 +1504,18 @@ describe("isSkillsCliAvailable", () => {
     const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
     expect(typeof opts?.timeout).toBe("number");
     expect(opts!.timeout!).toBeGreaterThan(0);
+  });
+
+  it("probes from the given cwd, where the `skills` command will run", () => {
+    execSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliAvailable("/work/repo");
+    isSkillsCliAvailable();
+
+    const pinned = execSyncMock.mock.calls[0]![1] as { cwd?: string };
+    const unpinned = execSyncMock.mock.calls[1]![1] as { cwd?: string };
+    expect(pinned.cwd).toBe("/work/repo");
+    expect(unpinned).not.toHaveProperty("cwd");
   });
 });
 
@@ -619,8 +1534,12 @@ describe("localInstallCommand", () => {
       args: ["add", "--dev", "pkg"],
     });
   });
-  it("uses add -D for pnpm", () => {
-    expect(localInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-D", "pkg"] });
+  it("uses add -D for pnpm, skipping the workspace-root check", () => {
+    // A bare `pnpm add` at a workspace root fails with ERR_PNPM_ADDING_TO_ROOT.
+    expect(localInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "--ignore-workspace-root-check", "pkg"],
+    });
   });
   it("uses add -d for bun", () => {
     expect(localInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-d", "pkg"] });
@@ -641,6 +1560,19 @@ describe("localUninstallCommand", () => {
 // ── detectProjectPackageManager ──────────────────────────────────────────────
 
 describe("detectProjectPackageManager", () => {
+  // With no marker found the walk falls back to detectPackageManager(), which
+  // reads npm_config_user_agent — the agent of whichever package manager is
+  // running the suite. Pin it so the boundary case below tests the walk rather
+  // than the contributor's package manager.
+  const originalAgent = process.env.npm_config_user_agent;
+  beforeEach(() => {
+    delete process.env.npm_config_user_agent;
+  });
+  afterEach(() => {
+    if (originalAgent === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = originalAgent;
+  });
+
   it("detects pnpm from pnpm-lock.yaml", () => {
     fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
@@ -663,7 +1595,7 @@ describe("detectProjectPackageManager", () => {
     expect(detectProjectPackageManager(tmpDir)).toBe("pnpm");
   });
   it("falls back to a valid PM when no lockfile is present", () => {
-    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+    expect(detectProjectPackageManager(tmpDir)).toBe("npm");
   });
   it("honors the corepack packageManager field over lockfiles", () => {
     fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
@@ -717,7 +1649,7 @@ describe("detectProjectPackageManager", () => {
     );
     // No lockfile: nothing identifies a single manager, so detection falls
     // back to the user-agent default rather than guessing from entry order.
-    expect(["npm", "yarn", "pnpm", "bun"]).toContain(detectProjectPackageManager(tmpDir));
+    expect(detectProjectPackageManager(tmpDir)).toBe("npm");
   });
   it("a stale devEngines declaration does not outrank the lockfile (pnpm→yarn/bun migration)", () => {
     // yarn and bun neither read nor update devEngines, so a `pnpm init`-era
@@ -771,8 +1703,14 @@ describe("detectProjectPackageManager", () => {
     const repo = path.join(tmpDir, "other-repo");
     fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
     // The sibling repo has no lockfile of its own; the outer pnpm lockfile
-    // must NOT bleed through the .git boundary.
-    expect(["npm", "yarn", "bun"]).toContain(detectProjectPackageManager(repo));
+    // must NOT bleed through the .git boundary, so the walk stops and falls
+    // back to the (pinned-unset) agent default.
+    expect(detectProjectPackageManager(repo)).toBe("npm");
+  });
+  it("falls back to yarn for a markerless project launched from Yarn 2+", () => {
+    fs.mkdirSync(path.join(tmpDir, ".git"));
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
   });
 });
 

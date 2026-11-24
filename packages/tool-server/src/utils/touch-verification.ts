@@ -116,7 +116,7 @@ export async function verifyTouchDelivery(
  * `recover-touch-injection` declares `apple: { simulator: true }`, so naming it
  * in a warning for anything else sends the agent at a guaranteed 400.
  */
-export function canRecoverTouchInjection(device?: DeviceInfo): boolean {
+function canRecoverTouchInjection(device?: DeviceInfo): boolean {
   return device?.platform === "ios" && device.kind === "simulator";
 }
 
@@ -182,6 +182,12 @@ export function describeVerify(
     "coordinates, since there is no equivalent wedge to clear." +
     (opts.tail ? ` ${opts.tail}` : "")
   );
+}
+
+/** Join a gesture's own warning (a foldable's panel note) with the delivery warning. */
+export function joinWarnings(...warnings: (string | undefined)[]): string | undefined {
+  const present = warnings.filter((w): w is string => w !== undefined);
+  return present.length > 0 ? present.join(" ") : undefined;
 }
 
 /**

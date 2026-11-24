@@ -1,0 +1,59 @@
+.figure {
+  margin: 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/*
+ * `height: auto` is load-bearing: the width and height attributes on the
+ * element would otherwise fix the box at the recording's pixel height and
+ * letterbox the frame inside it. With height auto the ratio drives the box.
+ */
+.video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--swm-radius-small);
+  background-color: var(--swm-off-background);
+  object-fit: contain;
+}
+
+/*
+ * Landscape clips (CLI sessions, editor panes) fill the content column. The
+ * ratio here only reserves space until the real one is known, from the width
+ * and height props or from the file itself.
+ */
+.landscape {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
+/*
+ * Simulator and emulator captures are roughly 9:19.5. Capping the height keeps
+ * a full-width portrait clip from taking over three screens of scroll.
+ */
+.portrait {
+  height: 480px;
+  width: auto;
+  aspect-ratio: 9 / 19.5;
+}
+
+/* Below the cap there is no height to save, so portrait clips go full width. */
+@media (max-width: 600px) {
+  .portrait {
+    height: auto;
+    width: 100%;
+  }
+}
+
+.caption {
+  margin-top: 8px;
+  font-size: 0.875rem;
+  color: var(--swm-navy-light-60);
+  text-align: center;
+}
+
+:root[data-theme="dark"] .caption {
+  color: var(--swm-navy-dark-40);
+}

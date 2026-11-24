@@ -2,10 +2,20 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
-import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import {
+  jsRuntimeDebuggerBlueprint,
+  type JsRuntimeDebuggerApi,
+} from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
-import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { guardModuleLoadErrors } from "../../src/utils/debugger/scripts/guard-module-errors";
+import { scopeTempHome } from "../helpers/temp-home";
+
+// The JS-runtime-debugger / network blueprints build a real LogFileWriter,
+// whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
+// developer's real home.
+scopeTempHome("argent-metro-integration-home-");
 
 /**
  * Integration test using a mock Metro HTTP + CDP WebSocket server.
@@ -17,6 +27,8 @@ let wss: WebSocketServer;
 let cdpConn: WebSocket | null = null;
 let mockPort: number;
 let registry: Registry;
+let sourceMapRequests = 0;
+const evaluateParams: Record<string, unknown>[] = [];
 
 function handleCDPMessage(ws: WebSocket, raw: string) {
   const msg = JSON.parse(raw);
@@ -43,7 +55,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
             url: "http://localhost/index.bundle?platform=ios&dev=true",
             startLine: 0,
             endLine: 50000,
-            sourceMapURL: "index.bundle.map",
+            sourceMapURL: `http://127.0.0.1:${mockPort}/index.bundle.map`,
           },
         })
       );
@@ -59,6 +71,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
       break;
 
     case "Runtime.evaluate":
+      evaluateParams.push(params);
       ws.send(
         JSON.stringify({
           id,
@@ -135,6 +148,21 @@ beforeAll(async () => {
         );
         return;
       }
+      if (req.url === "/index.bundle.map") {
+        sourceMapRequests++;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ version: 3, sources: [], mappings: "" }));
+        return;
+      }
+      if (req.url === "/symbolicate" && req.method === "POST") {
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            stack: [{ file: "/mock/project/screens/Example.tsx", lineNumber: 12, column: 8 }],
+          })
+        );
+        return;
+      }
       res.statusCode = 404;
       res.end("Not found");
     });
@@ -145,7 +173,7 @@ beforeAll(async () => {
       ws.on("message", (raw) => handleCDPMessage(ws, raw.toString()));
     });
 
-    mockServer.listen(0, () => {
+    mockServer.listen(0, "127.0.0.1", () => {
       mockPort = (mockServer.address() as { port: number }).port;
       resolve();
     });
@@ -154,7 +182,7 @@ beforeAll(async () => {
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
-  registry.registerTool(debuggerStatusTool);
+  registry.registerTool(createDebuggerStatusTool(registry));
   registry.registerTool(debuggerEvaluateTool);
 });
 
@@ -187,10 +215,11 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
       device_id: "mock-device",
     })) as Record<string, unknown>;
 
+    expect(result.status).toBe("connected");
     expect(result.connected).toBe(true);
-    expect(result.loadedScripts).toBeGreaterThanOrEqual(1);
+    expect(result.loadedScripts).toBe(0);
     expect(result.enabledDomains).toContain("Runtime");
-    expect(result.enabledDomains).toContain("Debugger");
+    expect(result.enabledDomains).not.toContain("Debugger");
   });
 
   it("debugger-evaluate executes JS and returns result", async () => {
@@ -201,5 +230,37 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
     })) as { result: unknown };
 
     expect(result.result).toBe("eval-result-42");
+    expect(evaluateParams).toContainEqual({
+      expression: guardModuleLoadErrors("1 + 1"),
+      returnByValue: false,
+    });
+  });
+
+  it("connects to Metro without downloading unused source maps", async () => {
+    const before = sourceMapRequests;
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: "legacy-device",
+    })) as Record<string, unknown>;
+    expect(result.connected).toBe(true);
+    expect(sourceMapRequests).toBe(before);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:legacy-device`
+    );
+    expect(api.cdp.getEnabledDomains()).toContain("Runtime");
+    expect(api.cdp.getEnabledDomains()).not.toContain("Debugger");
+    const location = await api.sourceResolver.symbolicate(
+      `http://localhost:${mockPort}/index.bundle?platform=ios&dev=true`,
+      200,
+      10
+    );
+    expect(location).toEqual({ file: "screens/Example.tsx", line: 12, column: 8 });
+    expect(sourceMapRequests).toBe(before);
+    const evaluation = (await registry.invokeTool("debugger-evaluate", {
+      port: mockPort,
+      device_id: "legacy-device",
+      expression: "1+1",
+    })) as { result: unknown };
+    expect(evaluation.result).toBe("eval-result-42");
   });
 });

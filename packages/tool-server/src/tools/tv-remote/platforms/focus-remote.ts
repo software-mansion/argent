@@ -4,18 +4,12 @@ import { UnsupportedOperationError } from "../../../utils/capability";
 import type { RemoteButton } from "../../../utils/vega-input";
 import { expandButtons, type TvRemoteParams, type TvRemoteResult } from "../types";
 
-// Shared Apple TV (tvOS) / Android TV (leanback) remote path. Both expose the
-// same focus-driven `TvControlApi`, whose `navigate` accepts the full remote
-// vocabulary (`TvDirection` === `RemoteButton`). Presses go one at a time over
-// the daemon / `adb` (there is no batched path like Vega's `inputd-cli`), but
-// the whole sequence still runs in this single tool call.
+// Shared Apple TV / Android TV remote path: both back onto `TvControlApi`, whose
+// `navigate` takes the full `RemoteButton` vocabulary. One press per daemon /
+// `adb` round-trip — there is no batched path like Vega's `inputd-cli`.
 //
-// `unsupported` lets a platform reject buttons its backend can't honor *before*
-// any press fires (so a path doesn't half-execute). Apple TV uses it for the
-// media-transport / volume keys: the tvOS simulator's HID stack ignores
-// Consumer Control (page 0x0C) events, so injecting them is a silent no-op that
-// would otherwise report false success. Android TV passes nothing — every key
-// maps to a real `adb input keyevent`.
+// `unsupported` rejects buttons a backend can't honor before any press fires, so
+// a path can't half-execute.
 export async function pressFocusRemote(
   registry: Registry,
   device: DeviceInfo,
@@ -25,9 +19,8 @@ export async function pressFocusRemote(
 ): Promise<TvRemoteResult> {
   const buttons = expandButtons(params.button, params.repeat);
 
-  // Resolve first — this validates the target is a TV (the factory rejects a
-  // non-TV device). Otherwise the unsupported-button check below would tell an
-  // iPhone it's "not supported on the Apple TV simulator", asserting a wrong kind.
+  // Resolve first: this rejects a non-TV target, so the check below can't tell an
+  // iPhone it's "not supported on the Apple TV simulator".
   const api = await resolveTvApi(registry, device.id);
 
   if (unsupported?.size) {
@@ -44,15 +37,10 @@ export async function pressFocusRemote(
   }
 
   const pressed: RemoteButton[] = [];
-  // A path of up to 64 buttons × repeat 50 is one press per daemon / adb
-  // round-trip, so the loop can run for minutes — and `tv-remote` is
-  // `longRunning`, so the MCP adapter won't abort it for us. Check the framework
-  // signal between presses: if the client cancels or disconnects, abort the call
-  // rather than keep firing at the held device to completion. Already-sent
-  // presses aren't rolled back (they can't be), and `throwIfAborted` rejects the
-  // call rather than returning a partial `pressed` count — a cancelled request
-  // has no caller waiting for the tally. (The Vega branch injects the whole path
-  // in one round-trip and is unaffected.)
+  // Up to 64 buttons × repeat 50 means the loop can run for minutes, and
+  // `longRunning` disables the MCP fetch timeout, so nothing else stops it: bail
+  // between presses once the caller cancels. Sent presses can't be rolled back,
+  // and throwing beats returning a partial tally no caller is waiting for.
   for (const button of buttons) {
     options?.signal?.throwIfAborted();
     await api.navigate(button);

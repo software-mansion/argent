@@ -9,6 +9,7 @@ vi.mock("../src/utils/vega-input", async (importActual) => {
 
 import type { ToolContext } from "@argent/registry";
 import { createTvRemoteTool } from "../src/tools/tv-remote";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { UnsupportedOperationError } from "../src/utils/capability";
 import type { TvControlApi } from "../src/blueprints/tv-control-types";
 
@@ -28,6 +29,12 @@ function makeRegistry() {
 }
 
 beforeEach(() => {
+  // The Vega path's dependency gate resolves a real `adb` off PATH, $ANDROID_HOME
+  // and the default SDK locations, so without priming these tests pass only on a
+  // machine that has the Android SDK installed. Prime it, as boot-device and
+  // await-screen-idle do.
+  __resetDepCacheForTests();
+  __primeDepCacheForTests(["adb"]);
   injectVegaButtons.mockReset();
   injectVegaButtons.mockResolvedValue(undefined);
 });

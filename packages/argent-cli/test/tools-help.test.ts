@@ -1,0 +1,132 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tools } from "../src/tools.js";
+
+// `argent tools --help` used to print the whole tool catalogue — and to contact
+// the tool-server (starting one) to get it — because the help flag was filtered
+// out before the subcommand was read. These drive the real entry point with a
+// mocked client so "did it reach the server" is observable.
+
+const toolsClientMock = vi.hoisted(() => ({
+  fetchTool: vi.fn(),
+  fetchTools: vi.fn(),
+}));
+
+vi.mock("@argent/tools-client", () => ({
+  createToolsClient: vi.fn(() => toolsClientMock),
+}));
+
+let logSpy: ReturnType<typeof vi.spyOn>;
+let errSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  toolsClientMock.fetchTools.mockResolvedValue([
+    { name: "gesture-tap", description: "Tap the screen" },
+  ]);
+  toolsClientMock.fetchTool.mockResolvedValue({
+    name: "gesture-tap",
+    description: "Tap the screen",
+    inputSchema: { type: "object", properties: { udid: { type: "string" } }, required: ["udid"] },
+  });
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  logSpy.mockRestore();
+  errSpy.mockRestore();
+});
+
+const output = () => (logSpy.mock.calls as unknown[][]).map((c) => String(c[0] ?? "")).join("\n");
+
+const invoke = (argv: string[]) => tools(argv, { paths: {} as never });
+
+describe("argent tools --help", () => {
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], which duplicates the two-flag rows' names and reads as a claim about
+  // a bare `--json` — which prints no usage and does hit the server.
+  it.each([
+    [["--help"]],
+    [["-h"]],
+    [["--help", "--json"]],
+    [["--json", "--help"]],
+    [["describe", "--help"]],
+    [["--jsno", "--help"]],
+    [["--help", "describe", "gesture-tap"]],
+    [["describe", "--help", "gesture-tap"]],
+    [["describe", "-x", "--help"]],
+  ])("prints usage for %j without contacting the tool-server", async (argv) => {
+    await invoke(argv);
+
+    expect(output()).toContain("argent tools describe <name>");
+    expect(output()).toContain("--help, -h");
+    // The defect: help used to start a tool-server just to list tools.
+    expect(toolsClientMock.fetchTools).not.toHaveBeenCalled();
+    expect(toolsClientMock.fetchTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [["--jsno"], "Unknown flag: --jsno"],
+    [["describe", "gesture-tap", "--jsno"], "Unknown flag: --jsno"],
+    [["describe", "gesture-tap", "extra"], 'Unexpected argument "extra"'],
+    [["describe"], "`argent tools describe` requires a <tool-name>"],
+    [["--scope", "global"], "Unknown flag: --scope"],
+    [["frobnicate"], "Unknown subcommand: tools frobnicate"],
+  ])("rejects %j with exit 2 without contacting the tool-server", async (argv, message) => {
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as never);
+    try {
+      await expect(invoke(argv)).rejects.toThrow("process.exit:2");
+    } finally {
+      exit.mockRestore();
+    }
+
+    expect((errSpy.mock.calls as unknown[][]).join("\n")).toContain(message);
+    expect(output()).toContain("argent tools describe <name>");
+    expect(toolsClientMock.fetchTools).not.toHaveBeenCalled();
+    expect(toolsClientMock.fetchTool).not.toHaveBeenCalled();
+  });
+
+  it("still lists tools when no subcommand is given", async () => {
+    await invoke([]);
+    expect(toolsClientMock.fetchTools).toHaveBeenCalled();
+    expect(output()).toContain("  gesture-tap  Tap the screen");
+  });
+
+  it("prints the tool list as JSON with --json", async () => {
+    await invoke(["--json"]);
+    expect(JSON.parse(output())).toEqual([{ name: "gesture-tap", description: "Tap the screen" }]);
+  });
+
+  it.each([
+    [["describe", "gesture-tap", "--json"]],
+    [["describe", "gesture-tap", "--json", "--help"]],
+    [["--json", "describe", "gesture-tap", "--help"]],
+    [["describe", "--json", "gesture-tap", "--help"]],
+  ])("prints a described tool as JSON for %j", async (argv) => {
+    await invoke(argv);
+    expect(JSON.parse(output())).toMatchObject({ name: "gesture-tap" });
+  });
+
+  it("still describes a named tool", async () => {
+    await invoke(["describe", "gesture-tap"]);
+    expect(toolsClientMock.fetchTool).toHaveBeenCalledWith("gesture-tap");
+  });
+
+  // `argent tools describe <name> --help` asks for that tool's flags, not for
+  // this command's usage, whatever else follows the name.
+  it.each([
+    [["describe", "gesture-tap", "--help"]],
+    [["describe", "gesture-tap", "-h"]],
+    [["describe", "gesture-tap", "extra", "--help"]],
+    [["describe", "gesture-tap", "--bogus", "--help"]],
+    [["describe", "--", "gesture-tap", "--help"]],
+  ])("prints the described tool's flags for %j", async (argv) => {
+    await invoke(argv);
+
+    expect(toolsClientMock.fetchTool).toHaveBeenCalledWith("gesture-tap");
+    expect(output()).toContain("Tool: gesture-tap");
+    expect(output()).not.toContain("argent tools describe <name>");
+  });
+});

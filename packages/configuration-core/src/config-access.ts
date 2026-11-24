@@ -1,17 +1,20 @@
-// Schema-driven read/write for scoped configuration values.
-//
-// This is the layer the rest of argent should use to read a configuration:
-// instead of poking at a single global config.json, `getConfigValue` reads
-// every scope the value's schema entry allows, merges them under the entry's
-// policy, and falls back to the entry's default. `setConfigValue` /
+// Schema-driven read/write for scoped configuration values: `getConfigValue`
+// reads every scope the value's schema entry allows, merges them under the
+// entry's policy and falls back to its default; `setConfigValue` /
 // `unsetConfigValue` validate against the schema before writing. `argent config`
-// and the migrated lens getters are both thin wrappers over these.
+// and the lens getters wrap these.
 
-import type { FlagScope } from "./flags.js";
-import type { ConfigPathOptions } from "./paths.js";
+import * as path from "node:path";
+import { resolveProjectRoot, type FlagScope } from "./flags.js";
+import { isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 import { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 import { applyMergePolicy } from "./merge.js";
-import { CONFIG_SCHEMA, getConfigDefinition, type ConfigDefinition } from "./config-schema.js";
+import {
+  CONFIG_SCHEMA,
+  describeExpectedValue,
+  getConfigDefinition,
+  type ConfigDefinition,
+} from "./config-schema.js";
 
 /** Read + parse one scope's value for a definition (no merge, no default). */
 function readScopeValue<T>(
@@ -25,9 +28,8 @@ function readScopeValue<T>(
 }
 
 /**
- * The effective value of a configuration: the project and global scopes read,
- * validated, merged under the entry's policy, then defaulted. This is what a
- * runtime consumer (e.g. the simctl device-set reader) should call.
+ * The effective value: the project and global scopes read, validated, merged
+ * under the entry's policy, then defaulted.
  */
 export function getConfigValue<T>(
   def: ConfigDefinition<T>,
@@ -92,10 +94,21 @@ export class ConfigScopeError extends Error {
   }
 }
 
-/** Thrown when a value fails the schema's `parse` validator. */
+/**
+ * Thrown when a value fails the schema's `parse` validator. Carries what the key
+ * accepts and an example, so a caller can tell the user what to type instead.
+ */
 export class ConfigValidationError extends Error {
-  constructor(public readonly key: string) {
-    super(`Invalid value for config key "${key}".`);
+  constructor(
+    public readonly key: string,
+    public readonly expected?: string,
+    public readonly example?: string
+  ) {
+    super(
+      expected
+        ? `Invalid value for config key "${key}": expected ${expected}.`
+        : `Invalid value for config key "${key}".`
+    );
     this.name = "ConfigValidationError";
   }
 }
@@ -116,10 +129,9 @@ export class ConfigManagedElsewhereError extends Error {
 
 /**
  * Validate and persist a configuration value at a scope. `rawValue` is a
- * pre-parsed JSON value (the CLI coerces its string argument first); it is run
- * through the schema's validator, and the normalized result is stored. Returns
- * the normalized value that was written, so callers can report exactly what
- * landed on disk rather than the raw input.
+ * pre-parsed JSON value (the CLI coerces its string argument first). Returns the
+ * normalized value written, so callers can report what landed on disk rather
+ * than the raw input.
  */
 export function setConfigValue(
   key: string,
@@ -132,14 +144,15 @@ export function setConfigValue(
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
   const parsed = def.parse(rawValue);
-  if (parsed === undefined) throw new ConfigValidationError(key);
+  if (parsed === undefined)
+    throw new ConfigValidationError(def.key, describeExpectedValue(def), def.example);
   updateConfig((config) => setAtPath(config, key, parsed), scope, options);
   return parsed;
 }
 
 /**
- * Remove a configuration value at a scope. Returns true when an entry was
- * removed. Refuses keys delegated to a dedicated command.
+ * Remove a value at a scope. Returns true when an entry was removed. Refuses
+ * keys delegated to a dedicated command.
  */
 export function unsetConfigValue(
   key: string,
@@ -150,11 +163,9 @@ export function unsetConfigValue(
   const def = requireDefinition(key, registry);
   if (def.manageCommand) throw new ConfigManagedElsewhereError(key, def.manageCommand);
   if (!def.scopes.includes(scope)) throw new ConfigScopeError(key, scope, def.scopes);
-  // Fast path for a no-op: if the key is absent at this scope there is nothing
-  // to remove, so skip the write path entirely. Otherwise `updateConfig` would
-  // mkdir the scope's `.argent` dir and rewrite an unchanged config.json —
-  // materializing a project file (and dirtying git status) for an unset that
-  // removed nothing.
+  // Skip the write path when the key is absent: `updateConfig` would mkdir the
+  // scope's `.argent` dir and rewrite an unchanged config.json, materializing a
+  // project file (and dirtying git status) for an unset that removed nothing.
   if (getAtPath(readConfigObject(scope, options), key) === undefined) return false;
   let removed = false;
   updateConfig(
@@ -173,6 +184,10 @@ export interface ConfigEntryView {
   description: string;
   scopes: readonly FlagScope[];
   manageCommand?: string;
+  /** What a valid value looks like, in words. */
+  expected?: string;
+  /** An example of a valid value, as it would be typed. */
+  example?: string;
   /** Effective (merged + defaulted) value. */
   effective: unknown;
   /** Raw parsed value stored at the project scope, or undefined. */
@@ -186,21 +201,25 @@ export function listConfig(
   options: ConfigPathOptions = {},
   registry: readonly ConfigDefinition[] = CONFIG_SCHEMA
 ): ConfigEntryView[] {
+  // A home-rooted project's file is the global one: list its values once, as global.
+  const projectIsHome = isHomeDir(resolveProjectRoot(options.cwd ?? process.cwd()), options);
   return registry.map((def) => ({
     key: def.key,
     description: def.description,
     scopes: def.scopes,
     ...(def.manageCommand ? { manageCommand: def.manageCommand } : {}),
+    ...(describeExpectedValue(def) ? { expected: describeExpectedValue(def)! } : {}),
+    ...(def.example ? { example: def.example } : {}),
     effective: getConfigValue(def, options),
-    project: readScopeValue(def, "project", options),
+    project: projectIsHome ? undefined : readScopeValue(def, "project", options),
     global: readScopeValue(def, "global", options),
   }));
 }
 
 /**
- * Coerce a raw CLI string into a JSON value for `setConfigValue`. Tries JSON
- * first (so `true`, `42`, `["a","b"]` parse to their types) and falls back to
- * the literal string (so bare paths like `/tmp/set` don't need quoting).
+ * Coerce a raw CLI string into a JSON value for `setConfigValue`. JSON first (so
+ * `true`, `42`, `["a","b"]` keep their types), falling back to the literal
+ * string so bare paths like `/tmp/set` don't need quoting.
  */
 export function coerceCliValue(raw: string): unknown {
   try {
@@ -209,12 +228,6 @@ export function coerceCliValue(raw: string): unknown {
     return raw;
   }
 }
-
-// ── Argent Lens preferences (migrated onto the schema) ────────────────────
-// `lens.agent` is a real schema entry now, so these wrappers demonstrate the
-// merged reader on a live consumer: a project can pin the agent, falling back
-// to the user's global remembered choice. The public surface is unchanged so
-// `argent lens` keeps working without edits.
 
 const LENS_AGENT_KEY = "lens.agent";
 
@@ -232,4 +245,71 @@ export function setRememberedAgent(agentId: string, options: ConfigPathOptions =
 /** Forget the remembered `argent lens` agent (so the picker shows again). */
 export function clearRememberedAgent(options: ConfigPathOptions = {}): void {
   unsetConfigValue(LENS_AGENT_KEY, "global", options);
+}
+
+const ANDROID_SDK_ROOT_KEY = "android.sdkRoot";
+
+/** The configured Android SDK root as an absolute path (`~` expanded), or null when unset. */
+export function getAndroidSdkRoot(options: ConfigPathOptions = {}): string | null {
+  const value = getConfigValueByKey(ANDROID_SDK_ROOT_KEY, options);
+  if (typeof value !== "string") return null;
+  const home = resolveHomeDir(options);
+  if (value === "~") return path.resolve(home);
+  if (value.startsWith("~/")) return path.resolve(home, value.slice(2));
+  return path.resolve(value);
+}
+
+const ANDROID_ADB_SERVER_PORT_KEY = "android.adbServerPort";
+
+/** The configured adb server port, or null when unset. */
+export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number | null {
+  const value = getConfigValueByKey(ANDROID_ADB_SERVER_PORT_KEY, options);
+  return typeof value === "number" ? value : null;
+}
+
+const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
+
+/**
+ * The extra CoreSimulator device-set directories, as normalized absolute paths.
+ * Relative entries resolve per scope — project root for project, home for global
+ * — and `~`/`~/…` expands to home in either. Order follows the `union` preset
+ * (global first, project after), duplicates dropped after normalization.
+ */
+export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
+  const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
+  // Path resolution must happen per scope *before* deduplication, so the union
+  // is re-implemented here instead of going through `applyMergePolicy` — keep
+  // the order in sync with the schema entry's `union` preset.
+  if (def.merge !== "union") {
+    throw new Error(
+      `Expected "${IOS_ADDITIONAL_DEVICE_SETS_KEY}" to use the "union" merge preset; ` +
+        "update getAdditionalIosDeviceSets to match the new policy."
+    );
+  }
+  const home = resolveHomeDir(options);
+  const projectRoot = resolveProjectRoot(options.cwd ?? process.cwd());
+  const global = resolveDeviceSetEntries(readScopeValue(def, "global", options), home, home);
+  const project = resolveDeviceSetEntries(
+    readScopeValue(def, "project", options),
+    // A home-rooted project reads the global file; HOME's spelling lets the dedupe drop it.
+    isHomeDir(projectRoot, options) ? home : projectRoot,
+    home
+  );
+  return Array.from(new Set([...global, ...project]));
+}
+
+/** Resolve one scope's entries against its base. `path.resolve` rather than
+ * join/normalize in every branch, so trailing separators are stripped and the
+ * post-resolution dedup collapses equivalent spellings. */
+function resolveDeviceSetEntries(
+  entries: string[] | undefined,
+  baseDir: string,
+  home: string
+): string[] {
+  if (!entries || entries.length === 0) return [];
+  return entries.map((entry) => {
+    if (entry === "~") return path.resolve(home);
+    if (entry.startsWith("~/")) return path.resolve(home, entry.slice(2));
+    return path.resolve(baseDir, entry);
+  });
 }

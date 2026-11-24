@@ -56,6 +56,7 @@ const FAKE_CLI_BUNDLE =
     "startMcpServer",
     "tools",
     "run",
+    "e2e",
     "server",
     "lens",
     "link",
@@ -117,7 +118,7 @@ beforeAll(async () => {
     outdir: distDir,
     format: "esm",
     platform: "node",
-    target: "node20",
+    target: "node22",
     bundle: false,
     logLevel: "silent",
   });
@@ -156,6 +157,35 @@ describe("cli dispatcher: installer-help guard", () => {
     expect(stdout).toContain("Usage: argent uninstall");
     // The core guarantee: the destructive installer was never loaded/invoked.
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("`mcp --help` prints usage and never starts the server", async () => {
+    // It used to start it: the stdio server then blocked reading JSON-RPC from
+    // stdin, so the command looked like it hung (or, with stdin closed, like it
+    // printed nothing and succeeded).
+    const marker = freshMarker();
+    const { exitCode, stdout } = await runCli(["mcp", "--help"], marker);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Usage: argent mcp");
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("`mcp` with no arguments still starts the server", async () => {
+    // How every editor launches argent. If the help guard ever fired here it
+    // would print usage onto the JSON-RPC channel and break the handshake, so
+    // this control matters more than the case above.
+    const marker = freshMarker();
+    await runCli(["mcp"], marker);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.readFileSync(marker, "utf8")).toContain("startMcpServer");
+  });
+
+  it("`mcp` with a non-help argument still starts the server", async () => {
+    // Proves the guard keys on help rather than on "any argv" — hand-edited
+    // configs do carry extra arguments.
+    const marker = freshMarker();
+    await runCli(["mcp", "--metro-port", "8082"], marker);
+    expect(fs.existsSync(marker)).toBe(true);
   });
 
   it("`init --help` prints usage (with real options) and never runs the installer", async () => {
@@ -241,16 +271,22 @@ describe("cli dispatcher: non-installer commands and top-level arms", () => {
     const { exitCode, stdout } = await runCli(["--help"], marker);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Usage: argent <command> [options]");
-    // Pin the META-sourced rendering, not just any installer text: the summary
-    // wording unique to INSTALLER_COMMAND_META (`+ rules`), the indented detail
-    // lines, and an alias row. A revert to a hand-coded table (or dropping the
-    // details rendering in installerHelpEntry) fails here.
-    expect(stdout).toContain(
-      "Initialize argent in the current workspace (MCP server + skills + rules)"
-    );
-    expect(stdout).toContain("(--global [default] installs on PATH; --local commits a");
-    expect(stdout).toContain("Alias for init");
+    expect(stdout).toMatch(/^\s*init\s+.+/m);
+    expect(stdout).toContain("--global");
+    expect(stdout).toContain("--local");
+    expect(stdout).toMatch(/alias for init/i);
+    expect(stdout).toMatch(/^\s*e2e\s+.*argent e2e --help/m);
+    expect(stdout).not.toMatch(/^\s*flow\s/m);
     expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it.each(["e2e", "flow"])("`%s` reaches the e2e bundle with its argv", async (command) => {
+    const marker = freshMarker();
+    const { exitCode, stdout, stderr } = await runCli([command, "run", "checkout"], marker);
+    expect(exitCode).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("e2e:run checkout");
+    expect(stdout).toBe("");
+    expect(stderr).toBe("");
   });
 
   it("an unknown command prints help and exits 1", async () => {

@@ -1,7 +1,4 @@
-// Pure parsing of `<pm> config get <key>` stdout into milliseconds. No I/O —
-// safe to unit-test in isolation. Shared by the installer (which knows the
-// package manager it is about to run) and the tool-server update checker
-// (which probes every package manager because it cannot know which was used).
+// Pure parsing of `<pm> config get <key>` stdout; no I/O.
 
 export const SECOND_MS = 1000;
 export const MINUTE_MS = 60 * 1000;
@@ -19,7 +16,7 @@ function trimConfigValue(stdout: string): string | null {
   return trimmed;
 }
 
-/** Parse `<pm> config get <key>` stdout to a positive number, else 0 (unset). */
+/** Parse `<pm> config get <key>` stdout to a positive number, else 0. */
 export function parseConfigValue(stdout: string): number {
   const value = trimConfigValue(stdout);
   if (!value) return 0;
@@ -27,10 +24,7 @@ export function parseConfigValue(stdout: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/**
- * Parse npm's effective `before` cutoff into an equivalent age in ms.
- * Returns 0 when unset, invalid, or in the future (no effective gate).
- */
+/** Parse npm's effective `before` cutoff into an age in ms; 0 if in the future. */
 export function parseBeforeAgeMs(stdout: string, now = Date.now()): number {
   const value = trimConfigValue(stdout);
   if (!value) return 0;
@@ -46,9 +40,8 @@ export function parseBeforeAgeMs(stdout: string, now = Date.now()): number {
 }
 
 /**
- * Parse Yarn's `npmMinimalAgeGate` into ms. A bare number is interpreted as
- * minutes; a `<amount><unit>` string (ms/s/m/h/d/w) uses that unit. Returns 0
- * when unset or unparseable.
+ * Parse Yarn's `npmMinimalAgeGate` into ms: a bare number means minutes, an
+ * `<amount><unit>` string (ms/s/m/h/d/w) uses that unit.
  */
 export function parseYarnAgeGateMs(stdout: string): number {
   const value = trimConfigValue(stdout);

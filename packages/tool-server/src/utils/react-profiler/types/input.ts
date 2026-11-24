@@ -1,5 +1,5 @@
-// Hermes CPU profile node (CDP Profiler.stop format)
-export interface HermesCallFrame {
+// Hermes CPU profile (CDP Profiler.stop format)
+interface HermesCallFrame {
   functionName: string;
   scriptId: string;
   url: string;
@@ -12,8 +12,8 @@ export interface HermesProfileNode {
   callFrame: HermesCallFrame;
   hitCount: number;
   children?: number[];
-  selfTime?: number; // microseconds
-  totalTime?: number; // microseconds
+  selfTime?: number;
+  totalTime?: number;
 }
 
 export interface HermesCpuProfile {
@@ -24,19 +24,17 @@ export interface HermesCpuProfile {
   timeDeltas: number[];
 }
 
-// Raw shape returned by `ri.getProfilingData()` — only the fields we actually
-// read in `flattenProfilingData` and the injected stop-and-read script. The
-// React DevTools backend emits more (priorityLevel, effectDuration, rootID,
-// rendererID, timelineData, …) but we never consume those, so they're omitted.
-export interface BackendCommitData {
-  timestamp: number; // ms since the `startProfiling` call
+// Raw shape returned by `ri.getProfilingData()`, narrowed to the fields
+// `flattenProfilingData` and the injected stop-and-read script read.
+interface BackendCommitData {
+  timestamp: number; // ms since profiling started
   duration?: number;
   fiberActualDurations?: Array<[number, number]>;
   fiberSelfDurations?: Array<[number, number]>;
   changeDescriptions?: Array<[number, unknown]>;
 }
 
-export interface BackendRootData {
+interface BackendRootData {
   commitData: BackendCommitData[];
 }
 
@@ -44,7 +42,6 @@ export interface ProfilingDataBackend {
   dataForRoots: BackendRootData[];
 }
 
-// React DevTools ProfilingData shape
 export interface DevToolsChangeDescription {
   props: string[] | null; // changed prop names
   state: boolean | null;
@@ -56,17 +53,17 @@ export interface DevToolsChangeDescription {
 
 export interface DevToolsFiberCommit {
   commitIndex: number;
-  timestamp: number; // ms, React internal clock (performance.now)
+  timestamp: number; // ms since profiling started
   componentName: string;
   actualDuration: number; // ms
   selfDuration: number; // ms
-  commitDuration: number; // ms — root.current.actualDuration (total wall time for this commit)
+  commitDuration: number; // ms for the whole commit — identical on every fiber in it
   didRender: boolean;
   changeDescription: DevToolsChangeDescription | null;
-  hookTypes?: string[] | null; // fiber._debugHookTypes — available in dev builds
+  hookTypes?: string[] | null; // fiber._debugHookTypes — dev builds only
   parentName?: string | null; // nearest named ancestor component
-  isCompilerOptimized?: boolean; // true if fiber._debugHookTypes contains 'useMemoCache'
-  // Annotated by Stage 0 (preprocess) for parent-cascade root cause tracing
+  isCompilerOptimized?: boolean;
+  // Set by Stage 0 (00-preprocess) for parent-cascade tracing
   rootCauseParent?: string;
   rootCauseReason?: import("./output.js").ReRenderReason;
   rootCauseProps?: string[] | null;
@@ -77,27 +74,28 @@ export interface DevToolsFiberCommit {
 
 export interface DevToolsCommitTree {
   commits: DevToolsFiberCommit[];
-  hookNames?: Map<number, string>; // hook index → name if available
+  hookNames?: Map<number, string>;
 }
+
+/** The platform a React Native bundle was built for, as Metro's `platform` names it. */
+export type RnPlatform = "ios" | "android" | "macos";
 
 // Top-level raw input to the pipeline
 export interface RawProfilingInput {
-  flamegraph?: HermesCpuProfile; // optional — used only for buildMode detection in session-context
+  flamegraph?: HermesCpuProfile;
   commitTree: DevToolsCommitTree;
   sessionMeta: {
     recordingDurationMs: number;
     deviceId: string;
-    platform: "ios" | "android";
+    platform: RnPlatform;
     rnVersion: string;
-    projectRoot: string; // needed for AST resolution in stage 6
+    projectRoot: string;
     detectedArchitecture?: "bridge" | "bridgeless";
     anyCompilerOptimized?: boolean; // pre-scanned in react-profiler-stop before hot filtering
-    hotCommitIndices?: number[]; // commit indices selected as "interesting" (≥16ms absolute floor)
-    allClear?: boolean; // true if all commits were below 16ms floor
-    maxCommitMs?: number; // max commit heat when allClear=true
-    totalReactCommits?: number; // total unique commit batches (for accurate all-clear display)
-    // Per-commit tuples [commitIndex, droppedFiberCount, droppedActualDurationMs] for
-    // fibers the stop-time name resolver could not identify (transient/unmounted components).
+    hotCommitIndices?: number[]; // commits whose heat reached the 16ms floor
+    noHotCommits?: boolean; // no named commit reached the 16ms floor
+    maxCommitMs?: number; // slowest commit when noHotCommits=true
+    totalReactCommits?: number; // all commit batches, including ones hot filtering dropped
     unattributedByCommit?: Array<[number, number, number]>;
   };
 }

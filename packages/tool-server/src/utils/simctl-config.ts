@@ -1,24 +1,20 @@
-/** Ceiling for any single `xcrun simctl spawn UDID …` invocation.
- * Healthy CSS: ~0.3s. Under contention / Intel hosts / cold-start CSS: up to
- * a few seconds. 10s is well above any plausible legitimate latency and well
- * below "hung indefinitely" — the case the timeout exists to catch (degraded
- * CoreSimulatorService blocking simctl forever, so the watcher's backoff
- * would never fire). */
+/** Ceiling for any single `xcrun simctl spawn UDID …` invocation. A healthy
+ * CoreSimulatorService answers in ~0.3s; 10s sits above any plausible legitimate
+ * latency and below "hung indefinitely" — a wedged CoreSimulatorService blocking
+ * simctl forever is the case this exists to catch. */
 export const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
 
 /** Kill signal for timed-out `xcrun simctl` invocations.
  *
- * Node's `execFile` `timeout` sends its `killSignal` (default `SIGTERM`) once and
- * never escalates. A `simctl` process blocked on a wedged CoreSimulatorService
- * ignores `SIGTERM`, so the parent keeps awaiting past the deadline and the
- * timeout that `SIMCTL_SPAWN_TIMEOUT_MS` promises never actually fires (observed:
- * a `describe` call hung ~24 min against a stuck simulator until the tool-server
- * was killed). `SIGKILL` reaps the child at the timeout boundary so callers'
- * budgets hold.
+ * `execFile`'s `timeout` sends its `killSignal` (default `SIGTERM`) once and
+ * never escalates; a `simctl` blocked on a wedged CoreSimulatorService ignores
+ * `SIGTERM`, so the promise never settles and the timeout never fires. Mirrors
+ * `ADB_KILL_SIGNAL` in `adb.ts`.
  *
- * `simctl` is a single-process XPC client — the real work runs under the
- * simulator's `launchd_sim`, not as a child of `simctl` — so killing the direct
- * child settles the promise; the orphaned in-sim process is the simulator's to
- * reap. Mirrors `ADB_KILL_SIGNAL` in `adb.ts`, which fixed the same class of
- * hang for the Android surface. */
+ * Killing the direct child suffices for the real `simctl`, a single-process
+ * XPC client whose work runs under the simulator's `launchd_sim`. But `xcrun
+ * simctl` first runs Xcode's bash wrapper (in 16.4, 26.6 and 27.2; nothing
+ * before 16.4 was checked), which can hang in a child
+ * `xcodebuild -runFirstLaunch` that a direct-child kill orphans; `execSimctl`
+ * in `simctl-exec.ts` kills the whole process group instead. */
 export const SIMCTL_KILL_SIGNAL = "SIGKILL" as const;

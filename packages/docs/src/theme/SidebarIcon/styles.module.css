@@ -1,0 +1,5 @@
+.icon {
+  flex-shrink: 0;
+  margin-right: 8px;
+  color: var(--swm-sidebar-icon-color);
+}

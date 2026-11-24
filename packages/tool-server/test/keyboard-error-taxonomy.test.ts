@@ -1,10 +1,32 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { Registry, FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  runHdcShell: vi.fn(),
+}));
+
 import { InvalidToolInputError } from "../src/utils/capability";
 import { typeSimulatorServer } from "../src/tools/keyboard/simulator-server-keys";
 import { makeChromiumImpl } from "../src/tools/keyboard/platforms/chromium";
+import { harmonyImpl } from "../src/tools/keyboard/platforms/harmony";
+import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
+import { makeIosDeviceImpl } from "../src/tools/keyboard/platforms/ios-device";
+import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
+import {
+  clearCurrentIosDeviceApp,
+  setCurrentIosDeviceApp,
+} from "../src/utils/ios-device/app-session";
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
 import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-input";
+
+const runHdcShell = vi.mocked(realRunHdcShell);
 
 // The `keyboard` tool's `key` is a free `z.string()` and its `text` is a free
 // string, so an unknown named key or an un-typeable character passes zod
@@ -17,7 +39,6 @@ import { injectAndroidNamedKey, injectAndroidText } from "../src/utils/android-i
 // that STILL carries #420's granular telemetry code (the 400 mapping keys off the
 // error class, not the code — see InvalidToolInputError in utils/capability.ts).
 
-/** Assert the error is a 400-class input error carrying the given telemetry code. */
 async function expectInvalidInput(p: Promise<unknown>, code: string): Promise<void> {
   const err = await p.then(
     () => {
@@ -47,6 +68,25 @@ const chromiumDevice = {
   platform: "chromium",
   kind: "app",
 } as unknown as DeviceInfo;
+const iosPhysicalDevice = {
+  id: "00008030-000A1B2C3D4E5F60",
+  platform: "ios",
+  kind: "device",
+} as unknown as DeviceInfo;
+
+beforeEach(() => {
+  runHdcShell.mockReset();
+  runHdcShell.mockImplementation(async (_key, command) =>
+    command.startsWith("hidumper")
+      ? {
+          stdout:
+            "-- ScreenInfo\nscreen[0]: id=0, powerStatus=POWER_STATUS_ON, backlight=1, " +
+            "render resolution=1216x2688, physical resolution=1216x2688\n",
+          exitCode: 0,
+        }
+      : { stdout: "", exitCode: 0 }
+  );
+});
 
 describe("keyboard backends — input rejection is a 400 with a uniform telemetry taxonomy", () => {
   it("iOS: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
@@ -141,10 +181,204 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     );
   });
 
-  it("android: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+  // android's prototype-chain guard is pinned in keyboard-android.test.ts,
+  // which additionally asserts adb is never reached.
+
+  // The physical-iOS backend normalizes `key` through a trim(), so a
+  // whitespace-only name collapsed to "" and slipped past its named-key guard
+  // into the empty-request no-op below it: a 200 { typed: "", keys: 0 } with no
+  // device contact, which the caller cannot tell apart from a real press (the
+  // very outcome ../src/tools/keyboard/index.ts's empty-key guard exists to
+  // prevent). It rejects like every sibling instead.
+  it("iOS device: whitespace-only key -> 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const impl = makeIosDeviceImpl(new Registry());
     await expectInvalidInput(
-      injectAndroidNamedKey("emulator-5554", "constructor"),
+      impl.handler({}, { udid: iosPhysicalDevice.id, key: "   " }, iosPhysicalDevice),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
     );
+  });
+
+  it("harmony: prototype-chain key name → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // The keycode reaches the remote shell line unquoted.
+    for (const key of ["constructor", "__proto__", "toString"]) {
+      runHdcShell.mockClear();
+      await expectInvalidInput(
+        harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "hi", key }, harmonyDevice),
+        FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+      );
+      expect(runHdcShell).not.toHaveBeenCalled();
+    }
+  });
+
+  it("harmony: newline in text → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // `uitest uiInput text` answers `No Error` whether or not anything landed.
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\nb" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+    await expect(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\nb" }, harmonyDevice)
+    ).rejects.toThrow(/Submit with `key: "enter"` after typing instead/);
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: a control character in text → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, text: "a\x07b" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: an unsupported key is diagnosed without reaching the device", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // The key check must precede any device round trip.
+    runHdcShell.mockRejectedValue(new Error("[Fail][E001005] Device not found or connected"));
+    await expectInvalidInput(
+      harmonyImpl.handler({}, { udid: harmonyDevice.id, key: "tab" }, harmonyDevice),
+      FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
+    );
+    expect(runHdcShell).not.toHaveBeenCalled();
+  });
+
+  it("harmony: every unsupported-input rejection carries the shared `unsupported` kind", async () => {
+    const harmonyDevice: DeviceInfo = { id: "harmony-KEY", platform: "harmony", kind: "device" };
+    // The Android twin tags these `unsupported`.
+    for (const params of [{ text: "a\nb" }, { text: "a\x07b" }, { key: "tab" }]) {
+      runHdcShell.mockClear();
+      const err = await harmonyImpl
+        .handler({}, { udid: harmonyDevice.id, ...params }, harmonyDevice)
+        .then(
+          () => {
+            throw new Error("expected the call to reject, but it resolved");
+          },
+          (e: unknown) => e
+        );
+      expect(getFailureSignal(err)?.error_kind).toBe("unsupported");
+      expect(runHdcShell).not.toHaveBeenCalled();
+    }
+  });
+
+  it("iOS device: unknown key -> 400 rejection naming both supported keys", async () => {
+    const impl = makeIosDeviceImpl(new Registry());
+    const err = await impl
+      .handler({}, { udid: iosPhysicalDevice.id, key: "pageup" }, iosPhysicalDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+
+    expect(err).toBeInstanceOf(InvalidToolInputError);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
+    // The message is the caller's whole named-key contract on hardware, so it
+    // must list both keys the backend accepts.
+    expect((err as Error).message).toContain("only 'enter' and 'backspace'");
+  });
+});
+
+describe("keyboard (ios-device): named-key routing", () => {
+  beforeEach(() => {
+    setCurrentIosDeviceApp(iosPhysicalDevice.id, "com.example.app");
+  });
+
+  afterEach(() => {
+    clearCurrentIosDeviceApp(iosPhysicalDevice.id);
+  });
+
+  // Positive control for the rejection above, pinned at the api.run seam: the
+  // key that was asked for is the runner command that goes over the wire.
+  it.each([
+    { key: "enter", command: "keyboardReturn" },
+    { key: "backspace", command: "keyboardDelete" },
+  ])("routes key '$key' to the runner's $command command", async ({ key, command }) => {
+    const run = vi.fn().mockResolvedValue({ message: "ok" });
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run,
+    } as never);
+
+    const impl = makeIosDeviceImpl(registry);
+    const result = await impl.handler({}, { udid: iosPhysicalDevice.id, key }, iosPhysicalDevice);
+
+    expect(result).toEqual({ typed: key, keys: 1 });
+    expect(run).toHaveBeenCalledWith({ command, appBundleId: "com.example.app" });
+  });
+});
+
+describe("keyboard (ios-device): typing with nothing focused", () => {
+  // The runner probes keyboard focus before typing and answers
+  // TEXT_INPUT_NOT_FOCUSED; audited on an iPhone 15, the pre-probe behavior
+  // was the generic "XCTest recorded a failure while executing type", which
+  // named neither the cause nor the fix.
+  function notFocusedRegistry(): Registry {
+    const registry = new Registry();
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run: vi.fn().mockRejectedValue(
+        new RunnerCommandError("no text input has keyboard focus", {
+          code: "TEXT_INPUT_NOT_FOCUSED",
+        })
+      ),
+    } as never);
+    return registry;
+  }
+
+  beforeEach(() => {
+    setCurrentIosDeviceApp(iosPhysicalDevice.id, "com.example.app");
+  });
+
+  afterEach(() => {
+    clearCurrentIosDeviceApp(iosPhysicalDevice.id);
+  });
+
+  it.each([{ text: "hello" }, { key: "enter" }, { key: "backspace" }])(
+    "maps TEXT_INPUT_NOT_FOCUSED to the retype instruction for %j",
+    async (input) => {
+      const impl = makeIosDeviceImpl(notFocusedRegistry());
+      const err = await impl
+        .handler({}, { udid: iosPhysicalDevice.id, ...input }, iosPhysicalDevice)
+        .then(
+          () => {
+            throw new Error("expected the call to reject, but it resolved");
+          },
+          (e: unknown) => e
+        );
+
+      expect(err).toBeInstanceOf(InvalidToolInputError);
+      expect((err as Error).message).toBe(
+        "Nothing on screen has keyboard focus. Tap the text field first, then retype."
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.KEYBOARD_INPUT_NOT_FOCUSED);
+    }
+  );
+
+  it("passes other runner failures through untouched", async () => {
+    const registry = new Registry();
+    const original = new RunnerCommandError("app 'com.example.app' is not running", {
+      code: "APP_NOT_AVAILABLE",
+    });
+    vi.spyOn(registry, "resolveService").mockResolvedValue({
+      udid: iosPhysicalDevice.id,
+      run: vi.fn().mockRejectedValue(original),
+    } as never);
+
+    const impl = makeIosDeviceImpl(registry);
+    const err = await impl
+      .handler({}, { udid: iosPhysicalDevice.id, text: "hello" }, iosPhysicalDevice)
+      .then(
+        () => {
+          throw new Error("expected the call to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+
+    expect(err).toBe(original);
   });
 });

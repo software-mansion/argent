@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ServiceInitializationError } from "@argent/registry";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
-import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import { axDaemonExitError } from "../src/blueprints/ax-service";
+import type { NativeDevtoolsApi, NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
+import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { isTvOsSimulator } from "../src/utils/ios-devices";
+import { unknownOrientationNote } from "../src/utils/ios-ui-orientation";
 
 // describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
 // unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
@@ -31,6 +35,11 @@ function makeAXServiceApi(
     degraded: options?.degraded ?? false,
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
+    livePanel: async () => null,
+    orientation: async () => ({}),
+    foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => ({ focused: false, verified: false }),
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
 }
@@ -38,6 +47,7 @@ function makeAXServiceApi(
 function makeNativeDevtoolsApi(options: {
   connectedBundleIds?: string[];
   requiresRestart?: boolean;
+  state?: NativeDevtoolsAppState;
   describeScreenResult?: unknown;
 }): NativeDevtoolsApi {
   const connected = new Set(options.connectedBundleIds ?? []);
@@ -46,14 +56,24 @@ function makeNativeDevtoolsApi(options: {
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => null,
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
     listConnectedBundleIds: () => [...connected],
-    requiresAppRestart: async () => options.requiresRestart ?? false,
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    appConnectionState: async () =>
+      options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async (bundleId) => ({
       bundleId,
       applicationState: "active",
@@ -100,6 +120,10 @@ describe("describe tool", () => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
     mockIsTvOsSimulator.mockResolvedValue(false);
+    // The externally-booted caveat is emitted once per device per server
+    // lifetime, so the "already told" set survives between tests that share a
+    // udid unless it is cleared here.
+    __resetBootCaveatStateForTests();
   });
 
   it("returns elements from ax-service daemon", async () => {
@@ -257,14 +281,238 @@ describe("describe tool", () => {
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(elementLineCount(result.description)).toBe(0);
+    // The boolean alone is an undocumented JSON field; the reason the relaunch
+    // is warranted has to travel with it.
+    expect(result.hint).toContain("restart-app");
+  });
+
+  it("carries the loop escape for a process it could not inspect", async () => {
+    // `indeterminate` is the only unconnected state a *running* app reaches on
+    // ios-remote, whose app processes cannot be inspected. describe sets
+    // should_restart there and await-ui-element renders it as "call restart-app
+    // and retry", so without the diagnosis riding along the agent restarts
+    // forever with nothing ever naming the tool-server.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "indeterminate",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toContain("do not keep restarting the app");
+    expect(result.hint).toContain("argent server stop && argent server start --detach");
+  });
+
+  it("names the stopped app rather than only flagging a restart", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "not_running",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toContain("com.example.app");
+    expect(result.hint).toContain("launch-app");
+  });
+
+  it("keeps the AX-degraded hint alongside the connection diagnosis", async () => {
+    // The two hints answer different questions — how to fix the sim boot, and
+    // why the native fallback is silent — so neither may displace the other.
+    // Both arms of the should_restart split build the hint separately, so
+    // covering one leaves the other free to drop it.
+    const remedies: Record<string, string> = {
+      stale_process: "restart-app",
+      unregistered: "argent server stop && argent server start --detach",
+    };
+    for (const [state, remedy] of Object.entries(remedies)) {
+      const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+      const nativeApi = makeNativeDevtoolsApi({
+        connectedBundleIds: [],
+        state: state as "stale_process" | "unregistered",
+      });
+      const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+      const tool = createDescribeTool(registry);
+
+      const result = await tool.execute(
+        {},
+        { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+      );
+      expect(result.hint, `${state} must keep the boot guidance`).toContain("boot-device");
+      expect(result.hint, `${state} must keep its own remedy`).toContain(remedy);
+    }
+  });
+
+  // `appConnectionState` re-applies the launchd env before it can answer, so it
+  // rejects on a sim that went away mid-call. An empty tree returned bare there
+  // reads as "nothing on screen" rather than "could not be read".
+  it("still explains itself when the connection probe throws", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: [], state: "stale_process" });
+    nativeApi.appConnectionState = async () => {
+      throw new Error("Invalid device: AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
+    };
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toContain("do not keep restarting the app");
+  });
+
+  // Without `bundleId`, `resolveNativeTargetApp` draws its candidates from the
+  // connected list — so every state the diagnosis explains throws out of the
+  // resolution, before anything is measured. This is the DEFAULT form of the
+  // call, so the two forms would otherwise answer differently for one device
+  // state.
+  it("explains an unreadable empty screen even with no bundleId to measure", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: [], state: "unregistered" });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toBeDefined();
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    // No app was resolved, so no state was measured and no relaunch may be
+    // prescribed — the empty read is marked untrustworthy, nothing more.
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  // The blueprint is registered unconditionally, so on an iOS target a failed
+  // resolution never means "no such service" — it means the service did not come
+  // up (commonly a socket bind losing to a concurrent same-udid server). A
+  // failed attempt at corroboration, so the empty read is still unexplained.
+  it("explains the read when the native-devtools service fails to come up", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  // All three sites that emit this hint are reachable with an explicit
+  // bundleId, so "pass bundleId" would name the step the caller already took.
+  it("does not tell a caller that passed bundleId to pass bundleId", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({ connectedBundleIds: ["com.example.app"] });
+    nativeApi.queryViewHierarchy = async () => {
+      throw new Error("inspector timeout after 5000ms");
+    };
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.hint).not.toMatch(/Pass `bundleId`/);
+    // Dropping the bundleId half must not drop `screenshot` with it — the only
+    // action left when the hierarchy cannot be read.
+    expect(result.hint).toMatch(/screenshot/);
+  });
+
+  // The ax-service's own hint is the simulator's state and carries the only
+  // corrective action for it; the read-level note must not displace it.
+  it("keeps the ax-degraded boot guidance ahead of the unreadable-hierarchy note", async () => {
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    expect(result.hint).toContain("boot-device");
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    // "ahead of" is the point: a reader who stops at the first sentence must
+    // reach the sim-level corrective action, not the note about one read.
+    // Presence alone passes with the two swapped.
+    expect(result.hint!.indexOf("boot-device")).toBeLessThan(
+      result.hint!.indexOf("not evidence that nothing is on screen")
+    );
+  });
+
+  it("does NOT return should_restart while the app is still connecting", async () => {
+    // await-ui-element renders `should_restart` as "call restart-app and retry",
+    // and exec is what starts the dial — so obeying it mid-handshake discards the
+    // connection being waited on and resets the age the verdict reads.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "connecting",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("Wait a few seconds");
+    // The prohibition, not just the absence of the hyphenated tool name — the
+    // hint is describe's only prose channel, and "then relaunch the app" would
+    // satisfy every other assertion here. With its colon, so that a qualified
+    // "…more than once" cannot pass off one relaunch as permitted: here the
+    // first one is already the one that discards the handshake.
+    expect(result.hint).toContain("Do NOT restart the app:");
+    expect(result.hint).not.toMatch(/restart-app/);
+  });
+
+  it("does NOT return should_restart when the app is injected but unregistered", async () => {
+    // The process here already launched with this service's injection in place,
+    // so a relaunch reproduces it and `should_restart` would rebuild the
+    // restart-app → describe loop. The diagnosis travels as a hint instead,
+    // which still marks the empty read untrustworthy for await-ui-element.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "unregistered",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("argent server stop && argent server start --detach");
+    expect(result.hint).not.toMatch(/restart-app/);
   });
 
   it("does NOT return should_restart for a non-injectable Apple system app (no restart loop)", async () => {
-    // com.apple.* apps can never load the injected dylib, so requiresAppRestart
-    // is always true for them in an unmocked run. Without an injectability gate,
-    // describe returns should_restart:true → the agent restarts the system app →
-    // AX is still empty → describe again → unbounded loop. The fallback must
-    // instead return the (empty) AX result with a screenshot hint.
+    // A com.apple.* app cannot be relied on to load the dylib, so it may never
+    // connect — yet the simulator's launchd env is applied process-wide, so its
+    // process carries the injection tokens and the measurement judges it on age.
+    // Older than this tool-server's listener (the usual case: system apps are
+    // already running when the server starts) reads `stale_process`, whose
+    // remedy is restart-app. Without an injectability gate that is
+    // should_restart:true → restart → AX still empty → describe → unbounded
+    // loop. The fallback must return the (empty) AX result with a screenshot
+    // hint instead.
     const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
     const nativeApi = makeNativeDevtoolsApi({
       connectedBundleIds: [],
@@ -287,6 +535,13 @@ describe("describe tool", () => {
     // and the native-devtools-status description.
     expect(result.hint).toMatch(/`screenshot`/);
     expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    // One of the agent-facing surfaces that must agree with the rest on HOW
+    // certain the injectability claim is (see the cross-surface check in
+    // native-devtools-status.test.ts): #453 saw the dylib fail to load on iOS
+    // 26.5, an E2E run saw it succeed on 18.5, so no surface may claim
+    // impossibility while all keep the terminal do-not-retry instruction.
+    expect(result.hint).not.toMatch(/can never (be injected|load|inject)/);
+    expect(result.hint).toMatch(/will NOT\s+help|cannot be relied on/);
   });
 
   it("keeps the degraded re-boot hint for a com.apple.* app when the ax-service is degraded", async () => {
@@ -494,6 +749,216 @@ describe("describe tool", () => {
     expect(result.hint).toMatch(/system dialogs/i);
   });
 
+  // ── Externally-booted caveat: wording and repetition ─────────────────────
+  // A sim booted by the developer (`xcrun simctl boot`, Xcode, `expo run:ios`)
+  // never gets the pre-boot AX prefs, so `degraded` stays true for its whole
+  // life. Verified on an externally-booted iOS 18.6 sim: describe returns the
+  // full tree — the Maps location prompt included, all three buttons tappable —
+  // so the caveat must neither order a reboot that would kill the developer's
+  // Metro session nor repeat itself on every call.
+
+  it("states the limitation without ordering a reboot when the degraded read returned a tree", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+
+    // The tree read fine, so the caveat is a statement, not an instruction:
+    // no MUST, and no "do it now / before continuing" urgency for an agent to
+    // obey literally.
+    expect(result.hint).not.toMatch(/MUST/);
+    expect(result.hint).not.toMatch(/\bnow\b/i);
+    expect(result.hint).not.toMatch(/before continuing/i);
+    // It still names the remedy.
+    expect(result.hint).toMatch(/boot-device/);
+  });
+
+  it("emits the degraded caveat once per device, not on every describe", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid });
+    const second = await tool.execute({}, { udid });
+    const third = await tool.execute({}, { udid });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(second.hint).toBeUndefined();
+    expect(third.hint).toBeUndefined();
+    // Suppressing the caveat must not cost the caller the tree itself.
+    expect(elementLineCount(second.description)).toBe(1);
+  });
+
+  it("tells the caveat again after the device has read healthy in between", async () => {
+    // A udid can leave the state the caveat describes and come back to it: boot
+    // through argent (or hand the udid to a fresh sim), then boot externally
+    // again. That second external boot has never been told, so keying "already
+    // told" to the tool-server's lifetime silences it for good after one cycle.
+    const elements = [
+      { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
+    ];
+    const response = { alertVisible: false, screenFrame: { width: 440, height: 956 }, elements };
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    const degradedTool = () =>
+      createDescribeTool(
+        makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: true }) })
+      );
+    const healthyTool = createDescribeTool(
+      makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: false }) })
+    );
+
+    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+    expect((await degradedTool().execute({}, { udid })).hint).toBeUndefined();
+    // Rebooted through argent: no caveat, and the device is no longer one the
+    // caveat has been told about.
+    expect((await healthyTool.execute({}, { udid })).hint).toBeUndefined();
+    // Booted externally again — a state this session has not reported yet.
+    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+  });
+
+  it("tells each degraded device its own caveat", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const first = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    const other = await tool.execute({}, { udid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB" });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(other.hint).toMatch(/booted through argent/);
+  });
+
+  it("repeats the blind-read caveat every call instead of deduping it", async () => {
+    // An empty tree from a degraded sim is the one case where the reboot earns
+    // its cost, and `isBlindRead` (await-ui-element / flows) reads a present
+    // `hint` on an empty tree as "this emptiness is untrustworthy". Deduping
+    // here would let a later `hidden` wait resolve true off a blind read.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid });
+    const second = await tool.execute({}, { udid });
+
+    expect(first.hint).toMatch(/boot-device/);
+    expect(second.hint).toEqual(first.hint);
+    expect(first.hint).toMatch(/no elements/i);
+  });
+
+  it("keeps the blind-read caveat when native-devtools fills the tree the AX read left empty", async () => {
+    // Reproduced on a fresh iOS 18.6 sim whose AX read went blind for the whole
+    // boot: with the location prompt on screen, native-devtools returned the
+    // injected app's own 20 elements and the dialog was not among them. That
+    // tree is populated but carries no SpringBoard chrome and no system dialog
+    // at all, so it is no evidence the AX subsystem works — reading it as such
+    // downgrades the caveat to the standing note, which the per-device gate
+    // then deletes, leaving the agent a tree silently missing a modal that is
+    // blocking the screen.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: ["com.example.settings"],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "General",
+          },
+        ],
+      },
+    });
+    const tool = createDescribeTool(
+      makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi })
+    );
+    const udid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+    const first = await tool.execute({}, { udid, bundleId: "com.example.settings" });
+    const second = await tool.execute({}, { udid, bundleId: "com.example.settings" });
+
+    expect(first.source).toBe("native-devtools");
+    expect(first.description).toMatch(/AXButton\s+"General"/);
+    // The reboot is what recovers the AX read, so it stays named…
+    expect(first.hint).toMatch(/no elements/i);
+    expect(first.hint).toMatch(/boot-device/);
+    // …and repeats, because the per-device gate only ever drops the standing
+    // note, which this path must not be producing.
+    expect(second.hint).toEqual(first.hint);
+  });
+
+  it("keeps the caveat on every internal describeIos read, which the tool alone dedupes", async () => {
+    // await-ui-element / flows / await-screen-idle poll describeIos directly and
+    // fold the last read's hint into one terminal note. The per-device gate
+    // lives at the tool boundary, so their diagnostics stay intact.
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 },
+            traits: [],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+    const registry = makeMockRegistry({ axService: axApi });
+    const device = {
+      id: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      platform: "ios" as const,
+      kind: "simulator" as const,
+    };
+
+    const first = await describeIos(registry, device, {}, { isTvOs: false });
+    const second = await describeIos(registry, device, {}, { isTvOs: false });
+
+    expect(first.hint).toMatch(/booted through argent/);
+    expect(second.hint).toEqual(first.hint);
+  });
+
   it("omits hint when ax-service is not degraded", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,
@@ -534,6 +999,16 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(elementLineCount(result.description)).toBe(0);
+    // The third site that returns an empty tree after a failed corroboration —
+    // its two siblings (the resolve catch and the outer catch) are both pinned,
+    // and this one answered with an in-band error rather than throwing. Returned
+    // bare, the empty tree reads as a blank screen, and `await-ui-element`'s
+    // blind-read guard keys off exactly `hint` / `should_restart`: with neither
+    // set, a `hidden` wait resolves against an element still on screen.
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.hint).toContain("view hierarchy unavailable");
+    // Nothing was measured about the app, so no relaunch may be prescribed.
+    expect(result.should_restart).toBeUndefined();
   });
 
   it("routes a tvOS target to the focus-driven view instead of the iOS ax-service", async () => {
@@ -567,5 +1042,411 @@ describe("describe tool", () => {
       "TvControl:DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
       expect.anything()
     );
+  });
+});
+
+describe("describe tool — ax-service read failure", () => {
+  beforeEach(() => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
+    __resetBootCaveatStateForTests();
+  });
+
+  function throwingAxApi(degraded: boolean): AXServiceApi {
+    return {
+      degraded,
+      describe: async () => {
+        throw new Error("ax-service query timed out: describe");
+      },
+      alertCheck: async () => false,
+      ping: async () => true,
+      livePanel: async () => null,
+      orientation: async () => ({}),
+      foregroundApp: async () => ({ alertVisible: false }),
+      fill: async () => ({ focused: false, verified: false }),
+      tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
+    };
+  }
+
+  // A query timeout on a sim that WAS booted through argent used to be reported
+  // as the boot caveat — "call boot-device with force=true" — sending the agent
+  // to reboot a healthy simulator. The read failure has to be named as itself.
+  it("names the read failure instead of the boot caveat when the sim was booted through argent", async () => {
+    const registry = makeMockRegistry({ axService: throwingAxApi(false) });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint).not.toContain("not booted through argent");
+  });
+
+  it("keeps the boot caveat ahead of the read failure when the sim was booted externally", async () => {
+    const registry = makeMockRegistry({ axService: throwingAxApi(true) });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.hint).toContain("not booted through argent");
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint!.indexOf("not booted")).toBeLessThan(result.hint!.indexOf("timed out"));
+  });
+
+  it("still serves the native-devtools tree after a read failure", async () => {
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: ["com.example.app"],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "Go",
+          },
+        ],
+      },
+    });
+    const registry = makeMockRegistry({
+      axService: throwingAxApi(false),
+      nativeDevtools: nativeApi,
+    });
+    const tool = createDescribeTool(registry);
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("native-devtools");
+    expect(result.hint).toContain("ax-service query timed out: describe");
+    expect(result.hint).not.toContain("not booted through argent");
+  });
+});
+
+// Issue #800: on Intel Macs the ax-service daemon dies of SIGSEGV on every
+// attach. It was reported as a simulator "not booted through argent", whose
+// remedy is `boot-device force=true`; the reboot started the same binary into
+// the same crash, the same hint came back, and an agent rebooted a healthy
+// simulator every 30 seconds until its session was killed.
+describe("describe tool — ax-service daemon crash", () => {
+  beforeEach(() => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
+    __resetBootCaveatStateForTests();
+  });
+
+  const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+
+  // What `resolveService` rejects with when the factory does: the registry
+  // wraps the blueprint's own error.
+  function startFailure(exit: { code: number | null; signal?: string }): Error {
+    const cause = axDaemonExitError(exit, "connecting");
+    return new ServiceInitializationError(`AXService:${UDID}`, cause.message, { cause });
+  }
+
+  function registryWhereAxFailsToStart(
+    failure: Error,
+    nativeDevtools?: NativeDevtoolsApi
+  ): ReturnType<typeof makeMockRegistry> {
+    const registry = makeMockRegistry({ nativeDevtools });
+    const resolve = registry.resolveService.getMockImplementation()!;
+    registry.resolveService.mockImplementation(async (urn: string) => {
+      if (urn.startsWith("AXService:")) throw failure;
+      return resolve(urn);
+    });
+    return registry;
+  }
+
+  // The daemon connected and died during the read, which is how the crash
+  // arrives when it attaches before it faults.
+  function axApiThatCrashesOnRead(degraded: boolean): AXServiceApi {
+    return {
+      ...makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded }),
+      describe: async () => {
+        throw axDaemonExitError({ code: 139, signal: "SIGSEGV" }, "connected");
+      },
+    };
+  }
+
+  const nativeTree = (bundleId: string) =>
+    makeNativeDevtoolsApi({
+      connectedBundleIds: [bundleId],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 20, y: 150, width: 400, height: 44 },
+            tapPoint: { x: 220, y: 172 },
+            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+            normalizedTapPoint: { x: 0.5, y: 0.18 },
+            traits: ["button"],
+            label: "Go",
+          },
+        ],
+      },
+    });
+
+  it("says the service crashed instead of prescribing a reboot", async () => {
+    const registry = registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }));
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).not.toContain("not booted through argent");
+    // Both remedies are named only to be ruled out.
+    expect(result.hint).not.toMatch(/call boot-device/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("names whichever signal it was", async () => {
+    const registry = registryWhereAxFailsToStart(startFailure({ code: 134, signal: "SIGABRT" }));
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toContain("SIGABRT");
+  });
+
+  it("keeps the boot caveat for a start that failed without a crash or a measured boot state", async () => {
+    // An exit code, and a daemon the simulator killed on its way down: a
+    // reboot can bring the daemon back after either. These errors carry no
+    // measurement of how the sim was booted, which the real factory attaches
+    // (see ax-service-daemon-exit.test.ts), so they are still taken for a sim
+    // not booted through argent.
+    for (const exit of [{ code: 1 }, { code: 137, signal: "SIGKILL" }]) {
+      const tool = createDescribeTool(registryWhereAxFailsToStart(startFailure(exit)));
+      const result = await tool.execute({}, { udid: UDID });
+      expect(result.hint).toContain("not booted through argent");
+      expect(result.hint).toContain("Call boot-device with force=true");
+      expect(result.hint).not.toContain("crashed");
+      // No read took place, and the error is not dropped.
+      expect(result.hint).not.toContain("read returned no elements");
+      expect(result.hint).toMatch(
+        exit.signal
+          ? /was killed by SIGKILL before connecting/
+          : /exited with code 1 before connecting/
+      );
+    }
+  });
+
+  it("keeps an ordinary read failure an ordinary read failure", async () => {
+    const axApi: AXServiceApi = {
+      ...makeAXServiceApi({ alertVisible: false, elements: [] }),
+      describe: async () => {
+        throw new Error("ax-service daemon disconnected");
+      },
+    };
+    const tool = createDescribeTool(makeMockRegistry({ axService: axApi }));
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toContain(
+      "The accessibility read failed (ax-service daemon disconnected)."
+    );
+    expect(result.hint).not.toContain("crashed");
+  });
+
+  it("reports a crash during the read the same way, also on a sim booted externally", async () => {
+    // Degraded and blind would otherwise be the blind caveat: "the read
+    // returned no elements ... call boot-device with force=true". No read took
+    // place, and the reboot is the loop.
+    for (const degraded of [false, true]) {
+      const tool = createDescribeTool(
+        makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })
+      );
+      const result = await tool.execute({}, { udid: UDID });
+      expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("The accessibility read failed");
+    }
+  });
+
+  it("serves the native tree with the crash hint, on every call", async () => {
+    // Never deduped: the native tree carries no system dialog and no
+    // SpringBoard chrome, so each one may be missing what covers the screen.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        nativeTree("com.example.app")
+      )
+    );
+
+    const first = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+    const second = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(first.source).toBe("native-devtools");
+    expect(first.description).toMatch(/AXButton\s+"Go"/);
+    expect(first.hint).toMatch(/ax-service.*SIGSEGV/i);
+    // The native tree's frames could not be turned upright without the
+    // service, which names the UI's orientation, and the hint says so.
+    expect(first.hint).toContain(
+      unknownOrientationNote(
+        { unknownReason: "the accessibility service is not running" },
+        "these frames are in"
+      )
+    );
+    expect(second.hint).toBe(first.hint);
+  });
+
+  describe("and the standing boot caveat", () => {
+    // The crash hint says nothing about how the sim was booted, but the read
+    // that crashed knew: the service reports it once connected, and a failed
+    // start carries what the factory measured. The once-per-device state goes
+    // by that, as it does for a read that worked.
+    const response = {
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        { label: "General", frame: { x: 0.045, y: 0.337, width: 0.9, height: 0.046 }, traits: [] },
+      ],
+    };
+    const degradedRead = () =>
+      createDescribeTool(
+        makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: true }) })
+      ).execute({}, { udid: UDID });
+    const crashedRead = (degraded: boolean) =>
+      createDescribeTool(makeMockRegistry({ axService: axApiThatCrashesOnRead(degraded) })).execute(
+        {},
+        { udid: UDID }
+      );
+
+    it("is not re-armed by a crash on a sim still not booted through argent", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(true)).hint).toContain("crashed with SIGSEGV");
+      // Same sim, same state: the caveat already told stays told.
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+
+    it("is re-armed by a crash on a sim booted through argent", async () => {
+      // The crashed read found the sim off the state the caveat describes, as a
+      // read that timed out in its place would have. A later external boot of
+      // the same udid has not been told.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await crashedRead(false)).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+    });
+
+    it.each([true, false])(
+      "is not consumed by a crash that comes first (sim not booted through argent: %s)",
+      async (degraded) => {
+        // A crashed read told the agent nothing about the boot, so the first
+        // degraded read after it still owes the caveat.
+        expect((await crashedRead(degraded)).hint).toContain("crashed with SIGSEGV");
+        expect((await degradedRead()).hint).toMatch(/booted through argent/);
+        expect((await degradedRead()).hint).toBeUndefined();
+      }
+    );
+
+    it("is not re-armed by a crash whose boot state nothing measured", async () => {
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const unmeasured = createDescribeTool(
+        registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+      );
+      expect((await unmeasured.execute({}, { udid: UDID })).hint).toContain("crashed with SIGSEGV");
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+
+    it("is not re-armed by a start that failed without a crash, its boot state unmeasured", async () => {
+      // The crash's twin: the daemon was just as gone, and its hint is no more
+      // a caveat than the crash hint is. The measured cases, over a real start,
+      // are in ax-service-daemon-exit.test.ts.
+      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      const failed = createDescribeTool(registryWhereAxFailsToStart(startFailure({ code: 1 })));
+      expect((await failed.execute({}, { udid: UDID })).hint).toContain(
+        "ax-service exited with code 1 before connecting"
+      );
+      expect((await degradedRead()).hint).toBeUndefined();
+    });
+  });
+
+  it("sets the native fallback's own diagnosis apart from the crash", async () => {
+    // `unregistered` prescribes a tool-server restart for native devtools. The
+    // crash hint has just said a restart does not fix the crash, so the
+    // diagnosis has to read as the fallback's, with the crash hint first.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        makeNativeDevtoolsApi({ state: "unregistered" })
+      )
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toMatch(/SIGSEGV.*native fallback.*unrelated to the crash/is);
+    expect(result.hint).toContain("never registered its connection");
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("still flags the restart that brings the native fallback up", async () => {
+    // With the accessibility read gone the native tree is the only one left,
+    // and a stale process is one relaunch away from serving it.
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(
+        startFailure({ code: 139, signal: "SIGSEGV" }),
+        makeNativeDevtoolsApi({ state: "stale_process" })
+      )
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.example.app" });
+
+    expect(result.should_restart).toBe(true);
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toContain("call restart-app then retry");
+  });
+
+  it("adds the system-app dead end to the crash hint instead of dropping it", async () => {
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+    );
+
+    const result = await tool.execute({}, { udid: UDID, bundleId: "com.apple.Preferences" });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toContain(NON_INJECTABLE_NATIVE_WARNING);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("keeps the crash hint ahead of a native fallback that could not be read", async () => {
+    const tool = createDescribeTool(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
+    );
+
+    const result = await tool.execute({}, { udid: UDID });
+
+    expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
+    expect(result.hint).toMatch(/not evidence that nothing is on screen/);
+    expect(result.should_restart).toBeUndefined();
+  });
+
+  it("does not turn a crash on a provider's device into that provider's reboot caveat", async () => {
+    const external = { id: `ext:provider:${UDID}`, platform: "ios", kind: "simulator" } as const;
+    const crashed = await describeIos(
+      registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" })),
+      external,
+      {},
+      { isTvOs: false }
+    );
+    // The crash hint says describe continues on the native hierarchy "where
+    // that is available", so on a device that does not lend it, it says so.
+    expect(crashed.hint).toContain("SIGSEGV");
+    expect(crashed.hint).toMatch(/external provider.*fallback is unavailable/is);
+    expect(crashed.hint).toContain("screenshot");
+    expect(crashed.hint).not.toContain("Restart it from that application");
+
+    // The same device with a daemon that merely failed to start keeps the
+    // provider's caveat, with the failure in place of a read that never ran.
+    const failed = await describeIos(
+      registryWhereAxFailsToStart(startFailure({ code: 1 })),
+      external,
+      {},
+      { isTvOs: false }
+    );
+    expect(failed.hint).toContain(`AXService:${UDID}`);
+    expect(failed.hint).toContain("code 1");
+    expect(failed.hint).toMatch(/cannot reboot this device/i);
+    expect(failed.hint).toContain("screenshot");
   });
 });

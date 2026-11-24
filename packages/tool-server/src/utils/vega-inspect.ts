@@ -1,39 +1,43 @@
 /**
- * Vega screen inspection — host-side over `adb`, no bundled binary.
+ * Vega screen inspection over `adb`: forward a host port to the on-device
+ * automation toolkit's JSON-RPC port and POST `getPageSource`.
  *
- * The page source comes from the on-device automation toolkit, which serves
- * JSON-RPC on `127.0.0.1:8383` (the toolkit attaches at app launch; argent
- * enables it via `ensureAutomationToolkitEnabled`). We reach it host-side by
- * forwarding a deterministic localhost port to the device's toolkit port with
- * `adb forward`, POST the `getPageSource` JSON-RPC, and return the XML string.
- *
- * This replaces `vega-fast-cli inspect`, whose on-device server was itself just
- * a thin proxy to this same `:8383` toolkit endpoint — so talking to it directly
- * removes the host binary without losing any capability.
+ * The toolkit attaches at app launch; argent enables it via
+ * `ensureAutomationToolkitEnabled`.
  */
 import { request } from "node:http";
-import { runAdb } from "./adb";
+import { adbForward, runAdb } from "./adb";
+import { withKeyedLock } from "./keyed-lock";
 import { emulatorSerial } from "./vega-automation";
 
-// The toolkit's fixed on-device JSON-RPC port.
 const TOOLKIT_DEVICE_PORT = 8383;
-// Host-side forward port = console port + offset, so repeated calls reuse the
-// same idempotent `adb forward` instead of leaking ports (mirrors vega-fast-cli).
+// Derived from the console port so repeated calls reuse one idempotent
+// `adb forward` instead of leaking ports.
 const HOST_PORT_OFFSET = 10_000;
 
+// Keyed by adb serial. Overlapping `getPageSource` requests fail ("socket hang
+// up") and can wedge the toolkit until the VVD reboots; a timed-out wait tool
+// leaves its read running into the next describe.
+const pageSourceLocks = new Map<string, Promise<unknown>>();
+
 /**
- * Fetch the current Vega screen's page-source XML from the on-device automation
- * toolkit. Returns the raw XML string; the caller (describe) handles parsing and
- * the empty/unavailable case. Throws if the VVD can't be discovered, the forward
- * fails, or the toolkit returns an error / is unreachable.
+ * Raw page-source XML from the on-device automation toolkit; describe parses it
+ * and handles the empty/unavailable case. Throws if the VVD can't be discovered,
+ * the forward fails, or the toolkit errors / is unreachable.
  */
 export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
   const { serial, consolePort } = await emulatorSerial();
-  const hostPort = consolePort + HOST_PORT_OFFSET;
+  return withKeyedLock(pageSourceLocks, serial, () =>
+    fetchPageSource(serial, consolePort + HOST_PORT_OFFSET, timeoutMs)
+  );
+}
 
-  await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${TOOLKIT_DEVICE_PORT}`], {
-    timeoutMs: 10_000,
-  });
+async function fetchPageSource(
+  serial: string,
+  hostPort: number,
+  timeoutMs: number
+): Promise<string> {
+  await adbForward(serial, hostPort, TOOLKIT_DEVICE_PORT, { timeoutMs: 10_000 });
   try {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getPageSource", params: {} });
     const respText = await postJson("127.0.0.1", hostPort, "/jsonrpc", body, timeoutMs);
@@ -49,18 +53,16 @@ export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
       throw new Error(`toolkit error: ${JSON.stringify(parsed.error)}`);
     }
     const result = parsed.result;
-    // getPageSource returns the XML as a JSON string; tolerate a structured
-    // value by stringifying (matches vega-fast-cli's fallback).
+    // getPageSource returns the XML as a JSON string; tolerate a structured value.
     return typeof result === "string" ? result : JSON.stringify(result ?? "");
   } finally {
-    // Best-effort: drop the forward so a long-lived server doesn't accrete them.
+    // Drop the forward so a long-lived server doesn't accrete them.
     await runAdb(["-s", serial, "forward", "--remove", `tcp:${hostPort}`], {
       timeoutMs: 5_000,
     }).catch(() => {});
   }
 }
 
-/** Minimal HTTP POST returning the response body, for the forwarded toolkit port. */
 function postJson(
   host: string,
   port: number,
@@ -85,13 +87,11 @@ function postJson(
         let data = "";
         res.setEncoding("utf-8");
         res.on("data", (chunk) => (data += chunk));
+        // A body cut off mid-way ends here, never in "end".
+        res.on("error", reject);
         res.on("end", () => {
-          // A forwarded toolkit can answer non-2xx (e.g. the JSON-RPC endpoint is
-          // down and a gateway responds 500). Reject instead of handing the error
-          // body downstream as if it were page source — otherwise a success-shaped
-          // 500 body gets parsed as a real tree, and a structured/empty error body
-          // gets misreported as an empty screen. The caller's empty-tree + relaunch
-          // hint then covers it, as for every other toolkit-level failure here.
+          // Reject non-2xx: an error body handed downstream would either parse as
+          // a real tree or be misreported as an empty screen.
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
             reject(new Error(`toolkit HTTP ${status}: ${data.slice(0, 200)}`));

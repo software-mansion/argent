@@ -1,0 +1,295 @@
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
+
+// The reader pins `ps` to /bin or /usr/bin when either holds one. Hiding both
+// drops it to a bare `"ps"` resolved off PATH, which is what lets these tests
+// stand a stub in for `ps` and produce failures a real one will not produce on
+// demand — a rejected flag, and an argv too large for the host to ever exec.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const existsSync = (p: Parameters<typeof actual.existsSync>[0]): boolean =>
+    p === "/bin/ps" || p === "/usr/bin/ps" ? false : actual.existsSync(p);
+  return { ...actual, existsSync };
+});
+
+// 2 MiB of argv: past Node's 1 MiB execFileSync default, under the reader's
+// ceiling. Built by doubling in the shell because PATH is trimmed to the stub
+// and node, leaving no external command to generate it with.
+const PAD_BYTES = 16 * 2 ** 17;
+const HUGE_PREFIX = "node /stub/bundle start ";
+
+const PS_STUB = `#!/bin/sh
+case "$ARGENT_PS_STUB" in
+  reject) echo "ps: invalid option -- 'w'" >&2; exit 1 ;;
+  huge)
+    s=xxxxxxxxxxxxxxxx
+    i=0
+    while [ "$i" -lt 17 ]; do s="$s$s"; i=$((i + 1)); done
+    printf '${HUGE_PREFIX}%s\\n' "$s"
+    ;;
+  # A host without the forced UTF-8 locale: under it ps escapes the path, while
+  # the caller's own locale still renders it.
+  locale)
+    printf '%s\\n' "\${LC_ALL-}" >> "$ARGENT_PS_STUB_LOG"
+    case "\${LC_ALL-}" in
+      C.UTF-8|en_US.UTF-8)
+        case "\${ARGENT_PS_STUB_FORCED-}" in
+          fail) echo "ps: cannot read under this locale" >&2; exit 1 ;;
+          hang) exec /bin/sleep 5 ;;
+          *) echo "node /stub/za????????/tool-server.cjs start" ;;
+        esac
+        ;;
+      *) printf '%s\\n' "$ARGENT_PS_STUB_CMD" ;;
+    esac
+    ;;
+esac
+`;
+
+const FIXTURE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
+
+let launcher: typeof import("../src/launcher.js");
+let stubDir: string;
+let bundlePath: string;
+let restoreHome: () => void;
+let ambientPath: string | undefined;
+
+beforeAll(async () => {
+  stubDir = mkdtempSync(join(tmpdir(), "argent-ps-stub-"));
+  // Captured before the fixture writes below: a throw between the mkdtemp and
+  // this line would leave afterAll calling an unassigned restorer, and stubDir
+  // never removed.
+  restoreHome = redirectHomeTo(stubDir);
+  ambientPath = process.env.PATH;
+  writeFileSync(join(stubDir, "ps"), PS_STUB, "utf8");
+  chmodSync(join(stubDir, "ps"), 0o755);
+  bundlePath = join(stubDir, "tool-server.cjs");
+  copyFileSync(FIXTURE_BUNDLE, bundlePath);
+  // The stub dir first so `ps` resolves to it; node's own dir because
+  // spawnToolsServer launches `node` off PATH. Neither holds a real `ps`.
+  process.env.PATH = `${stubDir}:${dirname(process.execPath)}`;
+  vi.resetModules();
+  launcher = await import("../src/launcher.js");
+});
+
+const spawnedPids: number[] = [];
+describe("couldBeOurToolServer — host without the forced UTF-8 locale", () => {
+  const FORCED_LOCALE = process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
+
+  const paths = (bundle: string): import("../src/launcher.js").ToolsServerPaths => ({
+    bundlePath: bundle,
+    simulatorServerDir: "/unused/sim",
+    nativeDevtoolsDir: "/unused/dylibs",
+  });
+
+  async function spawnRecorded(bundle: string): Promise<number> {
+    const { port, pid } = await launcher.spawnToolsServer(
+      paths(bundle),
+      await launcher.findFreePort()
+    );
+    spawnedPids.push(pid);
+    await launcher.writeToolsServerState({
+      port,
+      pid,
+      startedAt: new Date().toISOString(),
+      bundlePath: bundle,
+      host: "127.0.0.1",
+    });
+    return pid;
+  }
+
+  function stubPs(
+    cmd: string,
+    forced?: "fail" | "hang"
+  ): { reads: () => string[]; restore: () => void } {
+    const log = join(stubDir, `ps-reads-${Date.now()}.log`);
+    writeFileSync(log, "");
+    const savedLcAll = process.env.LC_ALL;
+    process.env.ARGENT_PS_STUB = "locale";
+    process.env.ARGENT_PS_STUB_LOG = log;
+    process.env.ARGENT_PS_STUB_CMD = cmd;
+    if (forced) process.env.ARGENT_PS_STUB_FORCED = forced;
+    // The caller's own UTF-8 locale, which this host does have.
+    process.env.LC_ALL = "pl_PL.UTF-8";
+    return {
+      reads: () => readFileSync(log, "utf8").split("\n").filter(Boolean),
+      restore: () => {
+        delete process.env.ARGENT_PS_STUB_LOG;
+        delete process.env.ARGENT_PS_STUB_CMD;
+        delete process.env.ARGENT_PS_STUB_FORCED;
+        if (savedLcAll === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = savedLcAll;
+      },
+    };
+  }
+
+  it("stops a server under a non-ASCII path through the caller's own locale", async () => {
+    const dir = join(stubDir, "zażółć");
+    mkdirSync(dir, { recursive: true });
+    const bundle = join(dir, "tool-server.cjs");
+    copyFileSync(FIXTURE_BUNDLE, bundle);
+    const pid = await spawnRecorded(bundle);
+    const ps = stubPs(`node ${bundle} start`);
+    try {
+      expect(await launcher.killToolServer(bundle)).toBe(true);
+      expect(ps.reads().slice(0, 2)).toEqual([FORCED_LOCALE, "pl_PL.UTF-8"]);
+    } finally {
+      ps.restore();
+    }
+    expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+  });
+
+  it("retries a failed UTF-8 read in the caller's own locale", async () => {
+    const pid = await spawnRecorded(bundlePath);
+    const ps = stubPs(`node ${bundlePath} start`, "fail");
+    try {
+      expect(await launcher.killToolServer(bundlePath)).toBe(true);
+      expect(ps.reads().slice(0, 2)).toEqual([FORCED_LOCALE, "pl_PL.UTF-8"]);
+    } finally {
+      ps.restore();
+    }
+    expect(launcher.isToolsServerProcessAlive(pid)).toBe(false);
+  });
+
+  it("does not wait out a second read after one timed out", { timeout: 15_000 }, async () => {
+    const dir = join(stubDir, "zażółć-hang");
+    mkdirSync(dir, { recursive: true });
+    const bundle = join(dir, "tool-server.cjs");
+    copyFileSync(FIXTURE_BUNDLE, bundle);
+    await spawnRecorded(bundle);
+    const ps = stubPs(`node ${bundle} start`, "hang");
+    const started = Date.now();
+    try {
+      expect(await launcher.killToolServer(bundle)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(ps.reads()).toHaveLength(1);
+    } finally {
+      ps.restore();
+      await launcher.clearToolsServerState(bundle);
+    }
+  });
+
+  it("reads an ASCII path once, since no locale changes how ps renders it", async () => {
+    await spawnRecorded(bundlePath);
+    const ps = stubPs("node /some/other/bundle start");
+    try {
+      expect(await launcher.killToolServer(bundlePath)).toBe(false);
+      expect(ps.reads()).toHaveLength(1);
+    } finally {
+      ps.restore();
+    }
+    expect(await launcher.readToolsServerState(bundlePath)).not.toBeNull();
+    await launcher.clearToolsServerState(bundlePath);
+  });
+});
+
+afterEach(() => {
+  delete process.env.ARGENT_PS_STUB;
+  for (const pid of spawnedPids.splice(0)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already dead */
+    }
+  }
+});
+
+afterAll(() => {
+  // Both before the rmSync: anything still pointing at stubDir resolves to a
+  // directory that is gone.
+  restoreHome();
+  if (ambientPath === undefined) delete process.env.PATH;
+  else process.env.PATH = ambientPath;
+  rmSync(stubDir, { recursive: true, force: true });
+});
+
+describe("readProcessCommandLine", () => {
+  it("carries ps's own complaint into the error it throws", () => {
+    // A `ps` that rejects the width flags is exactly what the guard's
+    // diagnostic exists to name; without the child's stderr it can only say
+    // `Command failed: ps -ww …`.
+    process.env.ARGENT_PS_STUB = "reject";
+    let thrown: unknown;
+    try {
+      launcher.readProcessCommandLine(process.pid);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain("ps: invalid option -- 'w'");
+  });
+
+  it("reads a command line larger than Node's 1 MiB exec-output default", () => {
+    // A recycled pid can sit on a process with a multi-megabyte argv. Under the
+    // default the read comes back ENOBUFS, which the guard can only treat as
+    // "unidentifiable" — and a live server never gets retired.
+    expect(PAD_BYTES).toBeGreaterThan(1024 * 1024);
+    process.env.ARGENT_PS_STUB = "huge";
+    const cmd = launcher.readProcessCommandLine(process.pid);
+    expect(cmd.startsWith(HUGE_PREFIX)).toBe(true);
+    expect(cmd.length).toBe(HUGE_PREFIX.length + PAD_BYTES);
+  });
+});
+
+describe("ensureToolsServer — identity guard on a host with no `ps`", () => {
+  it(
+    "retires a wedged auto-spawned server on Windows, where nothing can read a command line",
+    { timeout: 30_000 },
+    async () => {
+      // Windows has no `ps`, so the guard can never confirm the recorded pid is
+      // ours. Vetoing the kill there would leave every wedged auto-spawned
+      // server running on a leaked port while the MCP health monitor retries
+      // the same replacement every 30s. The stub `ps` answers with nothing —
+      // the same "unidentifiable" verdict a missing binary produces — so only
+      // the platform decides the outcome.
+      const paths: import("../src/launcher.js").ToolsServerPaths = {
+        bundlePath,
+        simulatorServerDir: "/unused/sim",
+        nativeDevtoolsDir: "/unused/dylibs",
+      };
+      process.env.FAKE_MODE = "unhealthy";
+      let wedged: { port: number; pid: number };
+      try {
+        wedged = await launcher.spawnToolsServer(paths, await launcher.findFreePort(), {
+          token: "guard-token",
+        });
+      } finally {
+        delete process.env.FAKE_MODE;
+      }
+      spawnedPids.push(wedged.pid);
+      await launcher.writeToolsServerState({
+        port: wedged.port,
+        pid: wedged.pid,
+        startedAt: new Date().toISOString(),
+        bundlePath,
+        host: "127.0.0.1",
+        token: "guard-token",
+        managed: "autospawn",
+      });
+      expect(launcher.isToolsServerProcessAlive(wedged.pid)).toBe(true);
+
+      const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        await launcher.ensureToolsServer(paths);
+      } finally {
+        Object.defineProperty(process, "platform", realPlatform);
+      }
+
+      const replacement = await launcher.readToolsServerState(bundlePath);
+      spawnedPids.push(replacement!.pid);
+      expect(launcher.isToolsServerProcessAlive(wedged.pid)).toBe(false);
+      expect(replacement!.pid).not.toBe(wedged.pid);
+    }
+  );
+});

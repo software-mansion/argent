@@ -1,5 +1,3 @@
-// ── Service Errors ──
-
 import { FAILURE_CODES, type FailureCode } from "./failure-codes";
 
 export const FAILURE_AREAS = ["cli", "http", "registry", "tool_server", "installer"] as const;
@@ -25,18 +23,31 @@ export const FAILURE_COMMANDS = [
   "adb",
   "emulator",
   "vega",
+  "hdc",
+  "deveco_emulator",
   "xcrun_simctl",
+  // The `sim-remote` CLI, which stands in for simctl (and more) against a
+  // remote simulator.
+  "sim_remote",
   "xctrace",
   "native_devtools",
   "android_devtools",
   "ax_service",
   "simulator_server",
   "ffmpeg",
+  "afconvert",
   "cdp",
   "electron",
   "npm",
   "npx",
   "unknown",
+  "devicectl",
+  "xcodebuild",
+  "swiftc",
+  // The host-side helper that captures a cabled iPhone's screen.
+  "ios_screen_stream",
+  // `xcrun xcresulttool`, which reads an XCTest result bundle.
+  "xcresulttool",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];
@@ -67,21 +78,19 @@ export const NETWORK_FAILURES = [
 export type NetworkFailure = (typeof NETWORK_FAILURES)[number];
 
 export interface FailureSignal {
-  /** Static, searchable code. Never derive this from an Error message. */
+  /** Static code; never derive it from an Error message. */
   error_code: FailureCode;
-  /** Static source-location hint, e.g. `http_zod_validation` or `registry_execute`. */
+  /** Static source-location hint, e.g. `http_zod_validation`. */
   failure_stage: string;
   failure_area: FailureArea;
   error_kind: FailureKind;
-  /** Optional coarse command category; never a command line or argv. */
+  /** Coarse command category; never a command line or argv. */
   failure_command?: FailureCommand;
-  /** Optional process exit code; sanitized to a small non-negative integer. */
+  /** Process exit code; kept only when it is an integer in 0-255. */
   failure_exit_code?: number;
-  /** Optional allowlisted POSIX signal name. */
   failure_signal?: FailureSignalName;
-  /** Optional allowlisted spawn failure code. */
   failure_spawn_code?: FailureSpawnCode;
-  /** Optional coarse network failure class; never a URL, host, or port. */
+  /** Coarse network failure class; never a URL, host, or port. */
   network_failure?: NetworkFailure;
 }
 
@@ -121,10 +130,8 @@ export function withFailureSignal<T extends Error>(error: T, signal: FailureSign
 }
 
 export function getFailureSignal(error: unknown): FailureSignal | null {
-  // Bounded breadth-first walk so the shallowest (outermost) signal still wins,
-  // while also descending into AggregateError.errors — a signal attached to an
-  // aggregated sub-error would otherwise be missed. The visited set guards
-  // against cyclic `.cause`/`.errors` references.
+  // Breadth-first so the outermost signal wins; also descends into
+  // AggregateError.errors. `seen` guards against cyclic `.cause`/`.errors`.
   const seen = new Set<unknown>();
   const queue: unknown[] = [error];
   for (let visited = 0; visited < 16 && queue.length > 0; visited++) {
@@ -176,20 +183,26 @@ export function subprocessFailureMetadata(
   > = { failure_command };
   const err = error as {
     code?: string | number | null;
+    // execFileSync reports the exit code here; execFile in `code`.
+    status?: number | null;
     signal?: string | null;
   };
-  if (
-    typeof err.code === "number" &&
-    Number.isInteger(err.code) &&
-    err.code >= 0 &&
-    err.code <= 255
-  ) {
-    metadata.failure_exit_code = err.code;
-  } else if (
-    typeof err.code === "string" &&
-    FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)
-  ) {
-    metadata.failure_spawn_code = err.code as FailureSpawnCode;
+  if (typeof err.code === "string") {
+    // A string code wins over `status`: an execFileSync timeout whose child
+    // traps SIGTERM carries both ETIMEDOUT and the child's exit status.
+    if (FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)) {
+      metadata.failure_spawn_code = err.code as FailureSpawnCode;
+    }
+  } else {
+    const exitCode = typeof err.code === "number" ? err.code : err.status;
+    if (
+      typeof exitCode === "number" &&
+      Number.isInteger(exitCode) &&
+      exitCode >= 0 &&
+      exitCode <= 255
+    ) {
+      metadata.failure_exit_code = exitCode;
+    }
   }
   if (
     typeof err.signal === "string" &&
@@ -201,11 +214,9 @@ export function subprocessFailureMetadata(
 }
 
 export class ServiceNotFoundError extends Error {
-  public readonly serviceId: string;
   constructor(serviceId: string) {
     super(`Service "${serviceId}" not found`);
     this.name = "ServiceNotFoundError";
-    this.serviceId = serviceId;
     withFailureSignal(this, {
       error_code: FAILURE_CODES.REGISTRY_SERVICE_NOT_FOUND,
       failure_stage: "registry_resolve_service",
@@ -216,11 +227,9 @@ export class ServiceNotFoundError extends Error {
 }
 
 export class ServiceInitializationError extends Error {
-  public readonly serviceId: string;
   constructor(serviceId: string, message: string, options?: { cause?: Error }) {
     super(`[${serviceId}] ${message}`, options);
     this.name = "ServiceInitializationError";
-    this.serviceId = serviceId;
     withFailureSignal(
       this,
       getFailureSignalOrFallback(options?.cause, {
@@ -232,8 +241,6 @@ export class ServiceInitializationError extends Error {
     );
   }
 }
-
-// ── Tool Errors ──
 
 export class ToolNotFoundError extends Error {
   public readonly toolId: string;
@@ -251,11 +258,9 @@ export class ToolNotFoundError extends Error {
 }
 
 export class ToolExecutionError extends Error {
-  public readonly toolId: string;
   constructor(toolId: string, message: string, options?: { cause?: Error }) {
     super(`[Tool:${toolId}] ${message}`, options);
     this.name = "ToolExecutionError";
-    this.toolId = toolId;
     withFailureSignal(
       this,
       getFailureSignalOrFallback(options?.cause, {

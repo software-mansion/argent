@@ -2,16 +2,10 @@
 //
 // A configuration value can be set at two scopes — `project`
 // (`<project-root>/.argent/config.json`) and `global` (`~/.argent/config.json`).
-// When both scopes hold a value, a *merge policy* decides the effective value.
-// Feature flags get away with a single hardcoded rule (project overrides
-// global) because every flag is a homogeneous opt-in boolean. Config values are
-// heterogeneous — a device-set path wants project-wins, a telemetry opt-out
-// wants the more-restrictive value to win so a committed project file can never
-// re-enable something the user disabled globally — so each value declares its
-// own policy in the schema (see `config-schema.ts`).
-//
-// The presets below cover the common cases; a schema entry can also supply an
-// arbitrary function for a bespoke rule.
+// Feature flags need only one hardcoded rule (project shadows global) because
+// every flag is a homogeneous boolean; config values are heterogeneous, so each
+// declares its own policy in the schema (see `config-schema.ts`) — one of the
+// presets below, or an arbitrary function.
 
 /** Built-in merge behaviors, chosen per config value in the schema. */
 export type MergePreset =
@@ -24,10 +18,8 @@ export type MergePreset =
    * `true`; for numbers, the smaller value. Use for privacy/permission toggles
    * where a committed project file must never loosen a stricter global choice.
    *
-   * Caveat: the numeric rule hardcodes "smaller = stricter". Only apply this
-   * preset to a numeric config where a lower value is genuinely the safer bound.
-   * If larger is stricter (e.g. a retry cap, a minimum log level, a rate limit),
-   * do not use this preset — supply a custom `MergeFn` on the schema entry instead.
+   * "Smaller = stricter" is hardcoded. Where a larger number is the stricter
+   * bound (a retry cap, a minimum log level), supply a custom `MergeFn` instead.
    */
   | "prioritize-restrictive"
   /** Arrays only: the de-duplicated union of both scopes (global first). */
@@ -44,17 +36,14 @@ export interface MergeInputs<T> {
 }
 
 /**
- * A bespoke merge rule. Receives both scope values (either may be `undefined`)
- * and returns the effective value, or `undefined` to fall through to the
- * schema default. Provided as an escape hatch on a schema entry when none of
- * the presets fit.
+ * A bespoke merge rule for a schema entry no preset fits. Returns the effective
+ * value, or `undefined` to fall through to the schema default.
  */
 export type MergeFn<T> = (inputs: MergeInputs<T>) => T | undefined;
 
 /** A preset name or a custom function. */
 export type MergePolicy<T> = MergePreset | MergeFn<T>;
 
-/** The set of recognized preset names, for validation and docs. */
 export const MERGE_PRESETS: readonly MergePreset[] = [
   "prioritize-local",
   "prioritize-global",
@@ -66,17 +55,13 @@ export const MERGE_PRESETS: readonly MergePreset[] = [
 function mergeRestrictive<T>(local: T | undefined, global: T | undefined): T | undefined {
   if (local === undefined) return global;
   if (global === undefined) return local;
-  // Booleans: any `false` (opt-out) wins over `true`.
   if (typeof local === "boolean" && typeof global === "boolean") {
     return (local && global) as unknown as T;
   }
-  // Numbers: the smaller (stricter) bound wins.
   if (typeof local === "number" && typeof global === "number") {
     return Math.min(local, global) as unknown as T;
   }
-  // No ordering defined for other types — keep the project value, matching the
-  // fall-through of the other presets. (The schema restricts this preset to
-  // boolean/number values, so this branch is a safety net, not a real path.)
+  // No ordering defined for other types — keep the project value.
   return local;
 }
 
@@ -87,11 +72,11 @@ function toArray(value: unknown): unknown[] | null {
 function mergeUnion<T>(local: T | undefined, global: T | undefined): T | undefined {
   const l = toArray(local);
   const g = toArray(global);
-  // If neither scope holds an array there is nothing to union — behave like
-  // prioritize-local so a mis-typed value still resolves predictably.
+  // Nothing to union — behave like prioritize-local so a mis-typed value still
+  // resolves predictably.
   if (l === null && g === null) return local ?? global;
-  // Global first so project entries append after the shared baseline; dedup by
-  // value (works for primitive arrays — the documented array element type).
+  // Global first so project entries append after the shared baseline; `Set`
+  // dedup assumes primitive elements.
   const merged = [...(g ?? []), ...(l ?? [])];
   return Array.from(new Set(merged)) as unknown as T;
 }
@@ -99,8 +84,8 @@ function mergeUnion<T>(local: T | undefined, global: T | undefined): T | undefin
 function mergeIntersection<T>(local: T | undefined, global: T | undefined): T | undefined {
   const l = toArray(local);
   const g = toArray(global);
-  // Intersection needs both sides. When a scope is unset there is no constraint
-  // to intersect against, so the present scope passes through unchanged.
+  // A scope that is unset (or not an array) adds no constraint, so the other
+  // scope passes through unchanged.
   if (l === null && g === null) return local ?? global;
   if (l === null) return global;
   if (g === null) return local;
@@ -110,8 +95,7 @@ function mergeIntersection<T>(local: T | undefined, global: T | undefined): T | 
 
 /**
  * Combine a project (`local`) and `global` value under `policy`, returning the
- * effective value or `undefined` when neither scope contributes one. A function
- * policy is called directly; a preset name dispatches to the built-in rules.
+ * effective value or `undefined` when neither scope contributes one.
  */
 export function applyMergePolicy<T>(
   policy: MergePolicy<T>,
@@ -131,8 +115,7 @@ export function applyMergePolicy<T>(
     case "intersection":
       return mergeIntersection(local, global);
     default: {
-      // Exhaustiveness guard: a new preset added to the union without a case
-      // here becomes a compile error.
+      // A preset added to the union without a case here becomes a compile error.
       const _exhaustive: never = policy;
       return _exhaustive;
     }

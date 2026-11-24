@@ -1,11 +1,7 @@
 import type { DevToolsChangeDescription } from "../types/input";
 import type { ReRenderReason } from "../types/output";
 
-/**
- * Derive the re-render reason from a commit's change description.
- * hookTypes (fiber._debugHookTypes) is used to distinguish 'state' from 'hooks'.
- * Shared between 00-preprocess and 01-reduce to avoid duplication.
- */
+/** hookTypes (fiber._debugHookTypes) is what separates 'state' from 'hooks'. */
 export function deriveReason(
   cd: DevToolsChangeDescription | null,
   hookTypes?: string[] | null
@@ -13,7 +9,6 @@ export function deriveReason(
   if (cd === null) return "unknown";
   if (cd.props !== null && cd.props.length > 0) return "props";
   if (cd.didHooksChange || (cd.hooks !== null && cd.hooks.length > 0)) {
-    // Distinguish state-driven hook changes from generic hook changes
     if (hookTypes && cd.hooks) {
       const isState = cd.hooks.some((idx) => {
         const ht = hookTypes[idx];
@@ -26,4 +21,24 @@ export function deriveReason(
   if (cd.context === true) return "context";
   if (cd.state === true) return "state";
   return "parent";
+}
+
+export function emptyReasonHistogram(): Record<ReRenderReason, number> {
+  return { parent: 0, props: 0, hooks: 0, context: 0, state: 0, force_update: 0, unknown: 0 };
+}
+
+/**
+ * The reason with the most renders. A tie goes to the first in the histogram's
+ * key order, so the report's table and `render_counts` name the same one.
+ */
+export function dominantReason(histogram: Record<ReRenderReason, number>): ReRenderReason {
+  let best: ReRenderReason = "unknown";
+  let bestCount = -1;
+  for (const [reason, count] of Object.entries(histogram) as [ReRenderReason, number][]) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = reason;
+    }
+  }
+  return best;
 }

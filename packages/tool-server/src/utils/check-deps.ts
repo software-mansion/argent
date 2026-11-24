@@ -1,72 +1,61 @@
-import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
+import type { ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
+import { resolveHarmonyEmulator } from "./harmony-cli";
+import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
+import { DependencyMissingError } from "./dependency-errors";
 
-/**
- * Thrown when a tool declares a host-binary dependency (e.g. `adb`, `xcrun`)
- * that is not on PATH. The HTTP dispatcher maps this to `424 Failed
- * Dependency` with the message as the body; `.message` is the human-friendly
- * install hint, safe to bubble straight to the agent.
- */
-export class DependencyMissingError extends Error {
-  readonly missing: ToolDependency[];
-  constructor(missing: ToolDependency[], message: string) {
-    super(message);
-    this.name = "DependencyMissingError";
-    this.missing = missing;
-    withFailureSignal(this, {
-      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
-      failure_stage: "tool_dependency_preflight",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    });
-  }
-}
+export { DependencyMissingError };
 
-// Cache for CACHE_TTL_MS so a burst of tool calls pays at most one `command -v`
-// per dep, but an install mid-session (e.g. the user runs `xcode-select
-// --install` after a missing-dep error) recovers on its own within a minute
-// without needing a tool-server restart.
+// Short TTL: a burst of tool calls pays for at most one probe per dep, yet an
+// install mid-session recovers without a tool-server restart.
 const CACHE_TTL_MS = 60_000;
 type CacheEntry = { available: boolean; checkedAt: number };
 const cache = new Map<ToolDependency, CacheEntry>();
 
-// Short per-dep hints — the message is what the LLM sees on a missing-dep
-// error, so it should tell it how to unblock the user.
+// This text is what the LLM sees on a missing-dep failure, so each hint says
+// how to unblock the user. The agent will run what a hint says, so each one
+// names a route that works on any host, and any package-manager command names
+// its platform: an unlabelled `brew install` reads as the fix on Linux too.
 const INSTALL_HINTS: Record<ToolDependency, string> = {
   "xcrun":
-    "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
+    "Xcode command-line tools not found — iOS/tvOS simulators need a macOS host with them installed. On macOS, run `xcode-select --install` (or install Xcode from the App Store) and retry.",
   "adb":
-    "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
+    "Android SDK Platform Tools not found. Install `platform-tools` via Android Studio → SDK Manager or `sdkmanager 'platform-tools'` (`brew install --cask android-platform-tools` on macOS). If installed, ensure `adb` is on PATH or point `$ANDROID_HOME` (or the `android.sdkRoot` config key) at the SDK root (the resolver checks `<root>/platform-tools/adb`). Only required for Android devices and emulators.",
   "emulator":
-    "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
+    "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or point `$ANDROID_HOME` (or the `android.sdkRoot` config key) at the SDK root (the resolver checks `<root>/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
   "sim-remote":
     "`sim-remote` CLI not found on PATH. Install via the radon-cloud project (see its README) and run `sim-remote login` before invoking any ios-remote tool. Only required for remote iOS simulators.",
   "vega":
     "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
+  "harmony-emulator":
+    "HarmonyOS emulator manager not found. Install DevEco Studio; a macOS install at `/Applications/DevEco-Studio.app` is found automatically, and anywhere else set `$DEVECO_STUDIO_HOME` to the directory holding `tools/emulator/Emulator` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to list or launch HarmonyOS emulators.",
+  "hdc":
+    "`hdc`, the HarmonyOS device connector, was not found. Install DevEco Studio (it ships `hdc` under `sdk/default/openharmony/toolchains`, and a macOS install at `/Applications/DevEco-Studio.app` is found automatically), or put `hdc` from the OpenHarmony command-line tools on PATH, or set `$DEVECO_STUDIO_HOME` to the directory holding `sdk/default/openharmony/toolchains/hdc` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to drive HarmonyOS devices.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
-  // Android binaries support an `$ANDROID_HOME` fallback in addition to PATH
-  // (Android Studio sets ANDROID_HOME but does NOT add `$ANDROID_HOME/emulator`
-  // to PATH on macOS — the most common state for users coming from Studio).
-  // Funnel the lookup through `resolveAndroidBinary` so the dep check sees an
-  // SDK install even when the binary is off PATH; otherwise a host with a
-  // working SDK would 424 with an "install adb"-style hint that doesn't
-  // describe the actual problem.
+  // Android Studio sets ANDROID_HOME but leaves the SDK subdirs off PATH, so
+  // resolve through the SDK-aware resolver — a PATH-only check would 424 on a
+  // host whose SDK works fine.
   if (dep === "adb" || dep === "emulator") {
     return (await resolveAndroidBinary(dep)) !== null;
   }
-  // `vega`/`kepler` may live only under `~/vega/bin` when the user hasn't sourced
-  // `~/vega/env`, so resolve through the SDK-aware resolver rather than PATH alone.
+  // `vega`/`kepler` is only on PATH after `source ~/vega/env`, so also let the
+  // resolver check the SDK's default install location.
   if (dep === "vega") {
     return (await resolveVegaBinary()) !== null;
   }
-  // `commandOnPath` probes existence without invoking the dep itself — a bare
-  // `xcrun` call would fork the tool just to check existence, which is both
-  // slower and (for xcrun) can prompt the license agreement dialog on first
-  // use. It uses `command -v` on POSIX and `where` on Windows.
+  // Both ship inside DevEco Studio rather than on PATH.
+  if (dep === "harmony-emulator") {
+    return (await resolveHarmonyEmulator()) !== null;
+  }
+  if (dep === "hdc") {
+    return (await resolveHdc()) !== null;
+  }
+  // Probe existence without invoking the dep: a bare `xcrun` can pop the Xcode
+  // license dialog on first use.
   return (await commandOnPath(dep)) !== null;
 }
 
@@ -80,10 +69,10 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
 }
 
 /**
- * Throws DependencyMissingError if any declared dep isn't on PATH. All deps
- * are probed in parallel; the error message lists every missing one so the
- * agent sees the complete picture on the first failure instead of being
- * prompted twice for the same tool.
+ * Probes all deps in parallel.
+ *
+ * @throws DependencyMissingError listing every missing dep, so the agent isn't
+ * sent back for the same tool twice.
  */
 export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void> {
   if (deps.length === 0) return;
@@ -96,9 +85,9 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
 
 /**
  * Single-dep convenience over `ensureDeps`. `dispatchByPlatform` already
- * preflights the matched branch's `requires`; this is for tools that pick
- * a platform path internally (e.g. `boot-device`, where there is no udid to
- * classify yet) and want the same 424-with-install-hint failure mode.
+ * preflights the matched branch's `requires`; this is for tools that pick a
+ * platform path internally (e.g. `boot-device`, which has no udid to classify
+ * yet).
  */
 export async function ensureDep(dep: ToolDependency): Promise<void> {
   return ensureDeps([dep]);
@@ -110,10 +99,8 @@ export function __resetDepCacheForTests(): void {
 }
 
 /**
- * Test-only: pre-populate the cache so `ensureDep(dep)` is a no-op without
- * shelling out. Needed by tool dispatch tests that assert on `execFile` call
- * shapes / counts — without this, the `command -v <dep>` probe appears as an
- * extra first call and breaks `mock.calls[0]` expectations.
+ * Test-only: mark deps available so the preflight doesn't reach the probe and
+ * show up in tests' `execFile` mocks.
  */
 export function __primeDepCacheForTests(deps: ToolDependency[]): void {
   const now = Date.now();

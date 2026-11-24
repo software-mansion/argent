@@ -1,7 +1,6 @@
-import * as os from "os";
-import * as path from "path";
 import { promises as fs } from "fs";
 import { spawn } from "child_process";
+import type { LivePanel } from "../../utils/foldable";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { ScreenRecordingSessionApi } from "../../blueprints/screen-recording-session";
 import { waitForChildExit } from "../../utils/profiler-shared/lifecycle";
@@ -10,6 +9,7 @@ import {
   markScreenRecordingFinalized,
   registerActiveScreenRecording,
 } from "../../utils/screen-recording-reminder";
+import { takeReapedSession } from "../../utils/reaped-sessions";
 import { openMjpegStream, readJpegDimensions, type MjpegStream } from "./mjpeg-stream";
 import {
   assertNoActiveRecording,
@@ -19,30 +19,32 @@ import {
   statNonEmptyOutput,
   type StartRecordingResult,
   type StopRecordingFile,
+  recordingOutputPath,
 } from "./session-guards";
-import { buildWatermarkGraph, resolveFfmpeg, writeLogoTemp } from "./watermark";
+import {
+  buildWatermarkGraph,
+  letterboxFilter,
+  resolveFfmpeg,
+  writeLogoTemp,
+  type Dimensions,
+} from "./watermark";
 
 /**
- * Platform-agnostic screen capture, driven entirely by simulator-server — the
- * same backend `screenshot` and every input tool already use. simulator-server
- * publishes the device screen as an MJPEG stream; we subscribe to it, pace the
- * frames onto a fixed 30fps timeline, and pipe them into a single ffmpeg
- * process that encodes (and optionally watermarks) straight to the final mp4.
+ * Screen capture off simulator-server's MJPEG stream, paced onto a fixed 30fps
+ * timeline and piped into one ffmpeg process that encodes (and optionally
+ * watermarks) straight to the final mp4.
  *
- * Pacing frames here rather than letting ffmpeg read the stream itself is what
- * makes the timeline honest: the device only emits a frame when the screen
- * CHANGES, so a still screen would otherwise collapse to a fraction of a second
- * of video (and ffmpeg, blocked on a silent socket, would not even answer a
- * stop signal promptly). Re-emitting the last frame on a wall-clock schedule
- * keeps video duration equal to real elapsed time; identical frames cost almost
- * nothing once encoded.
+ * Pacing here rather than letting ffmpeg read the stream is what keeps the
+ * timeline honest: the device only emits a frame when the screen CHANGES, so a
+ * still screen would collapse to a fraction of a second of video. Re-emitting
+ * the last frame on a wall-clock schedule keeps duration equal to real elapsed
+ * time; identical frames cost almost nothing once encoded.
  */
 
 /**
- * Turns simulator-server's touch visualizer on for the life of a recording and
- * back off afterwards. Built by the start tool from the resolved sim-server
- * handle; capture.ts only arms it and stores the teardown, staying decoupled
- * from the sim-server client.
+ * simulator-server's touch visualizer, on for the life of a recording. Built by
+ * the start tool from the resolved sim-server handle, so capture stays
+ * decoupled from the sim-server client.
  */
 export interface PointerControl {
   /** Enable the overlay; resolves false if the sim-server would not turn it on. */
@@ -51,24 +53,59 @@ export interface PointerControl {
   disable(): Promise<void>;
 }
 
-export const OUTPUT_FPS = 30;
+const OUTPUT_FPS = 30;
 const FRAME_INTERVAL_MS = 1000 / OUTPUT_FPS;
 /** Cap a catch-up burst so a stalled pipe cannot trigger a write storm. */
 const MAX_CATCHUP_FRAMES = 5;
 /** Skip a tick while ffmpeg is this far behind rather than buffering in Node. */
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 /**
- * How long a screen may sit unchanged before trimming kicks in. The first
- * second of every still stretch is kept so pauses read naturally; past it the
- * duplicate frames are dropped until the screen changes again. Only used when
- * `trimStatic` is on.
+ * How long a screen may sit unchanged before `trimStatic` starts dropping
+ * duplicate frames; the kept head makes pauses read naturally.
  */
 const STATIC_GRACE_MS = 1_000;
 const STREAM_CONNECT_TIMEOUT_MS = 10_000;
 const FIRST_FRAME_TIMEOUT_MS = 10_000;
+/**
+ * How often a recording of a foldable resolves which panel is live, while it
+ * runs (the preview page polls its own route on a similar cadence; nothing
+ * else in argent polls). A fold made outside argent is then in the video
+ * within about a second of the hand-over.
+ */
+const PANEL_POLL_MS = 1_000;
+/**
+ * The panel the device just switched to has drawn (that is what made it
+ * live), so its stream's first frame lands within a few hundred ms; a panel
+ * that never draws again would leave the recording on the old stream.
+ */
+const PANEL_FIRST_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * How a recording of a foldable follows the panel the device renders to. The
+ * MJPEG stream is per panel and keeps one size for its lifetime, so following
+ * a fold means closing one stream and opening another; the frames keep going
+ * into the same ffmpeg, which letterboxes them into the first frame's size.
+ */
+export interface PanelFollow {
+  /**
+   * The panel the recording starts on, as resolved at start: the main screen
+   * when nothing resolved it, which then counts as the first check that
+   * failed, for stop's warning.
+   */
+  initial: LivePanel;
+  /** The MJPEG stream of a panel. */
+  streamUrlForScreen(screen: number): string;
+  /**
+   * Which panel the device renders to now, as every touch and capture
+   * resolves it; `source: "unknown"` when nothing could say.
+   */
+  resolveLivePanel(): Promise<LivePanel>;
+  /** Poll cadence; the default is {@link PANEL_POLL_MS}. */
+  pollMs?: number;
+}
 /** Hold briefly after spawn so bad args fail the start instead of the stop. */
 const START_FAILFAST_GRACE_MS = 800;
-/** ffmpeg finalizes on stdin EOF (typically <100ms); bound the wait anyway. */
+/** ffmpeg finalizes on stdin EOF; bound the wait anyway. */
 const FINALIZE_WAIT_MS = 20_000;
 const SIGINT_WAIT_MS = 5_000;
 
@@ -76,6 +113,11 @@ export function ffmpegArgs(opts: {
   outputFile: string;
   logoFile: string | null;
   graph: string | null;
+  /**
+   * The first frame's size, which the whole video keeps; null when its JPEG
+   * header could not be read.
+   */
+  canvas: Dimensions | null;
 }): string[] {
   const args = [
     "-hide_banner",
@@ -83,7 +125,7 @@ export function ffmpegArgs(opts: {
     "-loglevel",
     "warning",
     // The pump feeds whole JPEGs at a fixed cadence, so the input timeline is
-    // exactly OUTPUT_FPS — no timestamp guessing, no variable-framerate stutter.
+    // exactly OUTPUT_FPS — no timestamp guessing.
     "-f",
     "image2pipe",
     "-framerate",
@@ -92,10 +134,10 @@ export function ffmpegArgs(opts: {
     "-",
   ];
   if (opts.logoFile && opts.graph) {
-    // The still logo is looped into an endless input so the graph has a logo
-    // frame for every video frame; `shortest=1` in the graph ends the output
-    // with the capture. `buildWatermarkGraph` already crops the base to even
-    // dimensions, so the yuv420p encoder below always gets a valid size.
+    // The still logo is looped so the graph has a logo frame for every video
+    // frame; `shortest=1` in the graph ends the output with the capture.
+    // `buildWatermarkGraph` letterboxes the base into the first frame's
+    // evened size, so the yuv420p encoder below always gets a valid size.
     args.push(
       "-framerate",
       String(OUTPUT_FPS),
@@ -110,13 +152,17 @@ export function ffmpegArgs(opts: {
     );
   } else {
     // No watermark graph to normalize the base, so the raw frame reaches
-    // libx264 directly. yuv420p (4:2:0) subsamples chroma 2x and rejects an odd
-    // width or height — a device whose native resolution is odd on either axis
-    // (iPhone 16 / 15 Pro / 15 / 14 Pro stream at 1179x2556) would otherwise
-    // fail the encode after the readiness grace and leave a 0-byte file that
-    // stop reports as "the video file is empty". Drop the odd edge pixel so any
-    // resolution encodes; even frames are unchanged.
-    args.push("-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    // libx264 directly. yuv420p rejects an odd width or height — a device whose
+    // native resolution is odd on either axis (iPhone 16 / 15 Pro / 15 / 14 Pro
+    // stream at 1179x2556) would fail the encode after the readiness grace and
+    // leave a 0-byte file. Dropping the odd edge pixel leaves even frames
+    // unchanged. The letterbox fits a frame of another size mid-stream (a
+    // foldable's other panel) into the first frame's; ffmpeg left to itself
+    // would stretch it to the encoder's size.
+    args.push(
+      "-vf",
+      opts.canvas ? letterboxFilter(opts.canvas) : "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0"
+    );
   }
   args.push(
     "-c:v",
@@ -137,24 +183,20 @@ export function ffmpegArgs(opts: {
 }
 
 /**
- * Wall-clock frame pacer. Each tick tops the encoder up to the frame count the
- * elapsed time calls for, so a late or coalesced timer callback self-corrects
- * instead of shortening the video.
+ * Frame count the elapsed wall clock calls for, so a late or coalesced timer
+ * callback self-corrects instead of shortening the video.
  */
 export function framesDue(startedAtMs: number, nowMs: number): number {
   // Multiply before dividing: `elapsed / (1000/30)` lands just under the whole
-  // number at exact second boundaries (1000/33.333… = 29.999…), which would
-  // drop one frame per second.
+  // number at exact second boundaries (29.999…), dropping a frame per second.
   return Math.floor(((nowMs - startedAtMs) * OUTPUT_FPS) / 1000);
 }
 
 /**
- * Whether two frames show the same picture. A cheap reference check short-
- * circuits the common "no new frame arrived" case (the stream hands back the
- * same Buffer object until it decodes a new one); only a genuinely new arrival
- * pays the byte compare, which — being exact — flags a change down to a single
- * pixel, matching the "even by a couple of pixels counts" intent. Byte equality
- * is stronger than a hash (no collisions) and native-fast.
+ * Whether two frames show the same picture. The reference check short-circuits
+ * the common "no new frame arrived" case — the stream hands back the same
+ * Buffer until it decodes a new one — so only a genuinely new arrival pays the
+ * exact byte compare, which flags a change down to a single pixel.
  */
 function sameFrame(a: Buffer | null, b: Buffer | null): boolean {
   if (a === b) return true;
@@ -168,13 +210,11 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   api.framesWritten = 0;
   api.trimmedAnyFrames = false;
 
-  // Pacing baseline. `framesDue(paceBaseMs, now) + paceBaseFrames` is the frame
-  // count the wall clock calls for. In trim mode the baseline is re-anchored
-  // every time a dead stretch is skipped, so the gap contributes no output
-  // frames while active stretches still play back at real-time speed.
+  // Pacing baseline. In trim mode it is re-anchored every time a dead stretch
+  // is skipped, so the gap contributes no output frames while active stretches
+  // still play back at real-time speed.
   let paceBaseMs = api.wallClockStartMs ?? Date.now();
   let paceBaseFrames = 0;
-  // Trim bookkeeping: the last distinct picture and when it last changed.
   let lastFrame: Buffer | null = null;
   let lastChangeMs = paceBaseMs;
   let dead = false;
@@ -182,7 +222,9 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
   api.pumpTimer = setInterval(() => {
     const stdin = child?.stdin;
     if (!stdin || !stdin.writable) return;
-    const frame = stream.latest;
+    // Read through the session, not the closure: a foldable's recording swaps
+    // `api.frameStream` for the other panel's stream mid-capture.
+    const frame = (api.frameStream ?? stream).latest ?? null;
     if (!frame) return;
     // Never queue in Node: if ffmpeg is behind, drop this tick's frames and let
     // the counter catch up once it drains.
@@ -195,8 +237,8 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
         lastChangeMs = now;
       }
       if (now - lastChangeMs > STATIC_GRACE_MS) {
-        // Beyond the grace with no change: stop emitting. Nothing is written
-        // until the screen moves again, collapsing the dead stretch.
+        // Beyond the grace with no change: emit nothing until the screen moves
+        // again, collapsing the dead stretch.
         dead = true;
         api.trimmedAnyFrames = true;
         return;
@@ -221,10 +263,71 @@ function startPump(api: ScreenRecordingSessionApi, stream: MjpegStream): void {
 }
 
 /** Restore the touch visualizer to off. Best-effort, idempotent, never throws. */
-export async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
+async function disablePointer(api: ScreenRecordingSessionApi): Promise<void> {
   const disable = api.pointerDisable;
   api.pointerDisable = null;
   if (disable) await disable().catch(() => {});
+}
+
+/**
+ * Follow the panel a foldable renders to: resolve it on each tick, and when
+ * the answer changes, move the capture onto that panel's stream. A tick that
+ * resolves nothing leaves the capture where it is and is counted for stop's
+ * warning. The old stream is closed only once the new one has delivered a
+ * frame, so a stream that fails to open (or a panel that has not drawn yet)
+ * costs nothing but a retry on the next tick; the recording never goes dark
+ * on argent's account.
+ */
+function startPanelFollow(
+  api: ScreenRecordingSessionApi,
+  follow: PanelFollow,
+  child: ReturnType<typeof spawn>
+): void {
+  let inFlight = false;
+  api.panelPollTimer = setInterval(() => {
+    if (inFlight || api.captureProcess !== child) return;
+    inFlight = true;
+    void (async () => {
+      try {
+        const live = await follow.resolveLivePanel();
+        if (api.captureProcess !== child) return;
+        if (live.source === "unknown") {
+          api.panelReadFailures++;
+          return;
+        }
+        const screen = live.screen;
+        if (screen === api.activeScreen) return;
+        const next = await openMjpegStream(
+          follow.streamUrlForScreen(screen),
+          STREAM_CONNECT_TIMEOUT_MS
+        );
+        try {
+          await next.waitForFirstFrame(PANEL_FIRST_FRAME_TIMEOUT_MS);
+        } catch (err) {
+          next.close();
+          throw err;
+        }
+        // The poll may have outlived the capture while the stream connected.
+        if (api.captureProcess !== child || !api.pumpTimer) {
+          next.close();
+          return;
+        }
+        const previous = api.frameStream;
+        api.frameStream = next;
+        api.activeScreen = screen;
+        api.panelSwitches++;
+        previous?.close();
+      } catch (err) {
+        process.stderr.write(
+          `[screen-recording ${api.deviceId.slice(0, 8)}] could not follow the device onto its ` +
+            `other panel: ${err instanceof Error ? err.message : String(err)}; retrying\n`
+        );
+      } finally {
+        inFlight = false;
+      }
+    })();
+  }, follow.pollMs ?? PANEL_POLL_MS);
+  api.panelPollTimer.unref?.();
 }
 
 /** Stop pacing and release the stream subscription; safe to call repeatedly. */
@@ -233,11 +336,14 @@ function stopPump(api: ScreenRecordingSessionApi): void {
     clearInterval(api.pumpTimer);
     api.pumpTimer = null;
   }
+  if (api.panelPollTimer) {
+    clearInterval(api.panelPollTimer);
+    api.panelPollTimer = null;
+  }
   if (api.frameStream) {
-    // Preserve a real drop before dropping the reference: a stop that arrives
-    // after the cap/crash already ran this teardown reads the error from here,
-    // since `frameStream` (and its `error`) is gone by then. Our own clean
-    // close reports no error, so this never manufactures a phantom drop.
+    // Preserve a real drop before dropping the reference: a stop arriving after
+    // the cap/crash already ran this teardown reads the error from here. Our own
+    // clean close reports no error, so this never manufactures a phantom drop.
     api.lastFrameStreamError = api.frameStream.error ?? api.lastFrameStreamError;
     api.frameStream.close();
     api.frameStream = null;
@@ -246,13 +352,54 @@ function stopPump(api: ScreenRecordingSessionApi): void {
 
 /**
  * End the capture: stop producing frames and close ffmpeg's stdin, which is
- * what makes it write the mp4 trailer. Used by stop, by the time-limit cap and
- * by session teardown, so all three finalize identically.
+ * what makes it write the mp4 trailer.
  */
 function finalizeCapture(api: ScreenRecordingSessionApi): void {
   stopPump(api);
   const stdin = api.captureProcess?.stdin;
   if (stdin?.writable) stdin.end();
+}
+
+/**
+ * Every teardown (stop, the time limit, an encoder crash, dispose) closes the
+ * frame stream, so closing it is where a stream's source is released too.
+ */
+function withCloseHook(stream: MjpegStream, onClose: (() => void) | undefined): MjpegStream {
+  if (!onClose) return stream;
+  return {
+    get latest() {
+      return stream.latest;
+    },
+    get frameCount() {
+      return stream.frameCount;
+    },
+    get error() {
+      return stream.error;
+    },
+    waitForFirstFrame: (timeoutMs) => stream.waitForFirstFrame(timeoutMs),
+    close() {
+      stream.close();
+      onClose();
+    },
+  };
+}
+
+/** The ffmpeg path; throws the not-installed failure when there is none. */
+export async function requireFfmpeg(): Promise<string> {
+  const ffmpeg = await resolveFfmpeg();
+  if (!ffmpeg) {
+    throw new FailureError(
+      "`ffmpeg` was not found on PATH. Install a build with libx264 (`brew install ffmpeg` on macOS, `apt install ffmpeg` on Debian/Ubuntu) and retry.",
+      {
+        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
+        failure_stage: "screen_recording_resolve_ffmpeg",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "ffmpeg",
+      }
+    );
+  }
+  return ffmpeg;
 }
 
 export async function startCapture(
@@ -263,16 +410,39 @@ export async function startCapture(
     watermark: boolean;
     trimStatic: boolean;
     pointer?: PointerControl;
+    /** Set for a foldable: the capture then moves with the live panel. */
+    followPanel?: PanelFollow;
+    /**
+     * Release whatever serves `streamUrl` (a cabled iPhone's capture helper).
+     * Called once, when the frame stream closes or the start fails.
+     */
+    releaseStreamSource?: () => void;
   }
 ): Promise<StartRecordingResult> {
-  assertNoActiveRecording(api, "screen_recording_start");
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    params.releaseStreamSource?.();
+  };
+  try {
+    assertNoActiveRecording(api, "screen_recording_start");
+  } catch (err) {
+    release();
+    throw err;
+  }
   // Set synchronously (no await between the assert and here) so an overlapping
   // start or stop is rejected instead of racing this one through the async
-  // connect/spawn window. The finally clears it on EVERY exit — including a
-  // synchronous throw — so a failed start cannot wedge the session.
+  // connect/spawn window; the finally clears it on every exit.
   api.startPending = true;
   try {
-    return await startCaptureLocked(api, params);
+    return await startCaptureLocked(api, {
+      ...params,
+      releaseStreamSource: params.releaseStreamSource && release,
+    });
+  } catch (err) {
+    release();
+    throw err;
   } finally {
     api.startPending = false;
     api.pendingChild = null;
@@ -287,53 +457,42 @@ async function startCaptureLocked(
     watermark: boolean;
     trimStatic: boolean;
     pointer?: PointerControl;
+    followPanel?: PanelFollow;
+    releaseStreamSource?: () => void;
   }
 ): Promise<StartRecordingResult> {
-  const ffmpeg = await resolveFfmpeg();
-  if (!ffmpeg) {
-    throw new FailureError(
-      "`ffmpeg` was not found on PATH. Install it (e.g. `brew install ffmpeg`) to record the screen.",
-      {
-        error_code: FAILURE_CODES.SCREEN_RECORDING_FFMPEG_NOT_FOUND,
-        failure_stage: "screen_recording_resolve_ffmpeg",
-        failure_area: "tool_server",
-        error_kind: "dependency_missing",
-        failure_command: "ffmpeg",
-      }
-    );
-  }
+  const ffmpeg = await requireFfmpeg();
 
-  const outputFile = path.join(
-    os.tmpdir(),
-    `argent-screen-recording-${api.deviceId.replace(/[^A-Za-z0-9._-]/g, "-")}-${Date.now()}.mp4`
+  const outputFile = recordingOutputPath(api.deviceId);
+
+  const stream = withCloseHook(
+    await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS),
+    params.releaseStreamSource
   );
-
-  const stream = await openMjpegStream(params.streamUrl, STREAM_CONNECT_TIMEOUT_MS);
   let logoFile: string | null = null;
   let watermarkSkipped: string | null = null;
   let child: ReturnType<typeof spawn>;
   try {
-    // The first frame proves the device is actually drawing, and its JPEG
-    // header carries the frame size the watermark geometry needs — no ffprobe
-    // pass over a file that does not exist yet.
+    // The first frame proves the device is drawing, and its JPEG header carries
+    // the size the whole video keeps (the letterbox canvas) and the watermark
+    // geometry — no ffprobe pass over a file that does not exist yet.
     const firstFrame = await stream.waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS);
-    const dims = params.watermark ? readJpegDimensions(firstFrame) : null;
+    const canvas = readJpegDimensions(firstFrame);
     let graph: string | null = null;
-    if (dims) {
+    if (params.watermark && canvas) {
       logoFile = await writeLogoTemp();
-      graph = buildWatermarkGraph(dims);
+      graph = buildWatermarkGraph(canvas);
     } else if (params.watermark) {
-      // Only an unreadable JPEG header gets here. Record anyway — a video
-      // without the stamp beats no video — but say so rather than handing back
-      // a silently unwatermarked file.
+      // Only an unreadable JPEG header gets here. Record anyway, but say so
+      // rather than handing back a silently unwatermarked file.
       watermarkSkipped = "the frame size could not be read from the video stream";
     }
 
     // No await between here and `api.pendingChild = child`: if dispose() ran
-    // (shutdown) while this start was suspended above, abort now rather than
-    // spawn an encoder the teardown can no longer reap.
+    // while this start was suspended above, abort rather than spawn an encoder
+    // the teardown can no longer reap.
     assertNotDisposed(api, "screen_recording_start");
-    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph }), {
+    child = spawn(ffmpeg, ffmpegArgs({ outputFile, logoFile, graph, canvas }), {
       stdio: ["pipe", "ignore", "pipe"],
     });
     // Visible to dispose() while the fail-fast grace is pending (captureProcess
@@ -373,10 +532,6 @@ async function startCaptureLocked(
   api.recordingTimedOut = false;
   api.recordingExitedUnexpectedly = false;
   api.pendingRetrieval = false;
-  // Clear the previous capture's pointer-enable result: an end via the cap or an
-  // encoder crash never runs stop's reset, so without this a `showTouches: false`
-  // recording started afterwards would inherit a stale `pointerFailed` and warn
-  // at stop about an overlay it never requested.
   api.pointerFailed = false;
   api.lastExitInfo = null;
   api.lastFrameStreamError = null;
@@ -387,18 +542,25 @@ async function startCaptureLocked(
   api.framesWritten = 0;
   api.captureProcess = child;
   api.frameStream = stream;
+  api.activeScreen = params.followPanel?.initial.screen ?? null;
+  api.panelSwitches = 0;
+  api.panelReadFailures = params.followPanel?.initial.source === "unknown" ? 1 : 0;
   api.recordingActive = true;
   api.wallClockStartMs = Date.now();
   api.wallClockEndMs = null;
   api.timeLimitSeconds = params.timeLimitSeconds;
   registerActiveScreenRecording(api.deviceId, api.wallClockStartMs, params.timeLimitSeconds);
+  // This recording's own stop will succeed, so an earlier teardown breadcrumb
+  // would never be consumed — and would later blame a genuine "no active
+  // recording" on an unrelated teardown.
+  takeReapedSession("screen-recording", api.deviceId);
   startPump(api, stream);
+  if (params.followPanel) startPanelFollow(api, params.followPanel, child);
 
-  // Arm the exit handler BEFORE the pointer-enable await below. readiness
-  // already removed its own 'exit' listener, so if the encoder dies during that
-  // await the death would go unobserved (Node never replays an 'exit' fired with
-  // no listener) — a later stop would then hand back a truncated file with no
-  // warning and the cap would misread the crash as a clean time-limit finish.
+  // Arm the exit handler BEFORE the pointer-enable await below: readiness
+  // already removed its own 'exit' listener, so an encoder death during that
+  // await would go unobserved — a later stop would hand back a truncated file
+  // with no warning and the cap would misread the crash as a clean finish.
   child.on("exit", (code, signal) => {
     // Ownership guard: after this capture is superseded, its exit must not
     // clobber the newer capture's session state.
@@ -424,8 +586,8 @@ async function startCaptureLocked(
   if (params.pointer) {
     // Arm the touch visualizer before returning, so the very first interaction
     // is already drawn into the recording. Store the teardown first so a
-    // shutdown racing this await still restores the overlay. Best-effort: a
-    // failure only costs the touch markers, surfaced as a warning at stop.
+    // teardown racing this await still restores the overlay; a failure only
+    // costs the touch markers, surfaced as a warning at stop.
     api.pointerDisable = params.pointer.disable;
     api.pointerFailed = !(await params.pointer.enable());
   }
@@ -531,6 +693,8 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   const streamError = api.frameStream?.error ?? api.lastFrameStreamError ?? null;
   const watermarkSkipped = api.watermarkSkipped;
   const pointerFailed = api.pointerFailed;
+  const panelSwitches = api.panelSwitches;
+  const panelReadFailures = api.panelReadFailures;
   let warning: string | undefined;
 
   try {
@@ -571,10 +735,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
           `signal=${api.lastExitInfo?.signal ?? "?"}); returning whatever was captured.`;
     }
     if (streamError) {
-      // Append rather than gate on `!warning`: a stream drop that coincided
-      // with the cap/crash carries its own "may freeze" caveat on top of the
-      // more specific cap/exit notice — both are useful, neither should mask
-      // the other.
+      // Append rather than gate on `!warning`: a drop coinciding with the
+      // cap/crash carries its own caveat on top of the cap/exit notice, and
+      // neither should mask the other.
       warning = [
         warning,
         `The frame stream from simulator-server dropped during the recording (${streamError.message}); ` +
@@ -597,23 +760,33 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
         .filter(Boolean)
         .join(" ");
     }
+    if (panelReadFailures > 0) {
+      warning = [
+        warning,
+        `The panel the device renders to could not be resolved ${panelReadFailures} time(s) during ` +
+          `the recording (at its start, and on its checks every second): neither the accessibility ` +
+          `service nor CoreDevice answered. The recording stayed on its panel for those, so a ` +
+          `fold made during them is in the video only from the next check that answered, and ` +
+          `parts of it may be black.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
 
     const size = await statNonEmptyOutput(outputFile, "screen_recording_stop");
     // Wall-clock capture length: after the cap fires (or the encoder dies) the
     // recording is over even if stop arrives much later.
     const wallClockMs =
       startedAtMs === null ? null : (api.wallClockEndMs ?? Date.now()) - startedAtMs;
-    // durationMs is the length of the video the caller actually gets. With
-    // trimming that is shorter than the wall clock — it counts only the frames
-    // that survived (each output frame is 1/OUTPUT_FPS of a second).
+    // Length of the video the caller actually gets: with trimming that is
+    // shorter than the wall clock, counting only the frames that survived.
     const durationMs = trimStatic
       ? Math.round((api.framesWritten / OUTPUT_FPS) * 1_000)
       : wallClockMs;
     // Only surface the trim-only fields when trimming actually collapsed a
-    // static stretch. Without this guard a continuously-animating recording
-    // still reports a phantom trimmedMs of a frame or two purely from the
-    // framesWritten-vs-wall-clock rounding gap, contradicting the "present only
-    // when trimming applied" contract.
+    // static stretch: otherwise a continuously-animating recording reports a
+    // phantom trimmedMs of a frame or two from the framesWritten-vs-wall-clock
+    // rounding gap.
     const trimmedMs =
       trimStatic && wallClockMs !== null && api.trimmedAnyFrames
         ? Math.max(0, wallClockMs - durationMs!)
@@ -623,16 +796,14 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
       sizeBytes: size,
       durationMs,
       ...(trimmedMs !== undefined ? { wallClockMs: wallClockMs!, trimmedMs } : {}),
+      ...(panelSwitches > 0 ? { panelSwitches } : {}),
       ...(warning ? { warning } : {}),
     };
   } catch (err) {
     // A stop only throws when the container is missing or empty
-    // (statNonEmptyOutput). Drop that dead-weight 0-byte temp so a retry doesn't
-    // orphan it — but ONLY when the file is genuinely empty/absent, so no
-    // unexpected error can ever delete a real recording. Fail SAFE: cleanup is
-    // gated on a thrown failure AND an empty file, never on "delete unless a
-    // success flag was set" — a delete-by-default a later refactor (e.g. the
-    // stacked trim work) could trip into wiping every finalized video.
+    // (statNonEmptyOutput). Drop that 0-byte temp so a retry doesn't orphan it —
+    // gated on the file genuinely being empty, never on "delete unless a success
+    // flag was set", so no unexpected error can ever delete a real recording.
     const empty = await fs
       .stat(outputFile)
       .then((s) => s.size === 0)
@@ -642,8 +813,7 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
   } finally {
     // Always return the session to a startable state — a failed stat must not
     // wedge the next start behind "already active". The video is host-side, so
-    // unlike a device-side capture there is nothing a retried stop could
-    // recover.
+    // there is nothing a retried stop could recover.
     stopPump(api);
     await disablePointer(api);
     api.recordingActive = false;
@@ -656,6 +826,9 @@ export async function stopCapture(api: ScreenRecordingSessionApi): Promise<StopR
     api.pointerFailed = false;
     api.framesWritten = 0;
     api.trimmedAnyFrames = false;
+    api.activeScreen = null;
+    api.panelSwitches = 0;
+    api.panelReadFailures = 0;
     api.wallClockStartMs = null;
     api.wallClockEndMs = null;
     api.timeLimitSeconds = null;

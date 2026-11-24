@@ -2,22 +2,36 @@ import type {
   NativeDevtoolsApi,
   NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
+import type { MacosAppKind } from "../../utils/macos-app-kind";
 
 export interface RestartAppParams {
   udid: string;
   bundleId: string;
+  /** Android-only: ignored on iOS. */
   activity?: string;
+  /** Apple-only: appended to the simctl / devicectl launch argv after the bundle id. */
+  launchArgs?: string[];
 }
 
 export type RestartAppResult =
-  | { restarted: boolean; bundleId: string }
+  | {
+      restarted: boolean;
+      bundleId: string;
+      /** Mac apps: an AppKit app or a Mac Catalyst app, as list-devices names it. */
+      kind?: MacosAppKind;
+      /** Mac apps: the `.app` the new process was started from. */
+      appPath?: string;
+      /** Mac apps: the arguments the new process was started with. */
+      args?: string[];
+      /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */
+      note?: string;
+      /** Once network-capture-start started native network capture for the app: whether it followed the app into the new process, or that it is stopped. */
+      networkCapture?: string;
+    }
   | NativeDevtoolsInitFailedResult;
 
-// iOS gets the native-devtools service so restart-app can refresh the DYLD env
-// before the relaunch. Android's `services()` returns `{}` so its handler types
-// against an empty shape — `dispatchByPlatform` keeps the two generics separate.
 export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
-export type RestartAppAndroidServices = Record<string, never>;
 export type RestartAppVegaServices = Record<string, never>;
+export type RestartAppHarmonyServices = Record<string, never>;

@@ -1,3 +1,4 @@
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   withFailureSignal,
@@ -6,22 +7,23 @@ import {
   type Platform,
   type ToolCapability,
 } from "@argent/registry";
+import { HARMONY_DISABLED_REASON, isHarmonyEnabled } from "./harmony-flag";
 
 /**
- * Thrown when a tool is invoked against a device whose platform/kind it does
- * not declare in its `capability` field. The HTTP dispatcher maps this to
- * `400 Bad Request`; the message names the tool and the device so the agent
- * sees a clear "wrong target" error instead of a deeper failure.
+ * Thrown when a device's platform/kind isn't in the tool's `capability`
+ * declaration. The HTTP dispatcher maps this to `400 Bad Request`.
  */
 export class UnsupportedOperationError extends Error {
-  readonly toolId: string;
-  readonly device: DeviceInfo;
   constructor(toolId: string, device: DeviceInfo, reason?: string) {
     const detail = reason ? ` (${reason})` : "";
-    super(`Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`);
+    const next =
+      device.platform === "ios" && device.kind === "device"
+        ? " Use a simulator, or see the argent-ios-device-interact skill."
+        : "";
+    super(
+      `Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.${next}`
+    );
     this.name = "UnsupportedOperationError";
-    this.toolId = toolId;
-    this.device = device;
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,
       failure_stage: "tool_capability_assert_supported",
@@ -32,26 +34,15 @@ export class UnsupportedOperationError extends Error {
 }
 
 /**
- * Thrown by per-platform stub handlers (typically `platforms/android.ts`)
- * when the cross-platform architecture is wired up but the impl is missing.
+ * Thrown when cross-platform dispatch has no branch for the device's platform:
+ * the architecture is wired up but the impl is missing.
  *
- * Distinct from `UnsupportedOperationError`:
- *   - UnsupportedOperationError: capability says no, this device class is not
- *     a target for the tool (e.g. pinch on Android — adb has no multi-touch).
- *   - NotImplementedOnPlatformError: capability *could* say yes once filled
- *     in; the work just hasn't happened. The agent should report this back
- *     to the user verbatim instead of retrying.
+ * Distinct from `UnsupportedOperationError`, where the capability declaration
+ * deliberately excludes this device class. Here the capability *could* say yes
+ * once the work is done, so the agent should report it back instead of
+ * retrying.
  *
- * The HTTP dispatcher maps this to `501 Not Implemented` and surfaces the
- * `hint` field so the agent (and contributor) can see exactly what to wire.
- *
- * Usage in a stub at `tools/<your-tool>/platforms/<platform>.ts`:
- *
- *   throw new NotImplementedOnPlatformError({
- *     toolId: "<your-tool>",
- *     platform: "android",
- *     hint: "Optional one-line nudge — e.g. which adb / xcrun command to wrap.",
- *   });
+ * The HTTP dispatcher maps this to `501 Not Implemented` and surfaces `hint`.
  */
 export class NotImplementedOnPlatformError extends Error {
   readonly toolId: string;
@@ -80,24 +71,20 @@ export class NotImplementedOnPlatformError extends Error {
 }
 
 /**
- * Thrown when a tool rejects the *arguments* the caller passed — input that is
- * well-typed for the zod schema but that this tool/platform cannot carry out
- * (e.g. an unknown named key on any keyboard backend, a newline in Android/Vega
- * `keyboard` text that the on-device `input`/`send_text` can't represent, or a
- * character with no keycode on iOS/chromium). The HTTP dispatcher maps this to
- * `400 Bad Request`, matching the zod-validation path: it is a client input
- * error, not an internal fault, so it must not surface as a `500`. The
- * `.message` is the human-friendly reason, safe to bubble straight to the agent.
+ * Thrown when a tool rejects the caller's *arguments* — input that is well-typed
+ * for the zod schema but that this tool/platform cannot carry out (an unknown
+ * named key, a newline in Android/Vega `keyboard` text, a character with no
+ * keycode on iOS/chromium). A client input error, not an internal fault, so the
+ * HTTP dispatcher maps it to `400 Bad Request` like the zod-validation path
+ * rather than a `500`. The `.message` is safe to bubble straight to the agent.
  */
 export class InvalidToolInputError extends Error {
   /**
-   * @param signal Optional telemetry-signal overrides. The HTTP 400 mapping keys
-   *   off the error *class* (see http.ts), not the `error_code`, so a caller can
-   *   pass a more granular `error_code` / `failure_stage` / `error_kind` — e.g.
-   *   the keyboard backends' `KEYBOARD_KEY_UNSUPPORTED` /
-   *   `KEYBOARD_CHARACTER_UNSUPPORTED` / `VEGA_TEXT_INVALID` classifications
-   *   (from #420) — and keep both the granular telemetry bucket AND the 400
-   *   status. Defaults to the generic `TOOL_INPUT_INVALID` / validation signal.
+   * @param signal Telemetry-signal overrides. The HTTP 400 mapping keys off the
+   *   error *class* (see http.ts), not the `error_code`, so a caller can pass a
+   *   more granular code (e.g. the keyboard backends'
+   *   `KEYBOARD_CHARACTER_UNSUPPORTED`) and keep both the granular telemetry
+   *   bucket and the 400 status.
    */
   constructor(message: string, signal?: Partial<FailureSignal>) {
     super(message);
@@ -127,13 +114,94 @@ function platformMatrix(
       return capability.chromium;
     case "vega":
       return capability.vega;
+    case "harmony":
+      return capability.harmony;
+    case "macos":
+      return capability.macos;
   }
 }
 
+/** The flag that gates the `macos` platform, and the refusal every Mac branch gives without it. */
+export const MACOS_APPS_FLAG = "macos-apps";
+export const MACOS_APPS_FLAG_OFF_REASON =
+  "the macos-apps flag is off. Run: argent enable macos-apps";
+
+/**
+ * Why a Mac app cannot be driven here, or null when it can: the flag is off,
+ * or, with the flag on, the host is not a Mac. Read per call, so enabling the
+ * flag needs no restart.
+ */
+export function macosAppsUnavailableReason(): string | null {
+  if (!isFeatureEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
+  if (process.platform !== "darwin") return "native Mac apps can only be driven on macOS";
+  return null;
+}
+
+/**
+ * Whether what a flag adds is offered to the agent: its tools, and its
+ * `<flag:...>` spans and properties in tool text and in errors. Mac apps run
+ * only on macOS, so elsewhere the macos-apps flag adds nothing, and no text
+ * points the agent at a Mac app the host refuses. Every `renderFlagGated` call
+ * that an agent reads passes this, not the bare flag read, and the e2e parse
+ * errors that list the platforms name `macos` only when this is true.
+ *
+ * This decides what text offers, not what a parser accepts: an e2e file can
+ * name `macos` on every host, because the files are shared between hosts.
+ */
+export function isFlagOffered(flag: string): boolean {
+  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
+  return isFeatureEnabled(flag);
+}
+
+const MACOS_POINTER_ONLY =
+  "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
+const MACOS_NO_TRACKPAD_GESTURES =
+  "a Mac app has no trackpad gesture input: use the app's own zoom or rotate controls with " +
+  "gesture-tap or keyboard";
+
+/**
+ * Why a tool without a `macos` block refuses a Mac app, where the stock "no
+ * macos support declared" would leave the agent without a next step.
+ */
+const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  "gesture-swipe": MACOS_POINTER_ONLY,
+  "gesture-custom": MACOS_POINTER_ONLY,
+  "gesture-pinch": MACOS_NO_TRACKPAD_GESTURES,
+  "gesture-rotate": MACOS_NO_TRACKPAD_GESTURES,
+  "button": "a Mac app has no hardware buttons: use keyboard for key presses",
+  "reinstall-app":
+    "argent does not install Mac apps, it starts the .app where it was built. Rebuild the app, " +
+    "then run restart-app (or boot-device with macosAppPath for a .app at another path)",
+};
+
+/**
+ * Why network-capture-start and network-capture-stop refuse a platform whose
+ * capture has no start, where the stock text would not name the read to call.
+ */
+const NO_CAPTURE_START_STOP_REASONS: Partial<Record<Platform, string>> = {
+  vega: "a Vega app's network capture has no start or stop: view-network-logs turns it on at its first call",
+};
+
+const CATALYST_NO_APPKIT_VIEWS =
+  "a Mac Catalyst app's UIKit views are not in its AppKit view tree: use describe, which " +
+  "lists them with their identifiers and frames";
+
+/**
+ * Why a tool whose `macos` block leaves out `catalyst` refuses a Mac Catalyst
+ * app: those tools return a Mac app's AppKit view tree, and a Catalyst app
+ * draws its UIKit views inside one AppKit view.
+ */
+const MACOS_CATALYST_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  "native-find-views": CATALYST_NO_APPKIT_VIEWS,
+  "native-full-hierarchy": CATALYST_NO_APPKIT_VIEWS,
+  "native-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+  "native-user-interactable-view-at-point": CATALYST_NO_APPKIT_VIEWS,
+};
+
 /**
  * Throws if the tool's `capability` declaration doesn't include the given
- * device. A tool with no `capability` is treated as universally supported —
- * useful for system / workspace tools that don't touch a device.
+ * device. No `capability` means universally supported — for system / workspace
+ * tools that don't touch a device.
  */
 export function assertSupported(
   toolId: string,
@@ -141,13 +209,32 @@ export function assertSupported(
   device: DeviceInfo
 ): void {
   if (!capability) return;
+  if (device.platform === "harmony" && !isHarmonyEnabled()) {
+    throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
+  }
+  // Before the matrix, so every tool names the flag or the host.
+  const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (macosRefusal) throw new UnsupportedOperationError(toolId, device, macosRefusal);
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
-    throw new UnsupportedOperationError(toolId, device, `no ${device.platform} support declared`);
+    const reason =
+      (device.platform === "macos" ? MACOS_REFUSAL_REASONS[toolId] : undefined) ??
+      (toolId === "network-capture-start" || toolId === "network-capture-stop"
+        ? NO_CAPTURE_START_STOP_REASONS[device.platform]
+        : undefined) ??
+      `no ${device.platform} support declared`;
+    throw new UnsupportedOperationError(toolId, device, reason);
   }
   const supported = matrix[device.kind] === true;
   if (!supported) {
-    throw new UnsupportedOperationError(toolId, device, `kind '${device.kind}' not supported`);
+    const catalystReason =
+      device.kind === "catalyst" ? MACOS_CATALYST_REFUSAL_REASONS[toolId] : undefined;
+    const reason =
+      device.platform === "harmony" && device.kind === "emulator"
+        ? "a `harmony-emulator-` id names an instance only boot-device starts; drive the " +
+          '`harmony-<connectKey>` id of its `kind: "device"` entry in list-devices'
+        : (catalystReason ?? `kind '${device.kind}' not supported`);
+    throw new UnsupportedOperationError(toolId, device, reason);
   }
   if (capability.supports && !capability.supports(device)) {
     throw new UnsupportedOperationError(toolId, device, "supports() refiner rejected device");

@@ -2,10 +2,9 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
- * Cookie + Web Storage helpers for a Chromium (CDP) page session. Cookies go
- * through the CDP Network domain (so httpOnly cookies are visible/settable);
- * localStorage / sessionStorage go through `Runtime.evaluate` against the
- * active page (simple and origin-correct).
+ * Cookies go through the CDP Network domain so httpOnly cookies are
+ * visible/settable; localStorage / sessionStorage go through `Runtime.evaluate`
+ * against the active page, which scopes them to its origin.
  */
 
 export interface Cookie {
@@ -21,10 +20,10 @@ export interface Cookie {
   sameSite?: "Strict" | "Lax" | "None";
 }
 
-export interface SetCookieParams {
+interface SetCookieParams {
   name: string;
   value: string;
-  /** Either `url`, or `domain` (+ optional `path`), must scope the cookie. */
+  /** One of `url` or `domain` is required to scope the cookie. */
   url?: string;
   domain?: string;
   path?: string;
@@ -35,7 +34,7 @@ export interface SetCookieParams {
   expires?: number;
 }
 
-export interface DeleteCookieParams {
+interface DeleteCookieParams {
   name: string;
   url?: string;
   domain?: string;
@@ -70,7 +69,7 @@ export async function clearCookies(cdp: CDPClient): Promise<void> {
   await cdp.send("Network.clearBrowserCookies");
 }
 
-export type StorageType = "local" | "session";
+type StorageType = "local" | "session";
 
 function storeRef(type: StorageType): string {
   return type === "local" ? "localStorage" : "sessionStorage";

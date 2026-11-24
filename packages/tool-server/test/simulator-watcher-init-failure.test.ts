@@ -24,6 +24,22 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// The watcher reaches simctl through execSimctl (a detached spawn); route it
+// through the same mock so tests script its output alongside execFile's.
+vi.mock("../src/utils/simctl-exec", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/simctl-exec")>(
+    "../src/utils/simctl-exec"
+  );
+  return {
+    ...actual,
+    execSimctl: async (args: readonly string[]) => {
+      const result = await execFileMock("xcrun", args);
+      if (result instanceof Error) throw result;
+      return (result ?? { stdout: "" }).stdout;
+    },
+  };
+});
+
 import type { Registry } from "@argent/registry";
 import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
@@ -66,14 +82,23 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
       throw new Error("stub ensureEnv failure");
     },
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => initFailure,
     isConnected: () => false,
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
-    requiresAppRestart: async () => true,
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    appConnectionState: async () => "stale_process",
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },
@@ -168,14 +193,23 @@ describe("simulator-watcher with api-owned init failure state", () => {
         calls += 1;
       },
       reverifyEnv: async () => {},
+      armsEnv: true,
+      withdrawEnv: async () => {},
       getInitFailure: () => null,
       isConnected: () => false,
       isAppRunning: async () => false,
       listConnectedBundleIds: () => [],
-      requiresAppRestart: async () => true,
-      activateNetworkInspection: () => {},
-      getNetworkLog: () => [],
-      clearNetworkLog: () => {},
+      appConnectionState: async () => "stale_process",
+      startNetworkCapture: async () => false,
+      stopNetworkCapture: async () => ({ confirmed: true }),
+      isNetworkCaptureStarted: () => false,
+      isNetworkCaptureStopped: () => false,
+      networkCaptureMark: () => undefined,
+      refreshLentNetworkCapture: async () => {},
+      takeCaptureGap: () => false,
+      networkRecords: () => undefined,
+      networkCaptureAfterLaunch: async () => undefined,
+      setNetworkConditions: async () => {},
       getAppState: async () => {
         throw new Error("not implemented");
       },

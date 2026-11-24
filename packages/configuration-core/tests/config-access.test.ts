@@ -11,12 +11,22 @@ import {
   unsetConfigValue,
   listConfig,
   coerceCliValue,
+  getAdditionalIosDeviceSets,
+  getAndroidSdkRoot,
+  getAndroidAdbServerPort,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
   ConfigManagedElsewhereError,
 } from "../src/config-access.js";
-import type { ConfigDefinition } from "../src/config-schema.js";
+import {
+  CONFIG_SCHEMA,
+  describeExpectedValue,
+  getConfigDefinition,
+  MIN_SCRIPT_HEAP_LIMIT_MB,
+  MIN_SCRIPT_TIMEOUT_MS,
+  type ConfigDefinition,
+} from "../src/config-schema.js";
 
 // Sandbox both scopes: `homeDir` for global (~/.argent), `cwd` for the project
 // root (a tmp dir seeded with a `.git` marker so resolveProjectRoot stops there).
@@ -43,7 +53,8 @@ describe("dotted-path helpers", () => {
     expect(obj).toEqual({ ios: { deviceSet: "/tmp/set" } });
     expect(getAtPath(obj, "ios.deviceSet")).toBe("/tmp/set");
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(true);
-    expect(obj).toEqual({ ios: {} });
+    // The emptied parent goes with it, so unset restores the prior document.
+    expect(obj).toEqual({});
     expect(deleteAtPath(obj, "ios.deviceSet")).toBe(false);
   });
 
@@ -80,15 +91,44 @@ describe("getConfigValue — scope merge (lens.agent = prioritize-local)", () =>
   });
 });
 
+describe("recordings.directory — schema entry", () => {
+  it("is unset by default (the client then uses its built-in .argent/recordings)", () => {
+    expect(getConfigValueByKey("recordings.directory", opts())).toBeUndefined();
+  });
+
+  it("accepts a path at either scope and trims it", () => {
+    expect(setConfigValue("recordings.directory", "  ~/Movies/argent  ", "global", opts())).toBe(
+      "~/Movies/argent"
+    );
+    expect(setConfigValue("recordings.directory", "clips", "project", opts())).toBe("clips");
+  });
+
+  it("project scope wins over global (prioritize-local)", () => {
+    setConfigValue("recordings.directory", "/global/recordings", "global", opts());
+    setConfigValue("recordings.directory", "/project/recordings", "project", opts());
+    expect(getConfigValueByKey("recordings.directory", opts())).toBe("/project/recordings");
+    unsetConfigValue("recordings.directory", "project", opts());
+    expect(getConfigValueByKey("recordings.directory", opts())).toBe("/global/recordings");
+  });
+
+  it("rejects a non-string value", () => {
+    expect(() => setConfigValue("recordings.directory", 42, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+  });
+});
+
 describe("setConfigValue — validation", () => {
   it("rejects an unknown key", () => {
     expect(() => setConfigValue("nope.nope", "x", "global", opts())).toThrow(UnknownConfigKeyError);
   });
 
   it("rejects a project write for a global-only value via ConfigScopeError", () => {
-    // A settable, global-only definition supplied through the registry param
-    // (telemetry.enabled is global-only too, but it's manageCommand-delegated so
-    // it throws ConfigManagedElsewhereError first — this isolates the scope check).
+    // A settable, global-only definition supplied through the registry param,
+    // so this checks the scope rule alone: a shipped global-only key — today
+    // `scripts.maxTimeoutMs` and `scripts.heapLimitMb`, covered further down —
+    // brings its own value parsing along, and would decide the case here on
+    // whichever rule refused first.
     const registry: ConfigDefinition[] = [
       {
         key: "test.onlyGlobal",
@@ -160,7 +200,17 @@ describe("listConfig", () => {
     expect(lens.effective).toBe("codex");
     const telemetry = entries.find((e) => e.key === "telemetry.enabled")!;
     expect(telemetry.manageCommand).toBe("argent telemetry");
-    expect(telemetry.scopes).toEqual(["global"]);
+    expect(telemetry.scopes).toEqual(["project", "global"]);
+  });
+
+  it("lists a home-rooted project's values once, as global", () => {
+    setConfigValue("lens.agent", "codex", "global", opts());
+    const cwd = path.join(homeDir, "Downloads");
+    fs.mkdirSync(cwd);
+    const lens = listConfig({ homeDir, cwd }).find((e) => e.key === "lens.agent")!;
+    expect(lens.global).toBe("codex");
+    expect(lens.project).toBeUndefined();
+    expect(lens.effective).toBe("codex");
   });
 });
 
@@ -194,6 +244,129 @@ describe("coerceCliValue", () => {
   });
 });
 
+describe("android.sdkRoot — project wins, ~ expands", () => {
+  it("reads as null when unset and rejects a relative path", () => {
+    expect(getAndroidSdkRoot(opts())).toBeNull();
+    for (const relative of ["sdk", "~sdk", "./sdk"]) {
+      expect(() => setConfigValue("android.sdkRoot", relative, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
+  });
+
+  it("returns the project value over the global one, with ~ expanded to home", () => {
+    setConfigValue("android.sdkRoot", "/opt/global-sdk", "global", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.resolve("/opt/global-sdk"));
+    setConfigValue("android.sdkRoot", "~/Android/Sdk", "project", opts());
+    expect(getAndroidSdkRoot(opts())).toBe(path.join(homeDir, "Android/Sdk"));
+  });
+});
+
+describe("android.adbServerPort — project wins, a TCP port only", () => {
+  it("reads as null when unset and rejects anything but a port", () => {
+    expect(getAndroidAdbServerPort(opts())).toBeNull();
+    for (const bad of [0, 65536, 5037.5, "5038", -1]) {
+      expect(() => setConfigValue("android.adbServerPort", bad, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
+  });
+
+  it("returns the project value over the global one", () => {
+    setConfigValue("android.adbServerPort", 5038, "global", opts());
+    expect(getAndroidAdbServerPort(opts())).toBe(5038);
+    setConfigValue("android.adbServerPort", 6000, "project", opts());
+    expect(getAndroidAdbServerPort(opts())).toBe(6000);
+  });
+});
+
+describe("ios.additionalDeviceSets — additive union across scopes", () => {
+  it("reads as an empty list when neither scope is set", () => {
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([]);
+    expect(getConfigValueByKey("ios.additionalDeviceSets", opts())).toBeUndefined();
+  });
+
+  it("unions the scopes additively: global baseline first, project extras after, deduped", () => {
+    setConfigValue("ios.additionalDeviceSets", ["/tmp/sets/a", "/tmp/sets/b"], "global", opts());
+    setConfigValue("ios.additionalDeviceSets", ["/tmp/sets/b", "/tmp/sets/c"], "project", opts());
+    expect(getConfigValueByKey("ios.additionalDeviceSets", opts())).toEqual([
+      "/tmp/sets/a",
+      "/tmp/sets/b",
+      "/tmp/sets/c",
+    ]);
+    // Each scope's file holds only its own entries — the union is read-time.
+    expect(readConfigObject("global", opts())).toEqual({
+      ios: { additionalDeviceSets: ["/tmp/sets/a", "/tmp/sets/b"] },
+    });
+    expect(readConfigObject("project", opts())).toEqual({
+      ios: { additionalDeviceSets: ["/tmp/sets/b", "/tmp/sets/c"] },
+    });
+  });
+
+  it("rejects a non-array value; normalizes entries (trims, drops blanks/non-strings)", () => {
+    expect(() =>
+      setConfigValue("ios.additionalDeviceSets", "/tmp/sets/a", "global", opts())
+    ).toThrow(ConfigValidationError);
+    expect(
+      setConfigValue("ios.additionalDeviceSets", ["  /tmp/sets/a ", "", 42], "global", opts())
+    ).toEqual(["/tmp/sets/a"]);
+  });
+
+  it("getAdditionalIosDeviceSets expands ~ and resolves relative entries per scope", () => {
+    setConfigValue("ios.additionalDeviceSets", ["~/DeviceSets/ci", "shared"], "global", opts());
+    setConfigValue("ios.additionalDeviceSets", ["device-sets/e2e", "/abs/set"], "project", opts());
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([
+      path.join(homeDir, "DeviceSets/ci"),
+      // Relative global entries resolve against home…
+      path.join(homeDir, "shared"),
+      // …while relative project entries resolve against the project root.
+      path.join(projectDir, "device-sets/e2e"),
+      path.resolve("/abs/set"),
+    ]);
+  });
+
+  it("drops duplicates that only converge after normalization", () => {
+    setConfigValue("ios.additionalDeviceSets", ["~/DeviceSets/ci"], "global", opts());
+    setConfigValue(
+      "ios.additionalDeviceSets",
+      [path.join(homeDir, "DeviceSets", "ci")],
+      "project",
+      opts()
+    );
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([path.join(homeDir, "DeviceSets/ci")]);
+  });
+
+  it("strips trailing separators so slash-suffixed spellings dedup too", () => {
+    setConfigValue("ios.additionalDeviceSets", ["~/DeviceSets/ci/"], "global", opts());
+    setConfigValue(
+      "ios.additionalDeviceSets",
+      [path.join(homeDir, "DeviceSets", "ci"), "~"],
+      "project",
+      opts()
+    );
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([
+      path.join(homeDir, "DeviceSets/ci"),
+      // Bare `~` resolves to home without a trailing separator either.
+      homeDir,
+    ]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "resolves a home-rooted project's relative entries once when HOME is a symlink",
+    () => {
+      const linkedHome = path.join(projectDir, "home");
+      fs.symlinkSync(homeDir, linkedHome);
+      setConfigValue("ios.additionalDeviceSets", ["sets"], "global", { homeDir: linkedHome });
+      // Physical, like process.cwd().
+      const cwd = path.join(homeDir, "Downloads");
+      fs.mkdirSync(cwd);
+      expect(getAdditionalIosDeviceSets({ homeDir: linkedHome, cwd })).toEqual([
+        path.join(linkedHome, "sets"),
+      ]);
+    }
+  );
+});
+
 describe("getConfigValue — direct definition + custom-typed default", () => {
   it("applies the schema default when no scope contributes a value", () => {
     const def: ConfigDefinition<string> = {
@@ -206,4 +379,116 @@ describe("getConfigValue — direct definition + custom-typed default", () => {
     };
     expect(getConfigValue(def, opts())).toBe("fallback");
   });
+});
+
+describe("every schema entry can describe itself", () => {
+  it("says what value it expects", () => {
+    for (const def of CONFIG_SCHEMA) {
+      expect(describeExpectedValue(def), `key: ${def.key}`).toBeTruthy();
+    }
+  });
+
+  it("offers an example for every key a user may set", () => {
+    for (const def of CONFIG_SCHEMA) {
+      if (def.manageCommand) continue;
+      expect(def.example, `key: ${def.key}`).toBeTruthy();
+    }
+  });
+
+  it("offers examples that are actually accepted", () => {
+    // An example that its own validator rejects would hand the user a command
+    // reproducing the error it exists to fix.
+    for (const def of CONFIG_SCHEMA) {
+      if (!def.example) continue;
+      expect(def.parse(coerceCliValue(def.example)), `key: ${def.key}`).not.toBeUndefined();
+    }
+  });
+});
+
+describe("deleteAtPath prunes only what it emptied", () => {
+  it("removes a container the delete emptied", () => {
+    const obj: Record<string, unknown> = { ios: { additionalDeviceSets: ["/a"] } };
+    expect(deleteAtPath(obj, "ios.additionalDeviceSets")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("stops at the first ancestor that still holds something", () => {
+    const obj: Record<string, unknown> = { ios: { deviceSet: "x", additionalDeviceSets: ["/a"] } };
+    expect(deleteAtPath(obj, "ios.additionalDeviceSets")).toBe(true);
+    expect(obj).toEqual({ ios: { deviceSet: "x" } });
+  });
+
+  it("unwinds a chain deeper than one level", () => {
+    const obj: Record<string, unknown> = { a: { b: { c: { d: 1 } } } };
+    expect(deleteAtPath(obj, "a.b.c.d")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("keeps a sibling group intact while unwinding", () => {
+    const obj: Record<string, unknown> = { a: { b: { c: 1 } }, keep: { x: 1 } };
+    expect(deleteAtPath(obj, "a.b.c")).toBe(true);
+    expect(obj).toEqual({ keep: { x: 1 } });
+  });
+
+  it("leaves an empty array sibling alone", () => {
+    const obj: Record<string, unknown> = { a: { list: [], gone: 1 } };
+    expect(deleteAtPath(obj, "a.gone")).toBe(true);
+    expect(obj).toEqual({ a: { list: [] } });
+  });
+
+  it("empties the root object rather than removing it", () => {
+    const obj: Record<string, unknown> = { lens: { agent: "claude" } };
+    expect(deleteAtPath(obj, "lens.agent")).toBe(true);
+    expect(obj).toEqual({});
+  });
+
+  it("changes nothing when the path does not resolve", () => {
+    const obj: Record<string, unknown> = { ios: { deviceSet: "x" } };
+    expect(deleteAtPath(obj, "ios.missing")).toBe(false);
+    expect(deleteAtPath(obj, "nope.missing")).toBe(false);
+    expect(obj).toEqual({ ios: { deviceSet: "x" } });
+  });
+});
+
+describe("flow script host bounds", () => {
+  it("refuses a heap limit too small for a Node process to start", () => {
+    expect(() => setConfigValue("scripts.heapLimitMb", 2, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.heapLimitMb", 16, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB, "global", opts())).toBe(
+      MIN_SCRIPT_HEAP_LIMIT_MB
+    );
+  });
+
+  it("refuses a ceiling the step spends on starting its own process", () => {
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 30, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(() => setConfigValue("scripts.maxTimeoutMs", 99, "global", opts())).toThrow(
+      ConfigValidationError
+    );
+    expect(setConfigValue("scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS, "global", opts())).toBe(
+      MIN_SCRIPT_TIMEOUT_MS
+    );
+  });
+
+  it.each([
+    ["scripts.heapLimitMb", MIN_SCRIPT_HEAP_LIMIT_MB],
+    ["scripts.maxTimeoutMs", MIN_SCRIPT_TIMEOUT_MS],
+  ])("says what %s wants when it refuses one", (key, min) => {
+    const def = getConfigDefinition(key)!;
+    expect(describeExpectedValue(def)).toContain(`at least ${min}`);
+  });
+
+  it.each(["scripts.maxTimeoutMs", "scripts.heapLimitMb"])(
+    "keeps %s out of project scope, so repository content cannot raise its own ceiling",
+    (key) => {
+      const def = getConfigDefinition(key)!;
+      expect(def.scopes).toEqual(["global"]);
+      expect(() => setConfigValue(key, 60_000, "project", opts())).toThrow();
+    }
+  );
 });

@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getFailureSignal, FAILURE_CODES } from "@argent/registry";
 import { discoverMetro } from "../../src/utils/debugger/discovery";
 
 const mockFetch = vi.fn();
@@ -43,6 +47,46 @@ describe("discoverMetro", () => {
     expect(info.targets[0].id).toBe("page1");
   });
 
+  describe("project root header encoding", () => {
+    const target = {
+      id: "page1",
+      title: "React Native",
+      description: "some desc",
+      webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+    };
+    async function rootFor(header: string): Promise<string> {
+      mockFetch
+        .mockResolvedValueOnce(statusResponse(header))
+        .mockResolvedValueOnce(targetsResponse([target]));
+      return (await discoverMetro(8081)).projectRoot;
+    }
+
+    // Expo CLI sends encodeURI(projectRoot); RN CLI 20.2 sends a file URL pathname.
+    it("decodes a space", async () => {
+      expect(await rootFor("/Users/dev/My%20App")).toBe("/Users/dev/My App");
+    });
+
+    it("decodes non-ASCII letters", async () => {
+      expect(await rootFor("/Users/dev/%C5%BB%C3%B3%C5%82w%20App")).toBe("/Users/dev/Żółw App");
+    });
+
+    // Older RN CLIs send process.cwd() as is.
+    it("keeps a raw path that exists on disk with a literal escape in its name", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "argent-discovery-"));
+      try {
+        const raw = join(dir, "My%20App");
+        mkdirSync(raw);
+        expect(await rootFor(raw)).toBe(raw);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps a raw path whose percent sign is not an escape", async () => {
+      expect(await rootFor("/Users/dev/100%done")).toBe("/Users/dev/100%done");
+    });
+  });
+
   it("throws when Metro is not running", async () => {
     mockFetch.mockResolvedValueOnce(new Response("Not Found", { status: 404 }));
     await expect(discoverMetro(8081)).rejects.toThrow("not running");
@@ -70,10 +114,54 @@ describe("discoverMetro", () => {
     expect(info.targets).toHaveLength(1);
   });
 
+  // Metro dying BETWEEN probes: every network read in the sequence must land
+  // on the same classified failure as the initial connect — an unclassified
+  // fetch/stream error here surfaces as an opaque 500 that debugger-status /
+  // debugger-log-registry cannot map to a structured result.
+  describe("mid-sequence connection loss classifies as METRO_NOT_RUNNING", () => {
+    it("socket dies while reading the /status body", async () => {
+      const dyingBody = new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError("terminated: other side closed"));
+        },
+      });
+      mockFetch.mockResolvedValueOnce(new Response(dyingBody));
+      let thrown: unknown;
+      try {
+        await discoverMetro(8081);
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error).message).toMatch(/^Metro at port 8081 is not running \(got: /);
+      expect((thrown as Error).message).toContain("Do not retry in a loop");
+      expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+    });
+
+    it("socket dies on the /json/list fetch", async () => {
+      mockFetch
+        .mockResolvedValueOnce(statusResponse("/Users/dev/myapp"))
+        .mockRejectedValueOnce(new TypeError("fetch failed"));
+      let thrown: unknown;
+      try {
+        await discoverMetro(8081);
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error).message).toMatch(/^Metro at port 8081 is not running \(got: /);
+      expect((thrown as Error).message).toContain("Do not retry in a loop");
+      expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING);
+    });
+  });
+
   it("throws when no targets are found", async () => {
     mockFetch
       .mockResolvedValueOnce(statusResponse("/Users/dev/myapp"))
       .mockResolvedValueOnce(targetsResponse([]));
     await expect(discoverMetro(8081)).rejects.toThrow("no CDP targets");
+  });
+
+  it("non-Metro responder: appends the find-the-right-port guidance", async () => {
+    mockFetch.mockResolvedValueOnce(new Response("<html>hello</html>"));
+    await expect(discoverMetro(8081)).rejects.toThrow(/something else is listening/i);
   });
 });

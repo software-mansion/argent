@@ -1,32 +1,54 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-utils";
+import {
+  requireRecordingSession,
+  appendStepToFlow,
+  PROJECT_ROOT_INPUT,
+  type FlowSavedTo,
+} from "./flow-utils";
 
 const zodSchema = z.object({
-  message: z.string().describe("Message to echo when the flow is replayed"),
+  name: z
+    .string()
+    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
+    ),
+  message: z.string().describe("Text the echo step prints"),
 });
 
 export const flowInsertEchoTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; flowFile: string; savedTo: FlowSavedTo }
+  { message: string; stepCount: number; savedTo: FlowSavedTo }
 > = {
-  id: "flow-add-echo",
-  description: `Record an echo step in the active flow. Echo steps print a message when the flow is replayed — useful as labels between tool calls.
-Use when you want to annotate a recorded flow with a human-readable label or checkpoint message.
-Returns { message, flowFile }. Fails if no active flow recording is in progress.`,
+  id: "e2e-add-echo",
+  description: `Record an echo step in the e2e test named by \`name\` + \`project_root\`. Echo steps print a message when the e2e test is replayed, useful as labels between tool calls.
+Use when you want to annotate a recorded e2e test with a human-readable label or checkpoint message.
+Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording in progress.`,
   zodSchema,
+  fileInputs: PROJECT_ROOT_INPUT,
+  aliases: ["flow-add-echo"],
+  interaction: {
+    // Name the flow: recordings are concurrent, so an unqualified message is ambiguous.
+    startedMsg: ({ params }) => `Adding note to e2e test ${params.name}`,
+    completedMsg: ({ params }) => `Added note to e2e test ${params.name}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to add note to e2e test ${params.name}: ${failureSignal.error_code}`,
+  },
   services: () => ({}),
   async execute(_services, params) {
-    const flowName = getActiveFlow();
+    const session = await requireRecordingSession(params.project_root, params.name);
 
-    const { flowFile, savedTo } = await appendStepToActiveFlow({
+    const { savedTo, stepCount } = await appendStepToFlow(session, {
       kind: "echo",
       message: params.message,
     });
 
     return {
-      message: `Echo added to "${flowName}" flow`,
-      flowFile,
+      message: `Echo added to "${params.name}" e2e test`,
+      stepCount,
       savedTo,
     };
   },

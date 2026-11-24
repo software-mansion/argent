@@ -1,13 +1,13 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
+import { attachAndroidNetworkInspectorToLaunch } from "../../../blueprints/android-network-inspector";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
-// `am start -W` always prints a `Status:` banner. A positive-match check on
-// `Status: ok` is more robust than scanning for keywords like "Error": the old
-// /Error|Exception/ matcher false-failed on benign class names such as
-// `com.example.ErrorReportingActivity` in the "Activity:" line, and
-// false-succeeded on `Status: null` when the activity failed in onCreate.
+// `am start -W` always prints a `Status:` banner, so a positive match on
+// `Status: ok` beats scanning for keywords like "Error": those false-fail on
+// benign class names (`com.example.ErrorReportingActivity` in the `Activity:`
+// line) and false-succeed on `Status: null` when the activity dies in onCreate.
 export function assertAmStartOk(out: string): void {
   if (!/Status:\s*ok/i.test(out)) {
     throw new FailureError(`am start failed: ${out.trim()}`, {
@@ -18,20 +18,13 @@ export function assertAmStartOk(out: string): void {
     });
   }
   // "Warning: Activity not started, its current task has been brought to the
-  // front" also comes with Status: ok and means the app is foregrounded.
-  // That's the behavior callers want from launch-app, so we don't reject it.
+  // front" also comes with Status: ok, and foregrounding is what callers want.
 }
 
-// Normalize a user-supplied `activity` into a concrete `pkg/Activity` component
-// for `am start -n`. Three accepted shapes plus the bare-name trap:
-//   "pkg/.X" or "pkg/full.X"   → already a component, use as-is
-//   ".MainActivity"            → ${pkg}/.MainActivity (relative)
-//   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
-//   "MainActivity"             → ${pkg}/.MainActivity
-// The bare class name (no dot, no slash) is the trap: emitting it verbatim as
-// `${pkg}/MainActivity` makes `am start` treat it as a default-package class and
-// reject it ("no match"), so it must be made relative. Shared by launch-app and
-// restart-app so the two can't drift on this.
+// Normalize a user-supplied `activity` into a `pkg/Activity` component for
+// `am start -n`. A bare class name must be made relative (`${pkg}/.MainActivity`):
+// `${pkg}/MainActivity` is read as a default-package class and rejected with
+// "no match". Shared with restart-app so the two can't drift.
 export function normalizeActivityComponent(bundleId: string, activity: string): string {
   if (activity.includes("/")) return activity;
   if (activity.startsWith(".")) return `${bundleId}/${activity}`;
@@ -39,53 +32,41 @@ export function normalizeActivityComponent(bundleId: string, activity: string): 
   return `${bundleId}/.${activity}`;
 }
 
-// Parse the last `pkg/Activity` component out of `resolve-activity --brief`
-// output (one component per line; the resolved activity is the last non-empty
-// line). Returns null when the output names no concrete component — e.g. the
-// package has no activity for the requested category.
+// The resolved component is the last non-empty line of `resolve-activity
+// --brief` output; null when no line names a concrete component.
 function parseResolvedActivity(raw: string): string | null {
   const last = raw
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .pop();
-  // Return null (not throw) when no concrete component resolves, so the TV
-  // LEANBACK_LAUNCHER attempt can fall through to the standard LAUNCHER in
-  // resolveLauncherActivity. That function throws (with the resolve-activity
-  // output) only after every category has been tried.
+  // null rather than throw, so a TV LEANBACK attempt can fall through to the
+  // plain LAUNCHER in resolveLauncherActivity, which throws only after both fail.
   if (!last || !/^[\w.]+\/[\w.$]+$/.test(last)) return null;
-  // The Android system chooser/resolver (`android/...ResolverActivity` or its
-  // `...ChooserActivity` sibling, returned when several launchers match) shares
-  // the component shape but is NOT the app's launcher — `resolve-activity`
-  // returns it when the package has no activity for the requested category
-  // (common on TV, where a leanback-only app has no phone LAUNCHER). Treat it as
-  // "not resolved" so the LEANBACK→LAUNCHER fallback continues instead of
-  // launching the system chooser and reporting a false success. Anchored to the
-  // `android/` system package so a real app activity that merely ends in
-  // "ResolverActivity" (e.g. `com.example/.ResolverActivity`) is not rejected.
+  // `resolve-activity` returns the system chooser (`android/...Resolver` or
+  // `...ChooserActivity`) when the package has no activity for the requested
+  // category (common for leanback-only apps); it matches the component shape but
+  // is not the app's launcher. Treat it as unresolved so the fallback continues
+  // instead of launching the chooser and reporting success. Anchored to the
+  // `android/` system package so an app's own `.ResolverActivity` still passes.
   if (/^android\/.*(Resolver|Chooser)Activity$/.test(last)) return null;
   return last;
 }
 
-// Resolve the package's launcher activity via `cmd package resolve-activity`.
-// `--brief` prints one component per line; the resolved activity is the last
-// non-empty line (`pkg/fully.Qualified.Activity`). This lets the default
-// (no-activity) branch use `am start -W` for a proper blocking launch.
-//
-// `isTv` switches the intent category from LAUNCHER to LEANBACK_LAUNCHER:
-// Android TV apps declare a leanback launcher activity and frequently have NO
-// phone-style LAUNCHER one, so a plain resolve returns the system resolver
-// (`android/...ResolverActivity`) or nothing. We try LEANBACK first on TV and
-// fall back to the standard LAUNCHER so apps that ship both still launch.
+const LAUNCHER = "android.intent.category.LAUNCHER";
+const LEANBACK_LAUNCHER = "android.intent.category.LEANBACK_LAUNCHER";
+
+// `isTv` resolves against LEANBACK_LAUNCHER first: Android TV apps often declare
+// no phone LAUNCHER, so a plain resolve returns the system resolver or nothing.
+// Falls back to the standard LAUNCHER so apps shipping both still launch.
+// Returns the category the activity was resolved for, so the launch can start it
+// the way a launcher does (see `launcherStartArgs`).
 export async function resolveLauncherActivity(
   udid: string,
   bundleId: string,
   isTv = false
-): Promise<string> {
-  // Keep the raw output of the last attempt so the failure message can surface
-  // what adb actually returned — the diagnostic that distinguishes "empty
-  // output" (app not installed) from "wrong component shape" (only the system
-  // ResolverActivity matched).
+): Promise<{ component: string; category: string }> {
+  // Surfaced in the failure message, e.g. to show only the system resolver matched.
   let lastRaw = "";
   const resolveFor = async (category?: string): Promise<string | null> => {
     const intent = category ? ` -c ${shellQuote(category)}` : "";
@@ -99,15 +80,18 @@ export async function resolveLauncherActivity(
   };
 
   if (isTv) {
-    const leanback = await resolveFor("android.intent.category.LEANBACK_LAUNCHER");
-    if (leanback) return leanback;
+    const leanback = await resolveFor(LEANBACK_LAUNCHER);
+    if (leanback) return { component: leanback, category: LEANBACK_LAUNCHER };
   }
   const launcher = await resolveFor();
-  if (launcher) return launcher;
+  if (launcher) return { component: launcher, category: LAUNCHER };
 
+  const pmPath = await adbShell(udid, `pm path ${shellQuote(bundleId)}; true`);
   throw new FailureError(
     `Could not resolve a ${isTv ? "LEANBACK_LAUNCHER or LAUNCHER" : "LAUNCHER"} activity for ${bundleId}. ` +
-      `Install the app first, or pass an explicit \`activity\`. ` +
+      (pmPath.includes("package:")
+        ? `It is installed but declares no such activity: pass an explicit \`activity\`. `
+        : `It is not installed on ${udid}: install it with \`reinstall-app\`. `) +
       `(resolve-activity output: ${lastRaw.trim() || "empty"})`,
     {
       error_code: FAILURE_CODES.ANDROID_LAUNCH_ACTIVITY_RESOLVE_FAILED,
@@ -118,6 +102,40 @@ export async function resolveLauncherActivity(
   );
 }
 
+/**
+ * Once `network-capture-start` has started native network capture for an app,
+ * the capture follows the app into each process that launch-app and
+ * restart-app start, until `network-capture-stop`. The note in the launch
+ * result tells the caller whether the new process is instrumented, why capture
+ * did not follow it, or that it is stopped. Best effort: a launch never fails
+ * because capture could not follow it.
+ */
+export async function followNativeNetworkCapture(
+  udid: string,
+  bundleId: string
+): Promise<{ networkCapture?: string }> {
+  try {
+    const note = await attachAndroidNetworkInspectorToLaunch(udid, bundleId);
+    return note ? { networkCapture: note } : {};
+  } catch (err) {
+    process.stderr.write(
+      `[${udid}:${bundleId}] native network capture did not follow the launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
+    );
+    return {};
+  }
+}
+
+// A launcher starts an app with the MAIN action and its launcher category, and an
+// app can tell that start apart from a bare component start: an Expo development
+// build reopens its last project only for a MAIN start, and shows its own
+// launcher screen otherwise. An explicit `activity` gets no action or category,
+// since it need not be a launcher activity.
+export function launcherStartArgs(category: string | null): string {
+  return category ? ` -a android.intent.action.MAIN -c ${shellQuote(category)}` : "";
+}
+
 export const androidImpl: PlatformImpl<
   Record<string, unknown>,
   LaunchAppParams,
@@ -125,24 +143,24 @@ export const androidImpl: PlatformImpl<
 > = {
   requires: ["adb"],
   handler: async (_services, params) => {
-    // Resolve a concrete pkg/Activity component for every code path so we
-    // can always use `am start -W`, which blocks until the activity is
-    // drawn. The previous `monkey … LAUNCHER 1` fallback returned as soon
-    // as the intent was injected, leaving a window where describe/tap
-    // could race a still-forking process.
+    // Resolve a concrete component on every path so the launch can use
+    // `am start -W`, which blocks until the activity is drawn; otherwise
+    // describe/tap can race a still-forking process.
     let component: string;
+    let category: string | null = null;
     if (params.activity) {
       component = normalizeActivityComponent(params.bundleId, params.activity);
     } else {
-      // Android TV apps declare a LEANBACK_LAUNCHER activity (often with no
-      // phone LAUNCHER), so resolve against that category on TV targets.
+      // TV apps often declare only a LEANBACK_LAUNCHER activity.
       const isTv = await isAndroidTv(params.udid);
-      component = await resolveLauncherActivity(params.udid, params.bundleId, isTv);
+      ({ component, category } = await resolveLauncherActivity(params.udid, params.bundleId, isTv));
     }
-    const out = await adbShell(params.udid, `am start -W -n ${shellQuote(component)}`, {
+    const start = `am start -W${launcherStartArgs(category)} -n ${shellQuote(component)}`;
+    const out = await adbShell(params.udid, start, {
       timeoutMs: 30_000,
     });
     assertAmStartOk(out);
-    return { launched: true, bundleId: params.bundleId };
+    const capture = await followNativeNetworkCapture(params.udid, params.bundleId);
+    return { launched: true, bundleId: params.bundleId, ...capture };
   },
 };

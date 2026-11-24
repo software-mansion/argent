@@ -3,8 +3,10 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import type { DeviceInfo } from "@argent/registry";
 import {
+  audioDylibPath,
   axServiceBinaryPath,
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
@@ -13,8 +15,16 @@ import {
   tcpInjectionDylibs,
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
+import { PS_BIN } from "./vega-process";
+import { clearAudioLeftovers } from "./ios-audio-leftovers";
+import {
+  simctlArgsForUdid,
+  simctlTargetForUdid,
+  simctlTargetForUdidSync,
+  simctlTargetForWithdrawal,
+} from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { clearAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
@@ -27,27 +37,37 @@ const execFileAsync = promisify(execFile);
 
 export type IosEndpoint =
   | { transport: "unix"; socketPath: string }
-  // `port` is optional: omit (or set undefined) to request an ephemeral OS-assigned
-  // port. The listening side writes the realized port back here, so by the time
-  // an endpoint flows into the `host.*` functions below it always has `port` set.
+  // Omit `port` for an ephemeral OS-assigned one; the listening side writes the
+  // realized port back here before the endpoint reaches any `host.*` function.
   | { transport: "tcp"; port?: number };
 
 /**
- * Strategy that absorbs the local-vs-remote dichotomy out of the iOS
- * blueprints (ax-service, native-devtools). Each iOS service factory threads
- * its setup/teardown through one of these implementations and reads as a
- * linear pipeline instead of an `if (isRemote)` ladder.
+ * Keeps the local-vs-remote split out of the iOS blueprints (ax-service,
+ * native-devtools): each threads its setup/teardown through one implementation
+ * instead of an `if (isRemote)` ladder.
  */
-export interface IosHost {
+interface IosHost {
   readonly kind: "local" | "remote";
   /** When true, the host can only carry TCP traffic (sim-remote tunnel can't bridge unix sockets). */
   readonly requiresTcp: boolean;
 
-  // ── native-devtools steps ──
+  // native-devtools steps
   setupNativeDevtoolsEnv(udid: string, endpoint: IosEndpoint): Promise<void>;
+  /**
+   * Give the simulator's injection environment back, removing only what still
+   * names us. Called when a device provider claims a simulator we had already
+   * armed; see the watcher.
+   */
+  withdrawNativeDevtoolsEnv(udid: string, endpoint: IosEndpoint): Promise<void>;
   listRunningBundleIds(udid: string): Promise<Set<string>>;
+  /**
+   * Whether `bundleId` is running and, where this host can reach the process,
+   * how it was launched. Lets callers tell an app that predates injection —
+   * which a relaunch fixes — from one already launched with it.
+   */
+  inspectRunningApp(udid: string, bundleId: string): Promise<RunningAppInspection>;
 
-  // ── ax-service steps ──
+  // ax-service steps
   /** Local probes via `defaults read`; remote assumes the orchestrator handled it. */
   bootstrapAx(udid: string): Promise<{ entitlementBypassActive: boolean }>;
   /**
@@ -58,16 +78,92 @@ export interface IosHost {
    */
   spawnAxDaemon(udid: string, endpoint: IosEndpoint): ChildProcess;
 
-  // ── reverse tunnel (no-op on local) ──
+  // Reverse tunnel; no-op on local.
   startProxy(udid: string, port: number): Promise<void>;
   stopProxy(udid: string, port: number): Promise<void>;
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
+/**
+ * Argent's own bootstrap basename, always stripped before the active path is
+ * re-appended. The legacy pre-rename name (`libInjectionBootstrap.dylib`) is
+ * deliberately not listed: it is generic, and a live file carrying it could be
+ * another tool's injection bootstrap, which stripping would silently disable for
+ * the rest of the simulator's session. Stale pre-rename Argent entries still age
+ * out via the exists-on-disk rule below.
+ */
+const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set(["libArgentInjectionBootstrap.dylib"]);
+
+/**
+ * The same basenames asked about read-only: which ones mean "some build of
+ * argent injected this process". Recognising one changes nothing, so the legacy
+ * pre-rename name belongs here even though stripping by it does not — and a
+ * process an older argent injected is exactly what this must see. A provider's
+ * own bootstrap sharing that generic name cannot be misread as ours: the caller
+ * also requires the process to carry this endpoint's address.
+ */
+const RECOGNISED_BOOTSTRAP_DYLIB_BASENAMES = new Set([
+  ...ARGENT_BOOTSTRAP_DYLIB_BASENAMES,
   "libInjectionBootstrap.dylib",
 ]);
+
+/** How the process currently backing a bundle id was launched. */
+interface RunningAppProcess {
+  pid: number;
+  /** Time since exec. `ps -o etime` has whole-second resolution. */
+  ageMs: number;
+  /**
+   * The launch environment as `ps` renders it: space-joined `KEY=VALUE` tokens
+   * appended to the argv. Callers pick tokens out of the blob rather than
+   * parsing it into pairs — a value containing a space is indistinguishable
+   * from the next token, and nothing we look for holds one.
+   */
+  env: string;
+}
+
+interface RunningAppInspection {
+  running: boolean;
+  /**
+   * Null when there is no process to inspect: the app is not running, or this
+   * host cannot reach its app processes (ios-remote runs them on the
+   * orchestrator, out of reach of the local process table).
+   */
+  process: RunningAppProcess | null;
+}
+
+/**
+ * Whether a process was launched with a given devtools endpoint's injection in
+ * place: the Argent bootstrap dylib inserted, pointed at that exact endpoint.
+ *
+ * A process carrying a *different* endpoint (an ephemeral TCP port from an
+ * earlier tool-server run) is not injected for this one; relaunching it into
+ * the current launchd env re-points it.
+ */
+export function processCarriesInjection(env: string, endpoint: IosEndpoint): boolean {
+  const inserted = [...RECOGNISED_BOOTSTRAP_DYLIB_BASENAMES].some((name) => env.includes(name));
+  if (!inserted) return false;
+  const expected =
+    endpoint.transport === "tcp"
+      ? `NATIVE_DEVTOOLS_IOS_CDP_PORT=${endpoint.port}`
+      : `NATIVE_DEVTOOLS_IOS_CDP_SOCKET=${endpoint.socketPath}`;
+  return env.split(/\s+/).includes(expected);
+}
+
+/**
+ * Separate from the simctl budget: the single-pid `ps` probe reads the local
+ * process table with no simulator round-trip, and it is advisory — a slow
+ * answer is worth less than a fast "no evidence".
+ */
+const PS_PROBE_TIMEOUT_MS = 5_000;
+
+/** Parse `ps -o etime` (`[[dd-]hh:]mm:ss`) into seconds. */
+export function parsePsElapsedSeconds(etime: string): number | null {
+  const match = etime.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return (
+    Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds)
+  );
+}
 
 function splitDyldInsertLibraries(value: string): string[] {
   return value
@@ -77,11 +173,11 @@ function splitDyldInsertLibraries(value: string): string[] {
 }
 
 /**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
- * Entries starting with '@' (loader-path references) are always preserved.
- * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
+ * Drops Argent's own bootstrap dylib (by basename, not the legacy pre-rename
+ * one — see above) and entries absent from disk: truncated artifacts of the
+ * `simctl getenv` 127-byte bug, stale paths from old installs. Entries starting
+ * with '@' (loader-path references) are preserved regardless, and third-party
+ * dylibs present on disk (e.g. SimCam) are kept verbatim.
  */
 function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
   if (entry === bootstrapPath) {
@@ -96,26 +192,104 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
   return fs.existsSync(entry);
 }
 
-export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
-  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
+/** Control directory of the audio mock; set in every armed simulator, created by the host on first use. */
+export function audioDir(udid: string): string {
+  // The full UDID: unlike the native-devtools socket there is no unix path length to stay under, and two simulators
+  // must never share a control directory.
+  return `/tmp/argent-audio-${udid}`;
+}
+
+const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
+
+/** Basename of the audio hook, to recognise a copy an older install inserted from another path. */
+const AUDIO_DYLIB_BASENAME = "libArgentAudio.dylib";
+
+/**
+ * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
+ * without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens audio. Read per arming
+ * so `argent disable ios-audio-always-inserted` applies without a tool-server restart; disabled, the hook is
+ * inserted by the first audio tool call instead.
+ */
+function audioAlwaysInserted(): boolean {
+  return isFeatureEnabled(AUDIO_ALWAYS_INSERTED_FLAG);
+}
+
+/**
+ * The audio hook's dylib, or null when this install has none (it ships separately from the other dylibs).
+ * Arming goes on without it: only the audio tools need it, and they say how to get it.
+ */
+function installedAudioDylib(): string | null {
+  try {
+    return audioDylibPath();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Everything in `currentValue` that is not ours, in order. What both arming and
+ * withdrawing agree on. Arming appends our bootstrap to it, withdrawing keeps
+ * only it.
+ */
+function preservedDyldInsertLibraries(currentValue: string, bootstrapPath: string): string[] {
+  return splitDyldInsertLibraries(currentValue).filter((entry) =>
     shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
   );
-  return [...preserved, bootstrapPath].join(":");
+}
+
+export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
+  return [...preservedDyldInsertLibraries(currentValue, bootstrapPath), bootstrapPath].join(":");
+}
+
+/**
+ * What `DYLD_INSERT_LIBRARIES` should become once we hand the simulator back;
+ * the same preserved entries, with nothing of ours appended. The audio hook goes
+ * too, by basename: arming keeps an existing one in place (the first audio tool
+ * call may have inserted it), but it is ours all the same. `null` means the
+ * variable held only our own entries and should be unset outright rather than
+ * left as an empty string, which dyld treats as a malformed list.
+ */
+export function withdrawDyldInsertLibraries(
+  currentValue: string,
+  bootstrapPath: string
+): string | null {
+  const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath).filter(
+    (entry) => path.basename(entry) !== AUDIO_DYLIB_BASENAME
+  );
+  return preserved.length === 0 ? null : preserved.join(":");
+}
+
+/**
+ * Appends one more dylib of ours to the list without disturbing the bootstrap or
+ * foreign entries. An older copy of the same dylib (by basename) is replaced so
+ * an upgrade does not accumulate stale paths. Exported for ios-audio.ts.
+ */
+export function appendDyldInsertLibrary(currentValue: string, dylibPath: string): string {
+  const name = path.basename(dylibPath);
+  const kept = splitDyldInsertLibraries(currentValue).filter(
+    (entry) => entry !== dylibPath && path.basename(entry) !== name
+  );
+  return [...kept, dylibPath].join(":");
 }
 
 async function ensureAccessibilityEnabled(udid: string): Promise<void> {
-  // iOS 26+ requires AccessibilityEnabled and ApplicationAccessibilityEnabled to be set
-  // in the simulator's defaults for SwiftUI to populate the accessibility tree.
-  // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
+  // iOS 26+ needs both flags in the simulator's defaults for SwiftUI to populate
+  // the accessibility tree; without them UIAccessibility returns nil/0 for
+  // SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
+  /**
+   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal}, so the
+   * native-devtools grant covers these spawns.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
     flags.map((flag) =>
       execFileAsync(
         "xcrun",
         [
-          "simctl",
+          ...prefix,
           "spawn",
-          udid,
+          nativeId,
           "defaults",
           "write",
           "com.apple.Accessibility",
@@ -130,34 +304,41 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 }
 
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
-  // Pick the dylib slice that matches the simulator's target platform. tvOS
-  // simulators require a TVOSSIMULATOR-platform dylib — injecting the default
-  // IOSSIMULATOR slice causes dyld to silently skip the library and native
-  // injection never connects. (Remote sims are iOS-only, so this probe is
-  // local-path only.)
-  const bootstrapPath = (await isTvOsSimulator(udid))
-    ? bootstrapDylibPathTvos()
-    : endpoint.transport === "tcp"
-      ? bootstrapDylibPathTcp()
-      : bootstrapDylibPath();
+  // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
+  // the IOSSIMULATOR slice and native injection never connects.
+  const tvOs = await isTvOsSimulator(udid);
+  const bootstrapPath = await bootstrapPathFor(udid, endpoint);
 
-  // Read from launchctl inside the simulator (via simctl spawn) instead of
-  // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
-  // which corrupts the colon-separated path list and causes stale entries to
-  // accumulate on every ensureEnv() cycle.
+  /**
+   * These spawns install the injection env, so the native-devtools grant
+   * covers them.
+   */
+  const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
+
+  // Read launchctl inside the simulator rather than `simctl getenv`: the latter
+  // silently truncates past 127 bytes, corrupting the colon-separated path list
+  // and accumulating stale entries on every pass.
   const result = await execFileAsync(
     "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    [...prefix, "spawn", nativeId, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
     { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  if (!tvOs && endpoint.transport === "unix") {
+    // Every arming, flag or not: apps keep loading the audio hook a killed tool-server inserted, and would keep
+    // hearing the silence of its input even if no audio tool is called again.
+    await clearAudioLeftovers(audioDir(nativeId)).catch(() => {});
+  }
+  let updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  const audioDylib =
+    !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
+  if (audioDylib) updated = appendDyldInsertLibrary(updated, audioDylib);
 
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
@@ -169,9 +350,9 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     await execFileAsync(
       "xcrun",
       [
-        "simctl",
+        ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_PORT",
@@ -183,9 +364,9 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     await execFileAsync(
       "xcrun",
       [
-        "simctl",
+        ...prefix,
         "spawn",
-        udid,
+        nativeId,
         "launchctl",
         "setenv",
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
@@ -195,7 +376,99 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     );
   }
 
+  if (audioDylib) {
+    // Best-effort: the injection above is in place, so a failure here must cost only the audio tools, not the arming.
+    try {
+      // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+      fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
+      await execFileAsync(
+        "xcrun",
+        [
+          ...prefix,
+          "spawn",
+          nativeId,
+          "launchctl",
+          "setenv",
+          "ARGENT_AUDIO_DIR",
+          audioDir(nativeId),
+        ],
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+      );
+    } catch (err) {
+      process.stderr.write(`[ios-host] audio setup failed for ${nativeId}: ${String(err)}\n`);
+    }
+  }
+
   await ensureAccessibilityEnabled(udid);
+}
+
+/**
+ * The bootstrap this simulator's injection uses, whichever build applies to it.
+ * Arming and withdrawing must agree on it; withdrawing by a different path
+ * would leave the armed one in place.
+ */
+async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<string> {
+  if (await isTvOsSimulator(udid)) return bootstrapDylibPathTvos();
+  return endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
+}
+
+/**
+ * Undo {@linkcode setupNativeDevtoolsEnvLocal}: take our bootstrap and the
+ * audio hook back out of `DYLD_INSERT_LIBRARIES` and drop the endpoint variable
+ * and the audio control directory, leaving anything a third party put there
+ * untouched.
+ *
+ * Only ever removes what still names us. A provider that armed its own
+ * injection over ours already owns both variables and clearing its endpoint
+ * would break the very injection this is meant to get out of the way of.
+ */
+async function withdrawNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
+  const bootstrapPath = await bootstrapPathFor(udid, endpoint);
+
+  /**
+   * Not `simctlTargetForUdid`: the grant it would check is the one the claiming
+   * provider withheld, which is precisely why we are here.
+   * @see {@linkcode simctlTargetForWithdrawal}
+   */
+  const { nativeId, prefix } = await simctlTargetForWithdrawal(udid);
+
+  const getenv = async (name: string): Promise<string> => {
+    const result = await execFileAsync(
+      "xcrun",
+      [...prefix, "spawn", nativeId, "launchctl", "getenv", name],
+      { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
+
+    return (result.stdout ?? "").trim();
+  };
+
+  const setenv = (args: string[]): Promise<unknown> =>
+    execFileAsync("xcrun", [...prefix, "spawn", nativeId, "launchctl", ...args], {
+      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
+
+  const existing = await getenv("DYLD_INSERT_LIBRARIES");
+  const withdrawn = withdrawDyldInsertLibraries(existing, bootstrapPath);
+
+  if (withdrawn === null) {
+    await setenv(["unsetenv", "DYLD_INSERT_LIBRARIES"]);
+  } else if (withdrawn !== existing) {
+    await setenv(["setenv", "DYLD_INSERT_LIBRARIES", withdrawn]);
+  }
+
+  const [name, ours] =
+    endpoint.transport === "tcp"
+      ? (["NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port ?? "")] as const)
+      : (["NATIVE_DEVTOOLS_IOS_CDP_SOCKET", endpoint.socketPath] as const);
+
+  if (ours && (await getenv(name)) === ours) {
+    await setenv(["unsetenv", name]);
+  }
+
+  if ((await getenv("ARGENT_AUDIO_DIR")) === audioDir(nativeId)) {
+    await setenv(["unsetenv", "ARGENT_AUDIO_DIR"]);
+  }
 }
 
 async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint): Promise<void> {
@@ -205,11 +478,9 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
   if (endpoint.port === undefined) {
     throw new Error("native-devtools TCP endpoint reached host setup before its port was bound");
   }
-  // Upload the TCP dylibs to the orchestrator (the bootstrap is inserted into
-  // DYLD_INSERT_LIBRARIES; siblings are co-located so the bootstrap can
-  // @loader_path-resolve them), then point the dylib at our reverse-tunneled
-  // CDP port. Stage the non-inserted siblings first so every referenced file
-  // exists before the bootstrap is inserted.
+  // Only the bootstrap is inserted into DYLD_INSERT_LIBRARIES; its siblings must
+  // already sit beside it for @loader_path to resolve them, so stage those first.
+  // The CDP port it is pointed at lives on the host, via the reverse tunnel.
   const dylibs = [...tcpInjectionDylibs()].sort((a, b) => Number(a.insert) - Number(b.insert));
   for (const { path: filePath, insert } of dylibs) {
     await simRemoteInjectDylib(udid, { filePath, insert });
@@ -217,25 +488,111 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
   await simRemoteSetSimulatorEnv(udid, "NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port));
 }
 
-/** Parse `launchctl list` output for `UIKitApplication:<bundle-id>` matches. */
-function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
-  const bundleIds = new Set<string>();
+/**
+ * Parse `launchctl list` rows (`<pid>\t<status>\t<label>`) into
+ * `UIKitApplication:<bundle-id>` → pid.
+ *
+ * A null pid means the column did not parse, not that the job has no process:
+ * launchd prints `-` for a registered job that is not running, but measured on
+ * iOS 18.6 a `UIKitApplication` row is removed outright when the app exits.
+ * Callers treat a null pid as no evidence.
+ */
+function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
+  const jobs = new Map<string, number | null>();
   for (const line of stdout.split("\n")) {
     const match = line.match(/UIKitApplication:([^[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
+    if (!match) continue;
+    const pid = line.match(/^(\d+)\s/);
+    jobs.set(match[1].trim(), pid ? Number(pid[1]) : null);
   }
-  return bundleIds;
+  return jobs;
+}
+
+/** Parse `launchctl list` output for `UIKitApplication:<bundle-id>` matches. */
+function parseUIKitApplicationBundleIds(stdout: string): Set<string> {
+  return new Set(parseUIKitApplicationJobs(stdout).keys());
+}
+
+async function listRunningApps(udid: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "xcrun",
+    await simctlArgsForUdid(udid, ["spawn", udid, "launchctl", "list"]),
+    {
+      encoding: "utf8",
+      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    }
+  );
+  return stdout;
+}
+
+/** Pid of the app's running process from the simulator's launchd, or null when it is not running. */
+export async function runningAppPid(udid: string, bundleId: string): Promise<number | null> {
+  return parseUIKitApplicationJobs(await listRunningApps(udid)).get(bundleId) ?? null;
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-    encoding: "utf8",
-    timeout: SIMCTL_SPAWN_TIMEOUT_MS,
-    killSignal: SIMCTL_KILL_SIGNAL,
-  });
-  return parseUIKitApplicationBundleIds(stdout);
+  return parseUIKitApplicationBundleIds(await listRunningApps(udid));
+}
+
+/**
+ * Age and launch environment from the host process table: simulator apps are
+ * ordinary host processes owned by the same user, so BSD `ps e` renders the
+ * environment they were exec'd with, including the `DYLD_INSERT_LIBRARIES` and
+ * endpoint variables that decide whether Argent's dylib loaded. Null when the
+ * process is gone or the output doesn't parse; callers read that as "no
+ * evidence", never as "not injected".
+ *
+ * A SIP-protected binary would break that: `ps` suppresses its environment
+ * while still printing a well-formed argv, which reads as uninjected rather
+ * than unknown. Every pid reaching here comes from a simulator's `launchctl
+ * list`, and simulator apps are not SIP-protected — measured on iOS 18.6,
+ * third-party and `com.apple.*` bundles alike render their full environment.
+ */
+async function readProcessLaunchState(pid: number): Promise<RunningAppProcess | null> {
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(PS_BIN, ["eww", "-p", String(pid), "-o", "etime=,command="], {
+      encoding: "utf8",
+      timeout: PS_PROBE_TIMEOUT_MS,
+      // Matches the other `ps` probes (vega-process.ts): an environment can run
+      // to `kern.argmax` (1 MiB), exactly Node's default cap, so the default
+      // would ENOBUFS on a maximal one.
+      maxBuffer: 16 * 1024 * 1024,
+    }));
+  } catch (err) {
+    // Logged, not thrown, like the sibling probe in vega-process.ts: a broken
+    // probe (bad `ps` flags, a host without it) degrades *every* app to
+    // "indeterminate", indistinguishable from a genuinely uninspectable one. A
+    // process that simply exited also lands here, so this is a note.
+    process.stderr.write(`[ios-host] ps probe failed for pid ${pid}: ${String(err)}\n`);
+    return null;
+  }
+  const trimmed = stdout.trim();
+  const boundary = trimmed.search(/\s/);
+  if (boundary === -1) return null;
+  const ageSeconds = parsePsElapsedSeconds(trimmed.slice(0, boundary));
+  if (ageSeconds === null) return null;
+  return { pid, ageMs: ageSeconds * 1000, env: trimmed.slice(boundary + 1) };
+}
+
+async function inspectRunningAppLocal(
+  udid: string,
+  bundleId: string
+): Promise<RunningAppInspection> {
+  const jobs = parseUIKitApplicationJobs(await listRunningApps(udid));
+  if (!jobs.has(bundleId)) return { running: false, process: null };
+  const pid = jobs.get(bundleId) ?? null;
+  const process = pid === null ? null : await readProcessLaunchState(pid);
+  if (process !== null) return { running: true, process };
+  // No process behind a job the table had just listed. `{running: true, process:
+  // null}` is what `appConnectionState` maps to `indeterminate`, the one
+  // unconnected state whose remedy escalates to restarting the tool-server — but
+  // an app that exited between the two reads produces exactly this, and its
+  // truth is `not_running`, which only needs a launch. Re-read the table: gone
+  // means it exited, still listed means the probe itself is what failed.
+  const stillListed = parseUIKitApplicationJobs(await listRunningApps(udid)).has(bundleId);
+  return { running: stillListed, process: null };
 }
 
 function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
@@ -250,16 +607,28 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
       ? ["--port", String(endpoint.port)]
       : ["--socket", endpoint.socketPath];
 
+  // Synchronous by contract (returns the ChildProcess), so use the cached
+  // device-set verdict — `bootstrapAx` has always resolved it by this point.
+  // The ax-service grant covers the spawn that starts the daemon.
+  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+
   const proc = execFile(
     "xcrun",
-    ["simctl", "spawn", udid, binaryPath, ...endpointArgs, "--timeout", "3600"],
+    [
+      ...axTarget.prefix,
+      "spawn",
+      axTarget.nativeId,
+      binaryPath,
+      ...endpointArgs,
+      "--timeout",
+      "3600",
+    ],
     { encoding: "utf8" }
   ) as ChildProcess;
 
-  // Defense-in-depth: a missing udid here would crash the process —
-  // throwing inside an async listener bypasses promise rejection and
-  // bubbles up as `uncaughtException`, which the tool-server treats as
-  // fatal. Tag with "?" instead of dereferencing.
+  // Precomputed defensively: dereferencing a missing udid inside the stderr
+  // listener would throw outside any promise, and the tool-server exits on
+  // `uncaughtException`.
   const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
   proc.stderr?.on("data", (data: string) => {
     process.stderr.write(`[ax-service ${udidTag}] ${data}`);
@@ -275,11 +644,10 @@ function spawnAxDaemonRemote(udid: string, endpoint: IosEndpoint): ChildProcess 
   if (endpoint.port === undefined) {
     throw new Error("ax-service TCP endpoint reached spawn before its port was bound");
   }
-  // ios-remote: upload the TCP-built ax-service binary and `simctl spawn` it
-  // detached on the orchestrator. There is no local child process to shepherd —
-  // return a no-op ChildProcess stub so the surrounding factory code (exit/error
-  // wiring, kill on dispose) still type-checks. The remote daemon self-exits
-  // after `--timeout`, so the unreachable `kill()` is acceptable.
+  // The binary is uploaded and spawned detached on the orchestrator, so there is
+  // no local child to shepherd — the stub keeps the surrounding factory's
+  // exit/error wiring and `kill()` on dispose type-checking. The remote daemon
+  // self-exits after `--timeout`, so the unreachable `kill()` is acceptable.
   const noop = new EventEmitter() as unknown as ChildProcess;
   (noop as unknown as { kill: () => boolean }).kill = () => true;
   void simRemoteSpawn(udid, {
@@ -297,9 +665,11 @@ export const localIosHost: IosHost = {
   kind: "local",
   requiresTcp: false,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvLocal,
+  withdrawNativeDevtoolsEnv: withdrawNativeDevtoolsEnvLocal,
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
+  inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
-    await ensureAutomationEnabled(udid);
+    await clearAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
   },
   spawnAxDaemon: spawnAxDaemonLocal,
@@ -307,7 +677,12 @@ export const localIosHost: IosHost = {
   async stopProxy() {},
 };
 
-/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+/**
+ * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
+ * `AutomationEnabled` makes UIKit label a text field with its placeholder;
+ * local iPhone and iPad sims leave it out to keep Full Keyboard Access working
+ * ({@linkcode clearAutomationEnabled}).
+ */
 const ACCESSIBILITY_DEFAULT_FLAGS = [
   "AutomationEnabled",
   "AccessibilityEnabled",
@@ -318,14 +693,24 @@ export const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
   setupNativeDevtoolsEnv: setupNativeDevtoolsEnvRemote,
+  /**
+   * Nothing to give back. A device provider publishes simulators on the machine
+   * it shares with argent, so a remote sim is never claimed out from under us.
+   */
+  async withdrawNativeDevtoolsEnv() {},
   async listRunningBundleIds(udid) {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return parseUIKitApplicationBundleIds(stdout);
   },
-  // Apply the accessibility defaults the tool-server needs (the local host does
-  // this via `defaults write`; here we run the same writes through the remote
-  // generic spawn). The entitlement-bypass plist is assumed active on cloud
-  // sims; if it isn't, describe will still surface a useful error.
+  // App processes live on the orchestrator, out of reach of the local process
+  // table, so only running-ness is answerable; the null process keeps callers on
+  // their no-evidence path.
+  async inspectRunningApp(udid, bundleId) {
+    const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
+    return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
+  },
+  // Accessibility `defaults write`s routed through the remote generic spawn.
+  // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
     for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
       await simRemoteSpawn(udid, {

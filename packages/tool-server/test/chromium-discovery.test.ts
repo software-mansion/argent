@@ -4,6 +4,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AddressInfo } from "node:net";
+import { scopeTempHome } from "./helpers/temp-home";
 import {
   discoverChromiumDevices,
   getCandidateChromiumPorts,
@@ -19,7 +20,8 @@ interface FakeCdpServer {
 async function startFakeCdpServer(options?: {
   responses?: {
     version?: number | object;
-    list?: number | object;
+    /** A function is re-read per request, so a test can change the reply mid-run. */
+    list?: number | object | (() => number | object);
   };
 }): Promise<FakeCdpServer> {
   const server = http.createServer((req, res) => {
@@ -38,7 +40,8 @@ async function startFakeCdpServer(options?: {
       return;
     }
     if (req.url === "/json/list") {
-      const r = options?.responses?.list ?? [
+      const configured = options?.responses?.list;
+      const r = (typeof configured === "function" ? configured() : configured) ?? [
         {
           id: "abc",
           type: "page",
@@ -71,11 +74,25 @@ async function startFakeCdpServer(options?: {
   };
 }
 
+/**
+ * A port whose probe can never be answered: Node's fetch refuses port 1 as a
+ * WHATWG "bad port" before it opens a socket, so no listener can satisfy it.
+ * A port from the kernel's ephemeral range can be: that is what `listen(0)`
+ * hands out, and the fake CDP server above answers the very /json requests a
+ * probe makes.
+ */
+const UNREACHABLE_PORT = 1;
+
 const portsToCleanup: number[] = [];
 const serversToCleanup: FakeCdpServer[] = [];
 
 // Redirect port persistence to a throwaway file so tests never touch the
 // real ~/.argent/chromium-cdp-ports.json on a developer machine or CI runner.
+// This file drives the real persistPorts, which merges rather than replaces, so
+// a lapsed redirect would leave test ports in that file for list-devices to
+// probe. Scope HOME too: the fallback path then lands somewhere disposable.
+scopeTempHome("argent-chromium-discovery-home-");
+
 const TEST_PORTS_FILE = path.join(os.tmpdir(), `argent-test-chromium-ports-${process.pid}.json`);
 
 beforeAll(() => {
@@ -135,10 +152,9 @@ describe("discoverChromiumDevices", () => {
   });
 
   it("returns no entry for a non-responsive port", async () => {
-    // Tracked but no server bound
-    trackChromiumPort(1);
-    portsToCleanup.push(1);
-    const devices = await discoverChromiumDevices({ timeoutMs: 300, ports: [1] });
+    trackChromiumPort(UNREACHABLE_PORT);
+    portsToCleanup.push(UNREACHABLE_PORT);
+    const devices = await discoverChromiumDevices({ timeoutMs: 300, ports: [UNREACHABLE_PORT] });
     expect(devices).toEqual([]);
   });
 
@@ -153,6 +169,45 @@ describe("discoverChromiumDevices", () => {
     serversToCleanup.push(server);
     const devices = await discoverChromiumDevices({ timeoutMs: 1500, ports: [server.port] });
     expect(devices).toEqual([]);
+  });
+
+  it("keeps a running app tracked while it has no page target", async () => {
+    // An Electron app whose last window closed keeps answering /json/version
+    // while /json/list reports no page. Pruning it there loses the app for
+    // good, since nothing but a fresh boot re-adds a port.
+    let pages: object[] = [];
+    const server = await startFakeCdpServer({ responses: { list: () => pages } });
+    serversToCleanup.push(server);
+    trackChromiumPort(server.port);
+    portsToCleanup.push(server.port);
+
+    expect(await discoverChromiumDevices({ timeoutMs: 1500, ports: [server.port] })).toEqual([]);
+    expect(getCandidateChromiumPorts()).toContain(server.port);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(server.port);
+
+    // The window comes back: the app must be discoverable again.
+    pages = [
+      {
+        id: "abc",
+        type: "page",
+        title: "Test Page",
+        url: "file:///tmp/index.html",
+        webSocketDebuggerUrl: "ws://127.0.0.1:0/devtools/page/abc",
+      },
+    ];
+    const devices = await discoverChromiumDevices({ timeoutMs: 1500 });
+    expect(devices.some((d) => d.port === server.port)).toBe(true);
+  });
+
+  it("keeps a tracked port whose endpoint answers with a non-2xx status", async () => {
+    const server = await startFakeCdpServer({ responses: { version: 500 } });
+    serversToCleanup.push(server);
+    trackChromiumPort(server.port);
+    portsToCleanup.push(server.port);
+
+    expect(await discoverChromiumDevices({ timeoutMs: 1500, ports: [server.port] })).toEqual([]);
+    expect(getCandidateChromiumPorts()).toContain(server.port);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(server.port);
   });
 
   it("untracks a port after it stops responding", async () => {
@@ -186,14 +241,13 @@ describe("port persistence across tool-server restarts", () => {
   });
 
   it("a dead persisted port is pruned from the file after a failed probe", async () => {
-    trackChromiumPort(43211);
-    portsToCleanup.push(43211);
-    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43211);
+    trackChromiumPort(UNREACHABLE_PORT);
+    portsToCleanup.push(UNREACHABLE_PORT);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(UNREACHABLE_PORT);
 
-    // Nothing listens on 43211 — the probe fails and prunes it everywhere.
-    await discoverChromiumDevices({ timeoutMs: 300, ports: [43211] });
-    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(43211);
-    expect(getCandidateChromiumPorts()).not.toContain(43211);
+    await discoverChromiumDevices({ timeoutMs: 300, ports: [UNREACHABLE_PORT] });
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(UNREACHABLE_PORT);
+    expect(getCandidateChromiumPorts()).not.toContain(UNREACHABLE_PORT);
   });
 
   it("untrackChromiumPort removes the port from the persisted file", () => {

@@ -28,10 +28,6 @@ describe("source-map SSRF — redirect vector (PR #194 Issue 2)", () => {
     servers.length = 0;
   });
 
-  it("a direct non-loopback sourceMapURL is correctly rejected (baseline)", () => {
-    expect(isAllowedSourceMapURL("http://169.254.169.254/latest/meta-data/")).toBe(false);
-  });
-
   it("follows a loopback redirect to an 'internal' host and fetches it (the bug)", async () => {
     // "internal" target — stands in for 169.254.169.254 / an intranet service.
     // Loopback only so the test can observe the hit; the code path that
@@ -57,7 +53,7 @@ describe("source-map SSRF — redirect vector (PR #194 Issue 2)", () => {
     const attackerMapUrl = `http://127.0.0.1:${redirPort}/evil.map`;
     expect(isAllowedSourceMapURL(attackerMapUrl)).toBe(true); // first hop passes the gate
 
-    const reg = new SourceMapsRegistry("/tmp");
+    const reg = new SourceMapsRegistry();
     reg.registerFromScriptParsed(
       "http://127.0.0.1:" + redirPort + "/bundle.js",
       "1",

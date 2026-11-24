@@ -9,18 +9,20 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // full-hierarchy source and hard-fail rather than degrade to the AX tree, so
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { MIN_VIABLE_TRAVEL } from "../../src/tools/flows/flow-pinch-geometry";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -38,6 +40,8 @@ function mockRegistry(calls: Array<{ tool: string; args: Record<string, unknown>
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
+      if (id === "screenshot") return {};
       calls.push({ tool: id, args });
       return { ok: true };
     }),
@@ -182,10 +186,13 @@ describe("pinch: execution", () => {
     expect(args).not.toHaveProperty("endCenterY");
   });
 
-  it("defaults to the screen center when no selector is given (no tree read)", async () => {
-    currentTree = () => {
-      throw new Error("must not read the tree for a selector-less pinch");
-    };
+  it("defaults to the screen center and span when no selector is given, not to a node on screen", async () => {
+    // Non-empty on purpose: against an empty tree a pinch that wrongly resolved
+    // a frame would find none and fall back to the center anyway, so nothing
+    // told the two apart. This node would give centerX 0.2, centerY 0.75 and a
+    // 0.24 start span instead.
+    currentTree = () =>
+      screen([n({ label: "Panel", frame: { x: 0.05, y: 0.7, width: 0.3, height: 0.1 } })]);
     await writeFlow("pinch-center", {
       executionPrerequisite: "",
       steps: [{ kind: "pinch", scale: 0.5 }],
@@ -393,6 +400,76 @@ describe("pinch: gating", () => {
     expect(result.steps[0].reason).toMatch(/ctrl\+wheel/);
     expect(result.steps[0].reason).not.toMatch(/no backend/i);
     expect(result.calls).toHaveLength(0);
+  });
+
+  it("dispatches pinch on HarmonyOS — `uinput -T -m` moves both fingers in one call", async () => {
+    await writeFlow("pinch-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "pinch", scale: 2 }],
+    });
+
+    const result = await run("pinch-harmony", "harmony-127.0.0.1:5555");
+
+    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-pinch"]);
+  });
+
+  it("rejects rotate on HarmonyOS, naming the straight line rather than the missing contact", async () => {
+    // The arc is the wall, not the second finger: `uinput -T -m` moves each contact in a straight line.
+    await writeFlow("rotate-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "rotate", by: 90 }],
+    });
+
+    const result = await run("rotate-harmony", "harmony-127.0.0.1:5555");
+
+    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/unsupported on HarmonyOS/);
+    expect(result.steps[0].reason).toMatch(/straight line/);
+    expect(result.steps[0].reason).not.toMatch(/one contact at a time/);
+    expect(result.steps[0].reason).not.toMatch(/does not support platform/);
+    expect(result.calls).toHaveLength(0);
+  });
+
+  it("leaves tap on HarmonyOS untouched — it is the one gesture that has a backend", async () => {
+    currentTree = () =>
+      screen([n({ label: "Zoom in", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 } })]);
+    await writeFlow("tap-harmony-coord", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", x: 0.5, y: 0.5 }],
+    });
+
+    const result = await run("tap-harmony-coord", "harmony-127.0.0.1:5555");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+  });
+
+  it("dispatches pinch on a physical iOS device — the runner plays both fingers as one event stream", async () => {
+    await writeFlow("pinch-ios-device", {
+      executionPrerequisite: "",
+      steps: [{ kind: "pinch", scale: 2 }],
+    });
+
+    const result = await run("pinch-ios-device", "00008110-000978540290401E");
+
+    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-pinch"]);
+    expect(result.calls[0].args).toMatchObject({ udid: "00008110-000978540290401E" });
+  });
+
+  it("leaves tap on a physical iOS device untouched", async () => {
+    currentTree = () =>
+      screen([n({ label: "Zoom in", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 } })]);
+    await writeFlow("tap-ios-device", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Zoom in", loose: true } }],
+    });
+
+    const result = await run("tap-ios-device", "00008110-000978540290401E");
+
+    expect(result.ok).toBe(true);
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
   });
 
   it("leaves tap on chromium untouched", async () => {

@@ -1,34 +1,41 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
+  ARGENT_SKILL_PREFIX,
   buildArgentSkillsSource,
   getGlobalSkillLockPath,
   getInstalledVersion,
   getProjectSkillLockPath,
+  LEGACY_ARGENT_SKILL_NAMES,
   listArgentSkillsInLock,
   listBundledSkills,
+  npxChildEnv,
+  removePath,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
+import { ALL_ADAPTERS, getManagedContentTargets } from "./mcp-configs.js";
 
-export type SkillScope = "project" | "global";
+type SkillScope = "project" | "global";
 
-export interface SkillScopeResult {
+interface SkillScopeResult {
   scope: SkillScope;
-  /** Number of bundled skills that were re-synced into this scope. */
+  /** Count of bundled skills re-synced into this scope. */
   synced: number;
   /** First line of the sync error, or null on success. */
   syncError: string | null;
-  /** Names of argent-owned skills that were pruned from this scope. */
+  /** Argent-owned skills pruned from this scope. */
   pruned: string[];
   /** First line of the prune error, or null on success. */
   pruneError: string | null;
 }
 
-export interface SkillRefreshTelemetrySummary {
+interface SkillRefreshTelemetrySummary {
   scope_count: number;
   synced_count: number;
   pruned_count: number;
@@ -59,37 +66,32 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
   ];
 }
 
-// Re-syncs bundled argent skills into every scope that already tracks at
-// least one argent-owned skill, and prunes any argent-prefixed entry that is
-// no longer part of the bundled set. Safe to call from any command — a scope
-// with nothing tracked is skipped, so this never creates a
+// Re-syncs bundled argent skills into every scope that already tracks an
+// argent-owned skill, and prunes argent-prefixed entries no longer in the
+// bundled set. A scope tracking nothing is skipped, so this never creates a
 // `skills-lock.json` in an unrelated working directory.
 //
-// Sync prefers the GitHub-pinned source (`<repo>/packages/skills/skills#v<ver>`)
-// so the lockfile entry stays portable across machines. If the
-// network install fails, it retries with the bundled SKILLS_DIR so offline
-// users still get re-synced.
-//
-// The choice of `skills add` rather than `skills update` is deliberate:
-// `skills update` silently skips any entry with sourceType="local", so a
-// previous-version lock written from SKILLS_DIR would never refresh. `skills
-// add` rewrites the entry from the source we pass, which is exactly the
-// behavior we want after `npm i -g @swmansion/argent@new`.
+// Sync prefers the GitHub-pinned source so the lockfile entry stays portable
+// across machines, and retries with the bundled SKILLS_DIR when that fails.
 export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   const bundled = new Set(listBundledSkills());
-  // An empty bundled set means THIS package's skills dir is unreadable — a
-  // pruned pnpm store dir mid-update, a broken install — never "argent ships
-  // no skills". Acting on it would classify every tracked skill as orphaned
-  // and prune them all from both scopes; skip the refresh entirely instead.
+  // An empty bundled set means this package's skills dir is unreadable (broken
+  // or mid-update install), not that argent ships no skills — acting on it
+  // would prune every tracked skill from both scopes.
   if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
-  // Project-scope `skills` commands act on their cwd, and this can run as a
-  // detached updater whose inherited cwd is the tool-server's editor-chosen
-  // one (often `/` or `$HOME`) — pin every run to the project.
-  const execOpts = { stdio: ["ignore", "pipe", "pipe"] as const, cwd: projectRoot } as {
+  // Project-scope `skills` commands act on their cwd, and this can run from a
+  // detached updater that inherited the tool-server's editor-chosen cwd (often
+  // `/` or `$HOME`) — pin every run to the project.
+  const execOpts = {
+    stdio: ["ignore", "pipe", "pipe"] as const,
+    cwd: projectRoot,
+    env: npxChildEnv(),
+  } as {
     stdio: ["ignore", "pipe", "pipe"];
     cwd: string;
+    env: NodeJS.ProcessEnv;
   };
 
   for (const spec of getScopeSpecs(projectRoot)) {
@@ -132,15 +134,121 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
       }
     }
 
+    for (const name of pruneLegacySkillDirs(projectRoot, spec.scope, bundled)) {
+      if (!result.pruned.includes(name)) result.pruned.push(name);
+    }
+
     results.push(result);
   }
 
   return results;
 }
 
-// Renders a `refreshArgentSkills` summary as a multiline string suitable for
-// `p.note(...)`. Returns null when nothing happened so the caller can skip
-// printing an empty block.
+// The skills in `names` found on disk in a scope, each with a stamp of its
+// SKILL.md in every skill dir (inode and mtime). The skills CLI rewrites a skill
+// it installs, so two snapshots tell whether a run installed anything. stat
+// follows links, so an editor's link to the shared copy counts like the copy.
+// With no names (an unreadable bundled set), any argent-prefixed skill counts.
+export function snapshotArgentSkills(
+  projectRoot: string,
+  scope: SkillScope,
+  names: readonly string[]
+): Map<string, string> {
+  const { skillTargets } = getManagedContentTargets(
+    ALL_ADAPTERS,
+    projectRoot,
+    scope === "global" ? "global" : "local"
+  );
+  const found = new Map<string, string>();
+  for (const { targetPath } of skillTargets) {
+    let candidates: readonly string[] = names;
+    if (names.length === 0) {
+      try {
+        candidates = fs.readdirSync(targetPath).filter((n) => n.startsWith(ARGENT_SKILL_PREFIX));
+      } catch {
+        continue;
+      }
+    }
+    for (const name of candidates) {
+      const stat = fs.statSync(path.join(targetPath, name, "SKILL.md"), { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      found.set(name, `${found.get(name) ?? ""}${stat.ino}:${stat.mtimeMs};`);
+    }
+  }
+  return found;
+}
+
+// A renamed skill's old dir can outlive its lock entry (or never have had one),
+// so `skills remove` never sees it. Removes it, editor links to it, and its
+// lock entry from the scope. Returns the names removed.
+export function pruneLegacySkillDirs(
+  projectRoot: string,
+  scope: SkillScope,
+  bundled: ReadonlySet<string> = new Set(listBundledSkills())
+): string[] {
+  // An empty bundled set means an unreadable skills dir, not a skill-free
+  // release; see refreshArgentSkills.
+  if (bundled.size === 0) return [];
+  const legacy = LEGACY_ARGENT_SKILL_NAMES.filter((name) => !bundled.has(name));
+  const { skillTargets } = getManagedContentTargets(
+    ALL_ADAPTERS,
+    projectRoot,
+    scope === "global" ? "global" : "local"
+  );
+  const removed = new Set<string>();
+  for (const { targetPath } of skillTargets) {
+    for (const name of legacy) {
+      const dir = path.join(targetPath, name);
+      try {
+        // An editor link into an emptied .agents/skills dangles, and goes too.
+        if (removePath(dir)) removed.add(name);
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+  const lockPath =
+    scope === "global" ? getGlobalSkillLockPath() : getProjectSkillLockPath(projectRoot);
+  for (const name of removeLockEntries(lockPath, legacy)) removed.add(name);
+  return [...removed].sort();
+}
+
+// Legacy names the scope's lock still tracks. `skills remove` them before
+// pruneLegacySkillDirs drops their lock entries: only the skills CLI knows
+// every agent dir it linked them into (Kiro, Hermes, Windsurf, ...).
+export function listTrackedLegacySkills(
+  projectRoot: string,
+  scope: SkillScope,
+  bundled: ReadonlySet<string> = new Set(listBundledSkills())
+): string[] {
+  if (bundled.size === 0) return [];
+  const lockPath =
+    scope === "global" ? getGlobalSkillLockPath() : getProjectSkillLockPath(projectRoot);
+  return listArgentSkillsInLock(lockPath).filter(
+    (name) => LEGACY_ARGENT_SKILL_NAMES.includes(name) && !bundled.has(name)
+  );
+}
+
+// Drops `names` from a skills lockfile so a committed lock cannot restore them.
+function removeLockEntries(lockPath: string, names: readonly string[]): string[] {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+      skills?: Record<string, unknown>;
+    };
+    const skills = lock.skills;
+    if (!skills) return [];
+    const removed = names.filter((name) => name in skills);
+    if (removed.length === 0) return [];
+    for (const name of removed) delete skills[name];
+    fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+    return removed;
+  } catch {
+    return [];
+  }
+}
+
+// Returns null when nothing happened, so the caller can skip printing an empty
+// block.
 export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]): string | null {
   const lines: string[] = [];
   for (const r of results) {
@@ -164,7 +272,7 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
-export function summarizeSkillRefreshForTelemetry(
+function summarizeSkillRefreshForTelemetry(
   results: readonly SkillScopeResult[]
 ): SkillRefreshTelemetrySummary {
   return {
@@ -175,13 +283,9 @@ export function summarizeSkillRefreshForTelemetry(
   };
 }
 
-// ── Refresh + report ──────────────────────────────────────────────────────────
-
-// Single owner of the "Skills Updated" note, the skill_refresh_result event,
-// and the INSTALL_SKILLS_REFRESH_FAILED signal for both post-bump re-sync
-// flows — init-triggered update and `argent update` — which differ only in
-// the failure_stage naming the flow.
-export type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
+// The two post-bump re-sync flows — init-triggered update and `argent update` —
+// differ only in this stage name.
+type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
 export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
   const results = refreshArgentSkills(projectRoot);

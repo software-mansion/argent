@@ -1,60 +1,37 @@
 /**
- * Stage 05-render: Renders HotCommitSummary[] + ComponentFinding[] into markdown.
+ * Stage 05-render: HotCommitSummary[] + ComponentFinding[] -> markdown.
  *
- * Output is LLM-optimized: structured prose with emoji tier indicators.
- * Writes the full report to debugDir/react-profiler-report.md.
- * Returns a capped version (top 10 hot commits by totalRenderMs) for inline response.
+ * Writes the full report to debugDir/react-profiler-report.md; returns a copy capped to
+ * the top 10 hot commits by totalRenderMs for the inline response.
  *
- * Annotation matching: for each commit, find the annotation with highest offsetMs
- * that is <= commit's relative timestamp. No time-limit cutoff — always show the
- * most recent prior annotation so the developer/LLM can reason about causality.
+ * Commits are labeled with the most recent prior annotation, with no time cutoff, so a
+ * long gap still shows causality.
  */
 import { promises as fs } from "fs";
-import { join } from "path";
+import { isAbsolute, join, relative, sep } from "path";
 import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
+import { annotateComponentName } from "../component-names";
+import {
+  formatCount,
+  formatPeakCommit,
+  formatRenderSummaryReason,
+  formatRenderTime,
+  hasUnnamedSlowCommit,
+  MAX_FREQUENT_ROWS,
+  selectFrequentOutsideSource,
+  selectFrequentRerenders,
+  type FrequentRerenderRow,
+  type RenderSummary,
+} from "../render-summary";
+import { createComponentOriginClassifier, type ComponentOriginResult } from "../component-origin";
 
 const MAX_INLINE_COMMITS = 10;
+const MAX_OTHER_MATCHES = 3;
+const MAX_OUTSIDE_SOURCE_NAMES = 5;
 const REPORT_FILENAME = "react-profiler-report.md";
 
-interface ComponentAnnotation {
-  displayName: string;
-  tag: string;
-  rawName: string;
-}
-
-// Strips Forget/Memo/ForwardRef wrappers from display names and returns a
-// human-readable annotation for each wrapper found. rawName must be used in all
-// query tool suggestions — every pipeline stage keys on the original DevTools
-// string. Only apply displayName + tag in markdown text.
-function annotateComponentName(raw: string): ComponentAnnotation {
-  let name = raw;
-  let hasForget = false;
-  let hasMemo = false;
-  let hasForwardRef = false;
-
-  for (let i = 0; i < 4; i++) {
-    const m =
-      name.match(/^Forget\((.+)\)$/) ||
-      name.match(/^Memo\((.+)\)$/) ||
-      name.match(/^ForwardRef\((.+)\)$/);
-    if (!m) break;
-    if (name.startsWith("Forget(")) hasForget = true;
-    else if (name.startsWith("Memo(")) hasMemo = true;
-    else if (name.startsWith("ForwardRef(")) hasForwardRef = true;
-    name = m[1]!;
-  }
-
-  const parts: string[] = [];
-  if (hasMemo) parts.push("React.memo");
-  if (hasForget) parts.push("React Compiler");
-  if (hasForwardRef) parts.push("forwardRef");
-  const tag = parts.length > 0 ? ` [${parts.join(" + ")}]` : "";
-
-  return { displayName: name, tag, rawName: raw };
-}
-
-export interface RenderInput {
+interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
   componentFindings: ComponentFinding[];
   sessionContext: SessionContext;
@@ -63,11 +40,17 @@ export interface RenderInput {
   reactCommits: number;
   annotations?: Array<{ offsetMs: number; label: string }>;
   debugDir: string;
-  allClear?: boolean;
+  noHotCommits?: boolean;
+  /** Stop recorded no commit at all. Read from the commit count, so it needs no summary. */
+  noReactCommits?: boolean;
   maxCommitMs?: number;
+  /** Counts over all commits; null/undefined for sessions saved before stop wrote it. */
+  renderSummary?: RenderSummary | null;
+  /** Library-vs-app guess for frequent re-render rows; name-only when omitted. */
+  componentOrigin?: (rawName: string) => ComponentOriginResult;
 }
 
-export interface RenderOutput {
+interface RenderOutput {
   report: string;
   reportFile: string | null;
   hotCommitsTotal: number;
@@ -77,9 +60,9 @@ export interface RenderOutput {
 export async function renderProfilingReport(input: RenderInput): Promise<RenderOutput> {
   const reportFile = join(input.debugDir, REPORT_FILENAME);
 
-  if (input.allClear) {
+  if (input.noHotCommits) {
     const maxMs = input.maxCommitMs ?? 0;
-    const report = renderAllClear(input, maxMs);
+    const report = renderNoHotCommits(input, maxMs);
     const wroteFile = await writeReport(reportFile, report);
     return {
       report,
@@ -94,7 +77,13 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   const hotCommitsTotal = hotCommits.length;
 
   if (hotCommitsTotal === 0) {
-    const report = renderAllClear(input, 0);
+    // Defensive: stop does not produce this state today. It derives heat only
+    // from fibers that rendered, and such a fiber always gives its commit a
+    // summary that is not a margin. A summary still holds real totals. Without
+    // one, nothing about commits is known.
+    const report = input.renderSummary
+      ? renderNoHotCommits(input, input.maxCommitMs ?? 0)
+      : renderNoCommitData(input);
     const wroteFile = await writeReport(reportFile, report);
     return {
       report,
@@ -104,23 +93,19 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
     };
   }
 
-  // Sort annotations by offsetMs for binary search
   const annotations = (input.annotations ?? []).slice().sort((a, b) => a.offsetMs - b.offsetMs);
 
-  // Full report: all commits
   const fullMarkdown = buildFullMarkdown(input, annotations, hotCommitsTotal);
 
-  // Capped report: top MAX_INLINE_COMMITS hot commits by totalRenderMs
   const topHotByMs = hotCommits
     .slice()
     .sort((a, b) => b.totalRenderMs - a.totalRenderMs)
     .slice(0, MAX_INLINE_COMMITS);
   const topHotIndices = new Set(topHotByMs.map((s) => s.commitIndex));
 
-  // For the capped version, include margin commits adjacent to shown hot commits
+  // Keep a margin commit only when it neighbours a hot commit that is shown
   const cappedSummaries = input.hotCommitSummaries.filter((s) => {
     if (!s.isMargin) return topHotIndices.has(s.commitIndex);
-    // Include margin if adjacent to a shown hot commit
     return topHotIndices.has(s.commitIndex - 1) || topHotIndices.has(s.commitIndex + 1);
   });
 
@@ -140,34 +125,189 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal, hotCommitsShown };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+function renderTimeLine(input: RenderInput, summary: RenderSummary): string {
+  const label = input.sessionContext.buildMode === "dev" ? " (dev build)" : "";
+  return `**React render time${label}:** ${formatRenderTime(summary)}`;
+}
 
-function renderAllClear(input: RenderInput, maxMs: number): string {
+function renderReportHeader(input: RenderInput): string[] {
   const durationS = (input.recordingMs / 1000).toFixed(1);
   const compilerLine = renderCompilerStatus(
     input.sessionContext.reactCompilerEnabled,
     input.anyRuntimeCompilerDetected
   );
-  const maxNote = maxMs > 0 ? ` (peak commit: ${maxMs.toFixed(1)}ms)` : "";
   const lines = [
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** 0 of ${input.reactCommits} total`,
-    ``,
-    `✅ **All clear** — all React commits were below 16ms${maxNote}.`,
-    `No performance issues detected in this session.`,
+  ];
+  if (input.renderSummary) lines.push(renderTimeLine(input, input.renderSummary));
+  lines.push(``);
+  return lines;
+}
+
+/** The session holds a CPU profile at most, so it can claim nothing about commits. */
+function renderNoCommitData(input: RenderInput): string {
+  return [
+    ...renderReportHeader(input),
+    `No React commit data could be read for this session, so no commit durations were measured. Re-profile to measure them.`,
+  ].join("\n");
+}
+
+/**
+ * No hot commit. The report states what was measured and lists what re-rendered
+ * most. It gives no verdict: "no commit reached 16ms" does not show the app is
+ * fine, and no share of the recording shows that it is not. The share falls as
+ * idle time grows, and dev builds and Strict Mode inflate it by a varying amount.
+ */
+function renderNoHotCommits(input: RenderInput, maxMs: number): string {
+  const summary = input.renderSummary ?? null;
+  const lines = renderReportHeader(input);
+
+  if (summary?.totalCommits === 0 || input.noReactCommits) {
+    lines.push(
+      `No React commits were recorded, so there is nothing to measure. Interact with the app while the profiler records.`
+    );
+    return lines.join("\n");
+  }
+
+  const maxNote = maxMs > 0 ? ` (peak commit: ${formatPeakCommit(maxMs)})` : "";
+  lines.push(
+    summary && hasUnnamedSlowCommit(summary)
+      ? `⚠️ **Slow commit with no component names** — the slowest commit took ${formatPeakCommit(summary.maxCommitMs)}, but none of its components could be named, so it has no breakdown.`
+      : `No commit reached 16ms${maxNote}.`
+  );
+  if (!summary) {
+    lines.push(
+      ``,
+      `> This session has no render summary, usually because an older version saved it, so commits under 16ms were not measured: many cheap re-renders can still add up. Re-profile to measure them.`
+    );
+  } else if (summary.components.length === 0) {
+    lines.push(``, `No component in this session could be named, so there is nothing to list.`);
+  }
+
+  const { rows, cut } = frequentRerenderRows(input);
+  lines.push(
+    ...renderFrequentRerenders(
+      summary,
+      rows,
+      frequentOutsideSource(input),
+      input.sessionContext.projectRoot,
+      cut
+    )
+  );
+
+  lines.push(``, `---`, `## Next Steps`, ``);
+  if (rows.length > 0) {
+    lines.push(
+      `Ask the user which path to take:`,
+      ``,
+      `1. **Investigate further** — \`profiler-commit-query\` mode=\`render_counts\` for every component's counts, or \`profiler-cpu-query\` mode=\`top_functions\` for the JS work behind them.`,
+      `2. **Cut re-renders** — if the top rows re-render more often than the screen needs (the Reason column names what changes each time, e.g. a timer or animation kept in React state), reduce that, then re-profile the same scenario and compare.`,
+      `3. **Done for now** — save the report for reference.`
+    );
+  } else {
+    lines.push(
+      `- Re-profile under heavier load (longer interaction, more data) if this run did not cover the flow you care about.`,
+      `- \`profiler-cpu-query\` mode=\`top_functions\` shows the JS work during the recording.`
+    );
+    if (summary) {
+      lines.push(
+        `- \`profiler-commit-query\` mode=\`render_counts\` lists each component's render count over all ${formatCount(summary.totalCommits)} commits. A high count matters only when its time adds up.`
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/** The table's rows, and the components that qualified but ranked below the cap. */
+function frequentRerenderRows(input: RenderInput): {
+  rows: FrequentRerenderRow[];
+  cut: FrequentRerenderRow[];
+} {
+  const all = input.renderSummary
+    ? selectFrequentRerenders(
+        input.renderSummary,
+        input.componentOrigin ?? createComponentOriginClassifier(null),
+        Infinity
+      )
+    : [];
+  return { rows: all.slice(0, MAX_FREQUENT_ROWS), cut: all.slice(MAX_FREQUENT_ROWS) };
+}
+
+function frequentOutsideSource(input: RenderInput): string[] {
+  return input.renderSummary
+    ? selectFrequentOutsideSource(
+        input.renderSummary,
+        input.componentOrigin ?? createComponentOriginClassifier(null)
+      )
+    : [];
+}
+
+/** The section is the same in a report with hot commits and in one without. */
+function renderFrequentRerenders(
+  summary: RenderSummary | null,
+  rows: FrequentRerenderRow[],
+  outsideSource: string[],
+  projectRoot: string,
+  cut: FrequentRerenderRow[] = []
+): string[] {
+  if (!summary) return [];
+  // Printed with no table too: when the source is not the app's, this is all that is left of it.
+  const outsideNote = outsideSource.length > 0 ? [``, renderOutsideSourceNote(outsideSource)] : [];
+  const cutNote = cut.length > 0 ? [``, renderCutNote(cut)] : [];
+  if (rows.length === 0) return [...cutNote, ...outsideNote];
+  // With no source index, names alone cannot tell the app's components from a library's.
+  const unplaced = rows.some((row) => row.origin.origin === "unknown");
+  return [
     ``,
     `---`,
-    `## Suggested Improvements`,
+    `## Most Frequent Re-renders`,
     ``,
-    `No performance hotspots found. Consider these proactive checks:`,
+    `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits and used at least 1 ms of self time per second of recording, by self time per second. This shows where frequent re-renders add up, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
     ``,
-    `- Run \`react-profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
-    `- Run \`react-profiler-renders\` for a live view of render counts — components with high counts may benefit from \`React.memo\`${input.sessionContext.reactCompilerEnabled ? " or compiler-compatible patterns" : ""}.`,
-    `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`,
+    `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
+    `|---|---|---|---|---|---|---|`,
+    ...rows.map((row) => renderFrequentRow(row, projectRoot)),
+    ...cutNote,
+    ...outsideNote,
   ];
-  return lines.join("\n");
+}
+
+function renderCutNote(cut: FrequentRerenderRow[]): string {
+  const shown = cut
+    .slice(0, MAX_OUTSIDE_SOURCE_NAMES)
+    .map((row) => `\`${row.component.name}\``)
+    .join(", ");
+  const more =
+    cut.length > MAX_OUTSIDE_SOURCE_NAMES
+      ? ` and ${cut.length - MAX_OUTSIDE_SOURCE_NAMES} more`
+      : "";
+  return `Also re-rendered often (in at least 10 commits, with at least 1 ms of self time per second) but not listed above: ${shown}${more}. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
+}
+
+function renderOutsideSourceNote(names: string[]): string {
+  const shown = names
+    .slice(0, MAX_OUTSIDE_SOURCE_NAMES)
+    .map((name) => `\`${name}\``)
+    .join(", ");
+  const more =
+    names.length > MAX_OUTSIDE_SOURCE_NAMES
+      ? ` and ${names.length - MAX_OUTSIDE_SOURCE_NAMES} more`
+      : "";
+  return `Frequent re-renders left out because the source index has no definition for the name: ${shown}${more}. These are usually library components. Class components, components made by a wrapper such as \`observer()\`, and all of your components when \`project_root\` is wrong land here too. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
+}
+
+function renderFrequentRow(row: FrequentRerenderRow, projectRoot: string): string {
+  const c = row.component;
+  const ann = annotateComponentName(c.name);
+  const file =
+    row.origin.file !== undefined
+      ? `\`${pathFromProject(row.origin.file, projectRoot)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
+      : "—";
+  return (
+    `| \`${ann.displayName}\`${ann.tag} | ${formatCount(c.rerenders)} | ${row.perSecond.toFixed(1)} | ` +
+    `${row.selfMsPerSecond.toFixed(1)} | ${c.rerenderSelfMs.toFixed(1)}ms | ${formatRenderSummaryReason(c)} | ${file} |`
+  );
 }
 
 function renderCompilerStatus(enabled: boolean, detectedAtRuntime: boolean): string {
@@ -192,11 +332,13 @@ function buildFullMarkdown(
   const lines: string[] = [
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** ${totalHotCommits} of ${input.reactCommits} total`,
+    ...(input.renderSummary ? [renderTimeLine(input, input.renderSummary)] : []),
     ``,
     `> **Duration columns:** \`self\` = this component's own render work only (exclusive).`,
-    `> \`w/children\` = self + the entire subtree it owns (inclusive).`,
-    `> Do not sum the \`w/children\` column — a parent's inclusive time already contains its`,
-    `> children's time. Use \`self\` for summing; use \`w/children\` to understand container cost.`,
+    `> \`w/children\` = self + the entire subtree it owns (inclusive). On a grouped \`×N\` row it is`,
+    `> the largest single instance, while \`self\` is the total of all N.`,
+    `> Do not sum \`w/children\` across rows or instances — inclusive times nest inside each other.`,
+    `> Use \`self\` for summing; use \`w/children\` to understand container cost.`,
     ``,
     `---`,
     `## Slow React Batches`,
@@ -208,26 +350,39 @@ function buildFullMarkdown(
     lines.push("");
   }
 
-  // Top components table
   if (input.componentFindings.length > 0) {
     lines.push("---");
     lines.push("## Top Components by Total Render Cost");
     lines.push("");
+    // Total/Avg/Max and the first count cover only the commits kept above; the
+    // second count is from the all-commit summary, so a component re-rendering
+    // cheaply between slow commits is not under-counted (6 of 50 on Bluesky).
+    const renderSummary = input.renderSummary ?? null;
+    const allRerenders = renderSummary
+      ? new Map(renderSummary.components.map((c) => [c.name, c.rerenders]))
+      : null;
+    if (renderSummary) {
+      lines.push(
+        `> \`Renders\` = re-renders in the stored commits (hot and ±1 neighbours, which Total/Avg/Max cover) / re-renders in all ${formatCount(renderSummary.totalCommits)} commits.`
+      );
+      lines.push("");
+    }
     lines.push("| Component | Renders | Total | Avg | Max | Reason | File |");
     lines.push("|---|---|---|---|---|---|---|");
     for (const f of input.componentFindings) {
       const file = f.sourceLocation
-        ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
+        ? formatLocation(f.sourceLocation, sessionContext.projectRoot)
         : "—";
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
       const ann = annotateComponentName(f.component);
+      const all = allRerenders?.get(f.component);
+      const renders = all !== undefined ? `${f.renders} / ${formatCount(all)}` : `${f.renders}`;
       lines.push(
-        `| \`${ann.displayName}\`${ann.tag}${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
+        `| \`${ann.displayName}\`${ann.tag}${compilerFlag} | ${renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
       );
     }
 
-    // Compiler note (only if static detection says yes but runtime didn't detect)
     if (sessionContext.reactCompilerEnabled && !anyRuntimeCompilerDetected) {
       lines.push("");
       lines.push(
@@ -237,16 +392,37 @@ function buildFullMarkdown(
     }
   }
 
-  // Suggested improvements
+  // The sections above cover the stored commits only, and Top Components also
+  // drops some names, such as rows of a recycled list, so a frequent component
+  // can be missing from all of them. The list is added only then: a component in
+  // the table above already shows its count over all commits there.
+  const { rows: frequent, cut } = frequentRerenderRows(input);
+  const inTopComponents = new Set(input.componentFindings.map((f) => f.component));
+  // Past the cap and absent from the table above: the cap must not be what hides it.
+  const cutNew = cut.filter((row) => !inTopComponents.has(row.component.name));
+  const outsideSource = frequentOutsideSource(input).filter((name) => !inTopComponents.has(name));
+  const tableAddsRow = frequent.some((row) => !inTopComponents.has(row.component.name));
+  if (tableAddsRow || outsideSource.length > 0 || cutNew.length > 0) {
+    lines.push(
+      ...renderFrequentRerenders(
+        input.renderSummary ?? null,
+        tableAddsRow ? frequent : [],
+        outsideSource,
+        sessionContext.projectRoot,
+        cutNew
+      )
+    );
+  }
+
   const suggestionsSection = renderSuggestedImprovements(
     input.componentFindings,
-    sessionContext.reactCompilerEnabled
+    sessionContext.reactCompilerEnabled,
+    sessionContext.projectRoot
   );
   if (suggestionsSection) {
     lines.push(suggestionsSection);
   }
 
-  // Dev mode note
   if (sessionContext.buildMode === "dev") {
     lines.push("");
     lines.push(
@@ -254,7 +430,6 @@ function buildFullMarkdown(
     );
   }
 
-  // Next steps guidance for the agent
   lines.push("");
   lines.push("---");
   lines.push("## Next Steps");
@@ -309,21 +484,18 @@ function renderCommit(
 
   const lines: string[] = [header];
 
-  // Annotation: find the annotation with highest offsetMs <= commit relative timestamp
   const annotation = findPriorAnnotation(annotations, relativeMs);
   if (annotation) {
     const deltaSec = ((relativeMs - annotation.offsetMs) / 1000).toFixed(1);
     lines.push(`> After: "${annotation.label}" (${deltaSec}s prior)`);
   }
 
-  // Warm tier note
   if (summary.tier === "warm" && !summary.isMargin) {
     lines.push("> 🟡 May be acceptable in production (dev mode is ~3× slower)");
   }
 
   lines.push("");
 
-  // Header line: root cause for re-renders, initial render label for mount-dominated commits
   if (!summary.isMargin) {
     if (summary.isInitialRender) {
       const mountCount = summary.components.filter((c) => c.isFirstMount).length;
@@ -344,7 +516,6 @@ function renderCommit(
     }
   }
 
-  // Render component entries (mix of re-renders and mounts)
   for (const comp of summary.components) {
     const ann = annotateComponentName(comp.name);
     const countSuffix = comp.count > 1 ? ` ×${comp.count}` : "";
@@ -361,15 +532,12 @@ function renderCommit(
     );
   }
 
-  // "... and N more" if component list was capped
   if (summary.totalComponentCount > summary.components.length) {
     const remaining = summary.totalComponentCount - summary.components.length;
     lines.push(`- _... and ${remaining} more_`);
   }
 
-  // Coverage line: how much of the commit's wall-clock time is explained by the
-  // self-times above. Helps the agent decide whether to drill into the truncated
-  // tail before concluding.
+  // Coverage tells the agent whether the truncated tail is worth drilling into
   const shownSelfMs = summary.components.reduce((s, c) => s + c.selfDurationMs, 0);
   const roundedShown = Math.round(shownSelfMs * 10) / 10;
   const coveragePct =
@@ -380,7 +548,8 @@ function renderCommit(
   if (hiddenCount > 0) {
     lines.push(
       `- _Shown: ${roundedShown}ms self / ${summary.totalRenderMs}ms commit (${coveragePct}%) — ` +
-        `${hiddenCount} more components not shown. Use \`profiler-commit-query mode=by_index\` to see all._`
+        `${hiddenCount} more components not shown. Use ` +
+        `\`profiler-commit-query mode=by_index commit_index=${summary.commitIndex}\` to see all._`
     );
   } else if (coveragePct < 80) {
     lines.push(
@@ -388,9 +557,6 @@ function renderCommit(
     );
   }
 
-  // Unattributed duration: fibers that rendered in this commit but unmounted
-  // before react-profiler-stop ran, so their display names could not be resolved.
-  // The breakdown above is missing this much work — not silent, just not named.
   if (summary.unattributedMs !== undefined && summary.unattributedMs >= 1) {
     const fiberCount = summary.unattributedFiberCount ?? 0;
     const fiberLabel = fiberCount === 1 ? "fiber" : "fibers";
@@ -399,7 +565,7 @@ function renderCommit(
     );
   }
 
-  // CPU hotspots during this commit (from Hermes CPU profile correlation)
+  // Correlated from the Hermes CPU profile in stage 00-cpu-correlate
   if (summary.cpuHotspots && summary.cpuHotspots.length > 0) {
     lines.push("");
     lines.push("**CPU during this commit:**");
@@ -456,7 +622,7 @@ function findPriorAnnotation(
   annotations: Array<{ offsetMs: number; label: string }>,
   relativeMs: number
 ): { offsetMs: number; label: string } | undefined {
-  // Annotations are sorted by offsetMs. Find the last one with offsetMs <= relativeMs.
+  // Requires annotations sorted by offsetMs
   let result: { offsetMs: number; label: string } | undefined;
   for (const ann of annotations) {
     if (ann.offsetMs <= relativeMs) {
@@ -470,7 +636,8 @@ function findPriorAnnotation(
 
 function renderSuggestedImprovements(
   findings: ComponentFinding[],
-  compilerEnabled: boolean
+  compilerEnabled: boolean,
+  projectRoot: string
 ): string {
   if (findings.length === 0) return "";
 
@@ -482,9 +649,7 @@ function renderSuggestedImprovements(
   const lines: string[] = ["", "---", "## Suggested Improvements", ""];
 
   for (const f of topFindings) {
-    const loc = f.sourceLocation
-      ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
-      : null;
+    const loc = f.sourceLocation ? formatLocation(f.sourceLocation, projectRoot) : null;
     const ann = annotateComponentName(f.component);
     const heading = `\`${ann.displayName}\`${ann.tag}`;
     lines.push(loc ? `### ${heading} — ${loc}` : `### ${heading}`);
@@ -563,9 +728,8 @@ function renderSuggestedImprovements(
       }
     }
 
-    // Embed source snippet in a collapsible block if available
     if (f.sourceSnippet && f.sourceLocation) {
-      const snippetPath = `${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}`;
+      const snippetPath = `${pathFromProject(f.sourceLocation.file, projectRoot)}:${f.sourceLocation.line}`;
       lines.push("");
       lines.push(`<details><summary>Source — \`${snippetPath}\`</summary>`);
       lines.push("");
@@ -582,10 +746,31 @@ function renderSuggestedImprovements(
   return lines.join("\n");
 }
 
+function formatLocation(
+  loc: { file: string; line: number; otherMatches?: Array<{ file: string; line: number }> },
+  projectRoot: string
+): string {
+  const main = `\`${pathFromProject(loc.file, projectRoot)}:${loc.line}\``;
+  const others = loc.otherMatches ?? [];
+  if (others.length === 0) return main;
+  const shown = others
+    .slice(0, MAX_OTHER_MATCHES)
+    .map((m) => `${pathFromProject(m.file, projectRoot)}:${m.line}`);
+  const rest = others.length - shown.length;
+  return `${main} (name also in ${shown.join(", ")}${rest > 0 ? `, +${rest} more` : ""})`;
+}
+
+/** For a CPU frame's bundle url, where the end of the path is all that helps. */
 function shortenPath(file: string): string {
-  // Keep last 2 path segments for readability
   const parts = file.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
+}
+
+/** A path that an agent can open, unlike the end of the path. */
+function pathFromProject(file: string, projectRoot: string): string {
+  const fromRoot = relative(projectRoot, file);
+  const outsideRoot = !fromRoot || fromRoot.split(sep)[0] === ".." || isAbsolute(fromRoot);
+  return outsideRoot ? file : fromRoot;
 }
 
 async function writeReport(path: string, content: string): Promise<boolean> {

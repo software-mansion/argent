@@ -7,7 +7,7 @@ export interface FontGeometryImage {
   data: Buffer;
 }
 
-export interface RgbDelta {
+interface RgbDelta {
   r: number;
   g: number;
   b: number;
@@ -51,12 +51,12 @@ export interface FontGeometryEvidence {
   currentFeatures: FontGeometryFeatures;
 }
 
-export interface FontGeometryFeatures {
-  /** Original OCR/text bounds in image coordinates. */
+interface FontGeometryFeatures {
+  /** OCR text bounds, in image coordinates. */
   bounds: DiffBounds;
-  /** Alias for bounds; kept explicit so all feature geometry is image-space. */
+  /** Alias for bounds. */
   regionBounds: DiffBounds;
-  /** Actual sampled crop including detector padding, in image coordinates. */
+  /** Sampled crop: bounds padded by CROP_PADDING_PX, clamped to the image. */
   cropBounds: DiffBounds;
   /** Detected ink bounds in image coordinates. */
   inkBounds?: DiffBounds;

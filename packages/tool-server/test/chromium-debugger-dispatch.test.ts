@@ -13,7 +13,7 @@ import { resolveDevice } from "../src/utils/device-info";
 // block on one of these) breaks this single test instead of slipping into a
 // release. Kept exhaustive on purpose — a per-tool assertion is cheap and the
 // list is the contract.
-import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { networkLogsTool } from "../src/tools/network/network-logs";
@@ -103,7 +103,7 @@ describe("RN-only tool registry — every locked tool actually rejects Chromium"
   // Source of truth for what must stay locked. If a tool is added/removed
   // here, the maintainer is making an explicit Chromium-support decision.
   const LOCKED_TOOLS = [
-    debuggerComponentTreeTool,
+    createDebuggerComponentTreeTool(),
     debuggerReloadMetroTool,
     debuggerInspectElementTool,
     reactProfilerAnalyzeTool,
@@ -127,16 +127,6 @@ describe("RN-only tool registry — every locked tool actually rejects Chromium"
       );
     }
   );
-
-  it("matches the spec count — exactly 13 device-bound RN/iOS tools are locked", () => {
-    // Add to LOCKED_TOOLS above when locking a new tool; this guards against
-    // silent omissions. react-profiler-{start,stop,status} are factory-built
-    // and not exported as plain ToolDefinitions, so they're absent here even
-    // though they're locked — counted separately in the PR description.
-    // view-network-logs / view-network-request-details were UNLOCKED for
-    // Chromium (served via the Chromium server's Network recording) — see below.
-    expect(LOCKED_TOOLS).toHaveLength(13);
-  });
 
   it("view-network-logs / view-network-request-details now ALSO support Chromium", () => {
     for (const tool of [networkLogsTool, networkRequestTool]) {

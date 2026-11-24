@@ -6,6 +6,8 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point";
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface InspectItem {
   name: string;
@@ -15,30 +17,26 @@ export interface InspectItem {
   skipReason?: string;
 }
 
-// A raw bundle URL (e.g. http://localhost:8081/index.bundle) is not an openable
-// source: readSourceFragment rejects it and `code` stays null. The symbolication
-// fallback assigns such a URL as `source` when Metro cannot map a frame, so for
-// skip-filter purposes it must count as "no source" — otherwise every framework
-// wrapper it touches would survive Pass 1 / Pass 3 and flood the result in
-// exactly the symbolication-failure mode the fallback exists to handle.
+// When Metro cannot map a frame, the fallback stores the raw bundle URL as
+// `source`, but readSourceFragment rejects it and `code` stays null. It must
+// count as "no source" here, or every framework wrapper survives Pass 1 / Pass 3.
 function hasRealSource(item: InspectItem): boolean {
   return item.source !== null && !/^https?:\/\//.test(item.source.file);
 }
 
 /**
- * Filters and deduplicates the raw inspect-element hierarchy.
- * Applied after source resolution, before maxItems truncation.
+ * Filters and deduplicates the raw inspect-element hierarchy, after source
+ * resolution and before maxItems truncation.
  *
- * When includeSkipped is true, filtered items are kept in the result
- * with `skipped: true` and a `skipReason` string instead of being removed.
+ * With includeSkipped, filtered items stay in the result carrying
+ * `skipped: true` and a `skipReason` instead of being removed.
  */
 export function filterInspectItems(items: InspectItem[], includeSkipped = false): InspectItem[] {
   function skip(item: InspectItem, reason: string): InspectItem {
     return includeSkipped ? { ...item, skipped: true, skipReason: reason } : item;
   }
 
-  // Deduplicate consecutive AnimatedComponent(X) / Animated(X) that wrap the
-  // immediately preceding host component.
+  // Drop AnimatedComponent(X) / Animated(X) that wraps an immediately preceding X.
   const animDeduped: InspectItem[] = [];
   for (const item of items) {
     const inner = item.name.startsWith("AnimatedComponent(")
@@ -59,9 +57,8 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     animDeduped.push(item);
   }
 
-  // Pass 1: Source-aware skip-rule filter.
-  // Remove items that match skip patterns ONLY when they have no source file.
-  // Always keep index 0 (the leaf / tapped element) regardless of skip rules.
+  // Pass 1: skip rules apply only to items with no source file.
+  // Index 0 (the tapped leaf) is kept regardless.
   const skipFiltered: InspectItem[] = [];
   for (let i = 0; i < animDeduped.length; i++) {
     const item = animDeduped[i];
@@ -79,8 +76,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     skipFiltered.push(item);
   }
 
-  // Pass 2: Same-source deduplication.
-  // When consecutive items share the exact same source file:line, keep only the first.
+  // Pass 2: of consecutive items sharing one source file:line, keep the first.
   const srcDeduped: InspectItem[] = [];
   let lastKeptSource: InspectItem["source"] = null;
   for (const item of skipFiltered) {
@@ -100,8 +96,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
     srcDeduped.push(item);
   }
 
-  // Pass 3: Anonymous host element pruning.
-  // Remove "View" items with no source (keep the leaf at index 0).
+  // Pass 3: drop source-less "View" wrappers, except the first kept item.
   const result: InspectItem[] = [];
   let keptCount = 0;
   for (const item of srcDeduped) {
@@ -123,14 +118,22 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
-  x: z.coerce.number().describe("Logical X coordinate on device screen"),
-  y: z.coerce.number().describe("Logical Y coordinate on device screen"),
+  x: z.coerce
+    .number()
+    .describe(
+      "Horizontal position in logical pixels from the left edge of the screen<flag:macos-apps>, or in points from the left edge of the Mac app window, title bar included</flag:macos-apps>."
+    ),
+  y: z.coerce
+    .number()
+    .describe(
+      "Vertical position in logical pixels from the top edge of the screen<flag:macos-apps>, or in points from the top edge of the Mac app window, title bar included</flag:macos-apps>."
+    ),
   contextLines: z.coerce
     .number()
     .default(3)
@@ -139,20 +142,20 @@ const zodSchema = z.object({
     .boolean()
     .default(true)
     .describe(
-      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without symbolication or source reading."
+      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without a code fragment."
     ),
   maxItems: z.coerce
     .number()
     .default(35)
     .describe(
-      "Maximum number of hierarchy items to return, counted from the bottom (most specific component first). The hierarchy walks from the tapped element up to the root — the first items are the most relevant for editing. Increase to 70+ if you need to understand the broader navigation/screen structure."
+      "Maximum number of hierarchy items to return, most specific first. The default covers all app-specific code; increase to 70+ to also see the navigation/screen structure."
     ),
   includeSkipped: z
     .boolean()
     .default(false)
     .describe(
       "When true, items that would normally be filtered are kept in the response " +
-        "with skipped=true and a skipReason. Useful for understanding what was pruned."
+        "with skipped=true and a skipReason."
     ),
 });
 
@@ -175,29 +178,29 @@ export const debuggerInspectElementTool: ToolDefinition<
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns components from the tapped element upward through its parent hierarchy,
 each with its source file:line and a code fragment.
-
-The first items (lowest indices) are the most specific — the exact component under
+The first items (lowest indices) are the most specific: the exact component under
 the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Default shows 35 items which covers all app-specific code; use maxItems=70+ to also
-see the navigation/screen structure.
-
-Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
-Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
-Set includeSkipped=true to see filtered items annotated with skip reasons.
-Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
+Use when you need the source file and line for a component at a point. Convert fractions from debugger-component-tree using the width and height in its Screen line. Fails if the app is disconnected or the point is outside the screen.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift the result. Check the returned component against the intended control.</flag:macos-apps>`,
   zodSchema,
-  // RN-only: uses React Native's internal getInspectorDataForViewAtPoint and
-  // Metro's /symbolicate endpoint. Chromium's CDP has DOM.getNodeForLocation
-  // for "what's here?" but the source-map flow would need a complete rewrite —
-  // out of scope for this port.
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Inspecting element at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) => `Inspected element at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to inspect element at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
+  },
+  // RN-only: needs React Native's internal getInspectorDataForViewAtPoint and
+  // Metro's /symbolicate; the Chromium session has no source resolver.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const requestId = crypto.randomUUID();
-    const script = makeInspectScript(params.x, params.y, requestId);
+    const script = makeInspectScript(params.x, params.y, requestId, {
+      subtractRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
+    });
 
     const raw = await api.cdp.evaluateWithBinding(script, requestId, {
       timeout: 8000,
@@ -263,8 +266,7 @@ Use when you need the source file and line for a component at a tap coordinate. 
 
     const deduped = filterInspectItems(items, params.includeSkipped);
 
-    // maxItems counts only non-skipped items toward the limit;
-    // skipped items between kept items are included in the output.
+    // maxItems counts non-skipped items only; skipped items before the cutoff stay.
     let truncated: InspectItem[];
     let totalKept: number;
     if (params.includeSkipped) {

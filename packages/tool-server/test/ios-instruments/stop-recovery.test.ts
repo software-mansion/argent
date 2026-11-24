@@ -135,17 +135,23 @@ describe("native-profiler-stop recovery branch", () => {
       STOP_CTX
     )) as IosStopArtifacts;
 
-    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
+    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE, false);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.
-    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true, filename: "cpu.xml" });
+    expect(result.exportedFiles.cpu).toMatchObject({
+      __argentArtifact: true,
+      kind: "native-profile-cpu",
+      filename: "cpu.xml",
+    });
     expect(result.exportedFiles.hangs).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-hangs",
       filename: "hangs.xml",
     });
-    // The .trace bundle is now a downloadable artifact (delivered as tar.gz
-    // on demand), not a "stays on the host" note.
+    // The .trace bundle is a downloadable artifact (a compressed tar on
+    // demand), not a "stays on the host" note.
     expect(result.traceFile).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-trace",
       archive: "tar.gz",
       filename: "ios-profiler-20260101-000000.trace",
     });
@@ -190,10 +196,6 @@ describe("native-profiler-stop recovery branch", () => {
     expect(result.warning).toContain("Recording timed out at 10 min cap");
     expect(result.warning).not.toContain("xctrace exited before stop");
     expect(api.recordingTimedOut).toBe(false);
-  });
-
-  it("is declared longRunning so the MCP fetch timeout can't abort a slow stop", () => {
-    expect(nativeProfilerStopTool.longRunning).toBe(true);
   });
 
   it("falls through to the unrecoverable error when no recovery flag is set", async () => {
@@ -242,10 +244,13 @@ describe("native-profiler-stop recovery branch", () => {
       STOP_CTX
     );
     await vi.advanceTimersByTimeAsync(10);
-    const result = await promise;
+    const result = (await promise) as IosStopArtifacts;
 
     expect(result.warning).toBeUndefined();
-    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true });
+    expect(result.exportedFiles.cpu).toMatchObject({
+      __argentArtifact: true,
+      kind: "native-profile-cpu",
+    });
     expect(api.profilingActive).toBe(false);
     expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);

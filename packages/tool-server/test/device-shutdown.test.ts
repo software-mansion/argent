@@ -16,24 +16,35 @@ vi.mock("../src/utils/android-binary", () => ({
   resolveAndroidBinary: (name: string) => resolveAndroidBinaryMock(name),
 }));
 
+const xcodePending = vi.hoisted(() => ({ value: false }));
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return { ...actual, xcodeFirstLaunchPending: () => xcodePending.value };
+});
+
 import {
   shutdownOwnedDevice,
   shutdownOwnedDevices,
   shutdownDevice,
 } from "../src/utils/device-shutdown";
 
-// Default: exec succeeds (callback style: (file, args, cb) => cb(err, {stdout,stderr})).
+// Default: exec succeeds (callback style: (file, args, options, cb) => cb(err, {stdout,stderr})).
 function execSucceeds() {
-  execFileMock.mockImplementation(
-    (_file: string, _args: string[], cb: (e: unknown, r: unknown) => void) =>
-      cb(null, { stdout: "", stderr: "" })
+  execFileMock.mockImplementation((...args: unknown[]) =>
+    (args.at(-1) as (e: unknown, r: unknown) => void)(null, { stdout: "", stderr: "" })
   );
 }
 function execFails(message: string) {
-  execFileMock.mockImplementation((_file: string, _args: string[], cb: (e: unknown) => void) =>
-    cb(new Error(message))
+  execFileMock.mockImplementation((...args: unknown[]) =>
+    (args.at(-1) as (e: unknown) => void)(new Error(message))
   );
 }
+
+// Every shutdown spawn must be bounded, and SIGKILL-reaped: a wedged adb
+// daemon ignores execFile's default SIGTERM.
+const boundedExec = { timeout: 30_000, killSignal: "SIGKILL" };
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -49,6 +60,7 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "xcrun",
       ["simctl", "shutdown", "UDID-1"],
+      boundedExec,
       expect.any(Function)
     );
   });
@@ -60,6 +72,7 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "/sdk/platform-tools/adb",
       ["-s", "emulator-5554", "emu", "kill"],
+      boundedExec,
       expect.any(Function)
     );
   });
@@ -71,6 +84,7 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "adb",
       ["-s", "emulator-5554", "emu", "kill"],
+      boundedExec,
       expect.any(Function)
     );
   });
@@ -87,6 +101,17 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "simulator" });
     execFails("simctl: boom");
     await expect(shutdownOwnedDevice("UDID-1")).resolves.toBeUndefined();
+  });
+
+  it("swallows a refused argv while Xcode's component install is pending", async () => {
+    resolveDeviceMock.mockReturnValue({ id: "SIM-1", platform: "ios" });
+    xcodePending.value = true;
+    try {
+      await expect(shutdownOwnedDevice("SIM-1")).resolves.toBeUndefined();
+      expect(execFileMock).not.toHaveBeenCalled();
+    } finally {
+      xcodePending.value = false;
+    }
   });
 
   it("swallows an unclassifiable id (resolveDevice throws)", async () => {
@@ -111,6 +136,7 @@ describe("shutdownDevice (surfaces the outcome)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "xcrun",
       ["simctl", "shutdown", "UDID-1"],
+      boundedExec,
       expect.any(Function)
     );
   });
@@ -121,6 +147,7 @@ describe("shutdownDevice (surfaces the outcome)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "/sdk/platform-tools/adb",
       ["-s", "emulator-5554", "emu", "kill"],
+      boundedExec,
       expect.any(Function)
     );
   });

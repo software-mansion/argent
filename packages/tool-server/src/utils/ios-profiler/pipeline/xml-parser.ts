@@ -1,10 +1,10 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
-
-// ---------------------------------------------------------------------------
-// Shared XML helpers
-// ---------------------------------------------------------------------------
+import {
+  DEVICE_SUPPORT_PATH_SEGMENT,
+  SYSTEM_LIBRARY_PATH_PREFIXES,
+  TOOLING_LIBRARIES,
+} from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -21,7 +21,6 @@ function attr(element: string, name: string): string | null {
   return m ? decodeXml(m[1]) : null;
 }
 
-/** Extract all <row>...</row> blocks from the full XML content. */
 function extractRows(xml: string): string[] {
   const rows: string[] = [];
   const re = /<row[\s>](.*?)<\/row>/gs;
@@ -33,23 +32,16 @@ function extractRows(xml: string): string[] {
 }
 
 function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(DEVICE_SUPPORT_PATH_SEGMENT)
+  );
 }
 
-// ---------------------------------------------------------------------------
-// CPU XML parsing
-// ---------------------------------------------------------------------------
-
 /**
- * Resolve frames from a backtrace element, handling id/ref deduplication.
- *
- * The xctrace export uses an id/ref system:
- * - `<frame id="N" name="funcName">` defines a frame and registers it
- * - `<frame ref="N"/>` references a previously-defined frame
- * - `<backtrace id="N">...</backtrace>` defines a backtrace and registers it
- * - `<backtrace ref="N"/>` references a previously-defined backtrace
- * - `<binary id="N" name="..." path="...">` defines a binary
- * - `<binary ref="N"/>` references a previously-defined binary
+ * The xctrace export uses an id/ref system: `<frame id="N">`, `<backtrace id="N">`,
+ * `<tagged-backtrace id="N">` and `<binary id="N">` define and register an element;
+ * `<... ref="N"/>` reuses a prior one.
  */
 export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSample[] {
   const frameRegistry = new Map<string, StackFrame>();
@@ -57,20 +49,18 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   const binaryRegistry = new Map<string, { name: string; path: string }>();
   const samples: CpuSample[] = [];
 
-  // Pre-register all binaries (they can appear before frames that reference them)
+  // Binaries can appear before the frames that reference them.
   const binaryRe = /<binary\s+id="(\d+)"\s+[^>]*?name="([^"]*)"[^>]*?path="([^"]*)"[^>]*?\/?>/g;
   let bm;
   while ((bm = binaryRe.exec(xml)) !== null) {
     binaryRegistry.set(bm[1], { name: bm[2], path: bm[3] });
   }
 
-  // Optional per-process filtering for the host-wide (--all-processes) capture.
-  // Pre-register every process id → PID: `<process id="N" fmt="Name (PID)">`
-  // defines it (the PID is the LAST parenthesised group in fmt — process names
-  // can themselves contain parens, e.g. "Code Helper (Plugin) (54394)"); rows
-  // reference it via `<process ref="N"/>`. `pidByIndex` runs parallel to
-  // `samples` so we can drop non-target rows after the two parse passes without
-  // disturbing their row↔sample alignment. All a no-op when no filter is set.
+  // Per-process filtering for the host-wide (--all-processes) capture. `fmt` is
+  // "Name (PID)" and names can themselves contain parens ("Code Helper (Plugin) (54394)"),
+  // so the PID is the LAST parenthesised group. `pidByIndex` runs parallel to `samples`
+  // so non-target rows are dropped only after the two passes, keeping row↔sample
+  // alignment intact. A no-op when no filter is set.
   const processPid = new Map<string, number>();
   const pidByIndex: (number | undefined)[] = [];
   if (targetPid != null) {
@@ -87,41 +77,37 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   const rows = extractRows(xml);
 
   for (const row of rows) {
-    // Extract sample-time (nanoseconds)
     const sampleTimeMatch = row.match(/<sample-time[^>]*>(\d+)<\/sample-time>/);
     const sampleTimeRef = row.match(/<sample-time\s+ref="(\d+)"\s*\/>/);
     let timestampNs = 0;
     if (sampleTimeMatch) {
       timestampNs = parseInt(sampleTimeMatch[1], 10);
     } else if (sampleTimeRef) {
-      // sample-time ref — rare, but handle it
-      // We'd need a registry, but sample times are unique per row; skip
+      // No sample-time ref registry; the second pass skips these rows too. Their
+      // stack still registers its ids, which later rows refer back to.
+      resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
       continue;
     }
 
-    // Extract thread fmt
     const threadMatch = row.match(/<thread[^>]*\sfmt="([^"]*)"[^>]*>/);
     const threadRefMatch = row.match(/<thread\s+ref="(\d+)"\s*\/>/);
     let threadFmt = "Unknown Thread";
     if (threadMatch) {
       threadFmt = decodeXml(threadMatch[1]);
     } else if (threadRefMatch) {
-      // For thread refs, we need to look back — but the fmt is on the original.
-      // We'll store them in a registry built during processing.
+      // Sentinel; the second pass resolves it against threadRegistry.
       threadFmt = `Thread ref:${threadRefMatch[1]}`;
     }
 
-    // Extract weight (nanoseconds)
     const weightMatch = row.match(/<weight[^>]*>(\d+)<\/weight>/);
     const weightRefMatch = row.match(/<weight\s+ref="(\d+)"\s*\/>/);
-    let weightNs = 1000000; // default 1ms
+    let weightNs = 1000000; // 1ms
     if (weightMatch) {
       weightNs = parseInt(weightMatch[1], 10);
     } else if (weightRefMatch) {
-      // weight ref — look up from previous. Default to 1ms.
+      /* resolved in the second pass */
     }
 
-    // Extract backtrace
     const stack = resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
 
     if (targetPid != null) {
@@ -130,7 +116,6 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     samples.push({ timestampNs, threadFmt, weightNs, stack });
   }
 
-  // Resolve thread refs by building a thread registry from all rows
   const threadRegistry = new Map<string, string>();
   const threadDefRe = /<thread\s+id="(\d+)"\s+fmt="([^"]*)"[^>]*>/g;
   let tm;
@@ -138,7 +123,6 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     threadRegistry.set(tm[1], decodeXml(tm[2]));
   }
 
-  // Also build weight registry
   const weightRegistry = new Map<string, number>();
   const weightDefRe = /<weight\s+id="(\d+)"[^>]*>(\d+)<\/weight>/g;
   let wm;
@@ -157,13 +141,11 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
 
     const sample = samples[sampleIdx]!;
 
-    // Resolve thread ref
     if (sample.threadFmt.startsWith("Thread ref:")) {
       const refId = sample.threadFmt.slice("Thread ref:".length);
       sample.threadFmt = threadRegistry.get(refId) ?? "Unknown Thread";
     }
 
-    // Resolve weight ref
     const weightRefMatch = row.match(/<weight\s+ref="(\d+)"\s*\/>/);
     if (weightRefMatch) {
       sample.weightNs = weightRegistry.get(weightRefMatch[1]) ?? 1000000;
@@ -178,11 +160,7 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   return samples;
 }
 
-/**
- * Resolve the PID a time-profile row belongs to. A row defines its process
- * inline (`<process id="N" …>`, nested in `<thread>`) or references one
- * (`<process ref="N"/>`); either way the id maps to a pre-registered PID.
- */
+/** A row either defines its process inline or references one; both give a pre-registered id. */
 function rowProcessPid(rowXml: string, processPid: Map<string, number>): number | undefined {
   const def = rowXml.match(/<process\s+id="(\d+)"/);
   const ref = rowXml.match(/<process\s+ref="(\d+)"\s*\/>/);
@@ -196,16 +174,35 @@ function resolveBacktrace(
   backtraceRegistry: Map<string, StackFrame[]>,
   binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
-  // Check for backtrace ref first
+  // Xcode 26 and later wrap the stack in a <tagged-backtrace>: 26.x nests a
+  // <backtrace> in it, 27 lists the frames in it directly. Ids are unique across
+  // element types, so the one registry holds both kinds.
+  const tagged = rowXml.match(/<tagged-backtrace\b([^>]*?)(\/?)>/);
+  if (tagged) {
+    const taggedRef = tagged[1].match(/\bref="(\d+)"/);
+    if (taggedRef) return backtraceRegistry.get(taggedRef[1]) ?? [];
+
+    let content = "";
+    if (!tagged[2]) {
+      const start = tagged.index! + tagged[0].length;
+      const end = rowXml.indexOf("</tagged-backtrace>", start);
+      content = rowXml.substring(start, end === -1 ? rowXml.length : end);
+    }
+    const frames = /<backtrace[\s>]/.test(content)
+      ? resolveBacktrace(content, frameRegistry, backtraceRegistry, binaryRegistry)
+      : resolveFrames(content, frameRegistry, binaryRegistry);
+    const taggedId = tagged[1].match(/\bid="(\d+)"/);
+    if (taggedId) backtraceRegistry.set(taggedId[1], frames);
+    return frames;
+  }
+
   const btRefMatch = rowXml.match(/<backtrace\s+ref="(\d+)"\s*\/>/);
   if (btRefMatch) {
     return backtraceRegistry.get(btRefMatch[1]) ?? [];
   }
 
-  // Extract backtrace with frames
   const btMatch = rowXml.match(/<backtrace\s+id="(\d+)">(.*?)<\/backtrace>/s);
   if (!btMatch) {
-    // Try backtrace without id
     const btNoId = rowXml.match(/<backtrace>(.*?)<\/backtrace>/s);
     if (!btNoId) return [];
     return resolveFrames(btNoId[1], frameRegistry, binaryRegistry);
@@ -223,7 +220,6 @@ function resolveFrames(
   binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
   const frames: StackFrame[] = [];
-  // Match both <frame id="N" name="..." .../> and <frame ref="N"/>
   const frameRe = /<frame\s+((?:id|ref)="[^"]*"[^>]*?)\/?>/g;
   let fm;
   while ((fm = frameRe.exec(backtraceContent)) !== null) {
@@ -240,24 +236,32 @@ function resolveFrames(
     const frameName = nameMatch ? decodeXml(nameMatch[1]) : "???";
 
     let isSystem = false;
-    // Look for <binary> child element after this frame's opening tag.
-    // Simulator paths can exceed 300 chars, so use a generous window.
-    const frameFullMatch = backtraceContent.substring(fm.index!, fm.index! + fm[0].length + 2000);
-    const binaryIdMatch = frameFullMatch.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
-    const binaryRefMatch = frameFullMatch.match(/<binary\s+ref="(\d+)"\s*\/>/);
+    let binaryName: string | undefined;
+    // The frame's own <binary> child, never that of a later frame in the
+    // backtrace: a self-closing frame has none, and frames do not nest.
+    let ownContent = "";
+    if (!fm[0].endsWith("/>")) {
+      const end = backtraceContent.indexOf("</frame>", frameRe.lastIndex);
+      if (end !== -1) ownContent = backtraceContent.substring(frameRe.lastIndex, end);
+    }
+    const binaryIdMatch = ownContent.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
+    const binaryRefMatch = ownContent.match(/<binary\s+ref="(\d+)"\s*\/>/);
 
     if (binaryIdMatch) {
       isSystem = isSystemLibraryPath(binaryIdMatch[2]);
-      binaryRegistry.set(binaryIdMatch[1], {
-        name: attr(binaryIdMatch[0], "name") ?? "",
-        path: binaryIdMatch[2],
-      });
+      binaryName = attr(binaryIdMatch[0], "name") ?? "";
+      binaryRegistry.set(binaryIdMatch[1], { name: binaryName, path: binaryIdMatch[2] });
     } else if (binaryRefMatch) {
       const bin = binaryRegistry.get(binaryRefMatch[1]);
-      if (bin) isSystem = isSystemLibraryPath(bin.path);
+      if (bin) {
+        isSystem = isSystemLibraryPath(bin.path);
+        binaryName = bin.name;
+      }
     }
 
     const frame: StackFrame = { name: frameName, isSystemLibrary: isSystem };
+    const tooling = binaryName === undefined ? undefined : TOOLING_LIBRARIES.get(binaryName);
+    if (tooling) frame.tooling = tooling;
     if (idMatch) frameRegistry.set(idMatch[1], frame);
     frames.push(frame);
   }
@@ -265,15 +269,10 @@ function resolveFrames(
   return frames;
 }
 
-// ---------------------------------------------------------------------------
-// Hangs XML parsing
-// ---------------------------------------------------------------------------
-
-export function parseHangsXml(xml: string): RawHang[] {
+function parseHangsXml(xml: string): RawHang[] {
   const hangs: RawHang[] = [];
   const rows = extractRows(xml);
 
-  // Build registries for ref resolution
   const registry = new Map<string, string>();
   const defRe = /id="(\d+)"\s+fmt="([^"]*)"/g;
   let dm;
@@ -282,7 +281,6 @@ export function parseHangsXml(xml: string): RawHang[] {
   }
 
   const valueRegistry = new Map<string, string>();
-  // Capture elements with id that have inner text (for start-time, duration, hang-type values)
   const valRe = /<(start-time|duration|hang-type)\s+id="(\d+)"[^>]*>([^<]+)<\//g;
   let vm;
   while ((vm = valRe.exec(xml)) !== null) {
@@ -290,7 +288,6 @@ export function parseHangsXml(xml: string): RawHang[] {
   }
 
   for (const row of rows) {
-    // start-time
     let startNs = 0;
     const startMatch = row.match(/<start-time[^>]*>(\d+)<\/start-time>/);
     const startRefMatch = row.match(/<start-time\s+ref="(\d+)"\s*\/>/);
@@ -300,7 +297,6 @@ export function parseHangsXml(xml: string): RawHang[] {
       startNs = parseInt(valueRegistry.get(startRefMatch[1]) ?? "0", 10);
     }
 
-    // duration
     let durationNs = 0;
     const durMatch = row.match(/<duration[^>]*>(\d+)<\/duration>/);
     const durRefMatch = row.match(/<duration\s+ref="(\d+)"\s*\/>/);
@@ -310,7 +306,6 @@ export function parseHangsXml(xml: string): RawHang[] {
       durationNs = parseInt(valueRegistry.get(durRefMatch[1]) ?? "0", 10);
     }
 
-    // hang-type
     let hangType = "Unknown";
     const htMatch = row.match(/<hang-type[^>]*>([^<]+)<\/hang-type>/);
     const htRefMatch = row.match(/<hang-type\s+ref="(\d+)"\s*\/>/);
@@ -320,7 +315,6 @@ export function parseHangsXml(xml: string): RawHang[] {
       hangType = valueRegistry.get(htRefMatch[1]) ?? "Unknown";
     }
 
-    // thread fmt
     let threadFmt = "Main Thread";
     const threadMatch = row.match(/<thread[^>]*\sfmt="([^"]*)"[^>]*>/);
     const threadRefMatch = row.match(/<thread\s+ref="(\d+)"\s*\/>/);
@@ -338,13 +332,9 @@ export function parseHangsXml(xml: string): RawHang[] {
   return hangs;
 }
 
-// ---------------------------------------------------------------------------
-// Leaks XML parsing
-// ---------------------------------------------------------------------------
-
 export function parseLeaksXml(xml: string): RawLeak[] {
   const leaks: RawLeak[] = [];
-  // Leaks use self-closing <row .../> with attributes
+  // Leaks rows are self-closing, which extractRows() does not match.
   const rowRe = /<row\s+([^>]*?)\/>/g;
   let rm;
   while ((rm = rowRe.exec(xml)) !== null) {
@@ -368,10 +358,6 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   return leaks;
 }
 
-// ---------------------------------------------------------------------------
-// File-level entry points
-// ---------------------------------------------------------------------------
-
 export async function parseCpuFile(
   filePath: string | null,
   targetPid: number | null = null
@@ -385,13 +371,15 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
-  if (!filePath) return [];
+/** Null means no readable table. An empty array means the table contains no hangs. */
+export async function parseHangsFile(filePath: string | null): Promise<RawHang[] | null> {
+  if (!filePath) return null;
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseHangsXml(xml);
+    // xctrace can return a query result with no matching table node.
+    return /<node(?=[\s/>])/.test(xml) ? parseHangsXml(xml) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 

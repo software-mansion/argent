@@ -1,18 +1,22 @@
-import { spawn, execFileSync, type ChildProcess } from "child_process";
+import { execFileSync, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
-import { existsSync } from "node:fs";
-import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
-import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
-import {
-  listenForDarwinNotification,
-  type NotifyHandle,
-} from "../../../../utils/ios-profiler/notify";
-import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
+import { externalNativeId } from "../../../../utils/external-devices";
+import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
+import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
+import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
-import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
-import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
+import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
+import { writeXctraceSessionMetadata } from "../../../../utils/ios-profiler/session-metadata";
+import {
+  suspensionSpansInTrace,
+  type AppSuspensionSpan,
+  type AppSuspensionWindow,
+  type SuspensionAdjustment,
+} from "../../../../utils/ios-profiler/app-suspensions";
+import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import {
@@ -29,45 +33,19 @@ import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../../utils/profiler-shared/capture-guard";
-import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import {
+  appEnded,
+  assertNoCaptureRunning,
+  waitForStop,
+  commitXctraceRecording,
+  newTraceOutputPath,
+  resolveDefaultTemplatePath,
+  spawnXctraceRecording,
+  xctraceProgressProbe,
+  xctraceRunErrors,
+} from "./xctrace";
 
-// Two candidates because __dirname differs by runtime: bundled it's argent/dist/
-// (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
-// native-profiler/platforms/, four levels above dist/utils/ios-profiler/. Throw
-// if neither exists so a wrong depth can't silently break recording.
-function resolveDefaultTemplatePath(): string {
-  const candidates = [
-    path.resolve(__dirname, "..", "assets", "Argent.tracetemplate"),
-    path.resolve(
-      __dirname,
-      "..",
-      "..",
-      "..",
-      "..",
-      "utils",
-      "ios-profiler",
-      "Argent.tracetemplate"
-    ),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new FailureError(
-    `Argent.tracetemplate not found. Looked in:\n${candidates.map((c) => `  - ${c}`).join("\n")}\n` +
-      `Pass template_path explicitly, or rebuild so the template is copied into place.`,
-    {
-      // A required bundled asset is absent — a packaging/build problem, not a
-      // device or subprocess failure — so dependency_missing with no command.
-      error_code: FAILURE_CODES.NATIVE_PROFILER_TRACE_TEMPLATE_MISSING,
-      failure_stage: "ios_native_profiler_template_resolve",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    }
-  );
-}
-const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
-const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
@@ -76,6 +54,16 @@ const COLD_START_SIGNATURE = "Cannot find process matching name:";
 const STOP_GRACE_MS = 300_000;
 const STOP_TERM_MS = 5_000;
 const STOP_KILL_MS = 5_000;
+/**
+ * How long a stopping xctrace may make no progress (Mac apps only) before the
+ * stop ends it: a fifth of the recording, within 30 s to 2 min. A healthy stop
+ * starts with a wait that grows with the recording: after a 5 min recording,
+ * 23 s in which xctrace's CPU time or the trace bundle changed at least every
+ * 11 s.
+ */
+function stallIdleMs(recordedMs: number): number {
+  return Math.min(120_000, Math.max(30_000, Math.round(recordedMs / 5)));
+}
 
 interface AppInfo {
   CFBundleExecutable: string;
@@ -85,35 +73,40 @@ interface AppInfo {
 }
 
 interface DetectedApp {
-  /** CFBundleExecutable — used for human-readable messages and api.appProcess. */
+  /** CFBundleExecutable — human-readable messages and api.appProcess. */
   executable: string;
   /**
-   * Host PID of the running app, parsed from `launchctl list`. We attach by PID
-   * rather than by name because Xcode 26.5's `xctrace --attach` matches the app
-   * display name (not CFBundleExecutable, as Xcode <= 26.3 did), so passing the
-   * executable name fails with "Cannot find process matching name". A PID is
-   * unambiguous and works across Xcode versions. For simulator apps the launchd
-   * PID is also the host PID xctrace attaches to. Null when the target is not
-   * currently running (then we fall back to attaching by name).
+   * Host PID from `launchctl list` — for simulator apps the launchd PID is also
+   * the host PID xctrace attaches to. Attaching by PID rather than by name
+   * because Xcode 26.5's `xctrace --attach` matches the display name (not
+   * CFBundleExecutable, as <= 26.3 did), failing with "Cannot find process
+   * matching name". Null when the target is not running; then we attach by name.
    */
   pid: number | null;
 }
 
 /**
- * Enumerate the user apps currently running on the simulator, each paired with
- * its host PID. The PID is the leading column of `launchctl list`; apps that are
- * registered but not running carry `-` there and are skipped.
+ * Running user apps with their host PIDs. The PID is the leading column of
+ * `launchctl list`; registered-but-not-running apps carry `-` and are skipped.
  */
-// Exported for the shell-injection regression test (native-profiler-ios-shell-injection.test.ts).
+// Exported for native-profiler-ios-shell-injection.test.ts.
 export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    launchctlOutput = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"], {
+        granted: "native-profiler",
+      }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
   } catch (err) {
+    // Its message says what to do, and a flow step reports only the thrown message.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -130,7 +123,7 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
   }
 
   // Lines look like: `19967\t0\tUIKitApplication:com.apple.Preferences[183a][rb-legacy]`
-  // (PID, status, label). Only lines with a numeric PID are actually running.
+  // (PID, status, label); a non-numeric PID column means registered, not running.
   const runningPids = new Map<string, number>();
   for (const line of launchctlOutput.split("\n")) {
     const match = line.match(/^\s*(\d+)\s+\S+\s+UIKitApplication:([^[]+)/);
@@ -177,10 +170,9 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
 }
 
 /**
- * Both the auto-detect (attach) and the malloc_stack_logging launch paths bail the
- * same way when several user apps are running and no `app_process` disambiguates
- * them — only the failure_stage differs. One builder keeps the message and app-list
- * formatting in a single place.
+ * The auto-detect (attach) and malloc_stack_logging launch paths bail identically
+ * when several user apps run and no `app_process` disambiguates them — only the
+ * failure_stage differs.
  */
 function multipleRunningUserAppsError(
   runningUserApps: { info: AppInfo }[],
@@ -216,16 +208,17 @@ function detectRunningApp(udid: string): DetectedApp {
 }
 
 /**
- * Resolve an explicitly-provided `app_process` to a host PID by matching it
- * against the CFBundleExecutable or CFBundleDisplayName of a running user app.
- * Falls back to attaching by the given name (pid: null) when nothing matches —
- * e.g. the app isn't running yet — so the cold-start retry can still kick in.
+ * Match an explicit `app_process` against a running user app's CFBundleExecutable
+ * or CFBundleDisplayName. On no match — e.g. the app isn't running yet — returns
+ * pid: null so the caller attaches by name and the cold-start retry can kick in.
  */
 function resolveExplicitApp(udid: string, name: string): DetectedApp {
   let runningUserApps: { info: AppInfo; pid: number }[];
   try {
     runningUserApps = enumerateRunningUserApps(udid);
-  } catch {
+  } catch (err) {
+    // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     return { executable: name, pid: null };
   }
   const matched = runningUserApps.find(
@@ -240,18 +233,21 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
 function getInstalledApps(udid: string): Record<string, AppInfo> {
   let listAppsOutput: string;
   try {
-    // `simctl listapps` emits a plist; plutil converts it to JSON, reading the plist
-    // from stdin (the trailing `-`, guarded by `--` so it can never be taken for a flag).
-    // Two discrete-argv execFileSync calls instead of a piped `execSync` shell string —
-    // matching getAppBundlePath / terminate / relaunch, so no value (device_id included)
-    // is ever interpolated into a shell. Each stage buffers its full stdout in Node
-    // rather than the OS pipe, so both raise maxBuffer to run-with-timeout.ts's 256 MiB;
-    // Node's 1 MiB default would throw ENOBUFS on a well-populated simulator.
-    const listAppsPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    // `simctl listapps` emits a plist; plutil converts it to JSON from stdin (the
+    // trailing `-`, guarded by `--` so it can never be taken for a flag). Two
+    // discrete-argv execFileSync calls rather than a piped shell string, so no value
+    // (device_id included) is ever interpolated into a shell. Each stage buffers its
+    // full stdout in Node, hence run-with-timeout.ts's 256 MiB maxBuffer; Node's
+    // 1 MiB default would throw ENOBUFS on a well-populated simulator.
+    const listAppsPlist = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["listapps", udid], { granted: "native-profiler" }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
@@ -259,6 +255,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -280,10 +277,16 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
 function getAppBundlePath(udid: string, bundleId: string): string {
   let appPath: string;
   try {
-    appPath = execFileSync("xcrun", ["simctl", "get_app_container", udid, bundleId, "app"], {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-    }).trim();
+    appPath = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"], {
+        granted: "native-profiler",
+      }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+      }
+    ).trim();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
@@ -323,9 +326,8 @@ function getAppBundlePath(udid: string, bundleId: string): string {
 function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
   if (appProcess) {
     const installed = getInstalledApps(udid);
-    // CFBundleIdentifier is included so a bundle id is always a unique escape
-    // hatch: it is globally unique, so passing one narrows to exactly one app
-    // even when several builds share a CFBundleExecutable/CFBundleDisplayName.
+    // CFBundleIdentifier is matched too, as the unique escape hatch: it narrows to
+    // exactly one app even when builds share an executable or display name.
     const matches = Object.values(installed).filter(
       (info) =>
         info.ApplicationType === "User" &&
@@ -335,13 +337,11 @@ function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
     );
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) {
-      // The malloc path TERMINATES the resolved app before cold-launching it,
-      // so first-match-in-plist-order is not acceptable when several installed
-      // apps share a display name (dev + prod builds both shown as "MyApp"):
-      // an exact executable match wins; otherwise refuse before touching
-      // anything, naming the candidates. (A bundle-id argument can never reach
-      // here — it uniquely matches one app above — so the tie is always on
-      // executable/display name, and the bundle id is the guaranteed escape.)
+      // The malloc path TERMINATES the resolved app before cold-launching it, so
+      // first-match-in-plist-order is unacceptable when installed apps share a
+      // display name (dev + prod builds both shown as "MyApp"): an exact executable
+      // match wins, otherwise refuse before touching anything. (A bundle id matched
+      // uniquely above, so the tie is always on executable/display name.)
       const exact = matches.filter((info) => info.CFBundleExecutable === appProcess);
       if (exact.length === 1) return exact[0];
       const appList = matches
@@ -381,68 +381,12 @@ function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
   return runningUserApps[0].info;
 }
 
-async function registerStartupNotify(name: string): Promise<NotifyHandle | null> {
-  let handle: NotifyHandle;
-  try {
-    handle = listenForDarwinNotification(name);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(
-      `[native-profiler] failed to spawn notifyutil (${msg}); falling back to stdout substring match.\n`
-    );
-    return null;
-  }
-
-  const ready = await Promise.race([
-    handle.ready.then(() => true as const),
-    new Promise<false>((r) => setTimeout(() => r(false), NOTIFY_REGISTER_TIMEOUT_MS)),
-  ]);
-  if (ready) return handle;
-
-  handle.cancel();
-  process.stderr.write(
-    `[native-profiler] notifyutil did not register within ${NOTIFY_REGISTER_TIMEOUT_MS} ms; ` +
-      `falling back to stdout substring match.\n`
-  );
-  return null;
-}
-
-// Per-capture descriptors (appProcess, traceFile, cpuFilterPid, capture mode)
-// are stamped only after a SUCCESSFUL start, so a failed attempt has nothing
-// to reset beyond the spawned process handles — the previous capture's
-// still-loaded exports stay fully described for analyze (trace name,
-// all-processes filter PID, capture mode).
-function resetStartState(api: NativeProfilerSessionApi): void {
-  api.capturePid = null;
-  api.captureProcess = null;
-}
-
-export function handleXctraceExit(
-  api: NativeProfilerSessionApi,
-  code: number | null,
-  signal: string | null
-): void {
-  if (!api.profilingActive) return;
-  if (api.recordingTimeout) {
-    clearTimeout(api.recordingTimeout);
-    api.recordingTimeout = null;
-  }
-  api.capturePid = null;
-  api.captureProcess = null;
-  api.profilingActive = false;
-  if (!api.recordingTimedOut) {
-    api.recordingExitedUnexpectedly = true;
-  }
-  api.lastExitInfo = { code, signal };
-}
-
 /**
- * malloc_stack_logging must cold-launch the app under `xctrace --device --launch`.
- * When the resolved capture strategy is NOT `device`, the cold launch can't run, so
- * we refuse — but attribute the refusal to the ACTUAL cause so the message and the
- * telemetry `error_code` don't blame a degraded Xcode that may not be present:
- *   - `env-override`   → the operator forced `ARGENT_IOS_CAPTURE=all-processes`;
- *   - `degraded-xcode` → the active Xcode has the `--device` recording-start deadlock.
+ * malloc_stack_logging must cold-launch under `xctrace --device --launch`, so a
+ * non-`device` strategy is refused. Attribute the refusal to the ACTUAL cause so
+ * the message and telemetry `error_code` don't blame a degraded Xcode that may not
+ * be present: `env-override` (the operator forced `ARGENT_IOS_CAPTURE`) vs
+ * `degraded-xcode` (the active Xcode has the `--device` recording-start deadlock).
  */
 function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureError {
   if (reason.kind === "env-override") {
@@ -451,7 +395,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
         `ARGENT_IOS_CAPTURE="${reason.rawValue}" forces the "${reason.strategyName}" capture ` +
         `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
         `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
-        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+        `malloc_stack_logging.`,
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
         failure_stage: "native_profiler_start_malloc_capability",
@@ -465,8 +409,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   return new FailureError(
     `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
       `${versionNote} has the --device recording-start deadlock (Xcode 26.4 and later), so it would ` +
-      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
-      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging, or set ` +
       `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
@@ -477,7 +420,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   );
 }
 
-export interface IosStartParams {
+interface IosStartParams {
   device_id: string;
   app_process?: string;
   template_path?: string;
@@ -488,88 +431,85 @@ export async function startNativeProfilerIos(
   api: NativeProfilerSessionApi,
   params: IosStartParams
 ): Promise<{ status: "recording"; pid: number; traceFile: string }> {
-  if (api.profilingActive) {
-    throw new FailureError(
-      `A native profiling session is already running (PID: ${api.capturePid}).`,
-      {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
-        failure_stage: "native_profiler_start_session_state",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
+  // Warm the UDID → device-set cache; the synchronous simctl helpers below read it
+  // via simctlArgsForUdidSync and would otherwise target the wrong set.
+  await deviceSetForUdid(params.device_id);
+
+  /**
+   * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
+   * provider-supplied id carries means nothing outside Argent. simctl argv is
+   * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
+   */
+  const xctraceDevice = externalNativeId(params.device_id);
+
+  await waitForStop(api);
+  assertNoCaptureRunning(api);
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
 
   // Default flow attaches to the running app (preserves state, no overhead).
-  // malloc_stack_logging mode instead cold-launches the app *under* xctrace with
-  // MallocStackLogging=1 so the malloc library records allocation backtraces from
-  // the first allocation — without that, leaks are detected but unattributable
-  // ("<Call stack limit reached>"). `--env` is only honoured with `--launch`,
-  // which needs the .app path rather than the executable name or PID.
+  // malloc_stack_logging instead cold-launches it *under* xctrace with
+  // MallocStackLogging=1, so allocation backtraces exist from the first allocation —
+  // without that, leaks are detected but unattributable ("<Call stack limit
+  // reached>"). `--env` is honoured only with `--launch`, which needs the .app path.
   const useMallocStackLogging = params.malloc_stack_logging === true;
   let appProcess: string;
   let launchBundlePath: string | null = null;
-  // Bundle id of the app the malloc path terminated for its clean cold start, so a
-  // failed start can best-effort relaunch it instead of leaving the user's app dead.
+  // Bundle id the malloc path terminated for its cold start, so a failed start can
+  // best-effort relaunch it instead of leaving the user's app dead.
   let mallocRelaunchBundleId: string | null = null;
   // Normal (attach / all-processes) flow only — both stay null in
-  // malloc_stack_logging mode, which cold-launches by .app path under `--device`
-  // and is therefore already scoped without a capture strategy or detected PID.
+  // malloc_stack_logging mode, whose `--launch` on `--device` is already scoped.
   let detected: DetectedApp | null = null;
   let strategy: IosCaptureStrategy | null = null;
 
-  // Resolve the trace output path (which creates the debug dir) BEFORE the branch
-  // below. The malloc path terminates the running app for a clean cold start; if
-  // getDebugDir()'s mkdir failed AFTER that terminate, the app would be left dead
-  // with no relaunch (the best-effort relaunch only guards the start attempt).
-  // Doing it here means any mkdir failure happens before the app is touched.
-  const debugDir = await getDebugDir();
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
-    .slice(0, 15);
-  const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
+  // Resolve the output path (getDebugDir mkdirs) BEFORE the branch below: the malloc
+  // path terminates the running app, and an mkdir failure after that would leave it
+  // dead (the best-effort relaunch only guards the start attempt).
+  const outputFile = await newTraceOutputPath();
 
   if (useMallocStackLogging) {
-    // malloc_stack_logging must cold-launch the app under `xctrace --device --launch`
-    // (only `--launch` honours `--env MallocStackLogging=1`). On Xcode 26.4 and later
-    // the `--device` recording-start handshake is broken (see capture-strategy), so this
-    // would terminate the running app and then capture an empty trace — the opposite
-    // of the feature's purpose, surfaced only as a downstream "Analysis failed". Refuse
-    // up front, BEFORE touching the running app, unless the operator forces the device
-    // path via ARGENT_IOS_CAPTURE=device. Use the SIDE-EFFECT-FREE resolver so this
-    // guard doesn't emit selectIosCaptureStrategy()'s "using the all-processes
-    // fallback" stderr line immediately before throwing (that fallback never runs
-    // here); the reason it returns also lets the refusal name its actual cause
-    // (forced override vs. degraded Xcode) rather than always blaming the Xcode.
+    // Only `--launch` honours `--env MallocStackLogging=1`, and it needs `--device`,
+    // whose recording-start handshake is broken on Xcode 26.4 and later (see
+    // capture-strategy) — so this would terminate the running app and capture an empty
+    // trace, surfaced only as a downstream "Analysis failed". Refuse BEFORE touching
+    // the app. The SIDE-EFFECT-FREE resolver keeps selectIosCaptureStrategy()'s "using
+    // the all-processes fallback" stderr line from printing right before the throw, and
+    // its reason lets the refusal name the actual cause (forced override vs. Xcode).
     const captureDecision = resolveIosCaptureStrategy();
-    // The side-effect-free resolver above stays silent, so a typo'd override would
-    // be dropped without a word here (unlike the normal record flow). Surface it —
-    // otherwise the degraded-Xcode refusal below can even tell the user to "set
+    // The resolver above stays silent, so a typo'd override would be dropped without
+    // a word — and the refusal below could then tell the user to "set
     // ARGENT_IOS_CAPTURE=device" while their fumbled value sits ignored.
     warnIfInvalidCaptureOverride(captureDecision);
     if (captureDecision.strategy.name !== "device") {
       throw mallocNonDeviceStrategyError(captureDecision.reason);
     }
     const info = resolveAppForLaunch(params.device_id, params.app_process);
+    // The relaunch below must not beat injection.
+    await firstSimulatorPoll();
     appProcess = info.CFBundleExecutable;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
-    // Terminate any running instance so xctrace owns a clean cold launch with the
-    // env var set from process start (best-effort; not-running is fine).
+    // Terminate any running instance so the env var is set from process start
+    // (best-effort; not-running is fine).
     try {
-      execFileSync("xcrun", ["simctl", "terminate", params.device_id, info.CFBundleIdentifier], {
-        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-        stdio: "ignore",
-      });
-      // The terminate SUCCEEDED, so the app was actually running and we own killing
-      // it. Only now mark it for best-effort relaunch on a later start failure — if
-      // the app was NOT running (terminate throws below), relaunching would foreground
-      // an app the user never had open, the opposite of "restore what we killed".
+      execFileSync(
+        "xcrun",
+        simctlArgsForUdidSync(
+          params.device_id,
+          ["terminate", params.device_id, info.CFBundleIdentifier],
+          { granted: "native-profiler" }
+        ),
+        {
+          timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+          stdio: "ignore",
+        }
+      );
+      // The terminate SUCCEEDED, so the app was running and we own killing it. Only
+      // then mark it for relaunch — restoring an app the user never had open would be
+      // the opposite of "restore what we killed".
       mallocRelaunchBundleId = info.CFBundleIdentifier;
     } catch {
-      // app was not running — nothing to terminate, and nothing to restore
+      // app was not running — nothing to terminate, nothing to restore
     }
   } else {
     detected = params.app_process
@@ -577,14 +517,12 @@ export async function startNativeProfilerIos(
       : detectRunningApp(params.device_id);
     appProcess = detected.executable;
 
-    // Pick the capture approach for this environment. On Xcode versions where
-    // `xctrace --device` works this is the original device/attach path (which
-    // attaches by PID — immune to Xcode 26.5's display-name `--attach` matching);
-    // on the 26.4-and-later regression (where --device deadlocks) it is the host-wide
-    // --all-processes fallback, filtered to the app PID. See capture-strategy.
+    // On Xcode versions where `xctrace --device` works this is the device/attach path
+    // (attaching by PID — immune to Xcode 26.5's display-name `--attach` matching); on
+    // the 26.4-and-later deadlock it is the host-wide --all-processes fallback,
+    // filtered to the app PID. See capture-strategy.
     strategy = selectIosCaptureStrategy();
-    // The all-processes fallback records host-wide and isolates the app by PID, so
-    // it can only run when the target is actually running (PID known).
+    // The all-processes fallback isolates the app by PID, so it needs a live target.
     if (strategy.name === "all-processes" && detected.pid == null) {
       throw new FailureError(
         `The all-processes capture fallback needs the target app to be running so its ` +
@@ -600,75 +538,37 @@ export async function startNativeProfilerIos(
     }
   }
 
-  const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
-    const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
-    const notify = await registerStartupNotify(notifyName);
-
-    let xctraceArgs: string[];
-    if (useMallocStackLogging) {
-      // malloc_stack_logging cold launch: `--env` only applies to `--launch`, and
-      // the launched command must be the final argument (everything after `--` is
-      // the target plus its args). The degraded-Xcode guard above guarantees the
-      // `--device` path is viable here (or ARGENT_IOS_CAPTURE=device forced it).
-      xctraceArgs = [
-        "record",
-        "--template",
-        templatePath,
-        "--device",
-        params.device_id,
-        "--output",
-        outputFile,
-        "--no-prompt",
-        "--env",
-        "MallocStackLogging=1",
-      ];
-      if (notify) {
-        xctraceArgs.push("--notify-tracing-started", notifyName);
+  const attemptStart = (): Promise<{ child: ChildProcess; pid: number }> =>
+    spawnXctraceRecording(api, (notifyName) => {
+      if (useMallocStackLogging) {
+        // The launched command must be the final argument (everything after `--` is the
+        // target plus its args). The guard above guarantees `--device` is viable here.
+        const xctraceArgs = [
+          "record",
+          "--template",
+          templatePath,
+          "--device",
+          xctraceDevice,
+          "--output",
+          outputFile,
+          "--no-prompt",
+          "--env",
+          "MallocStackLogging=1",
+        ];
+        if (notifyName) {
+          xctraceArgs.push("--notify-tracing-started", notifyName);
+        }
+        xctraceArgs.push("--launch", "--", launchBundlePath!);
+        return xctraceArgs;
       }
-      xctraceArgs.push("--launch", "--", launchBundlePath!);
-    } else {
-      // Normal flow: let the selected capture strategy (device --attach by PID, or
-      // host-wide --all-processes) build the argv.
-      xctraceArgs = strategy!.buildRecordArgs({
+      return strategy!.buildRecordArgs({
         templatePath,
-        deviceId: params.device_id,
+        deviceId: xctraceDevice,
         target: detected!,
         outputFile,
-        notifyName: notify ? notifyName : undefined,
+        notifyName,
       });
-    }
-
-    const xctraceProcess = spawn("xctrace", xctraceArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
     });
-    api.capturePid = xctraceProcess.pid ?? null;
-    api.captureProcess = xctraceProcess;
-
-    try {
-      await waitForXctraceReady(xctraceProcess, { notify, timeoutMs: STARTUP_TIMEOUT_MS });
-    } catch (err) {
-      resetStartState(api);
-      throw err;
-    }
-
-    if (!xctraceProcess.pid) {
-      try {
-        xctraceProcess.kill("SIGKILL");
-      } catch {
-        // already dead
-      }
-      resetStartState(api);
-      throw new FailureError("xctrace process has no pid; cannot resolve start.", {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_NO_PID,
-        failure_stage: "native_profiler_xctrace_start",
-        failure_area: "tool_server",
-        error_kind: "subprocess",
-        failure_command: "xctrace",
-      });
-    }
-
-    return { child: xctraceProcess, pid: xctraceProcess.pid };
-  };
 
   const startMs = Date.now();
   const startWithRetry = async (): Promise<{ child: ChildProcess; pid: number }> => {
@@ -677,9 +577,8 @@ export async function startNativeProfilerIos(
         return await attemptStart();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // Cold-start retry only applies when attaching by name (device strategy);
-        // the all-processes fallback doesn't attach, and malloc_stack_logging
-        // cold-launches by path (no strategy), so neither can hit this.
+        // Cold-start retry applies only to attach-by-name (device strategy); the
+        // all-processes fallback never attaches and malloc cold-launches by path.
         const isColdStart =
           (strategy?.attachesByName ?? false) && msg.includes(COLD_START_SIGNATURE);
         if (!isColdStart) throw err;
@@ -710,75 +609,57 @@ export async function startNativeProfilerIos(
   try {
     started = await startWithRetry();
   } catch (err) {
-    // malloc_stack_logging terminated the running app for a clean cold start. If the
-    // capture never started, best-effort relaunch it so we don't leave the user with a
-    // dead app — the default attach path never terminates, so only this path needs it.
+    // The malloc path terminated the running app; if the capture never started,
+    // relaunch it. The attach path never terminates, so only this path needs this.
     if (mallocRelaunchBundleId) {
       try {
-        execFileSync("xcrun", ["simctl", "launch", params.device_id, mallocRelaunchBundleId], {
-          timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-          stdio: "ignore",
-        });
+        execFileSync(
+          "xcrun",
+          simctlArgsForUdidSync(
+            params.device_id,
+            ["launch", params.device_id, mallocRelaunchBundleId],
+            { granted: "native-profiler" }
+          ),
+          {
+            timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+            stdio: "ignore",
+          }
+        );
       } catch {
         // best-effort restore; surface the original start failure regardless
       }
     }
     throw err;
   }
-  const { child: xctraceProcess, pid: xctracePid } = started;
-
-  // Stamp the per-capture descriptors only now, on SUCCESS: a failed start
-  // must leave the previous capture's still-loaded exports fully described
-  // for analyze (trace name, all-processes filter PID, capture mode). The
-  // stale recovery flags reset here too — nothing in the attempt reads them,
-  // and clearing them on a FAILED start would make stop's partial-trace
-  // recovery for the previous abnormal capture unreachable, forfeiting it.
-  api.recordingTimedOut = false;
-  api.recordingExitedUnexpectedly = false;
-  api.lastExitInfo = null;
-  api.appProcess = appProcess;
-  api.traceFile = outputFile;
-  // The in-flight capture's mode; stop copies it into api.mallocStackLogging
-  // when it writes exportedFiles, so the report layer names the mode of the
-  // data it actually renders — stamping the report-facing flag here would
-  // re-label the previous capture's still-loaded exports/parsedData.
-  api.recordingMallocStackLogging = useMallocStackLogging;
-  // Null for the device strategy (already scoped by --attach) and for a
-  // malloc_stack_logging cold launch (scoped by --launch on --device); the app
-  // PID only for the host-wide all-processes fallback, to filter the samples.
-  api.cpuFilterPid = strategy ? strategy.cpuFilterPid(detected!) : null;
-  api.profilingActive = true;
-  api.wallClockStartMs = Date.now();
-  api.recordingTimeout = setTimeout(() => {
-    try {
-      xctraceProcess.kill("SIGINT");
-    } catch {
-      // already dead
-    }
-    api.profilingActive = false;
-    api.capturePid = null;
-    api.captureProcess = null;
-    api.recordingTimeout = null;
-    api.recordingTimedOut = true;
-  }, RECORDING_CAP_MS);
-
-  xctraceProcess.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
-
-  return {
-    status: "recording",
-    pid: xctracePid,
+  return commitXctraceRecording(api, started, {
+    appProcess,
     traceFile: outputFile,
-  };
+    mallocStackLogging: useMallocStackLogging,
+    // Null for the device strategy (scoped by --attach) and for a malloc cold launch
+    // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
+    cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
+  });
 }
 
 export interface IosStopResult {
   traceFile: string;
-  exportedFiles: Record<string, string | null>;
+  exportedFiles: Record<IosExportKey, string | null>;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }
 
-export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Promise<IosStopResult> {
+export function stopNativeProfilerIos(api: NativeProfilerSessionApi): Promise<IosStopResult> {
+  // A second stop while the first exports (a client that gave up on a slow stop
+  // and sent it again) gets the first one's result, not "no active session".
+  if (api.stopInProgress) return api.stopInProgress as Promise<IosStopResult>;
+  const stop = stopXctraceRecording(api).finally(() => {
+    api.stopInProgress = null;
+  });
+  api.stopInProgress = stop;
+  return stop;
+}
+
+async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosStopResult> {
   if ((api.recordingTimedOut || api.recordingExitedUnexpectedly) && api.traceFile) {
     const traceFile = api.traceFile;
     const wasTimeout = api.recordingTimedOut;
@@ -787,34 +668,49 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
-    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
+    const ended = api.recordingAppEnded;
+    const suspensions = endSuspensionWatch(api);
+    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
-    // The exports now describe the recording that just ended — pair its
-    // capture mode with them for the report layer.
+    // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
+    api.appEndedDuringCapture = ended;
+    api.exportSkipReason = diagnostics.skipped ?? null;
+    api.recordedMs = null;
+    api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+    anchorAtTraceStart(api, diagnostics);
+    await saveSessionMetadata(api, traceFile);
 
-    const warning = wasTimeout
+    let warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
         "Call native-profiler-start again for a fresh recording."
       : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
         `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
-        "Common causes: attached app terminated, simulator daemon restart. " +
+        (api.platform === "macos"
+          ? "Common causes: restart-app or launch-app started the app again, or xctrace was ended from outside. "
+          : "Common causes: attached app terminated, simulator daemon restart. ") +
         "Call native-profiler-start again for a fresh recording.";
+    if (ended) warning = `${warning} ${APP_ENDED_NOTE}`;
     process.stderr.write(`[native-profiler] ${warning}\n`);
 
     return { traceFile, exportedFiles, exportDiagnostics: diagnostics, warning };
   }
 
   if (!api.profilingActive || !api.captureProcess || !api.traceFile) {
+    // A teardown reaps NativeProfilerSession and the registry nulls the instance, so
+    // `api` here can be a fresh session that never saw the caller's capture. Say that
+    // happened rather than "you never started one".
+    const reaped = takeReapedSession("native-profiler", api.deviceId);
     throw new FailureError(
-      "No active native profiling session found. Call native-profiler-start first.",
+      reaped
+        ? describeReapedSession(reaped, "native profiling session")
+        : "No active native profiling session found. Call native-profiler-start first.",
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
         failure_stage: "native_profiler_stop_session_state",
         failure_area: "tool_server",
         // Internal session-state, not caller input — matches the react twin
-        // REACT_PROFILER_NO_ACTIVE_SESSION (not_found) and the Android site so the
-        // "no active session" family carries one consistent kind.
+        // REACT_PROFILER_NO_ACTIVE_SESSION and the Android site.
         error_kind: "not_found",
       }
     );
@@ -825,14 +721,38 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
     api.recordingTimeout = null;
   }
 
-  const result = await shutdownChild(api.captureProcess, {
+  const child = api.captureProcess;
+  const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
+  const idleMs = stallIdleMs(recordedMs);
+  // Before xctrace saves the trace and the exports run: an app that quits during
+  // them did not quit during the recording.
+  const ended = appEnded(api);
+  const result = await shutdownChild(child, {
     graceMs: STOP_GRACE_MS,
     termMs: STOP_TERM_MS,
     killMs: STOP_KILL_MS,
+    // On a Mac app, xctrace sometimes hangs after SIGINT for good, also with no
+    // argent in the app: idle, and writing nothing.
+    ...(api.platform === "macos"
+      ? {
+          stall: {
+            probe: xctraceProgressProbe(child, api.traceFile),
+            idleMs,
+            pollMs: 2_000,
+          },
+        }
+      : {}),
   });
 
   let warning: string | undefined;
-  if (!result.clean) {
+  if (result.stalled) {
+    warning =
+      `xctrace hung while it ended the recording: for ${Math.round(idleMs / 1000)} s it used ` +
+      `no CPU and wrote nothing to the trace. This is a fault of xctrace, which also happens ` +
+      `without argent. argent ended it with ${result.signalUsed}, so the exported data may be ` +
+      `incomplete or missing. Call native-profiler-start again for a new recording.`;
+    process.stderr.write(`[native-profiler] ${warning}\n`);
+  } else if (!result.clean) {
     warning =
       `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
       `${result.signalUsed} was used. Trace bundle may be incomplete.`;
@@ -844,12 +764,42 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   api.captureProcess = null;
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
+  // After xctrace ended: it suspends the app until then.
+  const suspensions = endSuspensionWatch(api);
 
-  const { files: exportedFiles, diagnostics } = await exportIosTraceData(api.traceFile);
+  // On a Mac app, xctrace can fail to attach and still write an empty trace.
+  const runErrors = api.platform === "macos" ? xctraceRunErrors(child) : [];
+  const attachFailed = runErrors.some((line) =>
+    line.startsWith("Failed to attach to target process")
+  );
+  if (runErrors.length > 0) {
+    const reported = runErrors.join(" ");
+    const issues = attachFailed
+      ? `xctrace could not attach to ${api.appProcess}, so nothing was recorded. xctrace ` +
+        `reported: ${reported} Call native-profiler-start again.`
+      : `xctrace reported errors for this recording, so the data may be incomplete: ${reported}`;
+    process.stderr.write(`[native-profiler] ${issues}\n`);
+    warning = warning ? `${warning} ${issues}` : issues;
+  }
+
+  // Each export of an empty trace waits out its timeout.
+  const { files: exportedFiles, diagnostics } = attachFailed
+    ? skippedTraceExport("xctrace did not attach to the app, so the trace holds no data.")
+    : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
-  // The exports now describe the recording that just ended — pair its capture
-  // mode with them for the report layer.
+  // Pair the exports with the capture mode of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
+  api.appEndedDuringCapture = ended;
+  api.exportSkipReason = diagnostics.skipped ?? null;
+  api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
+  api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+  anchorAtTraceStart(api, diagnostics);
+  await saveSessionMetadata(api, api.traceFile);
+  if (ended) {
+    // xctrace keeps recording when the app crashes, and the trace then lacks
+    // most of what came before.
+    warning = [warning, APP_ENDED_NOTE].filter(Boolean).join(" ");
+  }
 
   const stopResult: IosStopResult = {
     traceFile: api.traceFile,
@@ -858,6 +808,127 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   };
   if (warning) stopResult.warning = warning;
   return stopResult;
+}
+
+/**
+ * Saves the Mac app fields that analyze reads besides the exports, for profiler-load.
+ * A failed write costs only the notes of a later reload, so the stop goes on.
+ */
+async function saveSessionMetadata(
+  api: NativeProfilerSessionApi,
+  traceFile: string
+): Promise<void> {
+  if (api.platform !== "macos") return;
+  try {
+    await writeXctraceSessionMetadata(traceFile, {
+      appSuspensions: api.appSuspensions,
+      recordedMs: api.recordedMs,
+      appEndedDuringCapture: api.appEndedDuringCapture,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[native-profiler] could not save the session metadata: ${msg}\n`);
+  }
+}
+
+/** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */
+function endSuspensionWatch(api: NativeProfilerSessionApi): AppSuspensionWindow[] | null {
+  const watch = api.suspensionWatch;
+  api.suspensionWatch = null;
+  return watch ? watch.end() : null;
+}
+
+/**
+ * A Mac app's start returns, and stamps wallClockStartMs, only after it waited
+ * for tracing to start and then ARM_SETTLE_MS: about 2 s after the trace's time
+ * 0, from which the hangs count. The combined report places the hangs on the
+ * wall clock from this anchor, so it takes the trace's `<start-date>` instead.
+ */
+function anchorAtTraceStart(api: NativeProfilerSessionApi, diagnostics: ExportDiagnostics): void {
+  if (api.platform === "macos" && diagnostics.traceStartMs !== undefined) {
+    api.wallClockStartMs = diagnostics.traceStartMs;
+  }
+}
+
+function suspensionSpans(
+  windows: AppSuspensionWindow[] | null,
+  diagnostics: ExportDiagnostics
+): AppSuspensionSpan[] | null {
+  if (!windows || diagnostics.traceStartMs === undefined) return null;
+  return suspensionSpansInTrace(windows, diagnostics.traceStartMs, diagnostics.traceDurationMs);
+}
+
+const APP_ENDED_NOTE =
+  "The app quit, crashed or was restarted during the recording, and xctrace keeps only part " +
+  "of what the app did before that, so the report can miss CPU work, hangs and leaks of that " +
+  "time. Profile the scenario again with the app running until native-profiler-stop.";
+
+// Measured on two Mac apps that argent drove: each check held up taps and describe for about
+// 10 s, and the report showed hangs of 11 to 14 s where the app did no heavy work. The same
+// actions under the Time Profiler template showed no hang, and that template still found a
+// 1.5 s and a 2 s hang of the app.
+const LEAK_CHECK_HANG_NOTE =
+  "Instruments pauses a Mac app for several seconds while it checks the app for leaks, about " +
+  "every 11 s. A hang, mainly one that began at a tap or a describe, can be this pause and not " +
+  "the app's own work. To check a hang, record the same actions again with `template_path: \"Time " +
+  'Profiler"`, which records hangs and CPU samples but does not check for leaks.';
+
+/**
+ * Says how the Mac app's suspensions bear on the hangs when argent watched them, in
+ * place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the whole app, so a hang
+ * that a check overlapped holds its pause, and the app's own hang is between the
+ * recorded length less the pause and the recorded length (app-suspensions.ts).
+ * Null when no hang overlapped a suspension.
+ */
+function suspensionNote(adjustment: SuspensionAdjustment, leaksRecorded: boolean): string | null {
+  const { pauses, pausedMs, overlappedHangs } = adjustment;
+  if (overlappedHangs === 0) return null;
+  const seconds = `${(pausedMs / 1000).toFixed(1)} s`;
+  const times = pauses === 1 ? `once (${seconds})` : `${pauses} times (${seconds} in all)`;
+  const overlap =
+    `${pauses === 1 ? "This pause overlaps" : "These pauses overlap"} ${overlappedHangs} ` +
+    `${overlappedHangs === 1 ? "hang" : "hangs"}. Such a hang keeps the length that ` +
+    `Instruments recorded, and the report gives the part of it when the app was suspended. ` +
+    `A pause makes a hang of fixed work longer. It does not make a hang longer when the main ` +
+    `thread waits for something that goes on during the pause, such as a sleep, a deadline, ` +
+    `I/O or another process. So the app's own hang is between the recorded length less the ` +
+    `suspended part and the recorded length.`;
+  return leaksRecorded
+    ? `> ⚠️ **Leak-check pauses:** Instruments held the app suspended ${times} to check it for ` +
+        `leaks. ${overlap} To measure such a hang, record the same actions again with ` +
+        `\`template_path: "Time Profiler"\`, which does not check for leaks.`
+    : `> ⚠️ **App pauses:** macOS held the app suspended ${times}. ${overlap} To measure such ` +
+        `a hang, record the same actions again while nothing suspends the app, such as a debugger.`;
+}
+
+// Measured on Mac apps with the Argent template: the first leak check began 3.7 s after the
+// start returned and the next ones about every 11 s. A leak is in the trace only after a check
+// that began after it has ended, and a check took up to about 10 s on an app that argent drove:
+// a stop 8 s after the start found no leak at all, and a leak made just after a check began was
+// missing 15 s later and present 20 s later.
+const SHORT_LEAK_RECORDING_MS = 20_000;
+
+function shortLeakRecordingNote(recordedMs: number): string {
+  return (
+    `No leak was found, but the recording lasted only ${Math.round(recordedMs / 1000)} s. ` +
+    `Instruments begins its first leak check about 4 s after native-profiler-start returns, ` +
+    `and a check can take several seconds, so this trace may hold no finished check. Do not report the app as leak-free: record again, and keep recording ` +
+    `about 25 s after the action to check.`
+  );
+}
+
+/**
+ * Whether a leaks export holds the trace's Leaks detail, also when it has no row.
+ * Measured on a Mac app with `template_path: "Time Profiler"`, which has no Leaks
+ * instrument: the xctrace of Xcode 26.6 exports `<trace-query-result>` with no node
+ * in it and exits 0. The xctrace of Xcode 27.2 fails that export.
+ */
+async function leaksDetailExported(filePath: string): Promise<boolean> {
+  try {
+    return /<node[\s>]/.test(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 async function checkExportFileMissing(filePath: string | null): Promise<string | null> {
@@ -876,11 +947,13 @@ async function checkExportFileMissing(filePath: string | null): Promise<string |
 export async function analyzeNativeProfilerIos(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
-  // Mid-recording (or with a crashed capture pending recovery), the live
-  // session fields (traceFile, cpuFilterPid, wallClockStartMs) belong to the
-  // newer capture while exportedFiles still holds the previous one — analyze
-  // would render the old exports under the new trace's name, freshness anchor,
-  // and CPU filter PID. Same contract as the profiler-load guard: stop first.
+  // Until the stop has exported the trace, exportedFiles holds the previous
+  // recording's tables.
+  await waitForStop(api);
+  // Mid-recording (or with a crashed capture pending recovery), the live session
+  // fields (traceFile, cpuFilterPid, wallClockStartMs) belong to the newer capture
+  // while exportedFiles still holds the previous one, so analyze would render the old
+  // exports under the new trace's name, freshness anchor, and CPU filter PID.
   if (isCaptureInFlight(api)) {
     throw new FailureError(inFlightGuardMessage(api, "analyze"), {
       error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
@@ -890,10 +963,10 @@ export async function analyzeNativeProfilerIos(
     });
   }
   if (!api.exportedFiles) {
-    // Same logical failure as the Android analyze guard — keep them on one code
-    // so telemetry doesn't split "analyze called before stop" by platform.
-    // PROFILER_NATIVE_TRACE_MISSING stays reserved for a trace file missing on
-    // disk (see profiler-load).
+    // Same logical failure as the Android analyze guard — one code so telemetry
+    // doesn't split "analyze called before stop" by platform.
+    // PROFILER_NATIVE_TRACE_MISSING stays reserved for a trace file missing on disk
+    // (see profiler-load).
     throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
       error_code: FAILURE_CODES.NATIVE_PROFILER_NO_EXPORTED_TRACE,
       failure_stage: "native_profiler_analyze_load_exports",
@@ -902,32 +975,63 @@ export async function analyzeNativeProfilerIos(
     });
   }
 
-  const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([
+  const [cpuMissing, leaksMissing] = await Promise.all([
     checkExportFileMissing(api.exportedFiles.cpu ?? null),
-    checkExportFileMissing(api.exportedFiles.hangs ?? null),
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
   ]);
 
-  const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
-    await runIosProfilerPipeline(api.exportedFiles, { cpuFilterPid: api.cpuFilterPid });
+  // Null on iOS and when argent did not watch the Mac app: no hang gets a suspended part.
+  const appSuspensions = api.platform === "macos" ? api.appSuspensions : null;
+  const {
+    bottlenecks,
+    cpuSamples,
+    uiHangs,
+    hangsRecorded,
+    cpuHotspots,
+    memoryLeaks,
+    toolingCpuMs,
+    totalCpuMs,
+    suspensionAdjustment,
+  } = await runIosProfilerPipeline(api.exportedFiles, {
+    cpuFilterPid: api.cpuFilterPid,
+    appSuspensions,
+  });
+
+  // No leaks export means no leak data, not zero leaks: a trace whose template
+  // has the Leaks instrument exports an empty table when nothing leaked. The
+  // all-processes fallback records the built-in Time Profiler template, which
+  // has none. A leaks file that stop wrote but is now gone or unreadable is no
+  // leak data either. On a Mac app, so is a leaks export with no Leaks detail in it.
+  const leaksRecorded =
+    api.exportedFiles.leaks != null &&
+    !leaksMissing &&
+    (api.platform !== "macos" ||
+      memoryLeaks.length > 0 ||
+      (await leaksDetailExported(api.exportedFiles.leaks)));
 
   api.parsedData = {
     cpuSamples,
     uiHangs,
+    hangsRecorded,
     cpuHotspots,
     memoryLeaks,
-    // Freeze the exports' capture mode with the parsed data so drill-down
-    // consumers (leak_stacks, combined report) stay paired with it even after
-    // a newer capture re-stamps the session fields.
+    leaksRecorded,
+    // Freeze the capture mode with the parsed data so drill-down consumers
+    // (leak_stacks, combined report) stay paired with it after a newer capture
+    // re-stamps the session fields.
     mallocStackLogging: api.mallocStackLogging,
-    // Freeze the recording's start time too — the combined report anchors these
-    // hangs to wall-clock time, and must use THIS capture's start, not whatever
-    // a later native-profiler-start re-stamps onto the live session field.
+    // Freeze the start time too — the combined report anchors these hangs to
+    // wall-clock time and must use THIS capture's start, not a later one's.
     wallClockStartMs: api.wallClockStartMs,
   };
 
   const exportErrors: Record<string, string> = {};
-  if (!api.exportedFiles.cpu) {
+  const skipped = api.exportSkipReason
+    ? `Not exported: ${api.exportSkipReason} Call native-profiler-start for a new recording.`
+    : null;
+  if (!api.exportedFiles.cpu && skipped) {
+    exportErrors.cpu = skipped;
+  } else if (!api.exportedFiles.cpu) {
     exportErrors.cpu =
       "CPU time-profile export failed — xctrace could not export CPU data from this trace. " +
       "The trace template may not include a Time Profiler instrument, or the schema name " +
@@ -939,11 +1043,13 @@ export async function analyzeNativeProfilerIos(
       `file is gone or unreadable, so no CPU data could be analyzed. Re-run native-profiler-stop.`;
   }
   if (!api.exportedFiles.hangs) {
-    exportErrors.hangs = "Hangs export failed — no potential-hangs table found in trace.";
-  } else if (hangsMissing) {
     exportErrors.hangs =
-      `Hangs export ${hangsMissing} — the trace export claims it succeeded but the file is gone ` +
-      `or unreadable, so no hang data could be analyzed. Re-run native-profiler-stop.`;
+      skipped ?? "Hangs export failed — no potential-hangs table found in trace.";
+  } else if (!hangsRecorded) {
+    const hangsMissing = await checkExportFileMissing(api.exportedFiles.hangs);
+    exportErrors.hangs = hangsMissing
+      ? `Hangs export ${hangsMissing} — no hang data could be analyzed. Re-run native-profiler-stop.`
+      : `Could not read a potential-hangs table from \`${api.exportedFiles.hangs}\`.`;
   }
   if (api.exportedFiles.leaks && leaksMissing) {
     exportErrors.leaks =
@@ -954,31 +1060,91 @@ export async function analyzeNativeProfilerIos(
   const payload = {
     metadata: {
       traceFile: api.traceFile,
-      platform: "iOS",
+      platform: api.platform === "macos" ? "macOS" : "iOS",
       timestamp: new Date().toISOString(),
     },
     bottlenecks,
   };
 
+  const shortLeakNote =
+    api.platform === "macos" &&
+    leaksRecorded &&
+    memoryLeaks.length === 0 &&
+    api.recordedMs !== null &&
+    api.recordedMs < SHORT_LEAK_RECORDING_MS
+      ? shortLeakRecordingNote(api.recordedMs)
+      : null;
+
   return renderNativeProfilerReport({
     payload,
     traceFile: api.traceFile,
     exportErrors,
-    // wallClockStartMs is the recording's start time, stamped in-memory at
-    // native-profiler-start. A large gap to "now" means analyze is reusing a
-    // trace from an earlier capture in this same process run, not a fresh one.
+    // A large gap between the in-memory start time and "now" means analyze is reusing
+    // a trace from an earlier capture in this same process run, not a fresh one.
     //
-    // Limitation (iOS): unlike Android, iOS has no on-disk metadata sidecar, so
-    // profiler-load (which restores only the raw_*.xml) cannot recover the start
-    // time — wallClockStartMs is null for a loaded session and this note stays
-    // off. The note therefore fires only for a live in-process session, never
-    // for one restored from disk. Restoring iOS start-time across loads needs an
-    // iOS sidecar this Android-scoped change does not add; formatTraceFreshness
-    // degrades cleanly to null in that case. See test/ios-instruments/load-freshness.test.ts.
-    freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
+    // iOS, unlike Android, has no on-disk metadata sidecar, so profiler-load (raw_*.xml
+    // only) cannot recover the start time: wallClockStartMs is null for a loaded
+    // session, formatTraceFreshness returns null, and the note stays off. See
+    // test/ios-instruments/load-freshness.test.ts.
+    // All are warnings about the capture itself, shown at the top of the report.
+    freshnessNote:
+      [
+        formatTraceFreshness(api.wallClockStartMs, Date.now()),
+        api.appEndedDuringCapture
+          ? `> ⚠️ **The app ended during the recording:** ${APP_ENDED_NOTE}`
+          : null,
+        api.platform === "macos" && appSuspensions === null && leaksRecorded && uiHangs.length > 0
+          ? `> ⚠️ **Hangs and the leak check:** ${LEAK_CHECK_HANG_NOTE}`
+          : null,
+        suspensionAdjustment ? suspensionNote(suspensionAdjustment, leaksRecorded) : null,
+        shortLeakNote ? `> ⚠️ **Memory leaks:** ${shortLeakNote}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n\n") || undefined,
     // Same live-session-only caveat as wallClockStartMs: profiler-load has no
     // capture-mode sidecar, so a restored session renders with null (the
-    // unattributed-leaks note then falls back to inferring the mode).
+    // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
+    leaksRecorded,
+    mayMissFindings: api.appEndedDuringCapture || shortLeakNote !== null,
+    cpuDiagnostic: toolingNote(toolingCpuMs, totalCpuMs, api.platform === "macos"),
   });
+}
+
+/**
+ * Names the CPU time that the hotspots leave out because a tool spent it inside
+ * the app: argent's library while an agent drives the app during the recording
+ * (on a Mac app, describe and taps), and the recorder that Instruments'
+ * Allocations instrument injects.
+ */
+function toolingNote(
+  toolingMs: { argent: number; instruments: number } | undefined,
+  totalMs: number | undefined,
+  macApp: boolean
+): string | undefined {
+  if (!toolingMs || !totalMs || !(totalMs > 0)) return undefined;
+  const share = (ms: number) => {
+    const pct = Math.round((ms / totalMs) * 100);
+    return pct < 1 ? "<1%" : `${pct}%`;
+  };
+  const parts: string[] = [];
+  if (toolingMs.argent > 0) {
+    parts.push(
+      `${toolingMs.argent} ms (${share(toolingMs.argent)}) were argent's own work inside the app` +
+        (macApp ? `, such as describe and taps,` : ``) +
+        ` while the trace recorded`
+    );
+  }
+  if (toolingMs.instruments > 0) {
+    parts.push(
+      `${toolingMs.instruments} ms (${share(toolingMs.instruments)}) were the recorder that ` +
+        `Instruments loads into the app to track allocations`
+    );
+  }
+  if (parts.length === 0) return undefined;
+  return (
+    `Of the CPU samples, ${parts.join(", and ")}. They are left out of the CPU hotspots. A hang ` +
+    `whose suspects are marked "argent's own library" or "Instruments' own library" was caused ` +
+    `by that tool, not the app, unless the report says that its main thread very possibly waited.`
+  );
 }

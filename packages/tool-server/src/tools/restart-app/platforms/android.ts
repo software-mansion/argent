@@ -3,6 +3,8 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import {
   assertAmStartOk,
+  followNativeNetworkCapture,
+  launcherStartArgs,
   normalizeActivityComponent,
   resolveLauncherActivity,
 } from "../../launch-app/platforms/android";
@@ -17,22 +19,16 @@ export const androidImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, activity } = params;
     await adbShell(udid, `am force-stop ${shellQuote(bundleId)}`, { timeoutMs: 15_000 });
-    // Match launch-app's relaunch path: `monkey` returns as soon as the intent
-    // is injected and its /No activities found|Error:/ scrape false-failed on
-    // legitimate class names like `com.example.ErrorReportingActivity`. Use
-    // `am start -W -n <component>` with the same `Status: ok` positive-match
-    // assertion launch-app moved to.
     let component: string;
+    let category: string | null = null;
     if (activity) {
-      // Shared with launch-app so a bare class name ("MainActivity") becomes a
-      // relative `${pkg}/.MainActivity` rather than the `${pkg}/MainActivity`
-      // that `am start` rejects — the two tools must agree on this.
       component = normalizeActivityComponent(bundleId, activity);
     } else {
       const isTv = await isAndroidTv(udid);
-      component = await resolveLauncherActivity(udid, bundleId, isTv);
+      ({ component, category } = await resolveLauncherActivity(udid, bundleId, isTv));
     }
-    const out = await adbShell(udid, `am start -W -n ${shellQuote(component)}`, {
+    const start = `am start -W${launcherStartArgs(category)} -n ${shellQuote(component)}`;
+    const out = await adbShell(udid, start, {
       timeoutMs: 30_000,
     });
     try {
@@ -49,6 +45,7 @@ export const androidImpl: PlatformImpl<
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
     }
-    return { restarted: true, bundleId };
+    const capture = await followNativeNetworkCapture(udid, bundleId);
+    return { restarted: true, bundleId, ...capture };
   },
 };

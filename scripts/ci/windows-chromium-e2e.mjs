@@ -1,16 +1,8 @@
-// End-to-end smoke for Argent's Chromium (CDP) control plane on a host with no
-// virtualization — the path that makes "Argent on Windows" real for Electron /
-// Chrome apps. Chromium control is pure host-side TypeScript + CDP (the Rust
-// simulator-server is not involved), so it runs anywhere Node + Chrome run,
-// which is exactly what lets a hosted Windows runner verify it.
-//
-// Drives the running tool-server over HTTP exactly as an MCP client would:
-//   list-devices → screenshot → describe → gesture-tap → describe (observe the
-//   DOM change the tap caused).
-//
-// Cross-platform: also runnable on macOS/Linux for local debugging. Env:
-//   ARGENT_E2E_URL   base tool-server URL (default http://127.0.0.1:3033)
-//   ARGENT_E2E_OUT   directory for screenshot artifacts (default os.tmpdir())
+// End-to-end smoke for Argent's Chromium (CDP) control plane, driving the running
+// tool-server over HTTP exactly as an MCP client would. Chromium control is pure
+// host-side TypeScript + CDP — the Rust simulator-server is not involved — so a
+// hosted Windows runner with no virtualization verifies it fully. Also runnable on
+// macOS/Linux for local debugging.
 
 import { mkdirSync, copyFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +21,6 @@ function fail(msg, extra) {
   process.exit(1);
 }
 
-/** POST /tools/<name>; returns the tool's `data` payload, or throws on error. */
 async function callTool(name, body = {}) {
   const res = await fetch(`${BASE}/tools/${name}`, {
     method: "POST",
@@ -70,7 +61,7 @@ async function waitForServer() {
 async function main() {
   await waitForServer();
 
-  // 1) Discover the running Chromium instance via CDP port probing.
+  // 1) list-devices discovers Chromium by probing CDP ports.
   const devices = await callTool("list-devices");
   const list = devices.devices ?? [];
   console.log(
@@ -85,7 +76,7 @@ async function main() {
   const udid = chromium.id;
   console.log(`✓ discovered chromium device: ${udid}`);
 
-  // 2) Screenshot returns real pixels (not an empty/0-byte frame).
+  // 2) Screenshot must return real pixels.
   const shot = await callTool("screenshot", { udid });
   const hostPath = shot?.image?.hostPath;
   if (!hostPath || !existsSync(hostPath)) fail("screenshot returned no readable hostPath", shot);
@@ -94,7 +85,7 @@ async function main() {
   if (size < 1000) fail(`screenshot suspiciously small (${size} bytes) — likely a blank frame`);
   copyFileSync(hostPath, join(OUT, "chromium-before.png"));
 
-  // 3) describe surfaces the DOM — the tap target must be present.
+  // 3) describe surfaces the DOM.
   const before = await callTool("describe", { udid });
   const beforeText =
     typeof before === "string" ? before : (before.description ?? JSON.stringify(before));
@@ -106,13 +97,52 @@ async function main() {
   }
   console.log("✓ describe surfaced the DOM (found ArgentTapTarget)");
 
-  // 4) gesture-tap dispatches a real click; the page mutates the DOM in
-  //    response, which proves the tap actually landed (not just a 200).
+  // 4) A row clipped by its overflow ancestor is hidden; its painted sibling, and a
+  // row in a mirrored overflow box, are visible at frames the click really hits.
+  for (const [text, condition] of [
+    ["ArgentClippedRow", "hidden"],
+    ["ArgentRotatedClippedRow", "exists"],
+    ["ArgentRotatedClippedRow", "hidden"],
+    ["ArgentVisibleRow", "visible"],
+    ["ArgentMirroredRow", "visible"],
+  ]) {
+    const wait = await callTool("await-ui-element", {
+      udid,
+      condition,
+      selector: { text },
+      timeoutMs: 3000,
+    });
+    if (wait?.success !== true) fail(`await-ui-element ${condition} ${text} did not succeed`, wait);
+    console.log(`✓ ${text} is ${condition}`);
+  }
+  for (const [row, clicked] of [
+    ["ArgentVisibleRow", "ArgentRowClicked"],
+    ["ArgentMirroredRow", "ArgentMirrorClicked"],
+  ]) {
+    const rowLine = beforeText.split("\n").find((line) => line.includes(row));
+    const rowFrame = rowLine
+      ?.match(/\(([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)\s*$/)
+      ?.slice(1)
+      .map(Number);
+    if (!rowFrame) fail(`describe printed no frame for ${row}`, rowLine);
+    const [rx, ry, rw, rh] = rowFrame;
+    await callTool("gesture-tap", { udid, x: rx + rw / 2, y: ry + rh / 2 });
+    const rowTapped = await callTool("await-ui-element", {
+      udid,
+      condition: "exists",
+      selector: { text: clicked },
+      timeoutMs: 5000,
+    });
+    if (rowTapped?.success !== true) fail(`tap at ${row}'s frame missed it`, rowTapped);
+    console.log(`✓ tap at ${row}'s frame centre clicked it`);
+  }
+
+  // 5) gesture-tap dispatches a real click.
   const tap = await callTool("gesture-tap", { udid, x: 0.5, y: 0.5 });
   if (!(tap?.tapped === true)) fail("gesture-tap did not report tapped:true", tap);
   console.log("✓ gesture-tap reported tapped:true");
 
-  // 5) Observe the effect: the click handler rewrites the button to TAPPED-OK.
+  // 6) e2e-chromium-page.html's click handler rewrites the button to TAPPED-OK.
   let observed = false;
   for (let i = 0; i < 10; i++) {
     const after = await callTool("describe", { udid });

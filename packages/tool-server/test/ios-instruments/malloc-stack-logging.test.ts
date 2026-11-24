@@ -33,8 +33,17 @@ function fakeApi(): NativeProfilerSessionApi {
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingAppPid: null,
+    recordingAppEnded: false,
+    appEndedDuringCapture: false,
+    exportSkipReason: null,
+    recordedMs: null,
+    stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     traceFile: null,
     exportedFiles: null,
+    disposed: false,
     profilingActive: false,
     wallClockStartMs: null,
     parsedData: null,
@@ -86,12 +95,11 @@ async function importStart() {
 }
 
 // startNativeProfilerIos reads ARGENT_IOS_CAPTURE (via the capture-strategy
-// resolver), and exporting it globally is a documented operator setup for
-// degraded Xcodes — scrub it for every test so an ambient value can't flip the
-// resolved strategy (=all-processes would refuse every malloc start here), and
-// restore the ambient value afterwards. Tests that exercise the override still
-// set it themselves after the scrub.
-const AMBIENT_IOS_CAPTURE = process.env.ARGENT_IOS_CAPTURE;
+// resolver), so clear it around every test: a value left behind by one of the
+// tests that exercise the override would flip the resolved strategy for the
+// next one (=all-processes refuses every malloc start here). There is no
+// ambient value to preserve, because test/setup/clear-argent-env.ts strips
+// every ARGENT_* override before this module is imported.
 
 describe("native-profiler-start malloc_stack_logging", () => {
   beforeEach(() => {
@@ -101,16 +109,13 @@ describe("native-profiler-start malloc_stack_logging", () => {
   });
 
   afterEach(() => {
-    if (AMBIENT_IOS_CAPTURE === undefined) {
-      delete process.env.ARGENT_IOS_CAPTURE;
-    } else {
-      process.env.ARGENT_IOS_CAPTURE = AMBIENT_IOS_CAPTURE;
-    }
+    delete process.env.ARGENT_IOS_CAPTURE;
     vi.useRealTimers();
     vi.doUnmock("child_process");
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
+    vi.doUnmock("../../src/utils/simulator-watcher");
   });
 
   function applyCommonMocks(spawnFn: unknown, execSyncFn: unknown, execFileSyncFn: unknown) {
@@ -132,6 +137,37 @@ describe("native-profiler-start malloc_stack_logging", () => {
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
   }
+
+  it("waits for the simulator watcher's first poll before terminating and relaunching", async () => {
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+    let settleFirstPoll!: () => void;
+    const firstPoll = new Promise<void>((resolve) => {
+      settleFirstPoll = resolve;
+    });
+    vi.doMock("../../src/utils/simulator-watcher", () => ({
+      firstSimulatorPoll: () => firstPoll,
+    }));
+    const terminated = () =>
+      execFileSyncFn.mock.calls.some((c) => ((c[1] as string[]) ?? []).includes("terminate"));
+
+    const startNativeProfilerIos = await importStart();
+    const started = startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(terminated()).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+
+    settleFirstPoll();
+    await started;
+
+    expect(terminated()).toBe(true);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
 
   it("cold-launches the .app with MallocStackLogging when malloc_stack_logging is true", async () => {
     const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();

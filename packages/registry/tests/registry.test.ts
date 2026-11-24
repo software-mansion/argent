@@ -9,7 +9,9 @@ import {
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
+  getFailureSignal,
 } from "../src/errors";
+import { FAILURE_CODES } from "../src/failure-codes";
 import {
   createStaticBlueprint,
   createMockToolDef,
@@ -659,5 +661,91 @@ describe("Registry -- invokeTool zod enforcement (PR #194 injection root cause)"
 
     await registry.invokeTool("T", { anything: "goes" });
     expect(received).toEqual({ anything: "goes" });
+  });
+});
+
+describe("Registry -- invocation context id", () => {
+  it("ctx.toolInvocationId is populated with the minted id when the caller passes none", async () => {
+    // The id must be present on EVERY dispatch path, not only attributed HTTP
+    // requests: a tool that emits its own telemetry keyed on
+    // ctx.toolInvocationId (debugger:tool_outcome) otherwise produces orphaned
+    // rows from flow/CLI sub-invocations while tool:invoke/complete carry an id.
+    const registry = new Registry();
+    let seen: string | undefined;
+    registry.registerTool({
+      id: "ctx-id-probe",
+      services: () => ({}),
+      async execute(_s, _p, ctx) {
+        seen = ctx?.toolInvocationId;
+        return {};
+      },
+    });
+
+    const invoked: string[] = [];
+    registry.events.on("toolInvoked", (_id, toolInvocationId) => invoked.push(toolInvocationId));
+
+    await registry.invokeTool("ctx-id-probe");
+    expect(seen).toBeDefined();
+    expect(seen).toBe(invoked[0]);
+  });
+
+  it("ctx.toolInvocationId echoes a caller-provided id unchanged", async () => {
+    const registry = new Registry();
+    let seen: string | undefined;
+    registry.registerTool({
+      id: "ctx-id-probe",
+      services: () => ({}),
+      async execute(_s, _p, ctx) {
+        seen = ctx?.toolInvocationId;
+        return {};
+      },
+    });
+    await registry.invokeTool("ctx-id-probe", {}, { toolInvocationId: "caller-id-1" });
+    expect(seen).toBe("caller-id-1");
+  });
+});
+
+describe("Registry -- terminated-during-initialization signal", () => {
+  it("carries the REGISTRY_SERVICE_TERMINATING cause when a teardown races a running factory", async () => {
+    // A CDP drop can cascade teardown while a dependent factory is still
+    // running (see tool-server's RFC-profiler-reconnect notes); the guard that
+    // discards the freshly-built instance must reject with the coded
+    // terminating cause — falling back to the catch-all
+    // REGISTRY_SERVICE_INITIALIZATION_FAILED would both blind telemetry and
+    // turn a debugger-status "reconnecting" result back into a thrown failure.
+    const registry = new Registry();
+    let releaseFactory!: () => void;
+    const factoryGate = new Promise<void>((resolve) => {
+      releaseFactory = resolve;
+    });
+    registry.registerBlueprint({
+      namespace: "SlowInit",
+      getURN: (payload: string) => `SlowInit:${payload}`,
+      factory: async () => {
+        await factoryGate;
+        return {
+          api: {},
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    });
+
+    const resolving = registry.resolveService("SlowInit:x");
+    // Swallow the eventual rejection so the assertion below owns it.
+    resolving.catch(() => {});
+
+    await registry.disposeService("SlowInit:x");
+    releaseFactory();
+
+    let thrown: unknown;
+    try {
+      await resolving;
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(ServiceInitializationError);
+    expect((thrown as Error).message).toContain("terminated during initialization");
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
   });
 });

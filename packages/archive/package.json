@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "@argent/archive",
-  "version": "0.17.0",
-  "description": "Shared tar.gz helpers for the file boundary: create an archive of a path and extract one back to its top-level member.",
+  "version": "0.34.0",
+  "description": "Shared archive helpers for the file boundary: create a zstd or gzip compressed tar of a path and extract one back to its top-level member.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,8 +12,8 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.6.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^5.0.5"
   }
 }

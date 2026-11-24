@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { gunzipSync, zstdCompressSync } from "node:zlib";
+import { basename, delimiter, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, readFile, writeFile, stat, symlink, readdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -12,6 +14,7 @@ import {
   ARTIFACT_MARKER,
   type ArtifactHandle,
 } from "../src/artifacts.js";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 function handle(id: string, filename: string, mimeType: string): ArtifactHandle {
   return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
@@ -94,6 +97,22 @@ describe("materializeArtifacts", () => {
     expect((seen[0]!.headers as Record<string, string>).Authorization).toBe("Bearer secret-token");
   });
 
+  it("asks for no archive format when downloading a single file", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const recordingFetch = (async (_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return { ok: true, arrayBuffer: async () => new Uint8Array(PNG).buffer };
+    }) as unknown as typeof fetch;
+
+    await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", fetchImpl: recordingFetch }
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers).not.toHaveProperty("Accept");
+  });
+
   it("omits the Authorization header when no auth token is present", async () => {
     const seen: Array<RequestInit | undefined> = [];
     const recordingFetch = (async (_url: string, init?: RequestInit) => {
@@ -107,6 +126,23 @@ describe("materializeArtifacts", () => {
     );
 
     expect((seen[0]!.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it("aborts the download with the signal and reads the artifact as missing", async () => {
+    const controller = new AbortController();
+    // A download that only ends when its signal aborts.
+    const hangingFetch = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      })) as unknown as typeof fetch;
+    setTimeout(() => controller.abort(), 10);
+
+    const { result } = await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", fetchImpl: hangingFetch, signal: controller.signal }
+    );
+
+    expect(result).toEqual({ image: null });
   });
 
   it("walks nested handles (e.g. exportedFiles) and leaves non-handles untouched", async () => {
@@ -151,6 +187,45 @@ describe("materializeArtifacts", () => {
       { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ trunc: [1, 2, 3] }) } // …delivered 3
     );
     expect((result as { file: null }).file).toBeNull();
+  });
+
+  it("caps a cache-path download that over-streams past its declared size", async () => {
+    // The durable branch stops an under-declared body with `readCapped`; the
+    // temp-cache branch must do the same. A compromised tool-server announces
+    // 8 bytes and streams 200,000: the body has to be abandoned once it passes
+    // the declared size, before the whole thing is held in memory.
+    let pulled = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= 100) {
+          controller.close();
+          return;
+        }
+        pulled++;
+        controller.enqueue(new Uint8Array(2000));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const floodFetch = (async () => new Response(body)) as unknown as typeof fetch;
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "cacheflood",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: 8, // declares 8, delivers 200_000
+    };
+
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: floodFetch }
+    );
+
+    expect((result as { video: null }).video).toBeNull();
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(100);
   });
 
   it("scopes the cache dir by device and omits the device segment when absent", () => {
@@ -273,7 +348,7 @@ describe("materializeArtifacts local short-circuit", () => {
   });
 });
 
-// ── directory bundles (e.g. .trace) delivered as tar.gz ──────────────
+// ── directory bundles (e.g. .trace) delivered as a compressed tar ────
 
 function fakeFetchBuffer(map: Record<string, Buffer>): typeof fetch {
   return (async (url: string) => {
@@ -298,18 +373,21 @@ describe("materializeArtifacts directory bundles", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
   });
 
-  // Build a real .trace-like bundle and a gzipped tar of it (as the server would
-  // stream on demand), so the client extraction runs against genuine tar output.
+  // A real bundle and its gzipped tar, as a server streams it when zstd isn't asked for.
   async function makeBundle(): Promise<{ bundlePath: string; tarGz: Buffer }> {
     const bundlePath = join(hostDir, "session.trace");
     await mkdir(join(bundlePath, "sub"), { recursive: true });
     await writeFile(join(bundlePath, "top.txt"), "top");
     await writeFile(join(bundlePath, "sub", "nested.txt"), "nested");
+    // Incompressible payload so the tar body is deterministically larger than a
+    // directory's few-hundred-byte stat entry (what the server reports as `size`).
+    await writeFile(join(bundlePath, "payload.bin"), randomBytes(64 * 1024));
     const tarPath = join(hostDir, "session.tar.gz");
     execFileSync("tar", ["-czf", tarPath, "-C", hostDir, "session.trace"]);
     const tarGz = await readFile(tarPath);
@@ -352,10 +430,119 @@ describe("materializeArtifacts directory bundles", () => {
     );
 
     const extracted = (result as { traceFile: string }).traceFile;
-    expect(extracted).toBe(join(artifactDir(), "session.trace"));
+    expect(basename(extracted)).toBe("session.trace");
+    expect(extracted.startsWith(artifactDir() + sep)).toBe(true);
     expect((await stat(extracted)).isDirectory()).toBe(true);
     expect(await readFile(join(extracted, "top.txt"), "utf8")).toBe("top");
     expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("reads a directory bundle as missing when aborted before extraction", async () => {
+    const { tarGz } = await makeBundle();
+    const controller = new AbortController();
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("t2", join(hostDir, "gone.trace")) },
+      {
+        toolsUrl: "http://remote:3001",
+        signal: controller.signal,
+        fetchImpl: async () => {
+          controller.abort();
+          return new Response(new Uint8Array(tarGz));
+        },
+      }
+    );
+    expect(result).toEqual({ traceFile: null });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a cached trace when a same-name retry is cancelled during extraction",
+    async () => {
+      const { tarGz } = await makeBundle();
+      const handle = archiveHandle("trace", join(hostDir, "gone.trace"));
+      const ctx = { toolsUrl: "http://remote:3001", fetchImpl: fakeFetchBuffer({ trace: tarGz }) };
+      const { result: first } = await materializeArtifacts(handle, ctx);
+      const entries = await readdir(artifactDir());
+      const ready = join(hostDir, "extracting");
+      await writeFile(
+        join(hostDir, "tar"),
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          "  -t) echo session.trace/ ;;",
+          '  -tv) echo "drwxr-xr-x session.trace/" ;;',
+          `  -x) mkdir -p "$3/session.trace"; echo partial > "$3/session.trace/top.txt"; touch "${ready}"; exec sleep 30 ;;`,
+          "esac",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+
+      vi.stubEnv("PATH", `${hostDir}${delimiter}${process.env.PATH}`);
+      const controller = new AbortController();
+      const retry = materializeArtifacts(handle, { ...ctx, signal: controller.signal });
+      try {
+        await vi.waitFor(() => stat(ready));
+      } finally {
+        controller.abort();
+        expect((await retry).result).toBeNull();
+      }
+
+      expect(await readFile(join(first as string, "top.txt"), "utf8")).toBe("top");
+      expect(await readdir(artifactDir())).toEqual(entries);
+    }
+  );
+
+  it("remote: asks for zstd and unpacks a zstd bundle", async () => {
+    const { tarGz } = await makeBundle();
+    const zst = zstdCompressSync(gunzipSync(tarGz));
+    const accepts: Array<string | undefined> = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      accepts.push((init?.headers as Record<string, string> | undefined)?.Accept);
+      return fakeFetchBuffer({ t5: zst })(url, init);
+    }) as unknown as typeof fetch;
+
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("t5", join(hostDir, "gone.trace")) },
+      { toolsUrl: "http://remote:3001", fetchImpl }
+    );
+
+    expect(accepts).toEqual(["application/zstd, application/gzip"]);
+    const extracted = (result as { traceFile: string }).traceFile;
+    expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("remote: a bundle whose declared size is the folder's stat entry still downloads", async () => {
+    // The server reports a directory's `size` from `stat` — a few hundred bytes
+    // on macOS — while the tar body is megabytes. The cap must not trust it for
+    // archives, or an iOS trace over `argent link` is cut off mid-stream.
+    const { tarGz } = await makeBundle();
+    expect(tarGz.length).toBeGreaterThan(256);
+    let pulled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= tarGz.length) {
+          controller.close();
+          return;
+        }
+        const chunk = tarGz.subarray(pulled, pulled + 16 * 1024);
+        pulled += chunk.length;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+    });
+    const streamingFetch = (async () => new Response(body)) as unknown as typeof fetch;
+    const h: ArtifactHandle = {
+      ...archiveHandle("big", join(hostDir, "gone.trace")),
+      size: 256, // folder's stat entry, not the tar's
+    };
+    const { result } = await materializeArtifacts(
+      { traceFile: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: streamingFetch }
+    );
+
+    const extracted = (result as { traceFile: string | null }).traceFile;
+    expect(extracted).not.toBeNull();
+    if (!extracted) return;
+    expect((await stat(extracted)).isDirectory()).toBe(true);
+    expect((await readFile(join(extracted, "payload.bin"))).length).toBe(64 * 1024);
   });
 
   it("remote: a failed bundle download rewrites to null", async () => {
@@ -374,27 +561,36 @@ describe("materializeArtifacts directory bundles", () => {
 // project. These suites drive cwd into a marker-bearing temp dir and redirect
 // HOME so the global-fallback branch never touches the real `~/.argent`.
 
+// Write a `recordings.directory` value into `<rootDir>/.argent/config.json` —
+// `rootDir` being a project root (project scope) or a redirected HOME (global
+// scope), which is how the schema-driven reader finds each scope's document.
+async function writeScopedConfig(rootDir: string, directory: string): Promise<void> {
+  await mkdir(join(rootDir, ".argent"), { recursive: true });
+  await writeFile(
+    join(rootDir, ".argent", "config.json"),
+    JSON.stringify({ recordings: { directory } }, null, 2)
+  );
+}
+
 describe("durableSaveTarget", () => {
   let projectRoot: string;
   let home: string;
   let originalCwd: string;
-  let originalHome: string | undefined;
+  let restoreHome: () => void;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), "argent-proj-"));
     await writeFile(join(projectRoot, "package.json"), "{}"); // the project marker
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     originalCwd = process.cwd();
-    originalHome = process.env.HOME;
     process.chdir(projectRoot);
-    process.env.HOME = home;
+    restoreHome = redirectHomeTo(home);
     projectRoot = process.cwd(); // resolve /var → /private/var for assertions
   });
 
   afterEach(async () => {
     process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHome();
     await rm(projectRoot, { recursive: true, force: true });
     await rm(home, { recursive: true, force: true });
   });
@@ -487,6 +683,74 @@ describe("durableSaveTarget", () => {
     };
     expect(durableSaveTarget(h)).toBeNull();
   });
+
+  // ── `recordings.directory` configuration ────────────────────────────
+  // The wire hint stays `.argent/recordings`; the config redirects where that
+  // hint lands. Scope documents live at `<projectRoot>/.argent/config.json`
+  // (project) and `<HOME>/.argent/config.json` (global) — both sandboxed here.
+
+  const recordingHandle = (): ArtifactHandle => ({
+    ...handle("a", "clip.mp4", "video/mp4"),
+    saveDir: ".argent/recordings",
+  });
+
+  it("redirects to an absolute global-config directory (base = configured dir, rel = '')", async () => {
+    const custom = join(home, "Movies", "argent");
+    await writeScopedConfig(home, custom);
+    const target = durableSaveTarget(recordingHandle())!;
+    expect(target.dir).toBe(custom);
+    expect(target.path).toBe(join(custom, "clip.mp4"));
+    // rel is empty so the post-mkdir realpath check verifies the configured dir
+    // resolves to itself rather than requiring a `.argent/recordings` suffix.
+    expect(target.base).toBe(custom);
+    expect(target.rel).toBe("");
+  });
+
+  it("project config wins over global when both are set", async () => {
+    await writeScopedConfig(home, join(home, "global-recordings"));
+    await writeScopedConfig(projectRoot, join(projectRoot, "project-recordings"));
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, "project-recordings"));
+  });
+
+  it("falls back to the global config when the project scope is unset", async () => {
+    await writeScopedConfig(home, join(home, "global-recordings"));
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "global-recordings"));
+  });
+
+  it("expands a leading ~ to the user's home", async () => {
+    await writeScopedConfig(projectRoot, "~/Movies/argent");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "Movies", "argent"));
+  });
+
+  it("anchors a relative configured path at the project root", async () => {
+    await writeScopedConfig(projectRoot, "recordings/out");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, "recordings", "out"));
+  });
+
+  it("anchors a relative global config at home when not inside a project", async () => {
+    await writeScopedConfig(home, "captures");
+    const outside = await mkdtemp(join(tmpdir(), "argent-noproj-"));
+    process.chdir(outside);
+    try {
+      expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(home, "captures"));
+    } finally {
+      process.chdir(projectRoot);
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("a blank configured value reads as unset — default location kept", async () => {
+    await writeScopedConfig(projectRoot, "   ");
+    expect(durableSaveTarget(recordingHandle())!.dir).toBe(join(projectRoot, ".argent/recordings"));
+  });
+
+  it("config never resurrects a hostile wire saveDir — the allowlist still gates first", async () => {
+    await writeScopedConfig(projectRoot, join(projectRoot, "anywhere"));
+    for (const evil of [".git", "..", "/etc", ".argent", "recordings"]) {
+      const h: ArtifactHandle = { ...handle("a", "x.mp4", "video/mp4"), saveDir: evil };
+      expect(durableSaveTarget(h), evil).toBeNull();
+    }
+  });
 });
 
 describe("materializeArtifacts durable destination", () => {
@@ -495,7 +759,7 @@ describe("materializeArtifacts durable destination", () => {
   let projectRoot: string; // the client's project (marker-bearing) working dir
   let home: string; // redirected HOME for the global-fallback branch
   let originalCwd: string;
-  let originalHome: string | undefined;
+  let restoreHome: () => void;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
@@ -505,9 +769,8 @@ describe("materializeArtifacts durable destination", () => {
     home = await mkdtemp(join(tmpdir(), "argent-home-"));
     process.env.ARGENT_ARTIFACTS_DIR = root;
     originalCwd = process.cwd();
-    originalHome = process.env.HOME;
     process.chdir(projectRoot);
-    process.env.HOME = home;
+    restoreHome = redirectHomeTo(home);
     // On macOS the temp dir is under a /var → /private/var symlink; the
     // materializer resolves cwd to the real path, so mirror that for assertions.
     projectRoot = process.cwd();
@@ -516,8 +779,7 @@ describe("materializeArtifacts durable destination", () => {
   afterEach(async () => {
     process.chdir(originalCwd);
     delete process.env.ARGENT_ARTIFACTS_DIR;
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHome();
     await rm(root, { recursive: true, force: true });
     await rm(hostDir, { recursive: true, force: true });
     await rm(projectRoot, { recursive: true, force: true });
@@ -903,6 +1165,54 @@ describe("materializeArtifacts durable destination", () => {
     } finally {
       await rm(hostDir, { recursive: true, force: true });
     }
+  });
+
+  it("honors the recordings.directory config on the remote download path", async () => {
+    const custom = join(projectRoot, "my-videos");
+    await writeScopedConfig(projectRoot, custom);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vidcfg",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: MP4.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ vidcfg: MP4 }) }
+    );
+    expect((result as { video: string }).video).toBe(join(custom, "clip.mp4"));
+    expect(Buffer.from(await readFile(join(custom, "clip.mp4")))).toEqual(Buffer.from(MP4));
+    // Nothing under the default location.
+    expect(await absent(join(projectRoot, ".argent/recordings", "clip.mp4"))).toBe(true);
+  });
+
+  it("honors the recordings.directory config on the co-located copy path", async () => {
+    const custom = join(projectRoot, "clips");
+    await writeScopedConfig(projectRoot, custom);
+    const hostPath = join(hostDir, "argent-clip.mp4");
+    await writeFile(hostPath, Buffer.from(MP4));
+    const st = await stat(hostPath);
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "vidcfgl",
+      filename: "clip.mp4",
+      mimeType: "video/mp4",
+      size: st.size,
+      hostPath,
+      mtimeMs: st.mtimeMs,
+      saveDir: ".argent/recordings",
+    };
+    const throwingFetch: typeof fetch = (async () => {
+      throw new Error("fetch must not be called when the file is already local");
+    }) as unknown as typeof fetch;
+    const { result } = await materializeArtifacts(
+      { video: h },
+      { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+    );
+    expect((result as { video: string }).video).toBe(join(custom, "clip.mp4"));
+    expect(Buffer.from(await readFile(join(custom, "clip.mp4")))).toEqual(Buffer.from(MP4));
   });
 
   it("a non-string saveDir degrades that handle without crashing the whole result", async () => {

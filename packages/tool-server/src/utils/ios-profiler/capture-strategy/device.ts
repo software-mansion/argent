@@ -1,14 +1,11 @@
 import type { IosCaptureStrategy, RecordArgsInput, CaptureTarget } from "./types";
 
 /**
- * The original (and preferred) strategy: `xctrace record --device <sim>
- * --attach <pid|name>`. xctrace scopes the recording to the target process on
- * the simulator, so no post-export filtering is needed. This is the full
- * Time-Profiler path with the simulator as the Instruments device.
+ * `xctrace record --device <sim> --attach <pid|name>` — xctrace scopes the
+ * recording to the target process, so no post-export filtering is needed.
  *
- * It is the correct choice on Xcode versions where the `--device` recording
- * handshake works (≤ 26.3). On 26.4 and later it deadlocks at startup — see
- * ./all-processes and ./select.
+ * Correct on Xcode versions where the `--device` recording handshake works
+ * (≤ 26.3); 26.4 and later deadlock at startup — see ./all-processes and ./select.
  */
 export const deviceStrategy: IosCaptureStrategy = {
   name: "device",
@@ -16,9 +13,9 @@ export const deviceStrategy: IosCaptureStrategy = {
   attachesByName: true,
 
   buildRecordArgs(input: RecordArgsInput): string[] {
-    // Attach by PID when we know it (immune to Xcode 26.5's display-name
-    // `--attach` matching); fall back to the executable name when the target
-    // isn't running yet so the cold-start retry can still kick in.
+    // Xcode 26.5's `--attach` matches the display name, not CFBundleExecutable,
+    // so prefer the PID. Fall back to the name when the target isn't running yet,
+    // so the cold-start retry can still kick in.
     const attachTarget =
       input.target.pid != null ? String(input.target.pid) : input.target.executable;
 
@@ -41,7 +38,7 @@ export const deviceStrategy: IosCaptureStrategy = {
   },
 
   cpuFilterPid(_target: CaptureTarget): number | null {
-    // Already scoped to the target by --attach; keep every exported sample.
+    // Already scoped to the target by --attach.
     return null;
   },
 };

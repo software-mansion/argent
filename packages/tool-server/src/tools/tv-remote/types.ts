@@ -11,7 +11,6 @@ export interface TvRemoteResult {
   count: number;
 }
 
-/** Flatten a single button / path × repeat into the concrete sequence to send. */
 export function expandButtons(
   button: RemoteButton | RemoteButton[],
   repeat: number | undefined

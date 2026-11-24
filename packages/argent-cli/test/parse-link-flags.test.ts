@@ -105,6 +105,15 @@ describe("parseLinkFlags — error paths", () => {
     expect(() => parseLinkFlags(["-p"])).toThrow(/--port requires a value/);
   });
 
+  it("throws on a separately supplied empty --token instead of dropping the pairing token", () => {
+    expect(() => parseLinkFlags(["argent://TOK@10.0.0.42:3001", "--token", ""])).toThrow(
+      StartFlagError
+    );
+    expect(() => parseLinkFlags(["argent://TOK@10.0.0.42:3001", "--token", ""])).toThrow(
+      "--token requires a value"
+    );
+  });
+
   it("does not consume the next token as a value for boolean flags", () => {
     // `--yes` must NOT swallow the next token; here `--no-verify` is a separate flag.
     expect(parseLinkFlags(["--yes", "--no-verify"])).toMatchObject({
@@ -192,6 +201,6 @@ describe("parseUnlinkFlags", () => {
     expect(() => parseUnlinkFlags(["--bogus"])).toThrow(StartFlagError);
     expect(() => parseUnlinkFlags(["--bogus"])).toThrow(/Unknown flag: --bogus/);
     // Unlink takes no positional args either — anything not --yes/--help fails.
-    expect(() => parseUnlinkFlags(["foo"])).toThrow(/Unknown flag: foo/);
+    expect(() => parseUnlinkFlags(["foo"])).toThrow(/Unexpected argument "foo"/);
   });
 });

@@ -197,7 +197,18 @@ describe("simulator-server path resolution", () => {
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
+  });
+
+  it("run dir is the bin root when the shared resources/android copy exists", async () => {
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "shared-resources-"));
+    const platDir = path.join(dir, process.platform);
+    fs.mkdirSync(platDir, { recursive: true });
+    fs.writeFileSync(path.join(platDir, ssBinName()), "", { mode: 0o755 });
+    fs.mkdirSync(path.join(dir, "resources", "android"), { recursive: true });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.simulatorServerRunDir()).toBe(dir);
   });
 
   it("throws when the per-platform binary is missing", async () => {
@@ -246,7 +257,7 @@ describe("host platform key (arch-aware Linux bin dirs)", () => {
     const r = await loadResolver();
     expect(r.hostPlatformKey()).toBe("linux-arm64");
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
   });
 
   it("keeps resolving bin/linux on x86_64 Linux", async () => {
@@ -310,7 +321,7 @@ describe("Windows (win32) binary resolution", () => {
     expect(r.hostPlatformKey()).toBe("win32");
     expect(r.simulatorServerBinaryName()).toBe("simulator-server.exe");
     expect(r.simulatorServerBinaryPath()).toBe(binPath);
-    expect(r.simulatorServerBinaryDir()).toBe(platDir);
+    expect(r.simulatorServerRunDir()).toBe(platDir);
   });
 
   it("does not resolve an extensionless binary on Windows", async () => {
@@ -372,5 +383,35 @@ describe("ARGENT_NATIVE_DEVTOOLS_DIR override", () => {
     setPlatform("darwin");
     const r = await loadResolver();
     expect(r.nativeDevtoolsDylibPath()).toBe(dylib);
+  });
+});
+
+describe("macosArtifacts", () => {
+  afterEach(() => {
+    if (originalDevtoolsDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
+    else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
+    if (originalSimulatorDir === undefined) delete process.env.ARGENT_SIMULATOR_SERVER_DIR;
+    else process.env.ARGENT_SIMULATOR_SERVER_DIR = originalSimulatorDir;
+  });
+
+  it("resolves dylibs/macos/ and bin/darwin/, and names every missing file", async () => {
+    const root = fs.mkdtempSync(path.join(tmpRoot, "macos-"));
+    const expected = {
+      bootstrap: path.join(root, "dylibs", "macos", "libArgentInjectionBootstrap.dylib"),
+      library: path.join(root, "dylibs", "macos", "libNativeDevtoolsMacos.dylib"),
+      helper: path.join(root, "bin", "darwin", "argent-macos-helper"),
+    };
+    process.env.ARGENT_NATIVE_DEVTOOLS_DIR = path.join(root, "dylibs");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = path.join(root, "bin");
+    const r = await loadResolver();
+    expect(() => r.macosArtifacts()).toThrow(
+      `macOS app artifact not found: ${Object.values(expected).join(", ")}.`
+    );
+
+    for (const file of Object.values(expected)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "");
+    }
+    expect(r.macosArtifacts()).toEqual(expected);
   });
 });

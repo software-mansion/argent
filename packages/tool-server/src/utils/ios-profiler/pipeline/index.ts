@@ -1,45 +1,81 @@
 import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
 import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
-import { aggregateCpuHotspots } from "./02-aggregate";
+import { aggregateCpuHotspots, toolingWeightNs, withAppCallsThroughArgent } from "./02-aggregate";
+import {
+  suspendedTimeInHangs,
+  withSuspendedTime,
+  type AppSuspensionSpan,
+  type SuspensionAdjustment,
+} from "../app-suspensions";
 
-export interface PipelineOutput {
+interface PipelineOutput {
   bottlenecks: Bottleneck[];
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
+  hangsRecorded: boolean;
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /** CPU time of the libraries argent and Instruments load into the app, which the hotspots leave out. */
+  toolingCpuMs: { argent: number; instruments: number };
+  /** CPU time of the samples with a stack, the tools' included: what the hotspot shares are of. */
+  totalCpuMs: number;
+  /** What the app's suspensions overlapped in the hangs. Null when none were passed. */
+  suspensionAdjustment?: SuspensionAdjustment | null;
 }
 
-export interface PipelineOptions {
+interface PipelineOptions {
   /**
-   * iOS-only: keep only CPU samples belonging to this PID. Set by the
-   * all-processes capture strategy (host-wide recording) to isolate the target
-   * app; undefined/null for the device strategy, which is already scoped.
+   * Keep only CPU samples from this PID. Set by the all-processes strategy, whose
+   * capture is host-wide; null for the device strategy, already scoped by `--attach`.
    */
   cpuFilterPid?: number | null;
+  /**
+   * Mac apps: when macOS held the app suspended, on the trace's timeline. Each hang
+   * gets the suspended part of its span. Null or absent gives the hangs none.
+   */
+  appSuspensions?: AppSuspensionSpan[] | null;
 }
 
 export async function runIosProfilerPipeline(
   files: Record<string, string | null>,
   options: PipelineOptions = {}
 ): Promise<PipelineOutput> {
-  // Stage 0: Parse all three XMLs in parallel
-  const [cpuSamples, rawHangs, rawLeaks] = await Promise.all([
+  const [cpuSamples, hangsTable, rawLeaks] = await Promise.all([
     parseCpuFile(files.cpu ?? null, options.cpuFilterPid ?? null),
     parseHangsFile(files.hangs ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
+  for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);
 
-  // Stage 1: Correlate hangs with CPU samples
-  const { uiHangs, hangSampleTimestamps } = correlateHangsWithCpu(rawHangs, cpuSamples);
+  const rawHangs = hangsTable ?? [];
+  const suspensions =
+    options.appSuspensions != null ? suspendedTimeInHangs(rawHangs, options.appSuspensions) : null;
+  const correlated = correlateHangsWithCpu(rawHangs, cpuSamples, suspensions?.suspendedNs);
+  const { hangSampleTimestamps } = correlated;
+  const uiHangs = suspensions
+    ? correlated.uiHangs.map((hang, i) => withSuspendedTime(hang, suspensions.suspendedNs[i]!))
+    : correlated.uiHangs;
 
-  // Stage 2: Aggregate
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
   const memoryLeaks = aggregateLeaks(rawLeaks);
 
-  // Combine all bottlenecks
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 
-  return { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  const totalNs = cpuSamples.reduce((sum, s) => sum + (s.stack.length > 0 ? s.weightNs : 0), 0);
+  const tooling = toolingWeightNs(cpuSamples);
+  return {
+    bottlenecks,
+    cpuSamples,
+    uiHangs,
+    hangsRecorded: hangsTable !== null,
+    cpuHotspots,
+    memoryLeaks,
+    toolingCpuMs: {
+      argent: Math.round(tooling.argent / 1_000_000),
+      instruments: Math.round(tooling.instruments / 1_000_000),
+    },
+    totalCpuMs: Math.round(totalNs / 1_000_000),
+    suspensionAdjustment: suspensions?.summary ?? null,
+  };
 }

@@ -1,13 +1,14 @@
 import fs from "fs/promises";
 import path from "path";
 import { PNG } from "pngjs";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   analyzeScreenshotTextChanges,
   DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   type TextAnalysis,
 } from "./text-diff";
 import { formatScreenshotDiffSummary } from "./screenshot-diff-summary";
-import { normalizeToCommonSize, resizeDecodedPng } from "./resize";
+import { resizeDecodedPng } from "./resize";
 
 export interface Size {
   width: number;
@@ -27,7 +28,7 @@ export interface DiffBounds {
   height: number;
 }
 
-export interface DominantColorChange {
+interface DominantColorChange {
   channel: "red" | "green" | "blue" | "luminance" | "none";
   direction: "increase" | "decrease" | "none";
   magnitude: number;
@@ -93,6 +94,9 @@ interface DiffArtifactPaths {
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
+// Sized for a baseline PNG stored across sessions, machines and OS versions, so
+// it absorbs real drift. flow-pixels' PIXEL_THRESHOLD is deliberately tighter
+// (one live session, a far lower noise floor); see the rationale there.
 const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
@@ -123,26 +127,15 @@ export interface DiffPngFilesOptions {
 export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
   const settings = resolveDiffSettings(options.topMask ?? "status-bar");
 
-  const [decodedBaseline, decodedCurrent] = await Promise.all([
+  const [baseline, current] = await Promise.all([
     decodePngFile(options.baselinePath),
     decodePngFile(options.currentPath),
   ]);
 
-  // Same-aspect screenshots saved at different scales (e.g. a 0.3x baseline vs
-  // a 1.0x live capture) are uniform scalings of one framebuffer, so normalize
-  // them to a common size and compare instead of failing on the resolution
-  // mismatch. Genuinely different aspect ratios still hard-fail below.
-  const normalized = normalizeToCommonSize(decodedBaseline, decodedCurrent);
-  if (!normalized) {
-    return summarizeResult(
-      buildDimensionMismatchResult({
-        baseline: decodedBaseline,
-        current: decodedCurrent,
-      })
-    );
+  // Resampling produces artifacts that read as changes, so sizes must match.
+  if (baseline.width !== current.width || baseline.height !== current.height) {
+    return summarizeResult(buildDimensionMismatchResult({ baseline, current }));
   }
-  const baseline = normalized.baseline;
-  const current = normalized.current;
 
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
@@ -171,21 +164,12 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
-  // The OCR pass re-reads the two files from disk, so each image's text bounds
-  // come back in its own original coordinate space. When the inputs were
-  // normalized to a common size, rescale those bounds into that shared space
-  // (and hand the font-geometry pass the normalized images to match) so the
-  // cross-image comparison and the summary share the same coordinates the pixel
-  // diff uses. The scale factors are 1/1 when the inputs already match, and the
-  // top cutoff is derived from the normalized height for the same reason.
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
     hasPixelDiff: pixelDiff.differentPixels > 0,
     baselineImage: baseline,
     currentImage: current,
-    baselineRegionScale: regionScaleBetween(decodedBaseline, baseline),
-    currentRegionScale: regionScaleBetween(decodedCurrent, current),
     ignoreTopPixels: ignoredTopRowsFor(baseline.height, settings.ignoreTopNormalizedY),
     textChangeMinConfidence: DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   });
@@ -271,15 +255,6 @@ function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number
   return Math.min(height, Math.ceil(height * ignoreTopNormalizedY));
 }
 
-// Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
-// Both dimensions are 1 when the sizes match, so same-size inputs are untouched.
-function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
-  return {
-    x: from.width === 0 ? 1 : to.width / from.width,
-    y: from.height === 0 ? 1 : to.height / from.height,
-  };
-}
-
 function getChangedRegions(params: {
   mask: Uint8Array;
   baseline: DecodedPng;
@@ -347,14 +322,28 @@ async function writeDiffArtifacts(params: {
   );
 }
 
+// Both sides decode concurrently, so naming the path is the only thing that
+// tells the caller which of the two images was the bad one.
 async function decodePngFile(filePath: string): Promise<DecodedPng> {
-  const buffer = await fs.readFile(filePath);
-  const png = PNG.sync.read(buffer);
-  return {
-    width: png.width,
-    height: png.height,
-    data: png.data,
-  };
+  try {
+    const buffer = await fs.readFile(filePath);
+    const png = PNG.sync.read(buffer);
+    return {
+      width: png.width,
+      height: png.height,
+      data: png.data,
+    };
+  } catch (err) {
+    throw new FailureError(
+      `Could not read PNG at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+        failure_stage: "screenshot_diff_decode_failed",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 async function analyzeScreenshotTextChangesSafely(

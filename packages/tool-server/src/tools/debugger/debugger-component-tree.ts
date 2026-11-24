@@ -5,6 +5,8 @@ import type { ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface RawEntry {
   id: number;
@@ -39,7 +41,11 @@ function rectsOverlap(
 
 export function buildTextTree(
   data: RawResult,
-  opts: { onScreenOnly: boolean; maxNodes?: number; includeSkipped?: boolean }
+  opts: {
+    onScreenOnly: boolean;
+    maxNodes?: number;
+    includeSkipped?: boolean;
+  }
 ): string {
   const { screenW, screenH, components } = data;
 
@@ -85,11 +91,9 @@ export function buildTextTree(
     }
   }
 
-  // Remove components that are entirely off-screen and prune their entire subtree.
-  // This catches off-canvas navigation stacks (drawer, hidden tabs) whose children
-  // would otherwise survive because they lack rects.
+  // Prune the whole subtree: children of off-canvas stacks (drawer, hidden tabs)
+  // lack rects and would otherwise survive.
   if (canNormalize && opts.onScreenOnly) {
-    // Build a quick parent→children index for subtree pruning
     const tempChildren = new Map<number, number[]>();
     for (const c of components) {
       if (c.parentIdx >= 0) {
@@ -123,8 +127,7 @@ export function buildTextTree(
       }
     }
 
-    // Also remove rectless components whose entire ancestor chain is removed.
-    // These are children of off-screen containers that have no rect themselves.
+    // Rectless components hanging off an ancestor that was just removed off-screen.
     for (const c of components) {
       if (removed.has(c.id) || c.rect) continue;
       let ancestor = c.parentIdx;
@@ -139,9 +142,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse same-testID parent→child chains caused by prop drilling through HOC layers.
-  // e.g. ScreenWrapper [testID=X] → ScreenWrapperContainer [testID=X] → View [testID=X]
-  // Keep only the topmost component carrying each testID.
+  // Collapse same-testID chains from prop drilling through HOC layers
+  // (ScreenWrapper → ScreenWrapperContainer → View, all [testID=X]); keep the topmost.
   for (const c of components) {
     if (removed.has(c.id) || !c.testID) continue;
     let ancestor = c.parentIdx;
@@ -156,9 +158,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse full-screen transparent wrappers — components that span the entire screen
-  // with no meaningful content (no text, testID, or accessibilityLabel) are pure layout
-  // infrastructure and add nothing but indentation noise.
+  // Full-screen spans with no text, testID or accLabel are pure layout
+  // infrastructure — nothing but indentation noise.
   if (canNormalize) {
     for (const c of components) {
       if (removed.has(c.id) || c.text || c.testID || c.accLabel) continue;
@@ -175,10 +176,8 @@ export function buildTextTree(
     }
   }
 
-  // Remove components whose display text (text or accLabel) is already present
-  // in an ancestor's display text. Handles chains like:
+  // Drop display text already contained in an ancestor's, up to 6 levels:
   //   Link "Browse topic X" → Button "Browse topic X" → Text "X"
-  // where children repeat or subset the parent's label. Up to 6 levels deep.
   for (const c of components) {
     const cDisplay = c.text ?? c.accLabel;
     if (removed.has(c.id) || !cDisplay || c.testID) continue;
@@ -201,9 +200,8 @@ export function buildTextTree(
     }
   }
 
-  // Collapse content-free wrappers with same rect as their effective parent.
-  // A component that has no text, testID, or accLabel and overlaps its parent's
-  // rect is a layout wrapper that adds indentation noise without navigation value.
+  // A content-free component overlapping its parent's rect is a layout wrapper:
+  // indentation noise with no navigation value.
   for (const c of components) {
     if (removed.has(c.id) || c.text || c.testID || c.accLabel) continue;
     if (!c.rect) continue;
@@ -222,10 +220,8 @@ export function buildTextTree(
   const roots: number[] = [];
   for (const c of components) {
     if (removed.has(c.id)) {
-      // Reparent children of the removed node to its parent
       continue;
     }
-    // Walk up to find closest non-removed ancestor
     let effectiveParent = c.parentIdx;
     while (effectiveParent >= 0 && removed.has(effectiveParent)) {
       effectiveParent = components[effectiveParent].parentIdx;
@@ -242,11 +238,8 @@ export function buildTextTree(
     }
   }
 
-  // Remove single-child leaf nodes that add no navigation value: the component
-  // has no testID, is the sole child of a parent that already has text/testID,
-  // and has no children of its own. Catches patterns like:
-  //   WebOnlyInlineLinkText "Rachel Maddow" → UITextView "View profile"
-  //   ShareMenuButton [testID=postShareBtn] → Trigger "Open share menu"
+  // Drop content-free sole-child leaves under a parent that already carries
+  // text/testID — e.g. ShareMenuButton [testID=postShareBtn] → Trigger "Open share menu".
   {
     const toRemove: number[] = [];
     for (const [parentId, children] of childrenOf) {
@@ -264,7 +257,6 @@ export function buildTextTree(
         removed.add(id);
         filterStats.soleChildLeaf.count++;
       }
-      // Rebuild childrenOf after removals
       childrenOf.clear();
       roots.length = 0;
       for (const c of components) {
@@ -287,8 +279,6 @@ export function buildTextTree(
     }
   }
 
-  // Count visible nodes and identify collapsible single-child wrapper chains
-  // for maxNodes truncation.
   function countNodes(id: number): number {
     let n = 1;
     const ch = childrenOf.get(id);
@@ -299,8 +289,6 @@ export function buildTextTree(
   let totalVisible = 0;
   for (const rid of roots) totalVisible += countNodes(rid);
 
-  // A node is a "content-free single-child wrapper" if it has exactly 1 child
-  // and carries no text, testID, or accLabel.
   function isWrapper(id: number): boolean {
     const c = components[id];
     const ch = childrenOf.get(id);
@@ -308,14 +296,10 @@ export function buildTextTree(
     return !c.text && !c.testID && !c.accLabel;
   }
 
-  // collapsed maps a node id → number of wrappers collapsed below it.
-  // When set, the node's single-child chain is replaced with "... via N wrappers".
   const collapsed = new Map<number, number>();
   let collapsedCount = 0;
 
   if (opts.maxNodes !== undefined && totalVisible > opts.maxNodes) {
-    // Find all maximal single-child wrapper chains: sequences of consecutive
-    // wrapper nodes (each with exactly 1 child and no content).
     type Chain = { startId: number; length: number };
     const chains: Chain[] = [];
 
@@ -341,15 +325,11 @@ export function buildTextTree(
 
     for (const rid of roots) findChains(rid);
 
-    // Sort by chain length descending — collapse longest chains first
     chains.sort((a, b) => b.length - a.length);
 
     const excess = totalVisible - opts.maxNodes;
     for (const chain of chains) {
       if (collapsedCount >= excess) break;
-      // Collapsing a chain of N wrappers saves (N - 1) nodes
-      // (we keep the chain start, replace middle with summary, keep the end)
-      // Actually we replace all N wrappers with 1 summary line, saving N - 1.
       collapsed.set(chain.startId, chain.length);
       collapsedCount += chain.length - 1;
     }
@@ -357,10 +337,7 @@ export function buildTextTree(
 
   const lines: string[] = [];
 
-  if (canNormalize) {
-    lines.push(`Screen: ${screenW}x${screenH}`);
-    lines.push("");
-  }
+  if (canNormalize) lines.push(`Screen: ${screenW}x${screenH}`, "");
 
   function formatLabel(c: RawEntry): string {
     let label = c.name;
@@ -368,9 +345,9 @@ export function buildTextTree(
     if (displayText) label += ` "${displayText}"`;
     if (c.testID) label += ` [testID=${c.testID}]`;
     if (c.rect && canNormalize) {
-      const tapX = ((c.rect.x + c.rect.w / 2) / screenW).toFixed(2);
-      const tapY = ((c.rect.y + c.rect.h / 2) / screenH).toFixed(2);
-      label += ` (tap: ${tapX},${tapY})`;
+      const tapX = (c.rect.x + c.rect.w / 2) / screenW;
+      const tapY = (c.rect.y + c.rect.h / 2) / screenH;
+      label += ` (tap: ${tapX.toFixed(2)},${tapY.toFixed(2)})`;
     }
     return label;
   }
@@ -381,7 +358,6 @@ export function buildTextTree(
 
     const chainLen = collapsed.get(id);
     if (chainLen !== undefined) {
-      // Skip through the wrapper chain to find the end node
       let cur = id;
       for (let i = 0; i < chainLen; i++) {
         cur = childrenOf.get(cur)![0];
@@ -486,19 +462,19 @@ export function buildTextTree(
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   onScreenOnly: z
     .boolean()
     .default(true)
     .describe(
-      "When true (default), only components visible on screen are returned. " +
-        "Set to false to include all mounted components including those scrolled " +
-        "off-screen. Useful when you need to understand the full page structure."
+      "When true, only components visible on screen are returned. " +
+        "Set to false to include all mounted components, including those scrolled " +
+        "off-screen, e.g. to understand the full page structure."
     ),
   maxNodes: z.coerce
     .number()
@@ -512,74 +488,78 @@ const zodSchema = z.object({
     .boolean()
     .default(false)
     .describe(
-      "When true, appends a summary of all filtered components: total fiber count, " +
-        "JS-side skip counts by name, and TS-side filter pass removals. " +
-        "Useful for understanding what was pruned from the tree."
+      "When true, appends a summary of all filtered components: total fiber count " +
+        "and skip counts by component name and by filter."
     ),
 });
 
-export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
-  id: "debugger-component-tree",
-  description: `Fetch the current screen of a running React Native app as a compact component text tree.
-Only shows on-screen components with unique positions — off-screen (scrolled) content,
-full-screen transparent wrappers, and implementation-detail components are pruned.
+export function createDebuggerComponentTreeTool(): ToolDefinition<
+  z.infer<typeof zodSchema>,
+  string
+> {
+  return {
+    id: "debugger-component-tree",
+    description: `Fetch the current screen of a running React Native app as a compact tree of React components.
+Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
+text), [testID=…] and its center as (tap: x,y) fractions of the screen<flag:macos-apps> or Mac app window, including the title bar</flag:macos-apps>.
+Full-screen transparent wrappers and implementation-detail components are pruned. Wrappers the size
+of their parent are pruned too, so a missing name proves nothing: check with debugger-inspect-element.
 
-Each visible component is listed with its name, text content, and normalized
-tap coordinates in [0,1] space (fractions of the screen, not pixels — same space as tap/swipe/gesture).
+Use when you need what describe does not show: a testID for a selector (on Android, describe omits
+the testID of a view that has no label and is not tappable), or the component names and nesting
+behind the screen before editing code. To find what to tap, use describe.
 
-This is the preferred element discovery tool for React Native apps. More information in argent-react-native-app-workflow skill.
+Returns a compact text tree; call again after navigation. Fails if the Metro debugger is disconnected.<flag:macos-apps> On Mac apps with several React Native windows, the tool uses the root with the most components. With the old architecture (Paper), native views around the React root can shift tap points. Use describe for tap targets.</flag:macos-apps>`,
+    zodSchema,
+    searchHint: "react native component tree testID testIDs selector component names hierarchy",
+    readOnly: true,
+    interaction: {
+      startedMsg: () => "Reading React component tree",
+      completedMsg: () => "Read React component tree",
+      failedMsg: ({ failureSignal }) =>
+        `Failed to read React component tree: ${failureSignal.error_code}`,
+    },
+    // RN-only: needs the React DevTools backend from the dev JS bundle. Chromium has
+    // no equivalent — use `describe` there.
+    capability: RN_ONLY_TOOL_CAPABILITY,
+    services: (params) => ({
+      debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
+    }),
+    async execute(services, params) {
+      const api = services.debugger as JsRuntimeDebuggerApi;
+      const requestId = crypto.randomUUID();
+      const script = makeComponentTreeScript({
+        includeSkipped: params.includeSkipped,
+        requestId,
+        addRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
+      });
+      const response = await api.cdp.evaluateWithBinding(script, requestId, {
+        timeout: 15_000,
+      });
 
-Workflow:
-  1. Call this tool to get the component tree.
-  2. Find the desired element by name, text, testID, or accessibilityLabel.
-  3. Use the (tap: x,y) coordinates directly with the tap tool.
+      const raw = response.result;
+      if (typeof raw !== "string") {
+        return "Error: no result from component tree script";
+      }
 
-Call again after navigation or state changes since positions may shift.
-Set includeSkipped=true to see a summary of all filtered components.
-Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
-  alwaysLoad: true,
-  searchHint: "react native component tree discovery tap coordinates",
-  zodSchema,
-  // RN-only: depends on the React DevTools backend that ships with the JS
-  // bundle in dev builds. Chromium has no equivalent — use `describe` instead
-  // for DOM-tree discovery on Chromium.
-  capability: RN_ONLY_TOOL_CAPABILITY,
-  services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
-  }),
-  async execute(services, params) {
-    const api = services.debugger as JsRuntimeDebuggerApi;
-    const requestId = crypto.randomUUID();
-    const script = makeComponentTreeScript({
-      includeSkipped: params.includeSkipped,
-      requestId,
-    });
-    const response = await api.cdp.evaluateWithBinding(script, requestId, {
-      timeout: 15_000,
-    });
+      const parsed: RawResult = JSON.parse(raw);
+      if (parsed.error) {
+        return `Error: ${parsed.error}`;
+      }
 
-    const raw = response.result;
-    if (typeof raw !== "string") {
-      return "Error: no result from component tree script";
-    }
+      const tree = buildTextTree(parsed, {
+        onScreenOnly: params.onScreenOnly,
+        maxNodes: params.maxNodes,
+        includeSkipped: params.includeSkipped,
+      });
 
-    const parsed: RawResult = JSON.parse(raw);
-    if (parsed.error) {
-      return `Error: ${parsed.error}`;
-    }
+      const deviceLine = [
+        `device: ${api.deviceName}`,
+        `app: ${api.appName}`,
+        ...(api.logicalDeviceId ? [`logicalDeviceId: ${api.logicalDeviceId}`] : []),
+      ].join(" | ");
 
-    const tree = buildTextTree(parsed, {
-      onScreenOnly: params.onScreenOnly,
-      maxNodes: params.maxNodes,
-      includeSkipped: params.includeSkipped,
-    });
-
-    const deviceLine = [
-      `device: ${api.deviceName}`,
-      `app: ${api.appName}`,
-      ...(api.logicalDeviceId ? [`logicalDeviceId: ${api.logicalDeviceId}`] : []),
-    ].join(" | ");
-
-    return `[${deviceLine}]\n${tree}`;
-  },
-};
+      return `[${deviceLine}]\n${tree}`;
+    },
+  };
+}

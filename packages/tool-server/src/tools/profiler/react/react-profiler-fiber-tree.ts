@@ -5,17 +5,19 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import {
+  buildHeartbeatScript,
+  FIBER_ROOT_TRACKER_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
+import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
 const NO_RENDERERS_ERROR = "no renderers attached to hook";
 const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-// See `react-profiler-renders.ts` for the rationale — branch on the actual
-// error code so "hook missing" (rebuild in dev mode) and "renderers not
-// attached" (wait for first render / let start bootstrap) get accurate
-// remediation instead of being collapsed into one misleading message.
+// Rationale for the per-code split: `react-profiler-renders.ts`.
 function messageForHookError(code: string): string {
   if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
   if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
@@ -96,40 +98,47 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
 }
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+      "Device ID of the app to inspect<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>. During a recording, use the ID passed to react-profiler-start."
     ),
   max_depth: z.coerce
     .number()
     .int()
     .positive()
     .default(10)
-    .describe("Maximum tree depth to traverse (default 10)"),
+    .describe("Maximum tree depth to traverse"),
   filter: z.string().optional().describe("Regex string to filter component names"),
 });
 
 export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
   description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
-Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).
+Use when tracing the ancestry of a library component.
 Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
 Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: () => "Reading React fiber tree",
+    completedMsg: () => "Read React fiber tree",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to read React fiber tree: ${failureSignal.error_code}`,
+  },
   // RN-only: walks the fiber tree via the React DevTools backend hook.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
+    // Same key as react-profiler-start, so a forwarded logicalDeviceId reads its run.
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
-    // Bump owner heartbeat only when this tool-server owns the active session.
-    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
-      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    if (api.profilingActive && api.sessionId && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(buildHeartbeatScript(api.sessionId)).catch(() => {});
     }
 
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");
@@ -169,7 +178,6 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
 
     let parsed = JSON.parse(result.result.value) as unknown;
 
-    // Re-inject hook once if missing and retry
     if (
       typeof parsed === "object" &&
       parsed !== null &&

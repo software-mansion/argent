@@ -1,7 +1,9 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import * as fs from "node:fs/promises";
 import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   CHROMIUM_CDP_NAMESPACE,
   discoverPrimaryPage,
@@ -9,6 +11,7 @@ import {
   chromiumCdpRef,
   ensureCdpReachable,
 } from "../src/blueprints/chromium-cdp";
+import { chromiumImpl } from "../src/tools/open-url/platforms/chromium";
 import { resolveDevice } from "../src/utils/device-info";
 
 interface FakeCdp {
@@ -23,10 +26,13 @@ interface FakeCdp {
     method: string,
     payload: Record<string, unknown> | ((id: number) => Record<string, unknown>)
   ) => void;
+  /** Record requests but answer none, like a page under a JavaScript dialog. */
+  mute: () => void;
 }
 
 async function startFakeCdp(): Promise<FakeCdp> {
   const recordedMethods: string[] = [];
+  let muted = false;
   const customReplies = new Map<
     string,
     Record<string, unknown> | ((id: number) => Record<string, unknown>)
@@ -74,6 +80,7 @@ async function startFakeCdp(): Promise<FakeCdp> {
           params?: unknown;
         };
         recordedMethods.push(msg.method);
+        if (muted) return;
         let result: unknown;
         const custom = customReplies.get(msg.method);
         if (custom !== undefined) {
@@ -126,6 +133,9 @@ async function startFakeCdp(): Promise<FakeCdp> {
     ws: wss,
     recordedMethods,
     setReply: (method, payload) => customReplies.set(method, payload),
+    mute: () => {
+      muted = true;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         wss.close(() => httpSrv.close(() => resolve()));
@@ -134,9 +144,11 @@ async function startFakeCdp(): Promise<FakeCdp> {
 }
 
 const servers: FakeCdp[] = [];
+const filesToCleanup: string[] = [];
 
 afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
+  for (const p of filesToCleanup.splice(0)) await fs.rm(p, { force: true });
 });
 
 describe("chromiumCdpBlueprint (smoke)", () => {
@@ -182,12 +194,55 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       });
       expect(s.recordedMethods).toContain("Input.dispatchMouseEvent");
 
+      // Session priming enabled focus emulation so the page believes it is
+      // focused even when the OS window is not (focus-gated app logic must
+      // keep working while an agent drives an unfocused window).
+      expect(s.recordedMethods).toContain("Emulation.setFocusEmulationEnabled");
+
       // Screenshot — fake server returns a tiny PNG, we expect a real file
       // path in the unified media dir maintained by the chromium-server.
       const shot = await instance.api.captureScreenshot();
+      filesToCleanup.push(shot.path);
       expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("factory with answerTimeoutMs fails within it, sending nothing more, on a page that does not answer", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    s.mute();
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const started = Date.now();
+
+    const err = await chromiumCdpBlueprint
+      .factory({}, device, { device, answerTimeoutMs: 300 })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT);
+    expect(s.recordedMethods).toEqual(["Runtime.evaluate"]);
+    await vi.waitFor(() => expect(s.ws.clients.size).toBe(0));
+  });
+
+  it("open-url fails with the classified error when Chromium rejects the navigation", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    s.setReply("Page.navigate", { frameId: "F", errorText: "net::ERR_NAME_NOT_RESOLVED" });
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
+
+    try {
+      const err = await chromiumImpl
+        .handler({ chromium: instance.api }, { udid: device.id, url: "http://x.invalid/" }, device)
+        .catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
     } finally {
       await instance.dispose();
     }

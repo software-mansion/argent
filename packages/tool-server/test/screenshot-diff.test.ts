@@ -2,7 +2,8 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { diffPngFiles, type Rgb } from "../src/tools/screenshot-diff/screenshot-diff";
 
 const analyzeScreenshotTextChangesMock = vi.hoisted(() =>
@@ -113,24 +114,63 @@ describe("diffPngFiles", () => {
     expect(result.contextDiffPath).toBeUndefined();
   });
 
-  it("compares same-aspect screenshots of different resolutions instead of failing", async () => {
+  it.each([
+    // The same screen at two screenshot scales.
+    { baseline: { width: 10, height: 20 }, current: { width: 20, height: 40 } },
+    // Full-resolution iPhone 16 vs iPhone 16 Pro: 0.29% apart in aspect ratio.
+    { baseline: { width: 1179, height: 2556 }, current: { width: 1206, height: 2622 } },
+    // Pixel 9 vs Pixel 7: same width, 24 rows taller.
+    { baseline: { width: 1080, height: 2424 }, current: { width: 1080, height: 2400 } },
+    // Same height, different width.
+    { baseline: { width: 1080, height: 2400 }, current: { width: 1440, height: 2400 } },
+  ])(
+    "reports $baseline.width x $baseline.height vs $current.width x $current.height as a dimension mismatch without comparing",
+    async ({ baseline, current }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, baseline.width, baseline.height, { r: 30, g: 60, b: 90 });
+      await writePng(currentPath, current.width, current.height, { r: 30, g: 60, b: 90 });
+
+      const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+      expect(result).toMatchObject({
+        differentPixels: 0,
+        mismatchPercentage: 0,
+        dimensionMismatch: { expected: baseline, actual: current },
+      });
+      const lines = result.summary.split("\n");
+      expect(lines).toContain("- status: dimension_mismatch");
+      expect(lines).toContain(
+        "  - only images of identical dimensions are compared; capture both with the same device model, orientation, foldable posture and screenshot scale (live captures use scale: 1.0) and, on a Mac app, the same window size, counting a sheet, popover, alert or menu reaching past it"
+      );
+      expect(result.diffPath).toBeUndefined();
+      expect(result.contextDiffPath).toBeUndefined();
+      expect(analyzeScreenshotTextChangesMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("compares equal-dimension images", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
-    // Same aspect ratio (0.5), different scale: a 0.3x-style saved baseline vs a
-    // full-res live capture. These must be normalized and compared, not rejected.
     await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
-    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 }, [
+      ...rectPixels(2, 10, 3, 2, { r: 255, g: 0, b: 0 }),
+    ]);
 
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    const result = await diffPngFiles({
+      baselinePath,
+      currentPath,
+      outputDir: dir,
+      topMask: "none",
+    });
 
     expect(result.dimensionMismatch).toBeUndefined();
-    expect(result.summary).not.toContain("dimension_mismatch");
-    expect(result.imageSize).toEqual({ width: 10, height: 20 });
+    expect(result.differentPixels).toBe(6);
     expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
-    const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
-    expect(diff.width).toBe(10);
-    expect(diff.height).toBe(20);
+    expect(result.imageSize).toEqual({ width: 10, height: 20 });
+    expect(result.summary).toContain("- compared_at: 10x20");
   });
 
   it("merges same-line fragments but keeps separate rows distinct", async () => {
@@ -318,6 +358,39 @@ describe("diffPngFiles", () => {
     });
   });
 
+  it.each([
+    [
+      "non-PNG bytes under a .png name",
+      async (bad: string) => fs.writeFile(bad, Buffer.from("\xff\xd8\xff\xe0JFIF", "binary")),
+    ],
+    [
+      "a truncated PNG",
+      async (bad: string, valid: string) =>
+        fs.writeFile(bad, (await fs.readFile(valid)).subarray(0, 40)),
+    ],
+    ["a directory", async (bad: string) => fs.mkdir(bad)],
+  ])("classifies %s and names the side that could not be decoded", async (_label, writeBad) => {
+    const dir = await makeTempDir();
+    const currentPath = path.join(dir, "current.png");
+    const baselinePath = path.join(dir, "bad.png");
+    await writePng(currentPath, 4, 4, { r: 0, g: 0, b: 0 });
+    await writeBad(baselinePath, currentPath);
+
+    const error = await diffPngFiles({ baselinePath, currentPath, outputDir: dir }).then(
+      () => undefined,
+      (err: unknown) => err
+    );
+
+    expect(error).toBeInstanceOf(FailureError);
+    expect((error as Error).message).toContain(baselinePath);
+    expect(getFailureSignal(error)).toEqual({
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_decode_failed",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  });
+
   it("passes the default text-change minimum confidence to OCR analysis", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
@@ -334,56 +407,27 @@ describe("diffPngFiles", () => {
     );
   });
 
-  // diffPngFiles normalizes two same-aspect, different-resolution screenshots to a
-  // common size, then hands the OCR/font pass BOTH the normalized images and each
-  // image's decoded->normalized region scale, so the rescaled text bounds and the
-  // pixels they crop share the pixel-diff coordinate space. normalizeToCommonSize
-  // only ever downscales the LARGER image and returns the smaller one untouched, so
-  // for any one fixture only the downscaled side's wiring is load-bearing: its
-  // normalized image and region scale differ from the raw decoded ones, so reverting
-  // baselineImage/currentImage (or the matching region scale) to the decoded value
-  // would surface the raw size and fail here. The untouched side's assertions hold
-  // for both the decoded and normalized value, so we exercise BOTH directions to pin
-  // both sides. Without this wiring the OCR pass would be handed the raw images and
-  // no region scales -- the mismatch #442 fixed.
-  it.each([
-    {
-      larger: "baseline",
-      baseline: { width: 480, height: 240 },
-      current: { width: 240, height: 120 },
-      baselineRegionScale: { x: 0.5, y: 0.5 },
-      currentRegionScale: { x: 1, y: 1 },
-    },
-    {
-      larger: "current",
-      baseline: { width: 240, height: 120 },
-      current: { width: 480, height: 240 },
-      baselineRegionScale: { x: 1, y: 1 },
-      currentRegionScale: { x: 0.5, y: 0.5 },
-    },
-  ])(
-    "hands OCR the normalized images and decoded->normalized region scales when the $larger image is downscaled (diffPngFiles wiring)",
-    async ({ baseline, current, baselineRegionScale, currentRegionScale }) => {
-      const dir = await makeTempDir();
-      const baselinePath = path.join(dir, "baseline.png");
-      const currentPath = path.join(dir, "current.png");
-      await writePng(baselinePath, baseline.width, baseline.height, { r: 0, g: 0, b: 0 });
-      await writePng(currentPath, current.width, current.height, { r: 0, g: 0, b: 0 });
+  // Font-change detection reads these images; without them it reports nothing.
+  it("passes both decoded images to OCR analysis", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 20, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 2, 20, { r: 0, g: 0, b: 0 }, [
+      { x: 1, y: 10, rgb: { r: 255, g: 0, b: 0 } },
+    ]);
 
-      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
 
-      // Both images are normalized to the common 240x120 size; each region scale
-      // maps that image's OCR bounds from its decoded size into the shared space.
-      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          baselineImage: expect.objectContaining({ width: 240, height: 120 }),
-          currentImage: expect.objectContaining({ width: 240, height: 120 }),
-          baselineRegionScale,
-          currentRegionScale,
-        })
-      );
-    }
-  );
+    const options = (analyzeScreenshotTextChangesMock.mock.calls[0] as unknown[])[0] as {
+      baselineImage?: PNG;
+      currentImage?: PNG;
+    };
+    expect(options.baselineImage).toMatchObject({ width: 2, height: 20 });
+    expect(options.currentImage).toMatchObject({ width: 2, height: 20 });
+    expect(readRgb(options.baselineImage!, 1, 10)).toEqual({ r: 0, g: 0, b: 0 });
+    expect(readRgb(options.currentImage!, 1, 10)).toEqual({ r: 255, g: 0, b: 0 });
+  });
 
   // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
   // found any changes via hasPixelDiff; the pass uses that to skip text analysis when
@@ -418,8 +462,16 @@ describe("diffPngFiles", () => {
   );
 });
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
+
 async function makeTempDir(): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 async function writePng(

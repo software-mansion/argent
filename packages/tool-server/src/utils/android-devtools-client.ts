@@ -1,15 +1,8 @@
 import * as net from "node:net";
-import * as readline from "node:readline";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { attachNdjsonReader, reportDroppedFrameToStderr } from "./ndjson-socket";
 
-/**
- * Newline-delimited JSON socket client for the android-devtools helper.
- *
- * UiAutomation is single-threaded inside the helper, so requests are
- * serialised here too — every `request` waits for the previous response
- * before sending. The 5 s per-RPC timeout matches the iOS native-devtools
- * client (`packages/tool-server/src/blueprints/native-devtools.ts:299`).
- */
+/** Newline-delimited JSON socket client for the android-devtools helper. */
 
 export interface AndroidDevtoolsClient {
   request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -24,11 +17,16 @@ interface PendingRequest {
 
 const DEFAULT_RPC_TIMEOUT_MS = 5_000;
 const LONG_RPC_TIMEOUT_MS = 15_000;
+/**
+ * `setText` waits up to 1 s for focus (searching up to 3000 nodes under a
+ * host view), clears the node cache, then reads back for up to about 1.2 s;
+ * the helper's own worker gives up at 12 s and answers. This outlasts that.
+ */
+const SET_TEXT_RPC_TIMEOUT_MS = 14_000;
 
 /**
- * Connect to the helper over a forwarded TCP socket and return a typed RPC
- * client. The socket's `close` / `error` events fire onTerminated so the
- * caller can propagate them to the registry's `terminated` event.
+ * Connect to the helper over the adb-forwarded TCP socket. `onTerminated` fires
+ * on every teardown path — socket `close`/`error` and an explicit `close()`.
  */
 export function connectAndroidDevtoolsClient(
   localPort: number,
@@ -41,10 +39,8 @@ export function connectAndroidDevtoolsClient(
     const pending = new Map<number, PendingRequest>();
     let nextId = 1;
     let closed = false;
-    // Serial request queue: only one request is in flight at a time. This
-    // matches the helper's single UiAutomation worker thread — sending two
-    // concurrent requests would still be serialised on the device, but the
-    // host-side queue makes timeouts predictable.
+    // One request in flight at a time: the helper drives UiAutomation from a
+    // single thread, and queueing host-side keeps per-RPC timeouts predictable.
     let chain: Promise<unknown> = Promise.resolve();
 
     const cleanup = (error?: Error) => {
@@ -72,36 +68,36 @@ export function connectAndroidDevtoolsClient(
     };
 
     socket.once("connect", () => {
-      const rl = readline.createInterface({ input: socket });
-      rl.on("line", (line) => {
-        if (!line.trim()) return;
-        let parsed: { id?: number; result?: unknown; error?: { message?: string; type?: string } };
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          return;
-        }
-        if (typeof parsed.id !== "number") return;
-        const req = pending.get(parsed.id);
-        if (!req) return;
-        pending.delete(parsed.id);
-        clearTimeout(req.timer);
-        if (parsed.error) {
-          const message = parsed.error.message ?? "Unknown helper error";
-          const type = parsed.error.type ?? "HelperError";
-          req.reject(
-            new FailureError(`${type}: ${message}`, {
-              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
-              failure_stage: "android_devtools_rpc_response",
-              failure_area: "tool_server",
-              error_kind: "subprocess",
-            })
-          );
-        } else {
-          req.resolve(parsed.result);
-        }
+      attachNdjsonReader(socket, {
+        onDropped: reportDroppedFrameToStderr("android-devtools"),
+        onMessage: (raw) => {
+          const parsed = raw as {
+            id?: number;
+            result?: unknown;
+            error?: { message?: string; type?: string };
+          };
+          if (typeof parsed.id !== "number") return;
+          const req = pending.get(parsed.id);
+          if (!req) return;
+          pending.delete(parsed.id);
+          clearTimeout(req.timer);
+          if (parsed.error) {
+            const message = parsed.error.message ?? "Unknown helper error";
+            const type = parsed.error.type ?? "HelperError";
+            req.reject(
+              new FailureError(`${type}: ${message}`, {
+                error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+                failure_stage: "android_devtools_rpc_response",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+              })
+            );
+          } else {
+            req.resolve(parsed.result);
+          }
+        },
       });
-      rl.on("close", () => cleanup());
+      socket.on("close", () => cleanup());
 
       resolve({
         request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -118,7 +114,11 @@ export function connectAndroidDevtoolsClient(
             }
             const id = nextId++;
             const timeoutMs =
-              method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
+              method === "getHierarchy"
+                ? LONG_RPC_TIMEOUT_MS
+                : method === "setText"
+                  ? SET_TEXT_RPC_TIMEOUT_MS
+                  : DEFAULT_RPC_TIMEOUT_MS;
             return new Promise<T>((resolveReq, rejectReq) => {
               const timer = setTimeout(() => {
                 pending.delete(id);
@@ -145,8 +145,8 @@ export function connectAndroidDevtoolsClient(
               }
             });
           };
-          // Chain so requests serialise; swallow rejection on the chain
-          // pointer so one failure doesn't poison subsequent requests.
+          // Swallow the chain pointer's rejection so one failure doesn't
+          // poison subsequent requests.
           const result = chain.then(send, send);
           chain = result.catch(() => undefined);
           return result;

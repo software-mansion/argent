@@ -3,8 +3,8 @@
 version: 2
 
 updates:
-  # npm: root + every workspace package (packages/*)
-  - package-ecosystem: "npm"
+  # bun: root + every workspace package (packages/*)
+  - package-ecosystem: "bun"
     directories:
       - "/"
       - "/packages/*"
@@ -16,21 +16,44 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "npm"
+      - "bun"
     commit-message:
       prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
       include: "scope"
     ignore:
       # tree-sitter 0.25.0 ships no Node 24 prebuilds and its binding.gyp forces
       # C++17 while Node 22+ v8 (cppgc) headers require C++20, so the native
-      # build fails `npm install`/`npm ci` on current Node. Stay on ^0.21.1,
+      # build fails `bun install` on current Node. Stay on ^0.21.1,
       # which ships N-API prebuilds (no compile). Patch updates stay allowed;
       # drop this ignore once upstream restores prebuilt binaries.
       - dependency-name: "tree-sitter"
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
+      # The docs theme @swmansion/t-rex-ui pins Docusaurus 3.9.2 exactly and
+      # imports theme-common internals 3.10 removed (`useKeyboardNavigation`).
+      # Drop this once t-rex-ui moves to a newer Docusaurus.
+      - dependency-name: "@docusaurus/*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # Docusaurus 3.9.2's webpackbar options fail validation in webpack
+      # 5.112.0's ProgressPlugin, breaking the docs build. Moves with Docusaurus.
+      - dependency-name: "webpack"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # @swmansion/argent-cloud-sdk 0.3.1 peer-requires @moq/net ^0.3.5, so a
+      # 0.4 spec leaves the lock on 0.3.5. Moves with the SDK.
+      - dependency-name: "@moq/net"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      # TypeScript 7 ships no JS compiler API, which ts-node, typescript-eslint
+      # and knip all load.
+      - dependency-name: "typescript"
+        versions:
+          - ">=7"
     groups:
       # Batch all minor + patch updates into one PR per week to cut noise.
       npm-minor-patch:
@@ -47,11 +70,6 @@ updates:
           - "*"
         update-types:
           - "major"
-      # Group security updates across all directories.
-      npm-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
 
   # GitHub Actions used by workflows under .github/workflows
   - package-ecosystem: "github-actions"

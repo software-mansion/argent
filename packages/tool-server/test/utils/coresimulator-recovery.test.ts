@@ -135,6 +135,21 @@ describe("recoverCoreSimulatorInjection", () => {
     expect(SHUTDOWN_STEP_TIMEOUT_MS).toBeGreaterThan(SIMCTL_SPAWN_TIMEOUT_MS);
   });
 
+  it("boots a target in an additional device set through its --set prefix", async () => {
+    // Without it, `simctl boot` looks in the default set, fails, and the
+    // host-wide shutdown leaves that simulator off.
+    const { calls, exec } = recordingExec();
+    await recoverCoreSimulatorInjection("UDID-3", {
+      exec,
+      targetPrefix: ["simctl", "--set", "/sets/radon"],
+    });
+
+    expect(calls.slice(-2)).toEqual([
+      ["xcrun", ["simctl", "--set", "/sets/radon", "boot", "UDID-3"]],
+      ["xcrun", ["simctl", "--set", "/sets/radon", "bootstatus", "UDID-3", "-b"]],
+    ]);
+  });
+
   it("leaves the device shut down when rebootAfter is false", async () => {
     const { calls, exec } = recordingExec();
     const steps = await recoverCoreSimulatorInjection("UDID-2", { rebootAfter: false, exec });

@@ -65,7 +65,7 @@ describe("recover-touch-injection", () => {
 
     expect(disposed).toEqual(expect.arrayContaining([simUrn, axUrn]));
     expect(result.disposedServices).toEqual(expect.arrayContaining([simUrn, axUrn]));
-    expect(recoverMock).toHaveBeenCalledWith(UDID, { rebootAfter: true });
+    expect(recoverMock).toHaveBeenCalledWith(UDID, { rebootAfter: true, targetPrefix: ["simctl"] });
     expect(result.recovered).toBe(true);
     expect(result.steps).toEqual(CLEAN_STEPS);
     expect(result.note).toMatch(/daemon restarted and the target device is booted/i);
@@ -133,7 +133,10 @@ describe("recover-touch-injection", () => {
 
     const result = await tool.execute({} as never, { udid: UDID, rebootAfter: false });
 
-    expect(recoverMock).toHaveBeenCalledWith(UDID, { rebootAfter: false });
+    expect(recoverMock).toHaveBeenCalledWith(UDID, {
+      rebootAfter: false,
+      targetPrefix: ["simctl"],
+    });
     expect(result.note).toMatch(/left shut down/i);
     expect(result.note).toMatch(/boot-device/);
   });

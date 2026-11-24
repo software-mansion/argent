@@ -7,6 +7,7 @@ import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import { classifyDevice, resolveDevice } from "../../utils/device-info";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import {
   recoverCoreSimulatorInjection,
   recoverySucceeded,
@@ -163,6 +164,12 @@ iOS simulators only. Returns { recovered, steps, disposedServices, note } — re
     // A cold boot outlives the MCP client's 30s abort, and its retry would stack
     // overlapping host-wide shutdown/killall runs that nothing cancels.
     longRunning: true,
+    interaction: {
+      startedMsg: ({ params }) => `Restarting the CoreSimulator daemon for ${params.udid}`,
+      completedMsg: ({ params }) => `Restarted the CoreSimulator daemon for ${params.udid}`,
+      failedMsg: ({ params, failureSignal }) =>
+        `Failed to restart the CoreSimulator daemon for ${params.udid}: ${failureSignal.error_code}`,
+    },
     services: () => ({}),
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
@@ -183,6 +190,10 @@ iOS simulators only. Returns { recovered, steps, disposedServices, note } — re
         );
       }
 
+      // Refuses a provider's simulator without the simctl grant, and resolves
+      // the `--set` of one in an additional device set, before anything host-wide runs.
+      const target = await simctlTargetForUdid(device.id);
+
       // Drop argent's live handles onto the old daemon before restarting it —
       // for every local Apple simulator, since the restart invalidates them all.
       const snapshot = registry.getSnapshot();
@@ -194,7 +205,10 @@ iOS simulators only. Returns { recovered, steps, disposedServices, note } — re
         await registry.disposeService(urn);
       }
 
-      const steps = await recoverCoreSimulatorInjection(device.id, { rebootAfter });
+      const steps = await recoverCoreSimulatorInjection(target.nativeId, {
+        rebootAfter,
+        targetPrefix: target.prefix,
+      });
       const recovered = recoverySucceeded(steps);
 
       return {

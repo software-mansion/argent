@@ -1,13 +1,12 @@
 import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlInstall, simctlUninstall } from "../../../utils/sim-remote";
+import { assertIosAppBundle } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
- * Remote analogue of the iOS impl. `sim-remote simctl install` uploads the
- * local `.app` to the orchestrator over QUIC, so this works against a remote
- * sim with no extra staging — the developer points at the same on-disk path
- * they'd use locally.
+ * Remote analogue of the iOS impl: `sim-remote simctl install` uploads the local
+ * `.app` to the orchestrator, so the same on-disk path works against a remote sim.
  */
 export const iosRemoteImpl: PlatformImpl<
   ReinstallAppServices,
@@ -18,6 +17,8 @@ export const iosRemoteImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
+    // The tool-server may run on Linux here, with no plutil to read the bundle id.
+    await assertIosAppBundle(absolute, bundleId, { readBundleId: false });
     try {
       await simctlUninstall(udid, bundleId);
     } catch {

@@ -1,0 +1,23 @@
+---
+sidebar_position: 3
+sidebar_label: How it works
+title: How it works
+sidebar_custom_props:
+  icon: network
+---
+
+Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Argent Cloud server checks your API key and assigns machines. A hosted Mac runs the iOS simulators. The CLI sends each command to the machine and prints the result. The simulator has no window on your screen. You see it through screenshots, screen recordings or Argent.
+
+## Sessions and machines
+
+A session is your authenticated connection to Argent Cloud. A machine is a hosted Mac that Argent Cloud reserves for your session. `sim-remote` manages the two separately. You can keep a machine across shells, hand it to another client, or give it back without a logout. See [Manage machines](/docs/cloud/guides/machines).
+
+## Simulator control
+
+`sim-remote simctl` is a drop-in replacement for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. For commands that need access to files on your computer (such as `install`, `addmedia` or `push`) it uploads them to the machine for you. For commands that produce files (`io screenshot`, `io recordVideo`, `get_app_container`) it handles the download. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
+
+## Networking
+
+Your computer and the hosted simulator are on different networks. Neither side can reach the `localhost` of the other. A reverse tunnel lets the simulator reach a server on your computer. A forward tunnel lets your computer reach a server on the machine. `sim-remote` keeps the tunnels open between commands. See [Connect to local servers](/docs/cloud/guides/local-servers).
+
+The [CLI reference](/docs/cloud/reference/cli) lists all commands.

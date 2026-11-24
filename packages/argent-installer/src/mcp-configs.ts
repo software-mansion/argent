@@ -2,11 +2,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { canonicalPath } from "@argent/configuration-core";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
   PACKAGE_NAME,
   PERMISSION_RULE,
+  DEVIN_PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import {
@@ -18,13 +20,21 @@ import {
   writeToml,
   readYaml,
   writeYaml,
+  copyDir,
+  findRetiredFiles,
+  resolveLinkedDestination,
+  realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
   getLocalArgentBinRelPath,
   RULES_DIR,
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
+  RETIRED_BUNDLED_PATHS,
+  RETIRED_GLOBAL_RULES,
+  type RetiredFile,
 } from "./utils.js";
+import { getGloballyInstalledLaunchPaths } from "./topology.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
 import { parse as parseTomlText } from "smol-toml";
@@ -38,7 +48,6 @@ function getAvailableToolIds(): string[] {
   return tools.map((t) => t.id);
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 // MARK: Types
 
 export interface McpServerEntry {
@@ -47,12 +56,10 @@ export interface McpServerEntry {
   env?: Record<string, string>;
 }
 
-// A same-named argent config in a hidden scope the client resolves ahead of
-// the entry init just wrote (e.g. Claude Code's per-project section of
-// ~/.claude.json), or client state that blocks it from loading
-// (disabledMcpjsonServers). Adapters only report; init-stale-config.ts
+// Argent config or client state outside the scope init just wrote that can keep
+// that entry from taking effect. Adapters only report; init-stale-config.ts
 // decides removal vs. warning.
-export interface ShadowingConfigFinding {
+interface ShadowingConfigFinding {
   /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
   location: string;
   /** One-line consequence for the user, e.g. `takes precedence over .mcp.json`. */
@@ -60,10 +67,8 @@ export interface ShadowingConfigFinding {
   /** The conflicting entry when parseable; null for non-entry state (a block list). */
   entry: McpServerEntry | null;
   /**
-   * True when removal needs no further policy checks (state keyed to this
-   * project root, or removal only re-enables prompting). When false,
-   * init-stale-config.ts removes the finding only if provably dead and warns
-   * otherwise.
+   * True when removal needs no further policy checks. When false,
+   * init-stale-config.ts removes the finding only if provably dead, else warns.
    */
   autoRemove: boolean;
   /** Remove the conflicting state. Returns true if something was removed. */
@@ -72,27 +77,61 @@ export interface ShadowingConfigFinding {
 
 export interface McpConfigAdapter {
   name: string;
+  // Telemetry slug kept stable across a product rename; defaults to the
+  // sanitized `name`.
+  telemetryName?: string;
   detect(): boolean;
   projectPath(root: string): string | null;
   globalPath(): string | null;
   write(configPath: string, entry: McpServerEntry): void;
   remove(configPath: string): boolean;
-  // Non-mutating predicate used by `update` to skip adapters/scopes the user
-  // never opted into during `init`. Without this, `update` would re-create
-  // configs for any editor whose dir happens to exist on the user's machine
+  // Lets `update` skip adapters/scopes the user never opted into during `init`,
+  // instead of re-creating configs for any editor whose dir happens to exist
   // (issue #195). Implementations must read the same key `remove()` checks.
   hasArgentEntry(configPath: string): boolean;
-  // The argent entry in normalized command/args form, or null when absent. A
-  // present-but-unrecognizable entry comes back as { command: "", args: [] }
-  // so callers can tell "absent" from "unreadable" (hasArgentEntry must stay
-  // true for it).
+  // Normalized argent entry, or null when absent. A present-but-unrecognizable
+  // entry comes back as { command: "", args: [] } so callers can tell "absent"
+  // from "unreadable" (hasArgentEntry must stay true for it).
   getArgentEntry(configPath: string): McpServerEntry | null;
-  // Report argent state in config locations OUTSIDE the projectPath/globalPath
-  // pair that the client resolves ahead of (or gates) the entry written at
-  // `writtenScope`. Only clients with hidden scopes implement this.
+  // Report argent state outside the projectPath/globalPath pair that can keep
+  // the entry written at `writtenScope` from taking effect.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
+  // `init` only, after the user agreed. `update` never calls it: the user may
+  // have removed or narrowed the rules since, and that choice stays.
   addAllowlist?(root: string, scope: "local" | "global"): void;
+  // Why addAllowlist would write nothing here, for init to report; null when
+  // it would write.
+  allowlistSkipReason?(root: string, scope: "local" | "global"): string | null;
+  // `update` only: carry an allowlist the user still has over to the tools
+  // this version added. Never re-adds rules the user removed.
+  refreshAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
+}
+
+// `write` replaces the whole argent server entry, so an approval key the
+// editor keeps inside that entry (Devin's alwaysAllow, Gemini's trust, Kiro's
+// autoApprove) would be lost on every update. This reads it back so the new
+// entry carries it over, whatever the user set it to.
+function existingEntryKeys(
+  configPath: string,
+  serversKey: string,
+  keys: readonly string[]
+): Record<string, unknown> {
+  let entry: unknown;
+  try {
+    entry = (readJsonc(configPath)[serversKey] as Record<string, unknown> | undefined)?.[
+      MCP_SERVER_KEY
+    ];
+  } catch {
+    return {};
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return {};
+  const kept: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = (entry as Record<string, unknown>)[key];
+    if (value !== undefined) kept[key] = value;
+  }
+  return kept;
 }
 
 type CodexConfig = {
@@ -108,35 +147,31 @@ type CodexConfig = {
   };
 };
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-// How the committed MCP entry locates the argent executable.
-//   global     → bare PATH `argent` (the default).
-//   local-node → `node <project-relative bin path>` (normal node_modules layout).
-//   local-pnp  → `yarn argent` (Yarn Plug'n'Play; no node_modules).
-//   local-npx  → `npx --no-install argent` (bin path unverifiable; never bare
-//                `npx`/`-y`, which can hang a TTY-less stdio server or
-//                silently network-install).
+// How the MCP entry locates the argent executable. local-npx is the fallback for
+// when the bin path is unverifiable; `--no-install` keeps it from silently
+// network-installing, and never a bare `npx -y`, which can hang a TTY-less
+// stdio server.
 export type McpCommandMode =
   | { kind: "global" }
+  | { kind: "global-pinned"; node: string; cli: string }
   | { kind: "local-node"; binRelPath: string }
   | { kind: "local-pnp" }
   | { kind: "local-npx" };
 
 function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntry {
-  // No env vars by default: the MCP server falls back to
-  // `${homedir()}/.argent/mcp-calls.log` when ARGENT_MCP_LOG is unset, so we
-  // keep this generated config portable — see issue #238.
+  // No env vars: the server falls back to `${homedir()}/.argent/mcp-calls.log`
+  // when ARGENT_MCP_LOG is unset, so a committed config stays portable (#238).
   switch (mode.kind) {
     case "local-node":
-      // `node` (not the .bin/argent .cmd/.ps1 shim) is Windows-safe. The
-      // relative path resolves against the client's cwd — the project root
-      // for a committed project-scope config.
+      // `node` rather than the .bin/argent shim, which on Windows is a .cmd
+      // that needs a shell.
       return { command: "node", args: [mode.binRelPath, "mcp"] };
     case "local-pnp":
       return { command: "yarn", args: ["argent", "mcp"] };
     case "local-npx":
       return { command: "npx", args: ["--no-install", "argent", "mcp"] };
+    case "global-pinned":
+      return { command: mode.node, args: [mode.cli, "mcp"] };
     default:
       return { command: MCP_BINARY_NAME, args: ["mcp"] };
   }
@@ -146,8 +181,6 @@ export function getMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServe
   return buildMcpEntry(mode);
 }
 
-// Resolve the MCP command shape for a committable (local) install rooted at
-// `root`.
 export function resolveLocalCommandMode(root: string): McpCommandMode {
   if (isYarnPnp(root)) return { kind: "local-pnp" };
   const binRelPath = getLocalArgentBinRelPath(root);
@@ -155,28 +188,37 @@ export function resolveLocalCommandMode(root: string): McpCommandMode {
   return { kind: "local-npx" };
 }
 
-// Single owner of the mode-and-scope → MCP command decision, shared by `init`
-// and `update`: only a local-mode PROJECT-scope entry runs the repo-local
-// copy; everything else keeps the bare `argent` command.
+// Global config files are read by editors started without the shell PATH
+// (Dock, JetBrains ACP), so they get absolute paths when the global install
+// has them. Spawns `which`: resolve once per run.
+export function resolveGlobalCommandMode(): McpCommandMode {
+  const launch = getGloballyInstalledLaunchPaths();
+  return launch ? { kind: "global-pinned", ...launch } : { kind: "global" };
+}
+
+// Shared by `init` and `update`: a local-mode PROJECT-scope entry runs the
+// repo-local copy, a global-scope entry runs `globalCmdMode`, and every other
+// project-scope entry keeps the bare `argent` command.
 export function getMcpEntryForScope(
   installMode: "global" | "local",
   configScope: "local" | "global",
-  localCmdMode: McpCommandMode | null
+  localCmdMode: McpCommandMode | null,
+  globalCmdMode: McpCommandMode
 ): McpServerEntry {
-  return installMode === "local" && configScope === "local" && localCmdMode
-    ? getMcpEntry(localCmdMode)
-    : getMcpEntry({ kind: "global" });
+  if (installMode === "local" && configScope === "local" && localCmdMode) {
+    return getMcpEntry(localCmdMode);
+  }
+  return getMcpEntry(configScope === "global" ? globalCmdMode : { kind: "global" });
 }
 
 function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
   return entry.env != null && Object.keys(entry.env).length > 0;
 }
 
-// Env keys argent itself wrote historically: entries from argent <= 0.9.x
-// carry ARGENT_MCP_LOG (dropped in 0.10.0 by #238). An entry whose env holds
-// nothing else is still argent-authored — classification must not read it as
-// a user customization, or those legacy entries would never be repaired to
-// the clean env-less shape (the refresh was the #238 rollout vehicle).
+// Env keys argent itself used to write (dropped by #238). An entry whose env
+// holds nothing else is still argent-authored — classification must not read it
+// as a user customization, or those legacy entries would never be repaired to
+// the clean env-less shape.
 const LEGACY_ARGENT_ENV_KEYS = new Set(["ARGENT_MCP_LOG"]);
 
 export function hasCustomizingEnv(entry: McpServerEntry): boolean {
@@ -198,13 +240,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-// After the Codex remover deletes the argent entry, collapse the now-empty
-// `mcp_servers` table it lived in so a config that held only argent reduces to {}
-// and writeTomlOrRemove can delete the file. Only this one key is touched —
-// foreign sibling keys and empty values elsewhere in the tree are preserved
-// byte-for-byte (the contract is "only touch argent"). The JSON adapters get the
-// same ancestor collapse for free from editJsoncFile. The sole caller passes a
-// TOML table (`mcp_servers`), so only the empty-object case can fire.
+// Collapses the `mcp_servers` table the Codex remover just emptied, so a config
+// that held only argent reduces to {} and writeTomlOrRemove can delete the file.
+// Only this key is touched: empty values elsewhere are the user's ("only touch
+// argent"). The JSON adapters get the same ancestor collapse from editJsoncFile.
 function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
   const value = parent[key];
   if (isRecord(value) && Object.keys(value).length === 0) {
@@ -212,7 +251,6 @@ function deleteIfEmpty(parent: Record<string, unknown>, key: string): void {
   }
 }
 
-// Normalize a raw config-file server entry into McpServerEntry shape.
 // Absent → null; present but unrecognizable → the { command: "" } sentinel
 // (see McpConfigAdapter.getArgentEntry). Env vars ride along (opencode spells
 // the key `environment`): they mark a hand-tuned entry and can make a command
@@ -241,14 +279,14 @@ function normalizeServerEntry(raw: unknown): McpServerEntry | null {
   return { command: "", args: [] };
 }
 
-// True when `entry` is a shape argent itself writes — one of the four
-// buildMcpEntry command modes, exact args, no env. Anything else is a
-// deliberate or unknown customization that refresh/cleanup flows must not
-// rewrite or remove. The node form accepts any RELATIVE path into a
-// node_modules copy of the package (everything getLocalArgentBinRelPath can
-// emit); an absolute or out-of-tree path is a hand-tuned override.
+// A shape argent itself writes; anything else is a customization that
+// refresh/cleanup flows must not rewrite or remove. The bare `node` form
+// accepts any RELATIVE path into a node_modules copy of the package (everything
+// getLocalArgentBinRelPath can emit); an absolute path there is hand-tuned. The
+// absolute-`node` form is the global pin (isPinnedGlobalEntry).
 export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   if (entry === null || hasCustomizingEnv(entry)) return false;
+  if (isPinnedGlobalEntry(entry)) return true;
   const { command, args } = entry;
   switch (command) {
     case MCP_BINARY_NAME:
@@ -270,18 +308,23 @@ export function isArgentManagedEntry(entry: McpServerEntry | null): boolean {
   }
 }
 
-// Writes `data` unchanged, except: when it has no own keys the file (and an
-// empty parent directory) is removed instead. This deliberately does NOT
-// recursively prune empty tables/arrays, so a foreign TOML server's `args = []`
-// and any sibling empty value survive — the previous deep-prune silently
-// stripped them, violating the "only touch argent" contract. Callers collapse
-// their own emptied argent container via deleteIfEmpty before calling here, so
-// "config held only argent" still results in file deletion.
-//
-// The JSON adapters achieve the same via editJsoncFile (which prunes only the
-// edited path's empty ancestors and deletes the file when the document
-// collapses to {}); TOML has no comment-preserving editor, so it keeps this
-// parse → mutate → stringify writer.
+export function isPinnedGlobalEntry(entry: McpServerEntry): boolean {
+  const [cli, subcommand] = entry.args;
+  return (
+    path.isAbsolute(entry.command) &&
+    path.basename(entry.command) === "node" &&
+    entry.args.length === 2 &&
+    subcommand === "mcp" &&
+    path.isAbsolute(cli) &&
+    cli.includes(`/node_modules/${PACKAGE_NAME}/`)
+  );
+}
+
+// Deliberately does NOT recursively prune empty tables/arrays, so a foreign TOML
+// server's `args = []` survives ("only touch argent"); callers collapse their own
+// emptied argent container via deleteIfEmpty first, so "held only argent" still
+// deletes the file. TOML has no comment-preserving editor, hence this
+// parse → mutate → stringify writer instead of editJsoncFile.
 function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
   if (Object.keys(data).length === 0) {
     fs.rmSync(filePath, { force: true });
@@ -292,20 +335,17 @@ function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): voi
   writeToml(filePath, data);
 }
 
-// ── Installed-editor evidence ─────────────────────────────────────────────────
 // A bare editor config directory (`.cursor`, `.claude`, `.vscode`, …) is NOT
-// proof the editor is installed: argent itself creates those directories when
-// it writes an MCP config, an allowlist, rules, agents, or skills there.
-// Counting them as detection made every later `init` "detect" editors the
-// user never installed (self-fulfilling detection). A directory is evidence
-// only when it holds something argent doesn't write, or an argent-writable
-// file carries non-argent content. Anything empty, unreadable, or unparseable
-// counts as evidence — when unsure, keep the old dirExists behavior.
+// proof the editor is installed: argent creates those itself when it writes an
+// MCP config, an allowlist, rules, agents or skills, so counting them made every
+// later `init` "detect" editors the user never installed. A directory is
+// evidence only when it holds something argent doesn't write, or an
+// argent-writable file carries non-argent content; anything empty, unreadable or
+// unparseable counts as evidence too (when unsure, detect).
 //
-// Every adapter whose detect() probes a directory or file argent itself
-// creates must route through this check — an asymmetric subset just moves the
-// self-fulfilling detection to the unchecked editors (and, worse, makes the
-// nothing-detected → configure-everything fallback fire more often).
+// Every detect() that probes a path argent itself creates must route through
+// this check — an asymmetric subset just moves the self-fulfilling detection to
+// the unchecked editors.
 
 function dirHasEditorEvidence(dir: string, looksArgentOnly: (dir: string) => boolean): boolean {
   return dirExists(dir) && !looksArgentOnly(dir);
@@ -318,10 +358,9 @@ function fileHasEditorEvidence(
   return fs.existsSync(filePath) && !looksArgentOnly(filePath);
 }
 
-// Strict parses for the evidence check. The shared readJsonc/readToml swallow
-// read/parse errors and return {} — here that would classify a corrupt USER
-// config as argent-only and drop the editor from detection. null = can't read
-// or parse; callers treat it as user evidence.
+// Strict parses for the evidence check: the shared readJsonc/readToml return {}
+// on a read/parse error, which here would classify a corrupt USER config as
+// argent-only. null = unreadable; callers treat that as user evidence.
 function parseJsoncStrict(filePath: string): Record<string, unknown> | null {
   let raw: string;
   try {
@@ -355,11 +394,10 @@ function parseYamlStrict(filePath: string): Record<string, unknown> | null {
   }
 }
 
-// The exact document argent's write() leaves in a config file it created
-// itself: a single server container holding only the argent entry (allowlist
-// toggles land INSIDE that entry). remove() prunes empty parents and deletes
-// the emptied file, so any other shape — extra top-level keys, foreign
-// servers, an empty document — is the user's.
+// The document argent's write() leaves in a config file it created itself.
+// remove() prunes empty parents and deletes the emptied file, so any other
+// shape — extra top-level keys, foreign servers, an empty document — is the
+// user's.
 function jsonLooksArgentServerOnly(filePath: string, containerKey: string): boolean {
   const config = parseJsoncStrict(filePath);
   if (config === null) return false;
@@ -370,11 +408,12 @@ function jsonLooksArgentServerOnly(filePath: string, containerKey: string): bool
   return serverKeys.length === 1 && serverKeys[0] === MCP_SERVER_KEY;
 }
 
-// rules/ and agents/ are byte copies of the bundled payloads — argent-written
+// rules/ and agents/ are byte copies of the bundled payloads, so argent-written
 // means every entry matches a bundled name exactly (a user's own
-// "argent-notes.md" must NOT pass). skills/ entries come from the skills CLI;
-// argent reserves the ARGENT_SKILL_PREFIX namespace there. An empty dir was
-// not left by argent (its copies always carry content) — that's user evidence.
+// "argent-notes.md" must NOT pass); skills/ come from the skills CLI, where
+// argent owns the ARGENT_SKILL_PREFIX namespace. Retired paths count too, so a
+// leftover from an older version is not user evidence. An empty dir is user
+// evidence: argent's copies always carry content.
 let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
 function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
@@ -386,6 +425,7 @@ function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   } catch {
     names = new Set();
   }
+  for (const retired of RETIRED_BUNDLED_PATHS[kind]) names.add(retired.path.split("/")[0]);
   bundledManagedNamesCache.set(kind, names);
   return names;
 }
@@ -471,8 +511,8 @@ function claudeDirLooksArgentOnly(dir: string): boolean {
   });
 }
 
-// .vscode holds a single argent artifact: mcp.json. Anything else in the dir
-// (settings.json, launch.json, extensions.json, …) is the user's workspace.
+// .vscode holds a single argent artifact: mcp.json. Anything else in the dir is
+// the user's workspace.
 function vscodeDirLooksArgentOnly(dir: string): boolean {
   let entries: string[];
   try {
@@ -657,9 +697,17 @@ function codexDirLooksArgentOnly(dir: string): boolean {
   });
 }
 
-// ── Cursor adapter ────────────────────────────────────────────────────────────
 // MARK: Cursor
-// Format: { mcpServers: { argent: { command, args, env } } }
+
+function cursorPermissionsPath(): string {
+  return path.join(homedir(), ".cursor", "permissions.json");
+}
+
+// The file's mcpAllowlist, or null when the file or the key is missing.
+function cursorPermissionsList(): string[] | null {
+  const list = readJsonc(cursorPermissionsPath()).mcpAllowlist;
+  return Array.isArray(list) ? (list as string[]) : null;
+}
 
 const cursorAdapter: McpConfigAdapter = {
   name: "Cursor",
@@ -679,12 +727,8 @@ const cursorAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".cursor", "mcp.json");
   },
 
-  // Cursor is a VS Code fork: .cursor/mcp.json is JSONC (line/block comments,
-  // trailing commas). Routing write/remove/hasArgentEntry through readJsonc /
-  // editJsoncFile applies path-targeted text edits that preserve comments and
-  // foreign servers. The old readJson → writeJson path ran commented files
-  // through readJson's `catch { return {} }`, then persisted only the argent
-  // entry — destroying every pre-existing server and comment. Matches VS Code.
+  // Read and written as JSONC through readJsonc / editJsoncFile: path-targeted
+  // text edits that preserve user comments and foreign servers.
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
@@ -713,64 +757,51 @@ const cursorAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // Cursor's allowlist lives in a separate ~/.cursor/permissions.json, which —
-  // like every Cursor config — is JSONC (comments, trailing commas) and may
-  // carry the user's own unrelated rules. Route through readJsonc / editJsoncFile
-  // so a hand-commented or multi-rule permissions.json survives: the old readJson
-  // path ran it through `catch { return {} }` and rewrote the whole file with
-  // only { mcpAllowlist }, dropping every foreign rule and comment. Newly matters
-  // because `hasArgentEntry` now reads mcp.json with readJsonc, so `update`
-  // detects a commented config as configured and calls this.
+  // The allowlist lives in a separate ~/.cursor/permissions.json that may carry
+  // the user's own rules, so edit that one key instead of rewriting the file.
+  // Only a file that already has an mcpAllowlist is edited. Once that key is
+  // non-empty, Cursor enforces the file: Run Everything drops to Allowlist, and
+  // the file's list replaces the in-IDE one. Under Run Everything the rule does
+  // nothing anyway, and without the file the user approves argent in Cursor.
+  allowlistSkipReason(): string | null {
+    return cursorPermissionsList() === null
+      ? "creating ~/.cursor/permissions.json would turn off Cursor's Run Everything mode; approve argent in Cursor instead"
+      : null;
+  },
+
   addAllowlist(): void {
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
-    const config = readJsonc(permPath);
-    const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : [];
-    if (list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
-    editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
+    const list = cursorPermissionsList();
+    if (list === null || list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    editJsoncFile(cursorPermissionsPath(), ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
-    // Cursor's allowlist lives ONLY in the machine-global permissions file.
-    // A scope-"local" cleanup (an uninstall retaining the global install)
-    // must not strip a file that install still depends on.
+    // The allowlist lives ONLY in the machine-global permissions file, which a
+    // retained global install still depends on.
     if (scope !== "global") return;
-    const permPath = path.join(homedir(), ".cursor", "permissions.json");
+    const permPath = cursorPermissionsPath();
     if (!fs.existsSync(permPath)) return;
     const config = readJsonc(permPath);
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : undefined;
     if (!list || !list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
     const next = list.filter((rule) => rule !== CURSOR_ALLOWLIST_PATTERN);
     // undefined deletes the emptied key; editJsoncFile prunes it and removes the
-    // file if the document collapses to {} (matching the old writeJsonOrRemove).
+    // file if the document collapses to {}.
     editJsoncFile(permPath, ["mcpAllowlist"], next.length > 0 ? next : undefined);
   },
 };
 
-// ── Claude Code adapter ───────────────────────────────────────────────────────
 // MARK: Claude
-// Format: { mcpServers: { argent: { type: "stdio", command, args, env } } }
-// Project: .mcp.json   Global: ~/.claude.json
-// Also manages permissions in .claude/settings.json
 
-// ~/.claude.json keys its "local scope" entries by the EXACT absolute project
-// path. Match keys against the root loosely — realpathSync.native canonicalizes
-// symlinks and, on case-insensitive filesystems, on-disk case (a session
-// started from /users/… writes a key .mcp.json-based lookups would miss).
+// ~/.claude.json keys its per-project entries by absolute path, so match them
+// by canonical path.
 function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
-  const canonical = (value: string): string => {
-    try {
-      return fs.realpathSync.native(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  const target = canonical(root);
-  return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+  const target = canonicalPath(root);
+  return Object.keys(projects).filter((key) => key === root || canonicalPath(key) === target);
 }
 
-// A recorded "reject" for the argent .mcp.json server. Claude Code honors a
-// disabledMcpjsonServers entry from ANY settings file, so a rejection recorded
-// before this init would keep the fresh project-scope entry from ever loading.
+// A recorded "reject" for the argent .mcp.json server: a rejection made before
+// this init can keep the fresh project-scope entry from loading.
 function claudeDisabledListFinding(
   settingsPath: string,
   label: string,
@@ -786,10 +817,9 @@ function claudeDisabledListFinding(
       : `a machine-wide "reject" in disabledMcpjsonServers blocks .mcp.json argent entries in ` +
         `every project; if that is not deliberate, remove "argent" from the list`,
     entry: null,
-    // Removing a PROJECT-confined rejection only lets Claude Code prompt for
-    // approval again — running `argent init` is that consent. The user-global
-    // list (~/.claude/settings.json) reaches every project on the machine, so
-    // it is never auto-removed; the shared policy warns instead.
+    // Removing a PROJECT-confined rejection only re-enables the approval prompt
+    // — running `argent init` is that consent. The user-global list reaches
+    // every project on the machine, so it is never auto-removed.
     autoRemove: projectConfined,
     remove: (): boolean => {
       const config = readJson(settingsPath);
@@ -799,9 +829,8 @@ function claudeDisabledListFinding(
       if (idx === -1) return false;
       list.splice(idx, 1);
       if (list.length === 0) delete config.disabledMcpjsonServers;
-      // Plain write — settings.json is the USER'S file. writeJsonOrRemove
-      // would prune other empty structures and could delete the whole file;
-      // dropping one list entry must never do that.
+      // settings.json is the USER'S file: dropping one list entry must never
+      // prune other empty structures or delete the file.
       writeJson(settingsPath, config);
       return true;
     },
@@ -813,9 +842,8 @@ const claudeAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     // .mcp.json and the .claude dirs are argent-created (MCP entry;
-    // permissions/rules/agents/skills), so both go through the evidence check.
-    // ~/.claude.json is Claude Code's primary config (OAuth, per-project
-    // state) — a real install always has more in it than argent's entry.
+    // permissions/rules/agents/skills), so all of these go through the evidence
+    // check.
     const mcpJsonArgentOnly = (p: string): boolean => jsonLooksArgentServerOnly(p, "mcpServers");
     return (
       fileHasEditorEvidence(path.join(process.cwd(), ".mcp.json"), mcpJsonArgentOnly) ||
@@ -833,9 +861,8 @@ const claudeAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".claude.json");
   },
 
-  // JSONC is a superset of JSON, so routing through readJsonc / editJsoncFile is
-  // safe for this strict-JSON config and keeps every MCP-entry write on the one
-  // comment- and foreign-server-preserving path (see the Cursor adapter).
+  // JSONC is a superset of JSON, so this config shares the one comment- and
+  // foreign-server-preserving write path (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       type: "stdio",
@@ -851,17 +878,16 @@ const claudeAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     if (configPath === this.globalPath()) {
-      // ~/.claude.json is the user's primary Claude config (OAuth state,
-      // per-project trust/history). Never delete or deep-prune it: drop only
-      // our key (collapsing an emptied mcpServers) and write the rest back
-      // verbatim, so editJsoncFile's collapse-to-{} deletion can't reach it.
-      // readJsonc above keeps a stray comment from nuking the whole file to {}.
+      // ~/.claude.json holds unrelated user state, so never delete or deep-prune
+      // it: drop only our key and write the rest back verbatim, out of reach of
+      // editJsoncFile's collapse-to-{} deletion. readJsonc above keeps a stray
+      // comment from flattening the whole file to {}.
       delete servers[MCP_SERVER_KEY];
       if (Object.keys(servers).length === 0) delete config.mcpServers;
       writeJson(configPath, config);
     } else {
-      // .mcp.json is JSONC-safe: preserve comments and foreign servers, and
-      // delete the file only if argent was all it held.
+      // Preserve comments and foreign servers; delete the file only if argent
+      // was all it held.
       editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], undefined);
     }
     return true;
@@ -878,12 +904,9 @@ const claudeAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // Claude Code's scope precedence is local > project (.mcp.json) > user
-  // (~/.claude.json top-level). "Local scope" lives outside the
-  // projectPath/globalPath pair: projects["<abs path>"].mcpServers in
-  // ~/.claude.json (the default target of `claude mcp add`). A stale entry
-  // there outranks BOTH scopes init can write — no tools, no error. Also
-  // reports recorded .mcp.json rejections (see claudeDisabledListFinding).
+  // Scans the scope outside the projectPath/globalPath pair —
+  // projects["<abs path>"].mcpServers in ~/.claude.json — plus recorded
+  // .mcp.json rejections (see claudeDisabledListFinding).
   findShadowingConfigs(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[] {
     const findings: ShadowingConfigFinding[] = [];
     const claudeJsonPath = path.join(homedir(), ".claude.json");
@@ -897,10 +920,9 @@ const claudeAdapter: McpConfigAdapter = {
         const raw = servers[MCP_SERVER_KEY];
         const entry = normalizeServerEntry(raw);
         // Auto-remove ONLY the stock shape a previous install left behind:
-        // bare `argent mcp`, no env. Anything else may be a deliberate
-        // override that outranks the committed entry BY DESIGN — report it so
-        // the shared policy warns or asks; never delete silently (`argent
-        // update --yes` runs this sweep too).
+        // bare `argent mcp`, no env. Anything else may be a deliberate override
+        // — report it, never delete silently (`argent update --yes` runs this
+        // sweep too).
         const hasCustomEnv = isRecord(raw) && isRecord(raw.env) && Object.keys(raw.env).length > 0;
         const isStockShape =
           entry !== null &&
@@ -919,10 +941,9 @@ const claudeAdapter: McpConfigAdapter = {
           // projects — but only the stock shape is provably a leftover.
           autoRemove: isStockShape,
           remove: (): boolean => {
-            // Re-read at removal time and bail unless the entry is still
-            // there: readJson yields {} on a parse failure, and writing that
-            // back would destroy unrelated state (OAuth sessions, trust
-            // decisions).
+            // Re-read and bail unless the entry is still there: readJson yields
+            // {} on a parse failure, and writing that back would destroy
+            // unrelated user state.
             const config = readJson(claudeJsonPath);
             const liveProjects = config.projects;
             if (!isRecord(liveProjects) || !isRecord(liveProjects[key])) return false;
@@ -961,18 +982,15 @@ const claudeAdapter: McpConfigAdapter = {
   },
 };
 
-// ── VS Code adapter ──────────────────────────────────────────────────────────
 // MARK: VSCode
-// Format: { servers: { argent: { type: "stdio", command, args, env } } }
-// Project only: .vscode/mcp.json
 
 const vscodeAdapter: McpConfigAdapter = {
   name: "VS Code",
 
   detect(): boolean {
     // The project .vscode dir is argent-created (mcp.json) → evidence check.
-    // ~/.vscode is written only by VS Code itself (extensions cache), never by
-    // argent, so its bare existence remains valid evidence.
+    // ~/.vscode is never written by argent, so its bare existence stays valid
+    // evidence.
     return (
       dirHasEditorEvidence(path.join(process.cwd(), ".vscode"), vscodeDirLooksArgentOnly) ||
       dirExists(path.join(homedir(), ".vscode"))
@@ -987,13 +1005,8 @@ const vscodeAdapter: McpConfigAdapter = {
     return null;
   },
 
-  // .vscode/mcp.json is JSONC — VS Code allows line/block comments and trailing
-  // commas. The previous JSON.parse → mutate → JSON.stringify path ran through
-  // readJson, whose `catch { return {} }` turned any commented file into {} and
-  // then persisted only { servers: { argent } }, destroying every pre-existing
-  // user server (and their comments). All four entry points now go through
-  // readJsonc / editJsoncFile — path-targeted text edits that preserve comments
-  // and foreign servers — matching the Zed and opencode adapters.
+  // Read and written as JSONC through readJsonc / editJsoncFile so user comments
+  // and foreign servers survive (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["servers", MCP_SERVER_KEY], {
       type: "stdio",
@@ -1023,11 +1036,8 @@ const vscodeAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // The user-profile mcp.json is a scope the projectPath/globalPath pair
-  // doesn't cover. User-vs-workspace precedence is undocumented (observed:
-  // silent single-winner), so a stale entry there can shadow a fresh
-  // .vscode/mcp.json entry. Report it; the shared policy removes it only when
-  // provably dead.
+  // The user-profile mcp.json is a scope the projectPath/globalPath pair doesn't
+  // cover. Report it; the shared policy removes it only when provably dead.
   findShadowingConfigs(_root: string, _writtenScope: "local" | "global"): ShadowingConfigFinding[] {
     const findings: ShadowingConfigFinding[] = [];
     for (const userDir of vscodeUserDirs()) {
@@ -1047,8 +1057,6 @@ const vscodeAdapter: McpConfigAdapter = {
   },
 };
 
-// Default-profile user config dirs for VS Code stable and Insiders. Only dirs
-// that exist are returned, so non-installed variants cost nothing.
 function vscodeUserDirs(): string[] {
   const bases: string[] = [];
   if (process.platform === "darwin") {
@@ -1068,13 +1076,23 @@ function vscodeUserDirs(): string[] {
   return dirs;
 }
 
-// ── Windsurf adapter ─────────────────────────────────────────────────────────
 // MARK: Windsurf
-// Format: { mcpServers: { argent: { command, args, env } } }
-// Global only: ~/.codeium/windsurf/mcp_config.json
+
+// Windsurf was renamed Devin Desktop. Its bundled Devin agent still loads MCP
+// servers from ~/.codeium/windsurf/mcp_config.json, but ignores alwaysAllow
+// there: tool approvals come only from permissions.allow in its own user config.
+function devinUserConfigPath(): string {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homedir(), "AppData", "Roaming");
+    return path.join(appData, "devin", "config.json");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return path.join(xdg || path.join(homedir(), ".config"), "devin", "config.json");
+}
 
 const windsurfAdapter: McpConfigAdapter = {
-  name: "Windsurf",
+  name: "Devin Desktop",
+  telemetryName: "windsurf",
 
   detect(): boolean {
     return dirHasEditorEvidence(
@@ -1091,13 +1109,13 @@ const windsurfAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
   },
 
-  // JSONC-safe MCP-entry writes (see the Cursor adapter): editJsoncFile
-  // preserves comments and pre-existing foreign servers on this JSON config.
+  // JSONC-safe writes (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["alwaysAllow"]),
     });
   },
 
@@ -1121,24 +1139,23 @@ const windsurfAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
-  // in this same mcp_config.json, and `init` runs write() (comment-preserving)
-  // before addAllowlist(). The old readJson path choked on any user comment and
-  // silently skipped the toggle; editJsoncFile targets just the argent entry's
-  // alwaysAllow key so comments and foreign servers survive.
+  // Targets just the argent entry's alwaysAllow key, so comments and foreign
+  // servers survive. alwaysAllow serves the legacy Cascade agent; the Devin
+  // agent needs its own permission rule.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
+    addAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
-    // Windsurf is a global-only client — same rule as Cursor's allowlist: a
-    // scope-"local" cleanup must not touch the machine-global config a
-    // retained global install depends on.
+    // Global-only client: a scope-"local" cleanup must not touch the
+    // machine-global config a retained global install depends on.
     if (scope !== "global") return;
+    removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
     const config = readJsonc(configPath);
@@ -1149,10 +1166,7 @@ const windsurfAdapter: McpConfigAdapter = {
   },
 };
 
-// ── Zed adapter ──────────────────────────────────────────────────────────────
 // MARK: Zed
-// Format: merges { context_servers: { argent: { source: "custom", command, args, env } } }
-// Into existing settings.json
 
 const zedAdapter: McpConfigAdapter = {
   name: "Zed",
@@ -1169,11 +1183,8 @@ const zedAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".config", "zed", "settings.json");
   },
 
-  // Zed's settings.json is JSONC (line + block comments, trailing commas).
-  // The previous JSON.parse → mutate → JSON.stringify path silently stripped
-  // every comment in the user's hand-edited file. All four entry points now
-  // go through editJsoncFile, which applies path-targeted text edits via
-  // jsonc-parser so comments and formatting outside the touched key survive.
+  // Read and written as JSONC through readJsonc / editJsoncFile so comments and
+  // formatting outside the touched key survive (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], {
       source: "custom",
@@ -1185,9 +1196,8 @@ const zedAdapter: McpConfigAdapter = {
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    // JSONC-tolerant read: a user-authored settings.json may contain comments
-    // that JSON.parse would reject (silently swallowed by readJson, leaving
-    // this branch thinking nothing needed removing).
+    // JSONC-tolerant read: a comment JSON.parse rejects is swallowed by
+    // readJson, which would leave this branch thinking nothing needed removing.
     const config = readJsonc(configPath);
     const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
@@ -1206,10 +1216,8 @@ const zedAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // Zed doesn't support server-level wildcards for MCP tools — each tool
-  // would need its own entry.  Setting the global default to "allow" is the
-  // documented opt-in; built-in security rules still protect against
-  // destructive operations.
+  // Zed has no server-level wildcard for MCP tools — each tool would need its
+  // own entry — so the global default is set to "allow" instead.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const settingsPath =
       scope === "global"
@@ -1226,17 +1234,13 @@ const zedAdapter: McpConfigAdapter = {
     if (!fs.existsSync(settingsPath)) return;
     const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (!perms || perms.default !== "allow") return;
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
 };
 
-// ── Gemini CLI adapter ────────────────────────────────────────────────────────
 // MARK: Gemini
-// Format: { mcpServers: { argent: { command, args, env } } }
-// Project: <root>/.gemini/settings.json   Global: ~/.gemini/settings.json
 
 const geminiAdapter: McpConfigAdapter = {
   name: "Gemini",
@@ -1256,13 +1260,13 @@ const geminiAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".gemini", "settings.json");
   },
 
-  // JSONC-safe MCP-entry writes (see the Cursor adapter): editJsoncFile
-  // preserves comments and pre-existing foreign servers on this JSON config.
+  // JSONC-safe writes (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["trust"]),
     });
   },
 
@@ -1286,11 +1290,8 @@ const geminiAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // JSONC-safe allowlist edits (see the Cursor adapter): the argent entry lives
-  // in this same settings.json, and `init` runs write() (comment-preserving)
-  // before addAllowlist(). The old readJson path choked on any user comment and
-  // silently skipped the toggle; editJsoncFile targets just the argent entry's
-  // trust key so comments and foreign servers survive.
+  // Targets just the argent entry's trust key, so comments and foreign servers
+  // survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
@@ -1319,10 +1320,7 @@ const geminiAdapter: McpConfigAdapter = {
   },
 };
 
-// ── Codex CLI adapter ────────────────────────────────────────────────────────
 // MARK: Codex
-// Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
-// Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
 
 const CODEX_FILENAME = ".codex";
 
@@ -1347,10 +1345,14 @@ const codexAdapter: McpConfigAdapter = {
   write(configPath: string, entry: McpServerEntry): void {
     const config = readToml(configPath);
     const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+    // The per-tool approvals live inside the entry, so keep them as they are
+    // (see existingEntryKeys).
+    const previous = servers[MCP_SERVER_KEY] as { tools?: unknown } | undefined;
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...(previous?.tools !== undefined ? { tools: previous.tools } : {}),
     };
     config.mcp_servers = servers;
     writeToml(configPath, config);
@@ -1402,6 +1404,30 @@ const codexAdapter: McpConfigAdapter = {
     writeToml(configPath, config);
   },
 
+  // Codex has no wildcard: each tool id is listed. A table with at least one
+  // approved tool means the user kept the allowlist, so tools this version
+  // added are approved too. Tools already listed keep the mode the user gave
+  // them, and an emptied or removed table stays as it is.
+  refreshAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+
+    const config = readToml(configPath) as CodexConfig;
+    const toolsConfig = config.mcp_servers?.argent?.tools;
+    if (!toolsConfig) return;
+    const optedIn = Object.values(toolsConfig).some(
+      (tool) => (tool as { approval_mode?: unknown } | undefined)?.approval_mode === "approve"
+    );
+    if (!optedIn) return;
+
+    const missing = getAvailableToolIds().filter((tool) => !(tool in toolsConfig));
+    if (missing.length === 0) return;
+    for (const tool of missing) {
+      toolsConfig[tool] = { approval_mode: "approve" };
+    }
+    writeToml(configPath, config);
+  },
+
   removeAllowlist(root, scope): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
@@ -1427,14 +1453,9 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
-// ── Hermes adapter ──────────────────────────────────────────────────────────
-// Format (YAML): mcp_servers: { argent: { command, args, env } }
-// Global only: ~/.hermes/config.yaml
-//
-// Uses the yaml Document API instead of POJO round-trip so user comments
-// and formatting in ~/.hermes/config.yaml survive every write. Refuses to
-// touch the file if mcp_servers exists but is not a YAML mapping (sequence
-// or scalar would otherwise be silently clobbered).
+// Uses the yaml Document API instead of a POJO round-trip so user comments and
+// formatting survive every write. Refuses to touch the file if mcp_servers
+// exists but is not a YAML mapping, which would otherwise be clobbered.
 
 const hermesAdapter: McpConfigAdapter = {
   name: "Hermes",
@@ -1498,21 +1519,14 @@ const hermesAdapter: McpConfigAdapter = {
   },
 };
 
-// ── opencode adapter ────────────────────────────────────────────────────────
 // MARK: opencode
-// Format: { mcp: { argent: { type: "local", command: [cmd, ...args], enabled,
-//   environment } }, tools: { "argent*": true } }
-// Project: <root>/opencode.json   Global: ~/.config/opencode/opencode.json
-//
-// Unlike every other adapter, opencode's config file is optional — a fresh
-// install typically has no opencode.json at all and the CLI runs with
-// defaults. So we cannot rely on the config directory existing to detect
-// opencode; instead we probe for the `opencode` binary on PATH.
+
+// Unlike every other adapter, opencode's config file is optional, so detection
+// probes for the `opencode` binary on PATH rather than a config directory.
 
 const OPENCODE_BINARY = "opencode";
 const OPENCODE_ALLOWLIST_PATTERN = "argent*";
 
-// Same filename prioritization order that's used by opencode CLI
 const OPENCODE_PROJECT_FILES = ["opencode.jsonc", "opencode.json"] as const;
 const OPENCODE_GLOBAL_FILES = ["opencode.jsonc", "opencode.json", "config.json"] as const;
 
@@ -1594,20 +1608,12 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 };
 
-// ── Kiro adapter ─────────────────────────────────────────────────────────────
 // MARK: Kiro
-// Format: { mcpServers: { argent: { command, args, env } } }
-// Project: <root>/.kiro/settings/mcp.json   Global: ~/.kiro/settings/mcp.json
 //
-// The same .kiro/settings/mcp.json is read by both the Kiro IDE and the Kiro
-// CLI (the rebranded Amazon Q Developer CLI), so one entry serves both.
-//
-// Allowlist: autoApprove: ["*"] on the argent entry — the Kiro IDE's documented
-// "approve every tool" syntax. The Kiro CLI's server-config struct has no
-// autoApprove field and is NOT deny_unknown_fields, so the CLI silently ignores
-// the key (verified against kiro-cli 2.9.0 / upstream CustomToolConfig). Net:
-// honored by the IDE, harmless to the CLI, which carries its own trust model.
-// IDE: https://kiro.dev/docs/mcp/configuration/  CLI: https://kiro.dev/docs/cli/mcp/
+// One .kiro/settings/mcp.json serves both the Kiro IDE and the Kiro CLI.
+// `autoApprove` is IDE syntax; the CLI's server config has no such field and
+// does not reject unknown ones, so the key is honored by the IDE and ignored by
+// the CLI, which carries its own trust model (checked against kiro-cli 2.9.0).
 
 const KIRO_AUTO_APPROVE_ALL = ["*"];
 
@@ -1629,15 +1635,14 @@ const kiroAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".kiro", "settings", "mcp.json");
   },
 
-  // Kiro is a VS Code fork: .kiro/settings/mcp.json is JSONC. As with Cursor,
-  // route write/remove/hasArgentEntry through readJsonc / editJsoncFile so
-  // comments and foreign servers survive instead of being flattened away by the
-  // old readJson → writeJson path.
+  // Read and written as JSONC through readJsonc / editJsoncFile so comments and
+  // foreign servers survive (see the Cursor adapter).
   write(configPath: string, entry: McpServerEntry): void {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
       ...(hasEnv(entry) ? { env: entry.env } : {}),
+      ...existingEntryKeys(configPath, "mcpServers", ["autoApprove"]),
     });
   },
 
@@ -1661,11 +1666,8 @@ const kiroAdapter: McpConfigAdapter = {
     return this.getArgentEntry(configPath) !== null;
   },
 
-  // JSONC-safe allowlist edits (see the Cursor adapter): .kiro/settings/mcp.json
-  // is JSONC, the argent entry lives in it, and `init` runs write() (comment-
-  // preserving) before addAllowlist(). The old readJson path choked on any user
-  // comment and silently skipped the toggle; editJsoncFile targets just the
-  // argent entry's autoApprove key so comments and foreign servers survive.
+  // Targets just the argent entry's autoApprove key, so comments and foreign
+  // servers survive.
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
@@ -1690,7 +1692,6 @@ const kiroAdapter: McpConfigAdapter = {
   },
 };
 
-// ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -1714,23 +1715,18 @@ export function getAdapterByName(name: string): McpConfigAdapter | undefined {
   return ALL_ADAPTERS.find((a) => a.name.toLowerCase() === name.toLowerCase());
 }
 
-export type AdapterConfigScope = "project" | "global";
+type AdapterConfigScope = "project" | "global";
 
-export interface ConfiguredAdapterScope {
+interface ConfiguredAdapterScope {
   adapter: McpConfigAdapter;
   scope: AdapterConfigScope;
   configPath: string;
 }
 
-// Returns the (adapter, scope, configPath) tuples where argent is already
-// configured. `update` uses this to skip editors the user opted out of during
-// `init` even when their config dir happens to exist on disk (issue #195).
-//
-// Detection is best-effort per scope: `hasArgentEntry` parses the on-disk
-// config and some backings throw on malformed input (e.g. Hermes' readYaml on
-// a broken ~/.hermes/config.yaml). One unparseable file must not abort the
-// whole update flow, so a throwing probe is treated as "not configured" and
-// skipped rather than propagated.
+// Where argent is already configured. `update` uses this to skip editors the
+// user opted out of during `init` even when their config dir happens to exist
+// (issue #195). A probe that throws on a malformed file (e.g. Hermes' readYaml)
+// counts as "not configured" rather than aborting the whole update.
 export function findConfiguredAdapterScopes(
   adapters: readonly McpConfigAdapter[],
   projectRoot: string
@@ -1756,50 +1752,48 @@ export function findConfiguredAdapterScopes(
   return results;
 }
 
-// ── Claude permissions helpers ────────────────────────────────────────────────
-
-export function addClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
-  // .claude/settings.json is normally strict JSON but is comment-tolerant in
-  // practice; route through readJsonc / editJsoncFile so a hand-added comment
-  // doesn't make readJson's `catch { return {} }` drop the user's other
-  // permissions on write — the same unconditional read-write clobber the mcp.json
-  // adapters were migrated off. editJsoncFile creates the permissions.allow path
-  // if absent and preserves comments and foreign keys.
+// Shared by Claude Code and Devin, whose settings both keep tool approvals in
+// a `permissions.allow` string array.
+function addAllowRule(settingsPath: string, rule: string): void {
+  // Route through readJsonc / editJsoncFile so a hand-added comment can't make
+  // readJson's `catch { return {} }` drop the user's other permissions on write.
+  // editJsoncFile creates the permissions.allow path if absent.
   const config = readJsonc(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
   const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
-  if (allow.includes(PERMISSION_RULE)) return;
-  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, PERMISSION_RULE]);
+  if (allow.includes(rule)) return;
+  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, rule]);
 }
 
-export function removeClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+function removeAllowRule(settingsPath: string, rule: string): void {
   if (!fs.existsSync(settingsPath)) return;
   const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
   const allow = permissions?.allow;
   if (!permissions || !Array.isArray(allow)) return;
-  if (!allow.includes(PERMISSION_RULE)) return;
-  const next = (allow as string[]).filter((rule) => rule !== PERMISSION_RULE);
+  if (!allow.includes(rule)) return;
+  const next = (allow as string[]).filter((r) => r !== rule);
   // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
-  // `permissions` and removes the file if the document collapses to {} (matching
-  // the old deleteIfEmpty + writeJsonOrRemove chain), while a comment or foreign
-  // permission keeps the file and survives byte-intact.
+  // `permissions` and removes the file if the document collapses to {}, while a
+  // comment or foreign permission keeps the file and survives byte-intact.
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
 }
 
-// ── Rules / Agents copy helpers ───────────────────────────────────────────────
+function claudeSettingsPath(root: string, scope: "local" | "global"): string {
+  return scope === "global"
+    ? path.join(homedir(), ".claude", "settings.json")
+    : path.join(root, ".claude", "settings.json");
+}
 
-export type ManagedContentScope = "local" | "global";
+export function addClaudePermission(root: string, scope: "local" | "global"): void {
+  addAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+}
+
+export function removeClaudePermission(root: string, scope: "local" | "global"): void {
+  removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+}
+
+type ManagedContentScope = "local" | "global";
 
 export interface ManagedContentTarget {
   editorName: string;
@@ -1807,7 +1801,7 @@ export interface ManagedContentTarget {
   label: string;
 }
 
-export interface ManagedContentTargets {
+interface ManagedContentTargets {
   skillTargets: ManagedContentTarget[];
   ruleTargets: ManagedContentTarget[];
   agentTargets: ManagedContentTarget[];
@@ -1815,10 +1809,28 @@ export interface ManagedContentTargets {
   skillsLockTargets: ManagedContentTarget[];
 }
 
+// A symlinked target is written through rather than replaced (see copyDir), so
+// files can land somewhere other than the configured path. Naming both keeps
+// that redirect auditable instead of silent, in the shortened form the rest of
+// the managed-content output uses.
+function formatCopyDestination(
+  target: ManagedContentTarget,
+  writtenPath: string,
+  root: string
+): string {
+  if (writtenPath === target.targetPath) return target.label;
+  // The written path came back from realpath, so shorten it against the same:
+  // a workspace reached through a link (macOS /var, a symlinked home) would
+  // otherwise never look relative to its own root.
+  return `${target.label} -> ${formatManagedPathLabel(writtenPath, realpathOrSelf(root))}`;
+}
+
 function formatManagedPathLabel(targetPath: string, root: string): string {
-  const home = homedir();
-  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
-    return `~${targetPath.slice(home.length)}`;
+  // targetPath may be physical (from process.cwd() or realpath) while $HOME is not.
+  for (const home of [path.resolve(homedir()), canonicalPath(homedir())]) {
+    if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+      return `~${targetPath.slice(home.length)}`;
+    }
   }
 
   const relative = path.relative(root, targetPath);
@@ -1909,9 +1921,8 @@ export function getManagedContentTargets(
         break;
       }
       case "opencode": {
-        // opencode's config lives at the project root (opencode.json), but
-        // its skills/agents live under .opencode/. Globally both live under
-        // ~/.config/opencode/.
+        // opencode's config sits at the project root, but its skills/agents
+        // live under .opencode/; globally both live under ~/.config/opencode/.
         const base =
           scope === "global"
             ? path.join(homedir(), ".config", "opencode")
@@ -1920,16 +1931,35 @@ export function getManagedContentTargets(
         addManagedTarget(targets.agentTargets, adapter.name, path.join(base, "agents"), root);
         break;
       }
+      case "Kiro": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // .kiro/skills/<name> into .agents/skills when it detects Kiro.
+        const kiroBase =
+          scope === "global" ? path.join(homedir(), ".kiro") : path.join(root, ".kiro");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(kiroBase, "skills"), root);
+        break;
+      }
+      case "Devin Desktop": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // Devin's skills/<name> into .agents/skills once Devin's config dir
+        // exists, and addAllowlist creates it. The skills CLI resolves the
+        // global dir from XDG_CONFIG_HOME on every platform, so this is not
+        // devinUserConfigPath(), which uses %APPDATA% on Windows.
+        const devinBase =
+          scope === "global"
+            ? path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "devin")
+            : path.join(root, ".devin");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(devinBase, "skills"), root);
+        break;
+      }
     }
   }
 
   return targets;
 }
 
-// ── Codex developer_instructions helpers ─────────────────────────────────────
-// Codex has no rules/ directory for model instructions. Instead we inject
-// rule content into the `developer_instructions` field of config.toml,
-// delimited by markers so we can update/remove without touching user content.
+// Rule content is injected into config.toml's `developer_instructions`,
+// delimited by markers so update/remove never touch user content.
 
 const ARGENT_RULES_START = "# --- argent rules (managed by argent init — do not edit) ---";
 const ARGENT_RULES_END = "# --- end argent rules ---";
@@ -1958,12 +1988,10 @@ function readAndConcatRules(rulesDir: string): string | null {
 function injectArgentSection(existing: string | undefined, rules: string): string {
   const section = `${ARGENT_RULES_START}\n${rules}\n${ARGENT_RULES_END}`;
   if (!existing) return section;
-  // Replace existing argent section if present
   const re = new RegExp(
     `${escapeStringRegexp(ARGENT_RULES_START)}[\\s\\S]*?${escapeStringRegexp(ARGENT_RULES_END)}`
   );
   if (re.test(existing)) return existing.replace(re, section);
-  // Append after user content
   return `${existing}\n\n${section}`;
 }
 
@@ -1999,8 +2027,60 @@ export function removeCodexRules(configPath: string): boolean {
   return true;
 }
 
-// ── Copy orchestrator ────────────────────────────────────────────────────────
 // MARK: Copy orchestrator
+
+export interface RetiredTargetFiles {
+  kind: "rules" | "agents";
+  target: ManagedContentTarget;
+  /** The target's label, naming where its link leads when it is one. */
+  location: string;
+  files: RetiredFile[];
+}
+
+// Copying only adds files, so one an older version wrote and this one dropped
+// stays, and editors keep loading it. Same targets as copyRulesAndAgents, for
+// each scan's adapters and scope. Global rule dirs get no rule at all, so every
+// rule argent once copied there is retired.
+export function findRetiredRulesAndAgents(
+  scans: ReadonlyArray<{ adapters: McpConfigAdapter[]; scope: ManagedContentScope }>,
+  root: string,
+  rulesDir: string,
+  agentsDir: string
+): RetiredTargetFiles[] {
+  const targets = scans.flatMap(({ adapters, scope }) => {
+    const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+    const globalRules = scope === "global";
+    return [
+      ...ruleTargets.map((target) => ({
+        kind: "rules" as const,
+        target,
+        bundleDir: globalRules ? null : rulesDir,
+        retired: globalRules
+          ? [...RETIRED_BUNDLED_PATHS.rules, ...RETIRED_GLOBAL_RULES]
+          : RETIRED_BUNDLED_PATHS.rules,
+      })),
+      ...agentTargets.map((target) => ({
+        kind: "agents" as const,
+        target,
+        bundleDir: agentsDir,
+        retired: RETIRED_BUNDLED_PATHS.agents,
+      })),
+    ];
+  });
+  const found: RetiredTargetFiles[] = [];
+  // Targets that are one dir share its files: list them once. That is a link to
+  // a canonical dir, or the local and global target when root is the home dir.
+  const seen = new Set<string>();
+  for (const { kind, target, bundleDir, retired } of targets) {
+    const dir = resolveLinkedDestination(target.targetPath);
+    if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
+    seen.add(`${kind}:${realpathOrSelf(dir)}`);
+    const files = findRetiredFiles(retired, bundleDir, target.targetPath);
+    if (files.length === 0) continue;
+    found.push({ kind, target, location: formatCopyDestination(target, dir, root), files });
+  }
+  return found;
+}
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
@@ -2011,13 +2091,17 @@ export function copyRulesAndAgents(
 ): string[] {
   const results: string[] = [];
   const managedTargets = getManagedContentTargets(adapters, root, scope);
+  // The rule only tells an agent in a project set up for argent what to do
+  // when argent is not installed. The usage guidance is in the MCP server's
+  // instructions, so a global copy would cost every session in every project
+  // tokens for nothing. findRetiredRulesAndAgents offers to remove old ones.
+  const globalScope = scope === "global";
 
-  for (const target of managedTargets.ruleTargets) {
+  for (const target of globalScope ? [] : managedTargets.ruleTargets) {
     try {
-      if (fs.existsSync(rulesDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(rulesDir, target.targetPath, { recursive: true });
-        results.push(`  Copied rules to ${target.targetPath}`);
+      const written = copyDir(rulesDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied rules to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy rules to ${target.targetPath}: ${err}`);
@@ -2026,18 +2110,28 @@ export function copyRulesAndAgents(
 
   for (const target of managedTargets.agentTargets) {
     try {
-      if (fs.existsSync(agentsDir)) {
-        fs.mkdirSync(target.targetPath, { recursive: true });
-        fs.cpSync(agentsDir, target.targetPath, { recursive: true });
-        results.push(`  Copied agents to ${target.targetPath}`);
+      const written = copyDir(agentsDir, target.targetPath);
+      if (written) {
+        results.push(`  Copied agents to ${formatCopyDestination(target, written, root)}`);
       }
     } catch (err) {
       results.push(`  Could not copy agents to ${target.targetPath}: ${err}`);
     }
   }
 
-  // Codex: inject rules into developer_instructions in config.toml
   for (const target of managedTargets.codexConfigTargets) {
+    if (globalScope) {
+      // The section sits between argent's markers, so removing it loses
+      // nothing of the user's.
+      try {
+        if (removeCodexRules(target.targetPath)) {
+          results.push(`  Removed argent rules from ${target.targetPath} (developer_instructions)`);
+        }
+      } catch (err) {
+        results.push(`  Could not remove argent rules from ${target.targetPath}: ${err}`);
+      }
+      continue;
+    }
     try {
       const injected = injectCodexRules(target.targetPath, rulesDir);
       if (injected) {

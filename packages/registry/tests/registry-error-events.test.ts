@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
+import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { Registry } from "../src/registry";
 import { ServiceState } from "../src/types";
 import {
@@ -178,6 +180,32 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("attributes a schema miss to the REGISTRY, not to the tool that never ran", async () => {
+    const registry = new Registry();
+    const execute = vi.fn();
+    registry.registerTool({
+      id: "typed-tool",
+      services: () => ({}),
+      zodSchema: z.object({ x: z.number() }),
+      execute,
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(registry.invokeTool("typed-tool", { xx: 1 })).rejects.toThrow(/Invalid params/);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(getFailureSignal(emittedError)).toEqual({
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "tool_params_parse",
+      failure_area: "registry",
+      error_kind: "validation",
+    });
+  });
+
   it("derives only safe subprocess metadata", () => {
     expect(
       subprocessFailureMetadata(
@@ -198,6 +226,29 @@ describe("Registry — failure signals", () => {
     ).toEqual({
       failure_command: "adb",
       failure_spawn_code: "ENOENT",
+    });
+  });
+
+  it("reads the exit code of an execFileSync failure from status", () => {
+    let error: unknown;
+    try {
+      execFileSync(process.execPath, ["-e", "process.exit(3)"], { stdio: "ignore" });
+    } catch (e) {
+      error = e;
+    }
+    expect(subprocessFailureMetadata(error, "unknown")).toEqual({
+      failure_command: "unknown",
+      failure_exit_code: 3,
+    });
+  });
+
+  it("reports an execFileSync timeout as ETIMEDOUT even when the child exited with a status", () => {
+    // A child that traps SIGTERM and exits 0 after the timeout.
+    expect(
+      subprocessFailureMetadata({ code: "ETIMEDOUT", status: 0, signal: null }, "unknown")
+    ).toEqual({
+      failure_command: "unknown",
+      failure_spawn_code: "ETIMEDOUT",
     });
   });
 

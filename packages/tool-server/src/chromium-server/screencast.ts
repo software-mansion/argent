@@ -4,23 +4,17 @@ import type { FpsTracker } from "./fps";
 import type { ScreencastFrame, ScreencastOpts, ScreencastSession, ServerEvents } from "./types";
 
 /**
- * Manages a single Chromium screencast session per Chromium device, with
- * refcounted consumers. Sim-server's MJPEG service spins up a JPEG encoder
- * only while at least one client is connected; we do the same — `start()` is
- * idempotent for additional callers and only triggers `Page.startScreencast`
- * on the transition from 0 → 1 active subscriber. `Page.stopScreencast` fires
- * once the last subscriber drops.
- *
- * The wrapping `ScreencastSession.stop()` is the disposal handle each caller
- * holds; calling it twice is safe.
+ * One Chromium screencast session per device, shared by refcounted consumers:
+ * `Page.startScreencast` fires on the 0 → 1 transition, `Page.stopScreencast`
+ * once the last subscriber drops. The returned `ScreencastSession.stop()` is
+ * each caller's disposal handle; calling it twice is safe.
  */
 export class ScreencastManager {
   private activeCount = 0;
   private currentOpts: ScreencastOpts | null = null;
-  // The in-flight Page.startScreencast promise for the first subscriber, shared
-  // so concurrent joiners await the SAME start instead of assuming a live
-  // session (and stranding themselves on a frame-less stream if it fails). Null
-  // when no start is in flight (idle, or a live session already running).
+  // The first subscriber's in-flight Page.startScreencast, published so joiners
+  // await the SAME start instead of assuming a live session and stranding
+  // themselves on a frame-less stream if it fails.
   private startInFlight: Promise<void> | null = null;
   private lastFrame: ScreencastFrame | null = null;
   private cdpListenerInstalled = false;
@@ -31,12 +25,8 @@ export class ScreencastManager {
     private readonly fps: FpsTracker
   ) {}
 
-  /**
-   * Most-recently-received frame, or null if no screencast is active /
-   * Chromium hasn't pushed a frame yet. Exposed so single-shot consumers
-   * (preview overlay, snapshot debug tool) can grab the last frame without
-   * starting their own session.
-   */
+  /** Never cleared on stop, so single-shot consumers can read a frame without
+   * starting their own session. */
   getLastFrame(): ScreencastFrame | null {
     return this.lastFrame;
   }
@@ -44,38 +34,30 @@ export class ScreencastManager {
   async start(opts: ScreencastOpts = {}): Promise<ScreencastSession> {
     this.installCdpListenerOnce();
 
-    // Tracks whether THIS call actually took a refcount slot. A call whose
-    // underlying Page.startScreencast raced a forceStop() and lost (the
-    // `startInFlight === inFlight` guards below) must return a session whose
-    // stop() is a true no-op — otherwise, once a later legitimate session
-    // starts and takes the same slot index, this phantom's stop() would
-    // decrement activeCount and potentially fire Page.stopScreencast for a
-    // stream this caller was never actually subscribed to.
+    // Whether THIS call took a refcount slot. A start that raced forceStop() and
+    // lost (the `startInFlight === inFlight` guards below) must return a session
+    // whose stop() is a true no-op — otherwise it would later decrement
+    // activeCount and stop a stream this caller never subscribed to.
     let acquired = false;
 
     if (this.startInFlight) {
-      // A first caller is mid-Page.startScreencast. Join the SAME in-flight start
-      // rather than assuming a live session: await it so a transient failure
-      // fails us too, and only take a refcount once the screencast is actually
-      // running. Incrementing before this await — as the naive refcount did —
-      // strands this caller on a frame-less stream when the owner's start
-      // rejects (activeCount never drains to 0, so no later start re-issues).
+      // Await the owner's start so a transient failure fails us too, and take a
+      // refcount only once the screencast is actually running. Incrementing
+      // before the await would leave activeCount stuck above 0 when the owner's
+      // start rejects, so no later start() re-issues.
       await this.startInFlight;
-      // If forceStop()/dispose superseded the start while we awaited, the owner
-      // took no refcount and the screencast is torn down — don't take a phantom
-      // one either. The owner's success continuation runs before ours (microtask
-      // FIFO on the shared promise), so activeCount already reflects whether the
-      // start was superseded (0) or is live (>0). Mirrors the owner-path guard.
+      // If forceStop()/dispose superseded the start, the owner took no refcount
+      // and the screencast is torn down — don't take a phantom one either. The
+      // owner's continuation on the shared promise runs before ours, so
+      // activeCount already reflects superseded (0) vs live (>0).
       if (this.activeCount > 0) {
         if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
         this.activeCount += 1;
         acquired = true;
       }
     } else if (this.activeCount === 0) {
-      // First subscriber, nothing in flight: issue Page.startScreencast and
-      // publish the promise so concurrent joiners await it. On failure nothing
-      // is left behind — no refcount, no currentOpts, no phantom session — so
-      // the next start() re-issues cleanly.
+      // Publish the promise so concurrent joiners await it. On failure nothing is
+      // left behind — no refcount, no currentOpts — so the next start() re-issues.
       this.currentOpts = opts;
       const inFlight = this.cdp
         .send("Page.startScreencast", this.toCdpStartArgs(opts))
@@ -95,13 +77,11 @@ export class ScreencastManager {
         this.activeCount += 1;
         acquired = true;
       }
-      // else: a forceStop()/dispose superseded this start while it was in flight,
-      // so the screencast we started is already torn down — don't take a refcount
-      // for it (`acquired` stays false, so the returned session's stop() is a
-      // true no-op). Mirrors the catch path's `startInFlight === inFlight`
-      // identity guard.
+      // else: forceStop()/dispose superseded this start, so what we started is
+      // already torn down — take no refcount (`acquired` stays false, making the
+      // returned session's stop() a true no-op).
     } else {
-      // A live session is already running: join it (first writer wins on opts).
+      // Join the live session; the first caller's opts win.
       if (this.optsDiffer(opts, this.currentOpts)) this.warnOptsIgnored();
       this.activeCount += 1;
       acquired = true;
@@ -135,9 +115,8 @@ export class ScreencastManager {
   }
 
   private warnOptsIgnored(): void {
-    // Subsequent callers join the existing session and accept whatever format /
-    // quality / size the first caller chose. Forcing a restart would tear down
-    // the first caller's stream mid-frame.
+    // Restarting to honor the new opts would tear down the first caller's stream
+    // mid-frame.
     process.stderr.write(
       `[chromium-screencast] additional caller requested screencast opts that differ from the active session; ignoring (first writer wins).\n`
     );
@@ -162,8 +141,7 @@ export class ScreencastManager {
       this.fps.recordFrame();
       this.events.emit("frame", frame);
       // Chromium pauses the screencast until every emitted frame is ack'd —
-      // missing an ack manifests as a frozen stream. Fire-and-forget is fine
-      // because send() returns a promise we don't need to await.
+      // a missed ack manifests as a frozen stream.
       this.cdp.send("Page.screencastFrameAck", { sessionId: payload.sessionId }).catch(() => {
         /* ignore — session may have closed between emit and ack */
       });

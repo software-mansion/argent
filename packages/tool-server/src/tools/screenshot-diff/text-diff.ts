@@ -7,15 +7,10 @@ import {
   type FontGeometryReasonCode,
 } from "./font-diff";
 
-export type TextChangeKind =
-  | "moved"
-  | "appeared"
-  | "disappeared"
-  | "content_changed"
-  | "font_changed";
-export type TextChangeSource = "ocr";
-export type TextAnalysisProvider = "ocr";
-export type TextReasonCode =
+type TextChangeKind = "moved" | "appeared" | "disappeared" | "content_changed" | "font_changed";
+type TextChangeSource = "ocr";
+type TextAnalysisProvider = "ocr";
+type TextReasonCode =
   | "exact_normalized_match"
   | "ocr_noise_tolerated"
   | "position_delta"
@@ -26,7 +21,7 @@ export type TextReasonCode =
   | "normalized_text_changed"
   | FontGeometryReasonCode;
 
-export interface TextRegionWord {
+interface TextRegionWord {
   text: string;
   confidence: number;
   bounds: DiffBounds;
@@ -65,26 +60,12 @@ export interface TextAnalysis {
   changes: TextChange[];
 }
 
-export interface RegionScale {
-  x: number;
-  y: number;
-}
-
-export interface AnalyzeScreenshotTextOptions {
+interface AnalyzeScreenshotTextOptions {
   baselinePath: string;
   currentPath: string;
   hasPixelDiff?: boolean;
   baselineImage?: FontGeometryImage;
   currentImage?: FontGeometryImage;
-  /**
-   * Multipliers that map the baseline image's OCR bounds into the common
-   * coordinate space the pixel diff uses. Supply when the inputs were
-   * normalized to a different resolution; omit (or pass 1/1) when they already
-   * share dimensions.
-   */
-  baselineRegionScale?: RegionScale;
-  /** Same as {@link baselineRegionScale}, for the current image's OCR bounds. */
-  currentRegionScale?: RegionScale;
   ignoreTopPixels?: number;
   textChangeMinConfidence?: number;
 }
@@ -139,42 +120,14 @@ export async function analyzeScreenshotTextChanges(
     };
   }
 
-  // OCR ran on each original file, so baseline and current bounds come back in
-  // their own image's coordinate space. Rescale both into the common space the
-  // pixel diff already uses so the cross-image geometry compares like with like.
   return analyzeTextRegions({
-    baselineRegions: rescaleTextRegions(baselineOcr.blocks, options.baselineRegionScale),
-    currentRegions: rescaleTextRegions(currentOcr.blocks, options.currentRegionScale),
+    baselineRegions: baselineOcr.blocks,
+    currentRegions: currentOcr.blocks,
     baselineImage: options.baselineImage,
     currentImage: options.currentImage,
     ignoreTopPixels: options.ignoreTopPixels,
     textChangeMinConfidence: options.textChangeMinConfidence,
   });
-}
-
-/**
- * Map OCR text regions (and their per-word bounds) from one image's coordinate
- * space into another by multiplying every bound by `scale`. Used to bring
- * baseline and current OCR output into the common, normalized coordinate space
- * the pixel diff compares in. Returns the regions untouched when `scale` is
- * absent or an identity (1/1) scale, so same-size inputs are unaffected.
- */
-export function rescaleTextRegions(regions: TextRegion[], scale?: RegionScale): TextRegion[] {
-  if (!scale || (scale.x === 1 && scale.y === 1)) return regions;
-  return regions.map((region) => ({
-    ...region,
-    bounds: scaleBounds(region.bounds, scale),
-    words: region.words?.map((word) => ({ ...word, bounds: scaleBounds(word.bounds, scale) })),
-  }));
-}
-
-function scaleBounds(bounds: DiffBounds, scale: RegionScale): DiffBounds {
-  return {
-    x: bounds.x * scale.x,
-    y: bounds.y * scale.y,
-    width: bounds.width * scale.x,
-    height: bounds.height * scale.y,
-  };
 }
 
 export function analyzeTextRegions(params: {
@@ -372,10 +325,10 @@ function protectValueSymbols(text: string): string {
         return `${prefix}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${digit}`;
       }
     )
-    .replace(/(\p{N})([+-])(\p{N})/gu, (match, left: string, symbol: string, right: string) => {
-      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${right}`;
+    .replace(/(\p{N})([+-])(?=\p{N})/gu, (match, left: string, symbol: string) => {
+      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}`;
     })
-    .replace(/([\p{L}\p{N}])\s*\/\s*([\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}$2`);
+    .replace(/([\p{L}\p{N}])\s*\/\s*(?=[\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}`);
 }
 
 function restoreValueSymbols(text: string): string {

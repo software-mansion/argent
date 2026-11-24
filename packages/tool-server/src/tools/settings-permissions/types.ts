@@ -30,20 +30,16 @@ export interface SettingsPermissionsResult {
   permission: PermissionName;
   bundleId: string;
   /**
-   * The platform-level identifiers the action was actually applied to: the
-   * `simctl privacy` service(s) on iOS, the `android.permission.*` names on
-   * Android. Lets the caller see exactly what changed — one abstract
-   * permission can fan out to several concrete ones on either platform
-   * (fine/coarse location and per-media reads on Android; `photos` +
-   * best-effort `photos-add` on iOS, where a secondary service the runtime
-   * doesn't model is simply absent from this list rather than an error).
+   * Platform-level ids actually changed: `simctl privacy` services on iOS,
+   * `android.permission.*` names on Android. One tool permission can fan out to
+   * several; an iOS secondary service the runtime doesn't model is absent here
+   * rather than an error.
    */
   applied: string[];
   /**
    * Android only: mapped `android.permission.*` entries the package manager
-   * rejected (typically not declared in the app's manifest, or gated by the
-   * device's API level). Present only when at least one other mapped
-   * permission succeeded — if all of them fail, the tool errors instead.
+   * rejected (undeclared in the manifest, or gated by API level). Absent when
+   * all of them fail — the tool errors instead.
    */
   skipped?: string[];
 }

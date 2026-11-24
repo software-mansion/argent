@@ -29,7 +29,6 @@ vi.mock("../../src/tools/profiler/native-profiler/platforms/ios", () => ({
     status: "ok",
     exportErrors: {},
   })),
-  handleXctraceExit: vi.fn(),
 }));
 vi.mock("../../src/tools/profiler/native-profiler/platforms/android", () => ({
   startNativeProfilerAndroid: vi.fn(async () => ({
@@ -102,6 +101,7 @@ describe("native-profiler-* dispatch by session platform", () => {
     // the filename still proves it routed through the Android (.pftrace) path.
     expect(stop.traceFile).toMatchObject({
       __argentArtifact: true,
+      kind: "native-profile-trace",
       archive: "tar.gz",
       filename: "android.pftrace",
     });

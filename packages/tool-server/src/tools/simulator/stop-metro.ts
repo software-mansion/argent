@@ -1,25 +1,24 @@
 import { z } from "zod";
 import { execFileSync } from "node:child_process";
-import type { ToolDefinition } from "@argent/registry";
+import { existsSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type ToolDefinition,
+} from "@argent/registry";
 
 /**
- * Parse the raw output of `netstat -ano` (Windows) into the deduped set of PIDs
- * *listening* on `port`. Pure string parsing, split out of `listeningPids` so
- * the win32 row-matching can be unit-tested without a Windows host.
+ * Deduped PIDs *listening* on `port`, parsed out of `netstat -ano` (Windows).
+ * Split out of `listeningPids` so the win32 row matching can be unit-tested
+ * off Windows.
  *
- * Each row is `proto localAddr foreignAddr state pid`. A row matches when it is
- * a TCP row whose local address ends in `:<port>` and whose FOREIGN address is a
- * wildcard endpoint (`0.0.0.0:0` / `[::]:0` / `*:*`) — the locale-independent
- * signature of a listener. The State column is deliberately NOT used: Windows
- * localizes it (German "ABHÖREN", French "À L'ÉCOUTE"), so keying off the literal
- * "LISTENING" silently matched nothing on a non-English host and stop-metro
- * no-opped while Metro kept running. An ESTABLISHED/other-state connection always
- * has a real remote endpoint in the foreign column, so the wildcard reliably
- * separates the listener (which we kill) from the tool-server's own CDP client
- * socket to Metro (which we must not). The leading colon guards against `:18081`
- * matching port 8081. UDP rows (4 columns, no state) are skipped, and PIDs are
- * deduplicated — a listener bound on both IPv4 `0.0.0.0:<port>` and IPv6
- * `[::]:<port>` reports the same PID on two rows.
+ * A listener is identified by its wildcard foreign endpoint (`0.0.0.0:0` /
+ * `[::]:0` / `*:*`), never by the State column, which Windows localizes
+ * (German "ABHÖREN"). A connection in any other state has a real remote
+ * endpoint there, so this also keeps the tool-server's own CDP client socket
+ * to Metro out of the result. One listener can report the same PID on an IPv4
+ * and an IPv6 row, hence the dedupe.
  */
 export function parseNetstatListeningPids(netstatOutput: string, port: number): number[] {
   const pids = new Set<number>();
@@ -29,13 +28,11 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
     if (cols.length < 5 || cols[0].toUpperCase() !== "TCP") continue;
     // The colon guards against `:18081` matching port 8081.
     if (!cols[1].endsWith(`:${port}`)) continue;
-    // Identify a listener by its wildcard foreign endpoint (locale-independent),
-    // not the localized State text.
+    // Wildcard foreign endpoint, not the localized State text.
     const foreign = cols[2];
     if (foreign !== "*:*" && !foreign.endsWith(":0")) continue;
-    // PID is the trailing column. Read it from the end, not a fixed index — a
-    // localized State can span multiple whitespace-split tokens (French
-    // "À L'ÉCOUTE"), which would otherwise shift the PID column.
+    // From the end, not a fixed index: a localized State can span several
+    // whitespace-split tokens (French "À L'ÉCOUTE") and shift the column.
     const pid = parseInt(cols[cols.length - 1], 10);
     if (!Number.isNaN(pid) && pid > 0) pids.add(pid);
   }
@@ -43,53 +40,144 @@ export function parseNetstatListeningPids(netstatOutput: string, port: number): 
 }
 
 /**
- * Resolve the PIDs of processes *listening* on a TCP port, cross-platform.
- * Only the listener (Metro itself) is returned, never processes holding an
- * ESTABLISHED connection to the port — otherwise the Argent tool-server's own
- * CDP client socket to Metro would be matched and killed alongside it.
+ * PIDs *listening* on `port` on Linux, read from procfs: `net/tcp{,6}` rows in
+ * the LISTEN state give the socket inodes, and the processes are the ones with
+ * an fd linked to `socket:[<inode>]`. Linux hosts often lack a usable `lsof`
+ * (absent from Debian, Ubuntu and Fedora base images, BusyBox on Alpine).
+ */
+export function procListeningPids(port: number, proc = "/proc"): number[] {
+  const inodes = new Set<string>();
+  for (const table of ["tcp", "tcp6"]) {
+    let rows: string;
+    try {
+      rows = readFileSync(`${proc}/net/${table}`, "utf-8");
+    } catch (error) {
+      // No tcp6 table on a kernel without IPv6.
+      if (table === "tcp6" && (error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const line of rows.split("\n")) {
+      // cols: [sl, localAddr, remAddr, state, tx:rx, tr:when, retrnsmt, uid, timeout, inode, ...]
+      const cols = line.trim().split(/\s+/);
+      if (cols.length < 10 || cols[3] !== "0A") continue; // 0A = TCP_LISTEN
+      if (parseInt(cols[1].split(":")[1], 16) !== port) continue;
+      inodes.add(cols[9]);
+    }
+  }
+  if (inodes.size === 0) return [];
+
+  const owned = new Set<string>();
+  const pids: number[] = [];
+  for (const entry of readdirSync(proc)) {
+    if (!/^\d+$/.test(entry)) continue;
+    let fds: string[];
+    try {
+      fds = readdirSync(`${proc}/${entry}/fd`);
+    } catch {
+      // Another user's process, or one that already exited.
+      continue;
+    }
+    let owns = false;
+    for (const fd of fds) {
+      let target: string;
+      try {
+        target = readlinkSync(`${proc}/${entry}/fd/${fd}`);
+      } catch {
+        continue;
+      }
+      const inode = target.match(/^socket:\[(\d+)\]$/)?.[1];
+      if (inode && inodes.has(inode)) {
+        owned.add(inode);
+        owns = true;
+      }
+    }
+    if (owns) pids.push(parseInt(entry, 10));
+  }
+  // Killing only the visible listeners would report the port freed while one still holds it.
+  if (owned.size < inodes.size) {
+    throw new Error(
+      `no visible process owns a socket listening on port ${port}: it belongs to another user or PID namespace, or just closed`
+    );
+  }
+  return pids;
+}
+
+// Absolute, since an MCP client may launch the tool-server with a PATH that omits /usr/sbin.
+const LSOF_BIN = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => existsSync(p)) ?? "lsof";
+const DARWIN_NETSTAT_BIN = existsSync("/usr/sbin/netstat") ? "/usr/sbin/netstat" : "netstat";
+
+/**
+ * Whether macOS `netstat -an` lists a TCP socket listening on `port`. Unlike
+ * lsof, it shows every user's sockets. Rows look like
+ * `tcp46 0 0 *.8081 *.* LISTEN`.
+ */
+export function parseDarwinNetstatHasListener(netstatOutput: string, port: number): boolean {
+  return netstatOutput.split("\n").some((line) => {
+    const cols = line.trim().split(/\s+/);
+    return cols[5] === "LISTEN" && cols[0].startsWith("tcp") && cols[3].endsWith(`.${port}`);
+  });
+}
+
+/**
+ * PIDs *listening* on a TCP port, cross-platform. Only the listener (Metro) is
+ * returned, never a process holding an ESTABLISHED connection to the port:
+ * that would match the tool-server's own CDP client socket to Metro.
  *
- * - POSIX: `lsof -ti tcp:<port> -sTCP:LISTEN` — one PID per line, exits
- *   non-zero when the port is free.
- * - Windows: `netstat -ano`, then keep TCP rows whose local address ends in
- *   `:<port>` and whose foreign endpoint is a wildcard — the locale-independent
- *   listener signature; the localized State column is deliberately not used (see
- *   parseNetstatListeningPids) — and read the trailing PID column. `lsof`
- *   doesn't exist on Windows, so the prior implementation threw ENOENT there.
- *
- * Both run without a shell, so `port` (already an int by the time it reaches
- * here) can never be interpreted as a shell token.
+ * Windows parses `netstat -ano`, Linux reads procfs, and other hosts ask
+ * `lsof`. No command runs through a shell, so `port` can never be read as a
+ * shell token.
  */
 function listeningPids(port: number): number[] {
   if (process.platform === "win32") {
     const output = execFileSync("netstat", ["-ano"], {
       encoding: "utf-8",
       timeout: 5_000,
-      // `netstat -ano` dumps every socket on the host; a busy box easily
-      // exceeds Node's default 1 MiB maxBuffer, and the resulting ENOBUFS
-      // throw would misread as "port is free" (stopped:false).
+      // `netstat -ano` dumps every socket on the host; Node's default 1 MiB
+      // can overflow and fail the probe.
       maxBuffer: 16 * 1024 * 1024,
     });
     return parseNetstatListeningPids(output, port);
   }
-  const output = execFileSync("lsof", ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
-    encoding: "utf-8",
-    timeout: 5_000,
-  }).trim();
+  if (process.platform === "linux") return procListeningPids(port);
+  let output: string;
+  try {
+    output = execFileSync(LSOF_BIN, ["-ti", `tcp:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    }).trim();
+  } catch (error) {
+    // lsof exits 1 both on no visible listener and on a fatal error (e.g.
+    // sandboxed); -t implies -w, so only the error writes to stderr.
+    const { status, stderr } = error as { status?: unknown; stderr?: string };
+    if (status !== 1 || stderr?.trim()) throw error;
+    // Non-root lsof cannot see another user's sockets, e.g. a Metro started with sudo.
+    if (process.platform === "darwin") {
+      const netstat = execFileSync(DARWIN_NETSTAT_BIN, ["-an", "-p", "tcp"], {
+        encoding: "utf-8",
+        timeout: 5_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      if (parseDarwinNetstatHasListener(netstat, port)) {
+        throw new Error(
+          `no visible process owns a socket listening on port ${port}: it belongs to another user, or just opened`,
+          { cause: error }
+        );
+      }
+    }
+    return [];
+  }
   if (!output) return [];
-  return output
-    .split("\n")
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => !Number.isNaN(n));
+  const lines = output.split("\n").map((s) => s.trim());
+  // Never SIGTERM the leading digits of a line that is not a bare PID.
+  const notPid = lines.find((s) => !/^\d+$/.test(s));
+  if (notPid !== undefined) {
+    throw new Error(`lsof did not print a PID list: ${notPid}`);
+  }
+  return lines.map((s) => parseInt(s, 10));
 }
 
 const zodSchema = z.object({
-  port: z
-    .number()
-    .int()
-    .min(1)
-    .max(65535)
-    .default(8081)
-    .describe("TCP port Metro is listening on (default 8081)"),
+  port: z.number().int().min(1).max(65535).default(8081).describe("TCP port Metro is listening on"),
 });
 
 export const stopMetroTool: ToolDefinition<
@@ -97,34 +185,69 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
-  description: `Stop the Metro bundler process listening on a given port (default 8081). Use when ending a React Native session or when Metro must be restarted. Returns { stopped, port, pids }; stopped=false if no process is found on the port. Fails if the port lookup command times out or the process cannot be killed. This is DESTRUCTIVE — always ask the user for confirmation before calling this tool.`,
+  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }: stopped=true when it sent SIGTERM to every listening pid it found (or the pid had already exited), stopped=false when it found none. Fails if the port lookup cannot run or times out, if it finds a listener but not the process that owns it, or if it cannot signal a listener it found (e.g. EPERM). On macOS another user's listener is detected only when no other listener on the port is visible, so it can survive stopped=true. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
   zodSchema,
+  interaction: {
+    startedMsg: ({ params }) => `Stopping Metro on port ${params.port}`,
+    completedMsg: ({ params }) => `Stopped Metro on port ${params.port}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to stop Metro on port ${params.port}: ${failureSignal.error_code}`,
+  },
   services: () => ({}),
   async execute(_services, params) {
     const port = (params as { port: number }).port;
+    let pids: number[];
     try {
-      const pids = listeningPids(port);
+      pids = listeningPids(port);
+    } catch (error) {
+      const { code } = error as { code?: unknown };
+      // Only a child process error carries `status`; procfs and parse failures do not.
+      const subprocess = typeof error === "object" && error !== null && "status" in error;
+      throw new FailureError(
+        `Could not determine what is listening on port ${port}: ${(error as Error).message}`,
+        {
+          error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
+          failure_stage: "stop_metro_port_probe",
+          failure_area: "tool_server",
+          error_kind: code === "ETIMEDOUT" ? "timeout" : subprocess ? "subprocess" : "unknown",
+          ...(subprocess ? subprocessFailureMetadata(error, "unknown") : {}),
+        },
+        { cause: error as Error }
+      );
+    }
 
-      if (pids.length === 0) {
-        return { stopped: false, port, pids: [] };
-      }
-
-      for (const pid of pids) {
-        try {
-          // On Windows the signal is ignored and the process is terminated
-          // outright (Node maps any kill to TerminateProcess); on POSIX
-          // SIGTERM lets Metro shut down its watchers cleanly.
-          process.kill(pid, "SIGTERM");
-        } catch {
-          // Process may have already exited
-        }
-      }
-
-      return { stopped: true, port, pids };
-    } catch {
-      // lsof / netstat exits non-zero (or finds nothing) when no process is
-      // listening on the port.
+    if (pids.length === 0) {
       return { stopped: false, port, pids: [] };
     }
+
+    const failed: { pid: number; error: Error }[] = [];
+    for (const pid of pids) {
+      try {
+        // Windows ignores the signal and terminates outright; on POSIX
+        // SIGTERM lets Metro shut down cleanly.
+        process.kill(pid, "SIGTERM");
+      } catch (error) {
+        // ESRCH: it exited since the probe. EPERM: e.g. an elevated Metro on Windows.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          failed.push({ pid, error: error as Error });
+        }
+      }
+    }
+    if (failed.length > 0) {
+      throw new FailureError(
+        `Could not send SIGTERM to a process listening on port ${port}: ${failed
+          .map(({ pid, error }) => `pid ${pid}: ${error.message}`)
+          .join("; ")}`,
+        {
+          error_code: FAILURE_CODES.STOP_METRO_SIGNAL_FAILED,
+          failure_stage: "stop_metro_signal",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        },
+        { cause: failed[0].error }
+      );
+    }
+
+    return { stopped: true, port, pids };
   },
 };

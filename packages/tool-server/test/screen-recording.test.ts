@@ -46,11 +46,17 @@ import {
 import { makePointerControl } from "../src/tools/screen-recording/screen-recording-start";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { openMjpegStream, readJpegDimensions } from "../src/tools/screen-recording/mjpeg-stream";
-import { resolveFfmpeg, writeLogoTemp } from "../src/tools/screen-recording/watermark";
+import {
+  letterboxFilter,
+  resolveFfmpeg,
+  writeLogoTemp,
+} from "../src/tools/screen-recording/watermark";
 import {
   __resetActiveScreenRecordingsForTesting,
   getActiveScreenRecordings,
 } from "../src/utils/screen-recording-reminder";
+import { __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
 
 const mockSpawn = vi.mocked(spawn);
 const mockOpenStream = vi.mocked(openMjpegStream);
@@ -195,8 +201,20 @@ const androidDevice: DeviceInfo = {
   kind: "emulator",
 } as DeviceInfo;
 
-beforeEach(() => {
+// startCapture names its output join(os.tmpdir(),
+// `argent-screen-recording-${deviceId}-${Date.now()}.mp4`). The device ids are
+// fixtures, and vi.useFakeTimers() seeds its clock from the real time rather
+// than a constant, so the millisecond two runs start in is the only thing
+// separating their paths — and each test ends by deleting the path it derived.
+// Scoping the tmpdir per test removes that window instead of leaving it narrow.
+let restoreTmpdir: () => void = () => {};
+let scratch = "";
+
+beforeEach(async () => {
+  scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screen-recording-test-"));
+  restoreTmpdir = redirectTmpdir(scratch);
   __resetActiveScreenRecordingsForTesting();
+  __resetReapedSessionsForTesting();
   mockSpawn.mockReset();
   mockOpenStream.mockReset();
   mockResolveFfmpeg.mockReset();
@@ -204,8 +222,10 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  restoreTmpdir();
+  await fs.rm(scratch, { recursive: true, force: true });
 });
 
 describe("screen-recording session blueprint", () => {
@@ -282,6 +302,144 @@ describe("screen-recording session blueprint", () => {
     await expect(fs.access(logo)).rejects.toThrow();
     expect(api.logoFile).toBeNull();
   });
+
+  describe("a capture reaped by stop-all-simulator-servers", () => {
+    // The teardown sequence from the review: start a recording, let
+    // `stop-all-simulator-servers` reap the device (which is what disposes this
+    // service), then call `screen-recording-stop`. `Registry._teardown` nulls
+    // the node's instance, so that stop resolves a BRAND NEW session — modelled
+    // here by building a second one for the same device.
+    async function reapDuringCapture(): Promise<{
+      output: string;
+      fresh: ScreenRecordingSessionApi;
+    }> {
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      fakeChild().exitOnStdinEnd();
+      await startAndSettle(instance.api);
+      const output = instance.api.outputFile!;
+
+      await instance.dispose();
+
+      return { output, fresh: await makeSession(iosDevice) };
+    }
+
+    it("tells the owner the recording was torn down, and where the video landed", async () => {
+      const { output, fresh } = await reapDuringCapture();
+
+      const err = await stopCapture(fresh).catch((e: unknown) => e);
+
+      const message = (err as Error).message;
+      // The bug: this used to be "No active screen recording … Call
+      // `screen-recording-start` first." while a finalized video sat on disk.
+      expect(message).not.toMatch(/Call `screen-recording-start` first/);
+      expect(message).toContain("torn down");
+      expect(message).toContain("stop-all-simulator-servers");
+      // Nothing else in the process still knows this path exists.
+      expect(message).toContain(output);
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+    });
+
+    it("tells the owner when the teardown hit a CAPPED capture awaiting retrieval", async () => {
+      // `hadUnretrievedCapture` has three arms and only `recordingActive` was
+      // covered. This is the likeliest real sequence of the three: the time
+      // limit fires, the video is finalized and waiting to be handed over, and
+      // the teardown lands in that window. The caller is owed a video just as
+      // much as in the mid-capture case.
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      fakeChild().exitOnStdinEnd();
+      await startAndSettle(instance.api, { timeLimitSeconds: 5 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(instance.api.recordingActive).toBe(false);
+      expect(instance.api.pendingRetrieval).toBe(true);
+      const output = instance.api.outputFile!;
+
+      await instance.dispose();
+      const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+
+      const message = (err as Error).message;
+      expect(message).not.toMatch(/Call `screen-recording-start` first/);
+      expect(message).toContain("torn down");
+      expect(message).toContain(output);
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+    });
+
+    it("tells the owner when the teardown hit a start still mid-readiness", async () => {
+      // The third arm. `startPending` is set synchronously before start's first
+      // await, so a teardown here destroys a capture whose child may already be
+      // spawned — reported as a teardown, not as "you never started one".
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      fakeStream();
+      fakeChild();
+      const pending = startCapture(instance.api, {
+        streamUrl: STREAM_URL,
+        timeLimitSeconds: 180,
+        watermark: false,
+        trimStatic: false,
+      });
+      pending.catch(() => {});
+      expect(instance.api.startPending).toBe(true);
+
+      await instance.dispose();
+      await pending.catch(() => {});
+      const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+
+      expect((err as Error).message).not.toMatch(/Call `screen-recording-start` first/);
+      expect((err as Error).message).toContain("torn down");
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
+      );
+    });
+
+    it("still reports a plain absence when no capture was reaped", async () => {
+      // The breadcrumb must not turn every "you never started one" into an
+      // accusation: disposing an idle session leaves nothing behind.
+      const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
+        device: iosDevice,
+      } as never);
+      await instance.dispose();
+
+      const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("No active screen recording");
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.SCREEN_RECORDING_NO_ACTIVE_SESSION
+      );
+    });
+
+    it("is consumed once, so it cannot blame a later unrelated absence", async () => {
+      const { fresh } = await reapDuringCapture();
+      await stopCapture(fresh).catch(() => {});
+
+      const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("No active screen recording");
+    });
+
+    it("is dropped by a new recording, which would otherwise never consume it", async () => {
+      const { fresh } = await reapDuringCapture();
+      fakeStream();
+      fakeChild().exitOnStdinEnd();
+      await startAndSettle(fresh);
+      await fs.writeFile(fresh.outputFile!, Buffer.alloc(16, 1));
+      await stopCapture(fresh);
+
+      const err = await stopCapture(await makeSession(iosDevice)).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("No active screen recording");
+    });
+  });
 });
 
 describe("screen recording capture", () => {
@@ -331,6 +489,8 @@ describe("screen recording capture", () => {
     await startAndSettle(api, { watermark: true });
     const args = mockSpawn.mock.calls[0]![1] as string[];
     expect(args).not.toContain("-filter_complex");
+    // No canvas to letterbox into either: the frames are only evened.
+    expect(args[args.indexOf("-vf") + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
 
     await fs.writeFile(api.outputFile!, Buffer.alloc(32, 1));
     const outputFile = api.outputFile!;
@@ -351,27 +511,68 @@ describe("screen recording capture", () => {
     expect(args).not.toContain("-filter_complex");
   });
 
+  it("letterboxes into the first frame's size with the watermark on and off", async () => {
+    // The first frame (1320x2868) is the canvas the whole video keeps, so a
+    // frame of another size later on is fitted into it instead of stretched.
+    for (const watermark of [false, true]) {
+      mockSpawn.mockClear();
+      const api = await makeSession(iosDevice);
+      fakeStream();
+      fakeChild();
+
+      await startAndSettle(api, { watermark });
+
+      const args = mockSpawn.mock.calls[0]![1] as string[];
+      const filter = watermark
+        ? args[args.indexOf("-filter_complex") + 1]
+        : args[args.indexOf("-vf") + 1];
+      expect(filter).toContain(letterboxFilter({ width: 1320, height: 2868 }));
+    }
+  });
+
   it("evens the raw base so an odd device resolution still encodes (no watermark)", () => {
     // The watermark-off path has no filter graph to normalize the base, so the
     // frame reaches libx264 directly. yuv420p rejects an odd width/height and
     // leaves a 0-byte file (iPhone 16 / 15 Pro / 15 / 14 Pro stream at
-    // 1179x2556); the crop drops the odd edge pixel so any resolution records.
-    const args = ffmpegArgs({ outputFile: "/tmp/out.mp4", logoFile: null, graph: null });
+    // 1179x2556); the crop drops the odd edge pixel so any resolution records,
+    // and it comes ahead of the letterbox, so those frames are not resampled.
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: null,
+      graph: null,
+      canvas: { width: 1179, height: 2556 },
+    });
     const vf = args.indexOf("-vf");
     expect(vf).toBeGreaterThan(-1);
-    expect(args[vf + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+    expect(args[vf + 1]).toBe(
+      "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "scale=1178:2556:force_original_aspect_ratio=decrease," +
+        "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0," +
+        "pad=1178:2556:(ow-iw)/2:(oh-ih)/2"
+    );
     expect(args).not.toContain("-filter_complex");
     // the crop must precede the output file, not trail it
     expect(vf).toBeLessThan(args.length - 1);
   });
 
+  it("only evens the base when the first frame's size is unknown (no watermark)", () => {
+    const args = ffmpegArgs({
+      outputFile: "/tmp/out.mp4",
+      logoFile: null,
+      graph: null,
+      canvas: null,
+    });
+    expect(args[args.indexOf("-vf") + 1]).toBe("crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0");
+  });
+
   it("does not add a second base filter when a watermark graph already evens it", () => {
-    // buildWatermarkGraph handles the even-base crop itself, so the args must not
+    // buildWatermarkGraph letterboxes the base itself, so the args must not
     // also carry a -vf (ffmpeg rejects -vf alongside -filter_complex on one map).
     const args = ffmpegArgs({
       outputFile: "/tmp/out.mp4",
       logoFile: "/tmp/logo.png",
       graph: "[0:v]fps=30,split=2[base][under];[base][x]overlay[out]",
+      canvas: { width: 1320, height: 2868 },
     });
     expect(args).not.toContain("-vf");
     expect(args).toContain("-filter_complex");
@@ -539,9 +740,86 @@ describe("screen recording capture", () => {
       expect(getFailureSignal(err)?.error_code).toBe(
         FAILURE_CODES.SCREEN_RECORDING_SERVER_SHUTTING_DOWN
       );
+      // The error CODE is not the behaviour here — its enum name still says
+      // "shutting down", which is exactly the claim the message stopped making.
+      // A dispose is now far more often a `stop-all-simulator-servers` reaping
+      // this device than a process shutdown, and the two are indistinguishable
+      // from `api.disposed`. So the message must name both, and must not tell
+      // the caller a retry is pointless: on the teardown branch the device is
+      // usually still up. Asserted here because reverting the whole rewrite to
+      // the old one-liner otherwise leaves the suite green.
+      const message = (err as Error).message;
+      expect(message).toContain("stop-all-simulator-servers");
+      expect(message).toContain("nothing was recorded");
+      expect(message).toContain("start the recording again");
+      expect(message).toContain(IOS_UDID);
     }
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(stream.close).toHaveBeenCalled();
+  });
+});
+
+describe("stream source release (cabled iPhone helper)", () => {
+  const start = (api: ScreenRecordingSessionApi, release: () => void) => {
+    const promise = startCapture(api, {
+      streamUrl: STREAM_URL,
+      timeLimitSeconds: 5,
+      watermark: false,
+      trimStatic: false,
+      releaseStreamSource: release,
+    });
+    promise.catch(() => {});
+    return promise;
+  };
+
+  it("releases the source once, when the time limit closes the stream", async () => {
+    const api = await makeSession(iosDevice);
+    const stream = fakeStream();
+    fakeChild().exitOnStdinEnd();
+    const release = vi.fn();
+    const promise = start(api, release);
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await promise;
+    expect(release).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(stream.close).toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    await stopCapture(api).catch(() => {});
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when the start is refused before the stream opens", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    fakeChild();
+    const first = start(api, vi.fn());
+    await vi.advanceTimersByTimeAsync(READY_GRACE_MS);
+    await first;
+
+    const release = vi.fn();
+    await expect(start(api, release)).rejects.toThrow(/already/i);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when the stream cannot be opened", async () => {
+    const api = await makeSession(iosDevice);
+    mockOpenStream.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const release = vi.fn();
+    await expect(start(api, release)).rejects.toThrow("ECONNREFUSED");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the source when ffmpeg dies inside the fail-fast grace", async () => {
+    const api = await makeSession(iosDevice);
+    fakeStream();
+    const child = fakeChild();
+    const release = vi.fn();
+    const promise = start(api, release);
+    await vi.advanceTimersByTimeAsync(1);
+    child.exit(1);
+    await expect(promise).rejects.toThrow();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });
 

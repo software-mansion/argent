@@ -1,8 +1,9 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { redirectHomeTo } from "./helpers/home-redirect.js";
 
 // Regression coverage for the "two tool-servers alive at once after an nvm
 // node-version switch" bug. Switching node versions makes the host relaunch
@@ -16,6 +17,7 @@ import { spawn } from "node:child_process";
 // real ~/.argent.
 let launcher: typeof import("../src/launcher.js");
 let TEST_HOME: string;
+let restoreHome: () => void;
 
 const FAKE_BUNDLE = resolve(__dirname, "fixtures/fake-tool-server.cjs");
 
@@ -27,19 +29,32 @@ const fakePaths = (): import("../src/launcher.js").ToolsServerPaths => ({
 
 beforeAll(async () => {
   TEST_HOME = mkdtempSync(join(tmpdir(), "argent-dup-test-"));
-  process.env.HOME = TEST_HOME;
+  restoreHome = redirectHomeTo(TEST_HOME);
   vi.resetModules();
   launcher = await import("../src/launcher.js");
   expect(existsSync(FAKE_BUNDLE)).toBe(true);
+  // Same assertion launcher-sweep and launcher-state make: the afterEach below
+  // deletes STATE_DIR recursively, so refuse to run at all if it did not land
+  // inside the sandbox.
+  expect(launcher.STATE_PATHS.STATE_DIR.startsWith(TEST_HOME)).toBe(true);
 });
 
 afterAll(() => {
+  restoreHome();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
 
-// Track every pid we create so a failing assertion can never strand a server.
 const spawnedPids: number[] = [];
+// TTL safety net. The reaper below can only kill a pid that reached
+// `spawnedPids`, and every site records one only after the spawn has already
+// happened — so an assertion throwing in between leaves a real server running
+// while this same hook deletes the record that could find it. Sixty seconds
+// outlasts the longest test here (30s) and expires well before the next run.
+beforeEach(() => {
+  process.env.FAKE_TTL_MS = "60000";
+});
 afterEach(async () => {
+  delete process.env.FAKE_TTL_MS;
   for (const pid of spawnedPids.splice(0)) {
     try {
       process.kill(pid, "SIGKILL");
@@ -64,17 +79,9 @@ describe("ensureToolsServer — duplicate-spawn prevention (nvm node-version swi
     "collapses a burst of concurrent launches into a single tool-server",
     { timeout: 30_000 },
     async () => {
-      // TTL safety net: if the lock regressed and a duplicate leaked, it
-      // self-exits instead of stranding a long-lived process on the host.
-      process.env.FAKE_TTL_MS = "60000";
-      let handles: Awaited<ReturnType<typeof launcher.ensureToolsServer>>[];
-      try {
-        handles = await Promise.all(
-          Array.from({ length: 5 }, () => launcher.ensureToolsServer(fakePaths()))
-        );
-      } finally {
-        delete process.env.FAKE_TTL_MS;
-      }
+      const handles = await Promise.all(
+        Array.from({ length: 5 }, () => launcher.ensureToolsServer(fakePaths()))
+      );
 
       const state = await launcher.readToolsServerState(FAKE_BUNDLE);
       expect(state).not.toBeNull();

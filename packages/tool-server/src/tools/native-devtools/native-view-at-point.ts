@@ -1,27 +1,22 @@
 import { z } from "zod";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsInitFailedResult,
-} from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+export type ViewAtPointResult =
+  NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
+
+/** The parameters both view-at-point tools take. */
+export const viewAtPointParams = {
+  ...nativeAppTarget,
   x: z
     .number()
     .describe(
-      "Raw X coordinate in the app window's native point space. NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the axes of the UI as the user sees it (the axes of screenshots and describe frames)<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
-    .describe(
-      "Raw Y coordinate in the app window's native point space. NOT normalized [0,1] tap space."
-    ),
+    .describe("Raw Y coordinate in points, on the same axes as x. NOT normalized [0,1] tap space."),
   includeAncestors: z
     .boolean()
     .optional()
@@ -35,9 +30,9 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
+        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
         "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor"
+        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
     ),
   skipClasses: z
     .array(z.string())
@@ -53,66 +48,86 @@ const zodSchema = z.object({
     .positive()
     .optional()
     .describe("Maximum depth for returned child/ancestor serialization (default 150)"),
+};
+
+const zodSchema = z.object({
+  ...viewAtPointParams,
+  hitTest: z
+    .boolean()
+    .optional()
+    .describe(
+      "true returns the view that would receive a touch at the point: it respects userInteractionEnabled, close to UIKit hit-testing. Default false: the deepest visible view."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result =
-  | NativeDevtoolsInitFailedResult
-  | { status: "restart_required"; message: string }
-  | { status: "ok"; view: unknown | null };
+type Result = ViewAtPointResult;
+
+/** Send the hit-test query (the view that receives the touch) or the plain one (the view drawn there). */
+export function queryViewAtPoint(
+  services: Record<string, unknown>,
+  params: z.infer<z.ZodObject<typeof viewAtPointParams>>,
+  toolId: string,
+  hitTest: boolean
+): Promise<ViewAtPointResult> {
+  return queryViewHierarchyFor(
+    services,
+    params,
+    toolId,
+    hitTest ? "ViewHierarchy.userInteractableViewAtPoint" : "ViewHierarchy.viewAtPoint",
+    hitTest
+      ? FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR
+      : FAILURE_CODES.NATIVE_DEVTOOLS_VIEW_AT_POINT_ERROR,
+    (result: { view?: unknown }) => ({ status: "ok" as const, view: result.view ?? null })
+  );
+}
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
-  description: `Inspect the deepest visible UIView at a raw native window point.
+  description: `Inspect the deepest UIView at a raw native window point: the one drawn there, or with hitTest: true the one that would receive a touch.
 
-Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
-so it answers "what is visually here?" rather than "what would receive the touch?".
+Without hitTest it ignores userInteractionEnabled and answers "what is visually here?".
+Use when a screenshot shows something the accessibility tree does not name (an
+unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
+identifier or nativeID of whatever draws it.
 
-IMPORTANT: x and y are raw iOS window coordinates in points, NOT normalized [0,1]
-simulator tap coordinates.
+With hitTest: true it answers "what would receive the touch?". Use when a tap lands
+somewhere unexpected or does nothing, to see which control UIKit would hand the
+touch to: a transparent overlay swallowing it, a parent recognizer, a disabled button.
 
-If status is restart_required: call restart-app then retry.`,
+Returns { status: "ok", view }: the matched view with its class name, frames,
+identifier, label and layer name, plus its ancestors and subviews as requested.
+view is null when nothing is drawn at that point, or with hitTest when no touchable view sits under it.
+
+To get x and y from a normalized describe frame, multiply its values by the
+screen size in points, on the same axes (landscape when the UI is).
+native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).<flag:macos-apps> On a Mac app,
+multiply them by the size of the area describe reports instead.</flag:macos-apps>
+
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {
-      x: params.x,
-      y: params.y,
-    };
-    if (params.includeAncestors !== undefined) rpcParams.includeAncestors = params.includeAncestors;
-    if (params.includeChildren !== undefined) rpcParams.includeChildren = params.includeChildren;
-    if (params.fields !== undefined) rpcParams.fields = params.fields;
-    if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;
-    if (params.skipClassPrefixes !== undefined)
-      rpcParams.skipClassPrefixes = params.skipClassPrefixes;
-    if (params.maxDepth !== undefined) rpcParams.maxDepth = params.maxDepth;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
-      "ViewHierarchy.viewAtPoint",
-      rpcParams
-    )) as { view?: unknown | null; error?: string };
-
-    if (result.error) {
-      throw new FailureError(result.error, {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_VIEW_AT_POINT_ERROR,
-        failure_stage: "native_devtools_view_at_point",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    return { status: "ok", view: result.view ?? null };
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) =>
+      params.hitTest
+        ? `Finding interactive view at (${params.x}, ${params.y})`
+        : `Inspecting native view at (${params.x}, ${params.y})`,
+    completedMsg: ({ params }) =>
+      params.hitTest
+        ? `Found interactive view at (${params.x}, ${params.y})`
+        : `Inspected native view at (${params.x}, ${params.y})`,
+    failedMsg: ({ params, failureSignal }) =>
+      params.hitTest
+        ? `Failed to find interactive view at (${params.x}, ${params.y}): ${failureSignal.error_code}`
+        : `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true, catalyst: false },
+  },
+  services: nativeAppServices,
+  execute: (services, { hitTest, ...query }) =>
+    queryViewAtPoint(services, query, "native-view-at-point", hitTest === true),
 };

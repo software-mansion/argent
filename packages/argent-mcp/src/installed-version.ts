@@ -4,14 +4,10 @@ import * as path from "node:path";
 /**
  * Version reported in the MCP `initialize` handshake (`serverInfo.version`).
  *
- * Resolved from the package.json one directory above the executing file —
- * the same pattern as `getInstalledVersion()` in packages/argent/src/cli.ts:
- * in the published package the bundled `dist/mcp-server.mjs` sits next to
- * `dist/cli.js`, so two-up is @swmansion/argent's shipped package.json; in
- * the dev workspace the compiled file resolves @argent/mcp's own package.json.
- * Both are version-bumped in lockstep, so either source is correct — unlike
- * the hardcoded literal this replaces, which had drifted several releases
- * behind the actual install.
+ * The parent of the compiled file's dist/ is @swmansion/argent's shipped
+ * package.json once published (dist/mcp-server.mjs ships next to dist/cli.js)
+ * and @argent/mcp's own in the dev workspace; packages/* are version-locked
+ * (scripts/check-workspace-versions.mjs), so either source is correct.
  */
 export function getInstalledVersion(): string {
   try {

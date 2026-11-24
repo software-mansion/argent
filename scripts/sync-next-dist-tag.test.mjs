@@ -1,7 +1,6 @@
 /**
- * Proves the dependency-free SemVer comparator in sync-next-dist-tag.mjs orders
- * versions identically to the `semver` library. `semver` is a dev/transitive
- * dependency used only by this test — the script itself stays dependency-free.
+ * Checks the dependency-free SemVer comparator in sync-next-dist-tag.mjs against
+ * the `semver` library.
  *
  * Run: node --test scripts/sync-next-dist-tag.test.mjs
  */
@@ -12,9 +11,6 @@ import semver from "semver";
 
 import { compareSemver, shouldAdvanceTag } from "./sync-next-dist-tag.mjs";
 
-// Real published history of @swmansion/argent plus tricky prerelease cases that
-// exercise every branch of SemVer precedence (numeric-vs-alphanumeric ids,
-// field-count tiebreak, prerelease-vs-release, build metadata).
 const VERSIONS = [
   "0.5.1",
   "0.5.2",
@@ -62,21 +58,19 @@ test("prerelease ranks below its release; numeric id below alphanumeric", () => 
 });
 
 test("shouldAdvanceTag only advances, never regresses 'next'", () => {
-  // Self-heal: drifted `next` advances to the true max (the bug this fixes).
+  // A stable-only publish leaves `next` behind; it must catch up.
   assert.equal(shouldAdvanceTag("0.11.0", "0.7.0-next.4"), true);
   assert.equal(shouldAdvanceTag("0.7.0-next.6", "0.7.0-next.4"), true);
 
-  // Unset or unparseable current => set it.
   assert.equal(shouldAdvanceTag("0.11.0", undefined), true);
   assert.equal(shouldAdvanceTag("0.11.0", null), true);
   assert.equal(shouldAdvanceTag("0.11.0", "not-a-version"), true);
 
-  // Idempotent: already at the max => no-op.
   assert.equal(shouldAdvanceTag("0.11.0", "0.11.0"), false);
   assert.equal(shouldAdvanceTag("0.12.0-next.0", "0.12.0-next.0"), false);
 
-  // Regression guard: a stale packument can compute a `max` older than the
-  // just-tagged prerelease `next` already points at — must NOT move backward.
+  // A CDN-stale packument can compute a `max` older than what `next` already
+  // points at; the tag must not move backward.
   assert.equal(shouldAdvanceTag("0.11.0", "0.12.0-next.0"), false);
   assert.equal(shouldAdvanceTag("0.7.0-next.4", "0.11.0"), false);
 });

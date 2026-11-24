@@ -1,81 +1,178 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import semver from "semver";
+import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./package-root.js";
 import { isYarnPnp } from "./preflight.js";
 
-// Argent supports two independent install topologies:
-//   - global: argent is on the user's PATH (the historical default).
-//   - local : argent is a project dependency resolvable from the project root
-//             — the committable "team-share" flow.
-// They can coexist; update/uninstall probe and handle each independently.
+// Two install topologies that can coexist: global (argent on PATH, the default)
+// and local (project dependency, the committable "team-share" flow).
+// update/uninstall probe and handle each independently.
 
-// Paths `which argent` can return that are NOT a real global install: temp
-// package runners (npx / pnpm dlx / bunx / yarn dlx) prepend their cache
-// .bin/ dir to PATH.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
+// `which argent` also matches the copy a temp package runner prepends to PATH.
+const TEMP_RUNNER_PATTERNS = [
+  // npx: <npm cache>/_npx/<hash>/node_modules/.bin
+  /\/_npx\//,
+  // pnpm 9+ dlx: <pnpm cache>/dlx/<hash>/<id>/node_modules/.bin
+  /\/dlx\/[^/]+\/[^/]+\/node_modules\/\.bin\//,
+  // pnpm 8 dlx: <store>/tmp/dlx-<pid>/node_modules/.bin
+  /\/dlx-\d+\//,
+  // yarn 2+ dlx: <tmp>/xfs-<hex>/argent
+  /\/xfs-[0-9a-f]{8,}\//,
+  // bunx up to 1.0.28: <tmp>/<spec>--bunx/node_modules/.bin
+  /--bunx\/node_modules\/\.bin\//,
+  // bunx 1.0.29 to 1.4.3, and on Windows: <tmp>/bunx-<uid>-<spec>/node_modules/.bin
+  /\/bunx-\d+-/,
+  // bunx 1.4.4+: <bun install cache, else tmp>/.bunx-<uid>/<spec>/node_modules/.bin
+  /\/\.bunx-\d+\//,
 ];
 
-export function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
+function isTempRunnerPath(binaryPath: string): boolean {
+  const slashed = binaryPath.split("\\").join("/");
+  return TEMP_RUNNER_PATTERNS.some((pattern) => pattern.test(slashed));
 }
 
-/**
- * Path of the globally-installed argent binary, or null when argent is not
- * permanently on PATH. Inspects every `where` / `which -a` match so a
- * concurrent temp-runner invocation does not mask a real global install.
- */
-function getGlobalBinaryPath(): string | null {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
-  } catch {
-    return null;
+// npm exec, npx and package scripts prepend `<cwd or ancestor>/node_modules/.bin`,
+// or `<--prefix>/node_modules/.bin` from any cwd, which holds a project's
+// devDependency, not a global install. Compared by canonical path:
+// process.cwd() is physical, and `npm --prefix <symlink>` is not.
+function isProjectBinPath(binaryPath: string): boolean {
+  const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : canonicalPath(p));
+  const binDir = norm(path.dirname(path.resolve(binaryPath)));
+  const prefix = process.env.npm_config_local_prefix;
+  if (prefix && norm(path.join(prefix, "node_modules", ".bin")) === binDir) return true;
+  for (let dir = path.resolve(process.cwd()); ; dir = path.dirname(dir)) {
+    if (norm(path.join(dir, "node_modules", ".bin")) === binDir) return true;
+    if (path.dirname(dir) === dir) return false;
   }
 }
 
+// Every argent on PATH but a temp runner's, in PATH order.
+function getPermanentBinaryPaths(): string[] {
+  try {
+    const [cmd, args] =
+      process.platform === "win32"
+        ? ["where", [MCP_BINARY_NAME]]
+        : ["which", ["-a", MCP_BINARY_NAME]];
+    const output = execFileSync(cmd, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !isTempRunnerPath(line));
+  } catch {
+    return [];
+  }
+}
+
+// Project copies are skipped too, so they do not mask a real global install.
+function getGlobalBinaryPaths(): string[] {
+  return getPermanentBinaryPaths().filter((line) => !isProjectBinPath(line));
+}
+
 /**
- * True iff argent is permanently installed on the user's PATH (not just being
- * executed transiently from an npx / dlx / bunx cache).
+ * Whether any argent but a temp runner's is on PATH, live here or not. Clearing
+ * what the editors' bare `argent` relies on goes by this, not by a live global:
+ * a version-manager shim that fails in this directory can run another Node's
+ * global elsewhere, and under npx or npm exec this PATH, which then holds the
+ * project's bin, is not the one the editors run.
+ */
+export function isArgentOnPath(): boolean {
+  return getPermanentBinaryPaths().length > 0;
+}
+
+/**
+ * The first live global argent on PATH: a link or pnpm shim that resolves to
+ * the package, or a binary that still runs. A version-manager shim (nodenv's,
+ * mise's) fails where no Node it selects has argent: until a reshim after an
+ * uninstall, or in a directory pinned to another Node. It is passed over: an
+ * install behind it still counts.
+ */
+export function getRemainingGlobalBinaryPath(): string | null {
+  for (const binaryPath of getGlobalBinaryPaths()) {
+    if (process.platform === "win32" || globalPackageRootOf(binaryPath)) return binaryPath;
+    try {
+      execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
+      return binaryPath;
+    } catch {
+      // A stale shim.
+    }
+  }
+  return null;
+}
+
+/**
+ * True iff a live argent is permanently on PATH, not run from an npx / dlx
+ * cache and not a stale version-manager shim.
  */
 export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
+  return getRemainingGlobalBinaryPath() !== null;
+}
+
+// Null when a project copy is first on PATH: package-manager runs put the
+// project's bin there, which says nothing about the global install behind it.
+function getUnshadowedGlobalBinaryPath(): string | null {
+  const first = getPermanentBinaryPaths()[0];
+  return first !== undefined && !isProjectBinPath(first) ? getRemainingGlobalBinaryPath() : null;
+}
+
+/** True iff a live global install is on PATH with no project copy before it. */
+export function isGlobalInstallFirstOnPath(): boolean {
+  return getUnshadowedGlobalBinaryPath() !== null;
 }
 
 /**
  * Root directory of the globally-installed argent package, or null when argent
  * is not on PATH or the layout can't be resolved. Used to read the installed
- * version and to scope tool-server teardown to servers from THIS install.
+ * version and to scope tool-server teardown to THIS install.
  */
 export function getGloballyInstalledPackageRoot(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
+  const binaryPath = getRemainingGlobalBinaryPath();
+  return binaryPath ? globalPackageRootOf(binaryPath) : null;
+}
+
+// A shim script's text, or null for a binary (a Volta or mise shim) or an
+// unreadable file. 64 KiB is far above any shim script.
+export function readShimScript(binaryPath: string): string | null {
+  try {
+    if (fs.statSync(binaryPath).size > 64 * 1024) return null;
+    return fs.readFileSync(binaryPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// pnpm's global bin is a shim script, not a link. pnpm 11+ ends it with a
+// `# cmd-shim-target=` line; older ones exec a path under `$basedir`.
+export function shimTargetOf(binaryPath: string): string | null {
+  const shim = readShimScript(binaryPath);
+  if (!shim) return null;
+  const trailer = /^# cmd-shim-target=(.+)$/m.exec(shim);
+  if (trailer) return trailer[1]!.trim();
+  const relative = /"\$basedir(?:_abs)?"?\/'?([^"'\s]*node_modules\/[^"'\s]*)/.exec(shim);
+  return relative ? path.resolve(canonicalPath(path.dirname(binaryPath)), relative[1]!) : null;
+}
+
+function globalPackageRootOf(binaryPath: string): string | null {
+  const root = packageRootOf(binaryPath);
+  if (root) return root;
+  const target = shimTargetOf(binaryPath);
+  return target ? packageRootOf(target) : null;
+}
+
+export function packageRootOf(binaryPath: string): string | null {
   try {
     const realPath = fs.realpathSync(binaryPath);
     const root = resolvePackageRoot(path.dirname(realPath));
     // resolvePackageRoot walks up to the FIRST package.json, which can be an
     // unrelated manifest (e.g. a stray `~/package.json`) when the bin is a
-    // non-symlink wrapper like a Windows `argent.cmd`. Callers feed this root
-    // to killToolServerForInstallDir, so an over-broad root would tear down
-    // unrelated installs' tool-servers — only trust a root that is really ours.
+    // non-symlink wrapper like a Windows `argent.cmd`. An over-broad root would
+    // make killToolServerForInstallDir kill unrelated installs' tool-servers.
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
       name?: string;
     };
@@ -85,11 +182,40 @@ export function getGloballyInstalledPackageRoot(): string | null {
   }
 }
 
+export function cliPathOf(packageRoot: string): string | null {
+  const binSub = argentBinSubpath(packageRoot);
+  if (!binSub) return null;
+  const cli = path.join(packageRoot, binSub);
+  return fs.existsSync(cli) ? cli : null;
+}
+
 /**
- * Version of the globally-installed argent package — NOT the running package
+ * Absolute `node` and CLI entrypoint that start the global install without
+ * PATH. Only a `node` beside the argent bin link counts, kept unresolved:
+ * `/opt/homebrew/bin/node` survives `brew upgrade`, its Cellar target does not.
+ * The bin dir itself is resolved so the entry never pins fnm's per-shell
+ * multishell link. Null on Windows, for shims such as Volta and pnpm, for
+ * prefixes without their own `node` and for a project's `node_modules/.bin`.
+ */
+export function getGloballyInstalledLaunchPaths(): { node: string; cli: string } | null {
+  if (process.platform === "win32") return null;
+  const binaryPath = getUnshadowedGlobalBinaryPath();
+  if (!binaryPath) return null;
+  const packageRoot = packageRootOf(binaryPath);
+  const cli = packageRoot ? cliPathOf(packageRoot) : null;
+  if (!cli) return null;
+  try {
+    const node = path.join(fs.realpathSync(path.dirname(binaryPath)), "node");
+    return fs.existsSync(node) ? { node, cli } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Version of the globally-installed argent package — NOT the running one
  * ({@link import("./utils.js").getInstalledVersion}): under `npx` the running
- * copy is the always-latest npx cache, which would mask an outdated global
- * install. Null when argent is not on PATH or the layout can't be resolved.
+ * copy is the always-latest cache, which would mask an outdated global install.
  */
 export function getGloballyInstalledVersion(): string | null {
   const pkgRoot = getGloballyInstalledPackageRoot();
@@ -103,8 +229,6 @@ export function getGloballyInstalledVersion(): string | null {
     return null;
   }
 }
-
-// ── Local install probes ──────────────────────────────────────────────────────
 
 interface ManifestDeps {
   dependencies?: Record<string, string>;
@@ -128,24 +252,24 @@ function readManifestDeclaration(projectRoot: string): string | null {
 }
 
 /**
- * True iff the project's own package.json declares @swmansion/argent. This is
- * the intent signal for local mode: a copy merely present in node_modules
- * (hoisted transitive dep, workspace symlink) is NOT an opt-in.
+ * True iff the project's own package.json declares @swmansion/argent — the
+ * intent signal for local mode. A copy merely present in node_modules (hoisted
+ * transitive dep, workspace symlink) is NOT an opt-in.
  */
 export function isDeclaredLocally(projectRoot: string): boolean {
   return readManifestDeclaration(projectRoot) !== null;
 }
 
 /**
- * Directory of the project-local @swmansion/argent package, via Node module
- * resolution from the project root (handles hoisted and pnpm layouts). Null
- * when unresolvable (not installed, or Yarn PnP without its resolver loaded).
+ * Directory of the project-local @swmansion/argent, via Node module resolution
+ * from the project root (handles hoisted and pnpm layouts). Null when
+ * unresolvable: not installed, or Yarn PnP without its resolver loaded.
  */
-export function resolveLocalArgentDir(projectRoot: string): string | null {
+function resolveLocalArgentDir(projectRoot: string): string | null {
   try {
     const req = createRequire(path.join(projectRoot, "package.json"));
     // No `exports` map today, so the package.json subpath resolves; the catch
-    // falls back to the plain node_modules path in case a future map hides it.
+    // covers a future map hiding it.
     return path.dirname(req.resolve(`${PACKAGE_NAME}/package.json`));
   } catch {
     const plain = path.join(projectRoot, "node_modules", PACKAGE_NAME);
@@ -153,17 +277,13 @@ export function resolveLocalArgentDir(projectRoot: string): string | null {
   }
 }
 
-export interface LocalInstallProbe {
+interface LocalInstallProbe {
   /**
-   * True when the package is present for this project: resolvable on disk, or
-   * declared in the manifest under Yarn PnP (which has no node_modules and
-   * whose resolver isn't loaded here).
+   * Resolvable on disk, or declared in the manifest under Yarn PnP (which has
+   * no node_modules and whose resolver isn't loaded here).
    */
   installed: boolean;
-  /**
-   * Installed version when it can be read. Under PnP this falls back to the
-   * declared specifier when it is an exact semver; null when unknown.
-   */
+  /** Under PnP, falls back to the declared specifier when it is exact semver. */
   version: string | null;
   /** Absolute package directory when resolvable on disk; null under PnP. */
   packageDir: string | null;
@@ -192,25 +312,20 @@ export function probeLocalInstall(projectRoot: string): LocalInstallProbe {
   return { installed: false, version: null, packageDir: null };
 }
 
-// True iff @swmansion/argent is installed for this project (resolvable from
-// the project root, or a declared dep under Yarn PnP).
 export function isLocallyInstalled(projectRoot: string): boolean {
   return probeLocalInstall(projectRoot).installed;
 }
 
-// Version of the project-local @swmansion/argent — the copy `update` must
-// compare against, as opposed to the running package (getInstalledVersion) or
-// the global install (getGloballyInstalledVersion).
+// The copy `update` compares against, as opposed to the running package
+// (getInstalledVersion) or the global install (getGloballyInstalledVersion).
 export function getLocallyInstalledVersion(projectRoot: string): string | null {
   return probeLocalInstall(projectRoot).version;
 }
 
-// Version read straight from <projectRoot>/node_modules/<pkg>/package.json,
-// bypassing Node's module-resolution realpath cache: resolveLocalArgentDir
-// memoizes the symlink's realpath for the process lifetime, so right after an
-// in-process install it can still report the OLD version. `update` uses this
-// to confirm a bump landed even when the package manager exited non-zero.
-// Null when there is no copy at that path.
+// Bypasses Node's module-resolution realpath cache, which makes
+// resolveLocalArgentDir still report the OLD version right after an in-process
+// install. `update` uses this to confirm a bump landed even when the package
+// manager exited non-zero.
 export function readLocalPackageVersionUncached(projectRoot: string): string | null {
   try {
     const pkgPath = path.join(projectRoot, "node_modules", PACKAGE_NAME, "package.json");
@@ -221,27 +336,36 @@ export function readLocalPackageVersionUncached(projectRoot: string): string | n
   }
 }
 
-// Project-relative POSIX path to the local argent CLI entrypoint (e.g.
-// "node_modules/@swmansion/argent/dist/cli.js"), or null when the package isn't
-// installed or its bin can't be resolved. Derived from the installed
-// package.json `bin` (and existence-checked) so it never writes a dead command;
-// forward slashes keep the committed command valid on Windows too.
-export function getLocalArgentBinRelPath(projectRoot: string): string | null {
-  const pkgDir = resolveLocalArgentDir(projectRoot);
-  if (!pkgDir) return null;
-  let binSub: string | undefined;
+/**
+ * The package-relative path of argent's CLI entrypoint (today `dist/cli.js`),
+ * read from the installed `package.json`'s `bin` rather than hard-coded, so a
+ * rename can never leave a caller pointing at a file that isn't there.
+ */
+function argentBinSubpath(pkgDir: string): string | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8")) as {
       bin?: string | Record<string, string>;
     };
-    if (typeof pkg.bin === "string") binSub = pkg.bin;
-    else if (pkg.bin && typeof pkg.bin === "object")
-      binSub = pkg.bin[MCP_BINARY_NAME] ?? Object.values(pkg.bin)[0];
+    if (typeof pkg.bin === "string") return pkg.bin;
+    if (pkg.bin && typeof pkg.bin === "object") {
+      return pkg.bin[MCP_BINARY_NAME] ?? Object.values(pkg.bin)[0] ?? null;
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+// Project-relative POSIX path to the local argent CLI entrypoint (e.g.
+// "node_modules/@swmansion/argent/dist/cli.js"). Derived from the installed
+// package.json `bin` and existence-checked so it never writes a dead command;
+// forward slashes keep the committed command valid on Windows too.
+export function getLocalArgentBinRelPath(projectRoot: string): string | null {
+  const pkgDir = resolveLocalArgentDir(projectRoot);
+  if (!pkgDir) return null;
+  const binSub = argentBinSubpath(pkgDir);
   if (!binSub) return null;
-  // Realpath the root so a symlinked project dir (e.g. macOS /var → /private/var)
+  // Realpath the root so a symlinked project dir (macOS /var → /private/var)
   // doesn't derail the relative path with spurious ".." segments.
   let root = projectRoot;
   try {
@@ -249,17 +373,15 @@ export function getLocalArgentBinRelPath(projectRoot: string): string | null {
   } catch {
     // keep the caller's path
   }
-  // Prefer the STABLE node_modules path over the resolved real path: module
-  // resolution returns the symlink TARGET — under pnpm the version-pinned
-  // .pnpm store dir. Committing that bakes the version into the MCP command,
-  // which breaks on the next bump (pnpm prunes the old store dir); the
-  // <root>/node_modules/<pkg> symlink stays valid across bumps.
+  // Prefer the STABLE node_modules path: module resolution returns the symlink
+  // TARGET — under pnpm the version-pinned .pnpm store dir, which pnpm prunes
+  // on the next bump, breaking the committed MCP command.
   const stableRel = path.join("node_modules", PACKAGE_NAME, binSub);
   if (fs.existsSync(path.join(root, stableRel))) {
     return stableRel.split(path.sep).join("/");
   }
-  // Fallback for hoisted layouts (package above the project's own node_modules):
-  // use the resolved path — still committable, just less bump-resilient.
+  // Hoisted layouts (package above the project's own node_modules): the
+  // resolved path is still committable, just less bump-resilient.
   const abs = path.join(pkgDir, binSub);
   if (!fs.existsSync(abs)) return null;
   return path.relative(root, abs).split(path.sep).join("/");

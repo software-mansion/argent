@@ -3,10 +3,8 @@ import { UnsupportedOperationError } from "../../../utils/capability";
 import { resolveTvApi } from "../../tv/tv-service";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
-// TV typing goes through the focus-driven tv-control backend (injected HID
-// keyboard on Apple TV, `adb input text` on Android TV). Named keys are
+// Shared by the ios (Apple TV) and android (Android TV) branches. Named keys are
 // navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
-// Shared by the ios (Apple TV) and android (Android TV) branches.
 export async function typeTv(
   registry: Registry,
   device: DeviceInfo,
@@ -25,7 +23,7 @@ export async function typeTv(
     const api = await resolveTvApi(registry, device.id);
     await api.type(text);
   }
-  // Count by codepoint (not UTF-16 units) so a non-BMP char reports `keys: 1`,
-  // matching the vega and simulator-server keyboard backends.
+  // Codepoints, not UTF-16 units: a non-BMP char reports `keys: 1`, matching the
+  // vega and simulator-server backends.
   return { typed: text, keys: [...text].length };
 }

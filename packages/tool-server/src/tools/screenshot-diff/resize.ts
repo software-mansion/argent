@@ -1,15 +1,11 @@
-// Pure (pngjs-free) image resampling helpers for screenshot-diff.
-//
-// This module intentionally has NO dependency on `pngjs`. It operates on a
-// plain decoded-image shape (`{ width, height, data }` with tightly-packed
-// RGBA bytes) so that it can be unit-tested in environments where `pngjs` is
-// not runtime-resolvable. `screenshot-diff.ts` re-uses these helpers and wraps
-// the results back into `pngjs` `PNG` objects where it needs them.
+// Deliberately free of any `pngjs` dependency, so these helpers stay usable and
+// testable where `pngjs` is not runtime-resolvable; callers wrap the results
+// back into `PNG` objects themselves.
 
 /**
- * Minimal decoded-image shape shared with `screenshot-diff.ts`'s `DecodedPng`
- * and `font-diff.ts`'s `FontGeometryImage`. `data` is a tightly-packed RGBA
- * byte buffer of length `width * height * 4`.
+ * Structurally identical to `screenshot-diff.ts`'s `DecodedPng` and
+ * `font-diff.ts`'s `FontGeometryImage`. `data` is tightly-packed RGBA of length
+ * `width * height * 4`.
  */
 export interface DecodedRgbaImage {
   width: number;
@@ -17,64 +13,9 @@ export interface DecodedRgbaImage {
   data: Buffer;
 }
 
-// Aspect ratios are treated as equal when they agree within this relative
-// tolerance. Uniform scalings of the same framebuffer (e.g. a 0.3x saved
-// screenshot vs a 1.0x live capture) match exactly in theory but pick up tiny
-// rounding error from integer pixel dimensions, so a small tolerance is needed.
-const ASPECT_RATIO_TOLERANCE = 0.01;
-
 /**
- * When two decoded images share the same aspect ratio (within
- * {@link ASPECT_RATIO_TOLERANCE}) but differ in resolution, downscale the
- * larger one to the smaller one's exact dimensions so they can be compared
- * pixel-for-pixel. The smaller image is returned untouched; we never upscale.
- *
- * Returns `null` when the aspect ratios genuinely differ — callers should keep
- * treating that as a hard dimension mismatch.
- */
-export function normalizeToCommonSize(
-  baseline: DecodedRgbaImage,
-  current: DecodedRgbaImage
-): { baseline: DecodedRgbaImage; current: DecodedRgbaImage } | null {
-  if (baseline.width === current.width && baseline.height === current.height) {
-    return { baseline, current };
-  }
-
-  if (!aspectRatiosMatch(baseline, current)) {
-    return null;
-  }
-
-  const baselineArea = baseline.width * baseline.height;
-  const currentArea = current.width * current.height;
-
-  if (baselineArea <= currentArea) {
-    return {
-      baseline,
-      current: resizeDecodedPng(current, baseline.width, baseline.height),
-    };
-  }
-
-  return {
-    baseline: resizeDecodedPng(baseline, current.width, current.height),
-    current,
-  };
-}
-
-function aspectRatiosMatch(a: DecodedRgbaImage, b: DecodedRgbaImage): boolean {
-  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) {
-    return false;
-  }
-  const aspectA = a.width / a.height;
-  const aspectB = b.width / b.height;
-  const largest = Math.max(aspectA, aspectB);
-  if (largest === 0) return false;
-  return Math.abs(aspectA - aspectB) / largest <= ASPECT_RATIO_TOLERANCE;
-}
-
-/**
- * Lanczos3-resample a decoded RGBA image to the target dimensions, returning a
- * new decoded image backed by a plain `Buffer`. Shared with the diff-artifact
- * downscaler in `screenshot-diff.ts`.
+ * Lanczos3-resample to the target dimensions. Always returns a fresh `Buffer`,
+ * never a view onto `src.data`.
  */
 export function resizeDecodedPng(
   src: DecodedRgbaImage,
@@ -112,7 +53,7 @@ export function resizeDecodedPng(
   return { width: targetWidth, height: targetHeight, data: output };
 }
 
-export interface ResampleAxisWeights {
+interface ResampleAxisWeights {
   start: number;
   weights: Float32Array;
 }
@@ -188,9 +129,8 @@ function resampleVerticalRgba(params: {
 
 function buildLanczos3AxisWeights(sourceSize: number, targetSize: number): ResampleAxisWeights[] {
   const scale = targetSize / sourceSize;
-  // For downscaling, stretch the kernel by `scale` to act as a low-pass
-  // anti-aliasing filter. For upscaling, evaluate the kernel at its native
-  // width so we interpolate rather than blur.
+  // Downscaling stretches the kernel by `scale` so it low-pass anti-aliases;
+  // upscaling keeps its native width so we interpolate rather than blur.
   const filterScale = scale < 1 ? scale : 1;
   const supportInSource = LANCZOS3_RADIUS / filterScale;
   const axis: ResampleAxisWeights[] = new Array(targetSize);

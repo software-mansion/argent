@@ -1,0 +1,123 @@
+import { describe, it, expect } from "vitest";
+import { renderByIndex } from "../src/tools/profiler/query/profiler-commit-query";
+import type { DevToolsFiberCommit } from "../src/utils/react-profiler/types/input";
+
+function fiber(
+  componentName: string,
+  actualDuration: number,
+  extra: Partial<DevToolsFiberCommit> = {}
+): DevToolsFiberCommit {
+  return {
+    commitIndex: 1,
+    timestamp: 2868,
+    commitDuration: 18.7,
+    componentName,
+    actualDuration,
+    selfDuration: actualDuration / 2,
+    didRender: true,
+    changeDescription: null,
+    ...extra,
+  } as DevToolsFiberCommit;
+}
+
+/** 30 fibers spanning 10 distinct component names, descending in cost. */
+function commit(): DevToolsFiberCommit[] {
+  const out: DevToolsFiberCommit[] = [];
+  for (let i = 0; i < 30; i++) {
+    out.push(fiber(`Comp${i % 10}`, 30 - i));
+  }
+  return out;
+}
+
+describe("profiler-commit-query by_index — top_n", () => {
+  it("returns every fiber when top_n is not given", () => {
+    // by_index is the drill-down the analyze report points at for a full
+    // breakdown, so an unrequested cap would make it show less than the report.
+    const out = renderByIndex(commit(), 1);
+    expect(out.split("\n").filter((l) => l.startsWith("| `")).length).toBe(30);
+    expect(out).toContain("Full Detail");
+    expect(out).not.toContain("cheaper fibers hidden");
+  });
+
+  it("caps the table when top_n is given, keeping the fibers with the most self time", () => {
+    const out = renderByIndex(commit(), 1, 8);
+    const rows = out.split("\n").filter((l) => l.startsWith("| `"));
+    expect(rows.length).toBe(8);
+    // Self time is half the duration here, so the retained rows are 30..23.
+    expect(rows[0]).toContain("| 30.0 |");
+    expect(rows[7]).toContain("| 23.0 |");
+    expect(out.split("\n")).toContain(
+      "_Showing the 8 of 30 fibers with the most self time — 22 cheaper fibers hidden. Note these are fibers, not components: the full set covers 10 distinct components and this view covers 8. Omit top_n for everything._"
+    );
+  });
+
+  it("reports the true fiber total alongside the shown count", () => {
+    const out = renderByIndex(commit(), 1, 8);
+    expect(out).toContain("**Fibers:** 30 (showing 8)");
+    // The heading must stop claiming full detail once it is not full.
+    expect(out).not.toContain("Full Detail");
+  });
+
+  it("ranks by self time, not by the inclusive duration a wrapper inherits", () => {
+    const commits = [
+      fiber("Wrapper", 50, { selfDuration: 0.5 }),
+      fiber("Leaf", 10, { selfDuration: 10 }),
+    ];
+    const rows = renderByIndex(commits, 1, 1)
+      .split("\n")
+      .filter((l) => l.startsWith("| `"));
+    expect(rows).toEqual(["| `Leaf` | 10.0 | 10.0 | unknown | `—` |  |"]);
+  });
+
+  it("labels the inclusive duration as the subtree's, next to the self time it ranks by", () => {
+    const out = renderByIndex(
+      [fiber("App", 40, { selfDuration: 1 }), fiber("List", 39, { selfDuration: 30 })],
+      1
+    );
+    expect(out).toContain("| Component | Self (ms) | Subtree (ms) | Reason | Parent | Compiler |");
+    expect(out.split("\n").filter((l) => l.startsWith("| `"))).toEqual([
+      "| `List` | 30.0 | 39.0 | unknown | `—` |  |",
+      "| `App` | 1.0 | 40.0 | unknown | `—` |  |",
+    ]);
+  });
+
+  it("says how many distinct components the truncated view actually covers", () => {
+    // The trap this guards: 8 fibers can be far fewer than 8 components, so a
+    // caller cannot infer coverage from the row count.
+    const out = renderByIndex(commit(), 1, 8);
+    expect(out).toContain("22 cheaper fibers hidden");
+    expect(out).toContain("10 distinct components");
+    expect(out).toContain("Omit top_n for everything");
+  });
+
+  it("keeps the root-cause chain when its fiber is too cheap to make the cut", () => {
+    // The fiber carrying the root cause is usually cheap — it triggers the
+    // cascade rather than doing the work — so it falls outside any top_n.
+    // Scanning the truncated list instead of the full commit would silently
+    // drop the single most useful line in this output.
+    const commits = [
+      ...commit(),
+      fiber("TinyTrigger", 0.01, {
+        rootCauseParent: "ParentThatChanged",
+        rootCauseChain: ["Root", "Middle"],
+        rootCauseReason: "props",
+      }),
+    ];
+    const out = renderByIndex(commits, 1, 5);
+    expect(out).toContain("**Root cause chain:**");
+    expect(out).toContain("ParentThatChanged");
+    // ...and the cheap fiber itself is indeed not in the table.
+    expect(out.split("\n").filter((l) => l.startsWith("| `TinyTrigger`")).length).toBe(0);
+  });
+
+  it("adds no truncation notice when top_n exceeds the fiber count", () => {
+    const out = renderByIndex(commit(), 1, 500);
+    expect(out).not.toContain("cheaper fibers hidden");
+    expect(out).toContain("Full Detail");
+    expect(out).not.toContain("(showing");
+  });
+
+  it("leaves the not-found path alone", () => {
+    expect(renderByIndex(commit(), 99, 5)).toBe("_Commit #99 not found in stored data._");
+  });
+});

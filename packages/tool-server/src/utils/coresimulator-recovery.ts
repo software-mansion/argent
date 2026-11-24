@@ -64,6 +64,11 @@ export interface RecoveryOptions {
   rebootAfter?: boolean;
   /** Injectable exec, for tests. */
   exec?: ExecFn;
+  /**
+   * `simctl` argv prefix for the target, from `simctlTargetForUdid`: carries
+   * `--set` for a simulator in an additional device set. Default `["simctl"]`.
+   */
+  targetPrefix?: string[];
 }
 
 /** True when every step succeeded (tolerated failures count as success). */
@@ -114,6 +119,7 @@ export async function recoverCoreSimulatorInjection(
 ): Promise<RecoveryStep[]> {
   const exec = options.exec ?? defaultExec;
   const rebootAfter = options.rebootAfter ?? true;
+  const targetPrefix = options.targetPrefix ?? ["simctl"];
   const steps: RecoveryStep[] = [];
 
   const run = async (
@@ -162,7 +168,7 @@ export async function recoverCoreSimulatorInjection(
   });
 
   if (rebootAfter) {
-    await run("boot", "xcrun", ["simctl", "boot", udid], {
+    await run("boot", "xcrun", [...targetPrefix, "boot", udid], {
       timeoutMs: BOOT_STEP_TIMEOUT_MS,
       tolerate: (m) => ALREADY_BOOTED.test(m),
     });
@@ -173,7 +179,7 @@ export async function recoverCoreSimulatorInjection(
         tolerate: () => true,
       });
     }
-    await run("bootstatus", "xcrun", ["simctl", "bootstatus", udid, "-b"], {
+    await run("bootstatus", "xcrun", [...targetPrefix, "bootstatus", udid, "-b"], {
       timeoutMs: BOOT_STEP_TIMEOUT_MS,
     });
   }

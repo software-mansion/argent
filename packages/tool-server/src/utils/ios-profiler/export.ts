@@ -1,14 +1,10 @@
 import * as path from "path";
-import { execFileAsyncWithTimeout } from "./run-with-timeout";
+import { DEFAULT_EXEC_TIMEOUT_MS, execFileAsyncWithTimeout } from "./run-with-timeout";
 
-/**
- * Known xctrace schema names that contain CPU time-profile data.
- * The actual name depends on the .tracetemplate — Time Profiler uses "time-profile",
- * CPU Profiler uses "cpu-profile", and some custom templates use "time-sample".
- */
+/** Which of these a trace actually contains depends on its `.tracetemplate`. */
 const CPU_SCHEMA_CANDIDATES = ["time-profile", "cpu-profile", "time-sample"];
 
-export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
+const EXPORTS = {
   cpu: {
     suffix: "_raw_cpu.xml",
     xpath: '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]',
@@ -21,22 +17,37 @@ export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
     suffix: "_raw_leaks.xml",
     xpath: '/trace-toc/run[@number="1"]/tracks/track[@name="Leaks"]/details/detail[@name="Leaks"]',
   },
-};
+} satisfies Record<string, { suffix: string; xpath: string }>;
+
+/**
+ * The fixed set of per-schema exports an iOS stop produces. Result types are
+ * keyed by this union (not `string`) so a consumer that must classify every
+ * export — e.g. artifact-kind tagging in native-profiler-stop — is forced by
+ * the compiler to handle a key added here.
+ */
+export type IosExportKey = keyof typeof EXPORTS;
 
 export interface ExportDiagnostics {
   tocSchemas: string[];
   cpuSchemaUsed: string | null;
   errors: Record<string, string>;
+  /** Why the stop exported no table, when it skipped them all. */
+  skipped?: string;
+  /** The trace's `<start-date>` in ms since 1970: trace time 0 on the wall clock. */
+  traceStartMs?: number;
+  /** The trace's `<duration>` in ms. */
+  traceDurationMs?: number;
 }
 
-/**
- * Run `xctrace export --toc` to discover what tables/schemas exist in the trace.
- * Returns an array of schema names found in the TOC.
- */
+/** execFile killed the command when its timeout ran out. */
+function timedOut(err: unknown): boolean {
+  return (err as { killed?: boolean } | null)?.killed === true;
+}
+
 async function discoverTraceSchemas(
   traceFile: string,
   diagnostics?: ExportDiagnostics
-): Promise<string[]> {
+): Promise<string[] | "timed-out"> {
   try {
     const { stdout: toc } = await execFileAsyncWithTimeout("xctrace", [
       "export",
@@ -50,27 +61,30 @@ async function discoverTraceSchemas(
     while ((m = schemaRe.exec(toc)) !== null) {
       schemas.push(m[1]);
     }
+    const startMs = Date.parse(/<start-date>([^<]+)<\/start-date>/.exec(toc)?.[1] ?? "");
+    if (diagnostics && Number.isFinite(startMs)) diagnostics.traceStartMs = startMs;
+    const durationS = Number(/<duration>([^<]+)<\/duration>/.exec(toc)?.[1]);
+    if (diagnostics && durationS > 0) diagnostics.traceDurationMs = durationS * 1000;
     return schemas;
   } catch (err) {
-    // Record rather than swallow: a `--toc` failure (e.g. ENOBUFS, timeout)
-    // leaves us with no schema list, which previously surfaced downstream as a
-    // misleading "schema not found / brute-force failed" message.
+    // Recorded rather than swallowed: an empty schema list otherwise surfaces
+    // downstream as a misleading "schema not found" message.
     if (diagnostics) {
       diagnostics.errors.toc = err instanceof Error ? err.message : String(err);
     }
-    return [];
+    return timedOut(err) ? "timed-out" : [];
   }
 }
 
-/**
- * Find the correct CPU schema xpath by checking the trace TOC.
- * Falls back to trying known schema candidates if TOC parsing fails.
- */
 async function resolveCpuXpath(
   traceFile: string,
-  diagnostics: ExportDiagnostics
-): Promise<string | null> {
-  const tocSchemas = await discoverTraceSchemas(traceFile, diagnostics);
+  diagnostics: ExportDiagnostics,
+  appEnded: boolean
+): Promise<string | null | "toc-timed-out"> {
+  const discovered = await discoverTraceSchemas(traceFile, diagnostics);
+  if (discovered === "timed-out" && appEnded) return "toc-timed-out";
+  // Otherwise a slow table of contents is no sign of slow tables: go on without it.
+  const tocSchemas = discovered === "timed-out" ? [] : discovered;
   diagnostics.tocSchemas = tocSchemas;
 
   if (tocSchemas.length > 0) {
@@ -89,10 +103,6 @@ async function resolveCpuXpath(
   return null;
 }
 
-/**
- * Try exporting CPU data with each known schema name until one succeeds.
- * Used as a fallback when TOC discovery doesn't find a match or fails.
- */
 async function tryCpuExportFallback(
   traceFile: string,
   outPath: string,
@@ -123,11 +133,39 @@ async function tryCpuExportFallback(
   return false;
 }
 
-export async function exportIosTraceData(traceFile: string): Promise<{
-  files: Record<string, string | null>;
+function skipAll(diagnostics: ExportDiagnostics, reason: string): void {
+  diagnostics.skipped = reason;
+  for (const key of Object.keys(EXPORTS) as IosExportKey[]) {
+    diagnostics.errors[key] = `Not exported: ${reason}`;
+  }
+}
+
+/** The result of a stop that exports no table, with `reason` for each one. */
+export function skippedTraceExport(reason: string): {
+  files: Record<IosExportKey, string | null>;
+  diagnostics: ExportDiagnostics;
+} {
+  const diagnostics: ExportDiagnostics = { tocSchemas: [], cpuSchemaUsed: null, errors: {} };
+  skipAll(diagnostics, reason);
+  return { files: { cpu: null, hangs: null, leaks: null }, diagnostics };
+}
+
+/**
+ * `appEnded`: the Mac app ended during the recording, so the trace can hold next
+ * to no data. Then a table of contents that runs out of time ends the export.
+ */
+export async function exportIosTraceData(
+  traceFile: string,
+  appEnded = false
+): Promise<{
+  files: Record<IosExportKey, string | null>;
   diagnostics: ExportDiagnostics;
 }> {
-  const exportedFiles: Record<string, string | null> = {};
+  const exportedFiles: Record<IosExportKey, string | null> = {
+    cpu: null,
+    hangs: null,
+    leaks: null,
+  };
   const diagnostics: ExportDiagnostics = {
     tocSchemas: [],
     cpuSchemaUsed: null,
@@ -136,12 +174,23 @@ export async function exportIosTraceData(traceFile: string): Promise<{
   const dir = path.dirname(traceFile);
   const baseName = path.basename(traceFile, ".trace");
 
-  for (const [key, config] of Object.entries(EXPORTS)) {
+  for (const key of Object.keys(EXPORTS) as IosExportKey[]) {
+    const config = EXPORTS[key];
     const outPath = path.join(dir, `${baseName}${config.suffix}`);
 
     if (key === "cpu") {
-      // Dynamic CPU schema resolution
-      const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics);
+      const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics, appEnded);
+      if (resolvedXpath === "toc-timed-out") {
+        // Listing the tables is the lightest export. A trace that holds next to
+        // no data (the app crashed or quit early) takes minutes for each one, so
+        // the CPU fallbacks, hangs and leaks would wait 60 s each for nothing.
+        skipAll(
+          diagnostics,
+          `xctrace could not list the trace's tables within ${DEFAULT_EXEC_TIMEOUT_MS / 1000} s, ` +
+            `for example because the trace holds next to no data.`
+        );
+        return { files: exportedFiles, diagnostics };
+      }
 
       if (resolvedXpath) {
         try {
@@ -163,7 +212,6 @@ export async function exportIosTraceData(traceFile: string): Promise<{
         }
       }
 
-      // Fallback: brute-force try all known CPU schemas
       if (await tryCpuExportFallback(traceFile, outPath, diagnostics)) {
         exportedFiles[key] = outPath;
       } else {
@@ -172,16 +220,6 @@ export async function exportIosTraceData(traceFile: string): Promise<{
       continue;
     }
 
-    // Default export (hangs + leaks).
-    //
-    // Leaks need no special handling: a single `xctrace export --xpath` of the
-    // `Leaks` track detail (EXPORTS.leaks). Unlike the CPU/hangs schema tables,
-    // that detail exports self-closing attribute rows — `<row
-    // leaked-object="…" size="…" responsible-frame="…" count="…"
-    // responsible-library="…" />` — which is exactly what parseLeaksXml
-    // matches. (A previous `--hal` gate here passed a flag that `xctrace
-    // export` does not accept; the first attempt always failed and fell back to
-    // this same plain export, so it has been removed.)
     try {
       await execFileAsyncWithTimeout("xctrace", [
         "export",

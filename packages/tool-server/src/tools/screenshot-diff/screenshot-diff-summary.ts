@@ -22,16 +22,18 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   const coordinateSpace = coordinateSpaceForSummary(result.imageSize);
 
   const lines: string[] = ["Screenshot diff summary", "", "Overall:"];
-  lines.push(`- status: ${status}`);
+  lines.push(statusLine(status));
 
   if (result.dimensionMismatch) {
     lines.push(
-      `- dimension_mismatch: expected=${formatSize(result.dimensionMismatch.expected)} actual=${formatSize(result.dimensionMismatch.actual)}`
+      `- dimension_mismatch: expected=${formatSize(result.dimensionMismatch.expected)} actual=${formatSize(result.dimensionMismatch.actual)}`,
+      "  - only images of identical dimensions are compared; capture both with the same device model, orientation, foldable posture and screenshot scale (live captures use scale: 1.0) and, on a Mac app, the same window size, counting a sheet, popover, alert or menu reaching past it"
     );
   } else {
     lines.push(
       `- pixel_mismatch: ${formatPercentage(result.mismatchPercentage)} - ${describeMismatch(result)}`
     );
+    if (result.imageSize) lines.push(`- compared_at: ${formatSize(result.imageSize)}`);
   }
 
   lines.push(
@@ -40,7 +42,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
 
   if (result.diffPath || result.contextDiffPath) {
     // Reference the result fields instead of embedding the paths: the client
-    // rewrites `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw
+    // rewrites `diffPath`/`contextDiffPath` to paths on its own machine, so a
     // server path inlined here would dangle when the tool-server runs remotely.
     lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
     lines.push(
@@ -83,6 +85,15 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   }
 
   return lines.join("\n");
+}
+
+function statusLine(status: SummaryStatus): string {
+  return `- status: ${status}`;
+}
+
+// The result carries its status only inside the summary text.
+export function summaryReportsDimensionMismatch(summary: string): boolean {
+  return summary.split("\n").includes(statusLine("dimension_mismatch"));
 }
 
 function screenshotDiffStatus(result: ScreenshotDiffSummaryInput): SummaryStatus {

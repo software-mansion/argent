@@ -84,6 +84,31 @@ describe("argent config — set/get across scopes", () => {
     expect(projCfg).toEqual({ lens: { agent: "codex" } });
   });
 
+  it("an additive array key (ios.additionalDeviceSets) unions the scopes instead of shadowing", () => {
+    config([
+      "set",
+      "ios.additionalDeviceSets",
+      '["/tmp/sets/a","/tmp/sets/b"]',
+      "--scope",
+      "global",
+    ]);
+    config([
+      "set",
+      "ios.additionalDeviceSets",
+      '["/tmp/sets/b","/tmp/sets/c"]',
+      "--scope",
+      "project",
+    ]);
+    logSpy.mockClear();
+    // Effective value = global baseline + project extras, deduplicated.
+    config(["get", "ios.additionalDeviceSets"]);
+    expect(output()).toBe('["/tmp/sets/a","/tmp/sets/b","/tmp/sets/c"]');
+    logSpy.mockClear();
+    // Each scope still stores (and reports) only its own entries.
+    config(["get", "ios.additionalDeviceSets", "--scope", "project"]);
+    expect(output()).toBe('["/tmp/sets/b","/tmp/sets/c"]');
+  });
+
   it("get --scope shows only that scope's stored value", () => {
     config(["set", "lens.agent", "claude", "--scope", "global"]);
     config(["set", "lens.agent", "codex", "--scope", "project"]);
@@ -155,6 +180,25 @@ describe("argent config — set/get across scopes", () => {
     );
     expect(globalCfg).toEqual({ lens: { agent: "codex" } });
   });
+
+  describe.skipIf(process.platform === "win32")("with HOME reached through a symlink", () => {
+    it.each([".argent", ".git"])(
+      "warns when project scope resolves to the home directory (%s marker)",
+      (marker) => {
+        const linkedHome = path.join(projectDir, "home");
+        fs.symlinkSync(homeDir, linkedHome);
+        process.env.HOME = linkedHome;
+        fs.mkdirSync(path.join(homeDir, marker));
+        const nested = path.join(homeDir, "not-a-project");
+        fs.mkdirSync(nested);
+        process.chdir(nested);
+
+        config(["set", "lens.agent", "codex", "--scope", "project"]);
+
+        expect(errors()).toContain("resolved to the home directory");
+      }
+    );
+  });
 });
 
 describe("argent config — validation & errors", () => {
@@ -174,10 +218,42 @@ describe("argent config — validation & errors", () => {
     expect(errors()).toMatch(/--scope must be/);
   });
 
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'unexpected extra argument "extra"'],
+    [["list", "--scope", "project"], "Unknown flag: --scope"],
+  ])("rejects %j with exit 2 instead of listing", (argv, message) => {
+    expect(() => config(argv)).toThrow(new ExitError(2));
+    expect(errors()).toContain(message);
+    expect(output()).toBe("");
+  });
+
+  it.each([[["set", "lens.agent", "claude", "--json"]], [["unset", "lens.agent", "--json"]]])(
+    "rejects --json on %j, which has no JSON output",
+    (argv) => {
+      expect(() => config(argv)).toThrow(new ExitError(2));
+      expect(errors()).toContain("Unknown flag: --json");
+      expect(output()).toBe("");
+    }
+  );
+
   it("rejects a value that fails the schema validator", () => {
     // lens.agent must be a non-blank string; a JSON number is invalid.
     expect(() => config(["set", "lens.agent", "42"])).toThrow(ExitError);
     expect(errors()).toMatch(/Invalid value/);
+  });
+});
+
+describe("argent config — usage", () => {
+  it("wraps every recognized key's description within 80 columns", () => {
+    config(["--help"]);
+    const out = output();
+    expect(out).toContain("Recognized keys:");
+    expect(out).toContain("\n  telemetry.enabled\n      Whether anonymous");
+    for (const line of out.split("\n")) {
+      // eslint-disable-next-line no-control-regex
+      expect(line.replace(/\x1b\[[0-9;]*m/g, "").length).toBeLessThanOrEqual(80);
+    }
   });
 });
 
@@ -213,5 +289,119 @@ describe("argent config — list & json", () => {
       scope: "effective",
       value: "claude",
     });
+  });
+});
+
+describe("argent config — a rejected value says what to type instead", () => {
+  it("names the expected shape and suggests the user's own value, correctly wrapped", () => {
+    // The reported case: a list-valued key given a single path.
+    expect(() =>
+      config([
+        "set",
+        "ios.additionalDeviceSets",
+        "~/Library/Developer/Radon/Devices",
+        "--scope",
+        "project",
+      ])
+    ).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected an array of strings");
+    // The suggestion carries the path they typed, not a stand-in from the docs,
+    // and keeps them on the scope they asked for.
+    expect(err).toContain(
+      `Did you mean: argent config set ios.additionalDeviceSets '["~/Library/Developer/Radon/Devices"]' --scope project`
+    );
+    expect(err).toContain("argent config list");
+  });
+
+  it("suggests nothing beyond the shape when wrapping would not help", () => {
+    expect(() => config(["set", "lens.agent", "42"])).toThrow(ExitError);
+
+    const err = errors();
+    expect(err).toContain("expected a non-empty string");
+    expect(err).not.toContain("Did you mean");
+    expect(err).toContain("Example: argent config set lens.agent claude");
+  });
+
+  it("keeps the global default out of the suggestion when no scope was given", () => {
+    expect(() => config(["set", "ios.additionalDeviceSets", "/a"])).toThrow(ExitError);
+
+    expect(errors()).toContain(`Did you mean: argent config set ios.additionalDeviceSets '["/a"]'`);
+    expect(errors()).not.toContain("--scope");
+  });
+
+  it("shows each key's expected value in list", () => {
+    config(["list"]);
+    expect(output()).toContain("an array of strings");
+    expect(output()).toContain('e.g. ["~/DeviceSets/ci"]');
+  });
+
+  it("carries the expected shape through list --json", () => {
+    config(["list", "--json"]);
+    const parsed = JSON.parse(output());
+    const entry = parsed.config.find((e: { key: string }) => e.key === "ios.additionalDeviceSets");
+    expect(entry.expected).toBe("an array of strings");
+    expect(entry.example).toBe('["~/DeviceSets/ci"]');
+  });
+});
+
+describe("argent config — unset leaves no empty parent behind", () => {
+  const projectConfig = () =>
+    fs.readFileSync(path.join(projectDir, ".argent", "config.json"), "utf8");
+
+  it("restores the document rather than leaving an empty group", () => {
+    config(["set", "ios.additionalDeviceSets", '["/a"]', "--scope", "project"]);
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(JSON.parse(projectConfig())).toEqual({});
+  });
+
+  it("keeps sibling keys and their groups", () => {
+    config(["set", "lens.agent", "codex", "--scope", "project"]);
+    config(["set", "ios.additionalDeviceSets", '["/a"]', "--scope", "project"]);
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(JSON.parse(projectConfig())).toEqual({ lens: { agent: "codex" } });
+  });
+
+  it("does not rewrite a file to tidy an empty group it did not create", () => {
+    // A no-op unset must not touch the file at all — that guarantee is why the
+    // fast path exists, and tidying would quietly break it.
+    const dir = path.join(projectDir, ".argent");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "config.json");
+    fs.writeFileSync(file, '{"ios":{}}');
+
+    config(["unset", "ios.additionalDeviceSets", "--scope", "project"]);
+
+    expect(fs.readFileSync(file, "utf8")).toBe('{"ios":{}}');
+  });
+});
+
+describe("argent config — a key the tool-server reads only at start", () => {
+  it("says a set or unset of android.adbServerPort needs a tool-server restart", () => {
+    config(["set", "android.adbServerPort", "5038"]);
+    expect(errors()).toContain("only when it starts");
+    expect(errors()).toContain("argent server stop");
+
+    errSpy.mockClear();
+    config(["unset", "android.adbServerPort"]);
+    expect(errors()).toContain("argent server stop");
+  });
+
+  it("says nothing when the write did not happen", () => {
+    expect(() => config(["set", "android.adbServerPort", "0"])).toThrow(ExitError);
+    expect(errors()).not.toContain("argent server stop");
+
+    errSpy.mockClear();
+    config(["unset", "android.adbServerPort"]);
+    expect(errors()).toBe("");
+  });
+
+  it("says nothing for a key that applies without a restart", () => {
+    config(["set", "android.sdkRoot", "/opt/android-sdk"]);
+    config(["unset", "android.sdkRoot"]);
+    expect(errors()).toBe("");
   });
 });

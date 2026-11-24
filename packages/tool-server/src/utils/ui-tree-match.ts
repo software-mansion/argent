@@ -1,43 +1,32 @@
 import { z } from "zod";
-import type { DeviceInfo, Registry } from "@argent/registry";
-import type { DescribeFrame, DescribeNode, DescribeTreeData } from "../tools/describe/contract";
-import { describeIos } from "../tools/describe/platforms/ios";
-import { describeAndroid } from "../tools/describe/platforms/android";
-import { describeChromium } from "../tools/describe/platforms/chromium";
-import { describeVega } from "../tools/describe/platforms/vega";
-import { chromiumCdpRef, type ChromiumCdpApi } from "../blueprints/chromium-cdp";
+import type { DescribeFrame, DescribeNode } from "../tools/describe/contract";
 
 /**
- * Shared accessibility/DOM-tree matching, extracted from `await-ui-element` so
- * the flow directives (`tap`, `type`, `assert`) and the recorder's reverse
- * lookup consume the same selector semantics the wait engine uses.
+ * Shared tree matching: `await-ui-element`, the flow directives (`tap`, `type`,
+ * `assert`) and the recorder's reverse lookup all resolve selectors through it.
+ *
+ * Reading order — what `after` and `next` mean by "follows", the match a
+ * `text` condition reads first, the pick of an `any: true` selector — is the
+ * user's, and so is every tree's frame space: an iOS simulator's trees are
+ * turned into the UI's upright space before they get here, also on a landscape
+ * UI (`utils/ios-ui-orientation.ts`).
  */
 
-// A selector locates a node in the tree returned by `describe`. Every provided
-// field must match (logical AND). `text` and `role` match as case-insensitive
-// substrings so callers don't need the exact label; `identifier` matches
-// exactly (or as the unqualified name of an Android resource-id) — see
-// `identifierMatches`.
 /**
- * Strict validation for the fields shared by every selector representation.
- * Kept separate from the non-empty selector refinement so flow-only selector
- * forms can replace `text` with another validated text constraint while still
- * reusing the canonical identifier/role validation.
- */
-/**
- * True when `text` contains at least one visibly-rendered, font-independent
- * character. Icon fonts expose their glyphs as Private Use Area code points
- * (a tab-bar icon's label can be U+E163 — an icon, not text) and zero-width /
- * format characters render as nothing: a text constraint made only of those
- * displays as EMPTY in flow YAML, is meaningless outside the app's private
- * font, and at replay matches an element no reader of the flow can predict.
- * Strips Cf (format: zero-width space/joiners, BOM), Co (private use) and
- * Cc (controls), then whitespace; visible = anything left.
+ * True when `text` contains at least one visibly-rendered character. Icon fonts
+ * expose glyphs as Private Use Area code points and zero-width / format
+ * characters render as nothing: a constraint made only of those displays as
+ * EMPTY in flow YAML and at replay matches an element no reader can predict.
  */
 export function hasVisibleText(text: string): boolean {
   return text.replace(/[\p{Cf}\p{Co}\p{Cc}]/gu, "").trim().length > 0;
 }
 
+/**
+ * The fields every selector representation shares, without the non-empty
+ * refinement, so a flow-only text constraint can replace `text` while reusing
+ * the same identifier/role validation.
+ */
 export const selectorFieldsSchema = z
   .object({
     text: z
@@ -77,84 +66,87 @@ export const selectorSchema = selectorFieldsSchema.refine(
 export type Selector = z.infer<typeof selectorSchema> & {
   /**
    * Flow-only regex text locator (`{ text: { matches: '<pattern>' } }` in flow
-   * YAML): a JS regular expression tested — unanchored and case-sensitive,
-   * the same doctrine as the `text` condition's `matches` — against the
-   * node's OWN label/value, deliberately not the hoisted `subtreeText`:
-   * subtree matching would make every unshielded ancestor of a text leaf
-   * match too, degrading the exact-beats-substring ranking actions rely on.
-   * Aggregate checks stay the `text` condition's job (`{ in, matches }`).
-   * A type-level extension, not a schema field, so the `await-ui-element`
-   * tool surface doesn't grow (the same boundary `TextMatchMode.matches`
-   * draws below).
+   * YAML), tested unanchored and case-sensitive against the node's OWN
+   * label/value, deliberately not the hoisted `subtreeText`: subtree matching
+   * would make every unshielded ancestor of a text leaf match too, degrading
+   * the exact-beats-substring ranking actions rely on. A type-level extension,
+   * not a schema field, so the `await-ui-element` tool surface doesn't grow.
    */
   textMatches?: string;
+  /**
+   * Flow-only container scope (`{ text: "Delete", within: { id: "card" } }` in
+   * flow YAML): the node's frame must sit inside the frame of a DISTINCT
+   * element matching this selector. Geometric, not tree-ancestry: the flow
+   * adapters flatten every platform tree into leaves under one synthetic root
+   * (see `flow-tree-flatten`), so ancestry does not survive to replay. Scopes
+   * chain outward (`a within b within c`). Resolved by {@link findAll}, which
+   * sees the whole tree; {@link matchNode} evaluates own fields only.
+   */
+  within?: Selector;
+  /**
+   * Flow-only general-sibling scope (`{ role: Switch, after: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `~` combinator: the node must FOLLOW a distinct
+   * element matching this selector in reading order (see {@link followKind}).
+   * Geometric for the same reason `within` is. Resolved by {@link findAll}.
+   */
+  after?: Selector;
+  /**
+   * Flow-only adjacent-sibling scope (`{ role: Switch, next: { text: "Wi-Fi" } }`
+   * in flow YAML) — the CSS `+` combinator: like {@link after}, but only the
+   * NEAREST following match is kept per anchor. The "control belonging to this
+   * row's label" locator. Resolved by {@link findAll}.
+   */
+  next?: Selector;
 };
 
 export type WaitCondition = "exists" | "visible" | "hidden" | "text";
 
-// How a `text` condition compares the located element's text to the expected
-// string: `contains` (default) is a case-insensitive substring; `equals` is a
-// case-insensitive full-string match (so "1" no longer satisfies "10"). Both
-// are offered so a caller can assert "shows this somewhere" or "shows exactly
-// this" interchangeably. `matches` treats the expected string as a JS regular
-// expression tested unanchored against the text (the `contains` analog —
-// anchor with ^…$ for the `equals` analog) for dynamic content that neither
-// literal mode can pin (counters, prices, dates). Unlike the literal modes it
-// is CASE-SENSITIVE — a regex carries its semantics in the pattern, and
-// forcing `i` would betray `\d{2}`-style precision. Flow directives only; the
-// await-ui-element tool's schema deliberately stays contains/equals.
+// `contains` (default) and `equals` are case-insensitive; `matches` is a JS
+// regex tested unanchored and CASE-SENSITIVELY — a regex carries its semantics
+// in the pattern, and forcing `i` would betray `\d{2}`-style precision.
+// `matches` is flow-only; the await-ui-element schema stays contains/equals.
 export type TextMatchMode = "contains" | "equals" | "matches";
-
-// ── Tree matching ──────────────────────────────────────────────────────────
 
 export function nodeText(node: DescribeNode): string {
   return [node.label, node.value].filter(Boolean).join(" ");
 }
 
-// Text used to evaluate a `text` condition (and quoted in its failure
-// messages). Prefers `subtreeText` — the text hoisted from descendants by the
-// flow adapters — so a `text` check against a testID container reads the text
-// it visibly wraps (e.g. a counter whose number is a child node), not the
-// container's own (empty) label. Falls back to the node's own text when no
-// descendant text was hoisted (every non-flow tree, and any leaf that already
-// carries its own text). `evaluateCondition` additionally accepts a match on
-// the node's own text — hoisting is additive, see the comment there. Selector
-// matching stays on `nodeText` so `tap`/`{ text }` targeting is unaffected.
+// Text a `text` condition reads (and its failure messages quote). Prefers
+// `subtreeText` — hoisted from descendants by the flow adapters — so a check
+// against a testID container reads the text it visibly wraps rather than its
+// own (empty) label. Selector matching stays on `nodeText`, so `tap`/`{ text }`
+// targeting is unaffected.
 export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
 
-export function includesCI(haystack: string | undefined, needle: string): boolean {
+function includesCI(haystack: string | undefined, needle: string): boolean {
   return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
 }
 
-export function equalsCI(actual: string | undefined, expected: string): boolean {
+function equalsCI(actual: string | undefined, expected: string): boolean {
   return (actual ?? "").toLowerCase() === expected.toLowerCase();
 }
 
 /**
- * Identifier matching: case-insensitive EXACT match, or the unqualified name of
- * an Android resource-id — `submit` matches `com.example.app:id/submit` — so a
- * caller never needs the package prefix. Deliberately NOT a substring test: an
- * identifier names one element, and substring matching lets a short needle
- * capture an unrelated id (`save` must not match `autosave-banner`), which is
- * how a loose flow selector's identifier-first pass could hijack a tap.
+ * Case-insensitive EXACT match, or the unqualified name of an Android
+ * resource-id (`submit` matches `com.example.app:id/submit`), so a caller never
+ * needs the package prefix. Deliberately not a substring test: a short needle
+ * would capture unrelated ids (`save` must not match `autosave-banner`).
  */
 export function identifierMatches(actual: string | undefined, needle: string): boolean {
   if (!actual) return false;
   return equalsCI(actual, needle) || actual.toLowerCase().endsWith(`:id/${needle.toLowerCase()}`);
 }
 
-/** @internal A narrow seam for verifying regex compilation lifetime in tests. */
+/** @internal Seam for asserting regex compilation lifetime in tests. */
 export const uiTreeMatchInternals = {
   createRegExp(pattern: string): RegExp {
     return new RegExp(pattern);
   },
 };
 
-// Empty/absent text is not a regex haystack, matching includesCI's semantics.
-// Keeping that rule here prevents selector, assertion, and ranking paths from
-// drifting apart when they reuse a compiled expression.
+// Absent/empty text is never a regex haystack, matching `includesCI`.
 function regexMatchesNonEmpty(regex: RegExp, actual: string | undefined): boolean {
   if (!actual) return false;
   return regex.test(actual);
@@ -166,12 +158,24 @@ export function textMatches(
   expected: string,
   mode: TextMatchMode
 ): boolean {
-  // The pattern was validated at flow parse time, so construction here cannot
-  // throw on a flow's behalf.
+  // Patterns are validated at flow parse time, so construction cannot throw.
   if (mode === "matches") {
     return regexMatchesNonEmpty(uiTreeMatchInternals.createRegExp(expected), actual);
   }
   return mode === "equals" ? equalsCI(actual, expected) : includesCI(actual, expected);
+}
+
+/**
+ * Does the selector constrain WHICH element it matches, rather than only where
+ * to look? False exactly for the universal selector (flow YAML's `any: true`).
+ */
+function hasOwnConstraint(selector: Selector): boolean {
+  return (
+    selector.text !== undefined ||
+    selector.textMatches !== undefined ||
+    selector.identifier !== undefined ||
+    selector.role !== undefined
+  );
 }
 
 function matchNodeWithRegex(
@@ -210,65 +214,344 @@ function selectorTextRegex(selector: Selector): RegExp | undefined {
     : uiTreeMatchInternals.createRegExp(selector.textMatches);
 }
 
+/**
+ * Single-node predicate over the selector's OWN fields. The relational scopes
+ * need the tree and are resolved by {@link findAll}; they are ignored here.
+ *
+ * A selector with no own fields matches EVERY node — the universal selector
+ * (CSS `*`, `any: true` in flow YAML), which `selectorSchema` and the flow
+ * parser only admit behind an explicit `any: true` paired with a relation.
+ */
 export function matchNode(node: DescribeNode, selector: Selector): boolean {
   return matchNodeWithRegex(node, selector, selectorTextRegex(selector));
 }
 
-function collectMatches(
-  node: DescribeNode,
-  selector: Selector,
-  textRegex: RegExp | undefined,
-  acc: DescribeNode[]
-): void {
-  if (matchNodeWithRegex(node, selector, textRegex)) acc.push(node);
-  for (const child of node.children) collectMatches(child, selector, textRegex, acc);
+// Frame-comparison tolerance (normalized units): a hair of overhang — a border,
+// a shadow, sub-pixel rounding — must not change what the eye plainly sees.
+// `frameWithin` reads it as containment slack; `frameAbove` reads it as the
+// row-band merge threshold. Same magnitude as flow-actions' EDGE_EPS.
+const WITHIN_EPS = 0.005;
+
+/** Is `inner` contained in `outer`, within {@link WITHIN_EPS} per edge? */
+export function frameWithin(inner: DescribeFrame, outer: DescribeFrame): boolean {
+  return (
+    inner.x >= outer.x - WITHIN_EPS &&
+    inner.y >= outer.y - WITHIN_EPS &&
+    inner.x + inner.width <= outer.x + outer.width + WITHIN_EPS &&
+    inner.y + inner.height <= outer.y + outer.height + WITHIN_EPS
+  );
 }
 
-// Every node matching the selector in the subtree, EXCLUDING `root` itself — the
-// synthetic full-screen container describe puts at the head of the tree. See the
-// long-form rationale in await-ui-element: matching the root would let a broad
-// role selector satisfy `visible`/`exists` on any screen.
+// A naive `within` scan tests every candidate against every container, which a
+// broad container selector (`within: { role: <common role> }`) drives quadratic
+// on a flow tree of up to 12k nodes — and findAll re-runs on every settle/poll.
+// Above a small container count, index the containers in a coarse uniform grid
+// so a candidate only tests the containers registered in its own top-left cell.
+// Only a `within` selector ever builds this.
+const CONTAINMENT_GRID_N = 16; // cells per axis over the normalized [0,1]² frame
+const CONTAINMENT_GRID_MIN = 32; // fewer containers than this: a direct scan wins
+
+// The grid column/row a normalized coordinate falls in, clamped to [0, N):
+// a frame can sit a hair off-screen and must still map to a real cell.
+function gridCell(coord: number): number {
+  const c = Math.floor(coord * CONTAINMENT_GRID_N);
+  return c < 0 ? 0 : c >= CONTAINMENT_GRID_N ? CONTAINMENT_GRID_N - 1 : c;
+}
+
+/**
+ * Build a predicate `inside(node)` — true when the node's frame sits inside a
+ * DISTINCT container in `containers`. Below {@link CONTAINMENT_GRID_MIN} it
+ * scans directly; larger sets are indexed in a coarse grid keyed by top-left
+ * cell.
+ *
+ * A container is registered in every cell its frame covers, PADDED by
+ * {@link WITHIN_EPS}: a candidate may overhang a container edge by up to the
+ * tolerance, so its top-left corner can land one cell before the container's
+ * unpadded coverage. The grid only PRUNES — the exact `frameWithin` check on
+ * the bucket decides — so the padding never admits a false containment.
+ */
+function containmentTester(containers: DescribeNode[]): (node: DescribeNode) => boolean {
+  if (containers.length < CONTAINMENT_GRID_MIN) {
+    return (node) => containers.some((c) => c !== node && frameWithin(node.frame, c.frame));
+  }
+  const cells = new Map<number, DescribeNode[]>();
+  for (const c of containers) {
+    const f = c.frame;
+    const colEnd = gridCell(f.x + f.width + WITHIN_EPS);
+    const rowEnd = gridCell(f.y + f.height + WITHIN_EPS);
+    for (let row = gridCell(f.y - WITHIN_EPS); row <= rowEnd; row++) {
+      for (let col = gridCell(f.x - WITHIN_EPS); col <= colEnd; col++) {
+        const key = row * CONTAINMENT_GRID_N + col;
+        const bucket = cells.get(key);
+        if (bucket) bucket.push(c);
+        else cells.set(key, [c]);
+      }
+    }
+  }
+  return (node) => {
+    const bucket = cells.get(gridCell(node.frame.y) * CONTAINMENT_GRID_N + gridCell(node.frame.x));
+    return (
+      bucket !== undefined && bucket.some((c) => c !== node && frameWithin(node.frame, c.frame))
+    );
+  };
+}
+
+/**
+ * Is `a` entirely above `b`, within {@link WITHIN_EPS}? The vertical half of
+ * reading order. Frames for which this fails BOTH ways share a row band and are
+ * ordered horizontally instead — that band rule is what makes "the switch after
+ * the Wi-Fi label" work, since a row's control and its label rarely share a top
+ * edge and a raw top-y comparison would order them by which is taller.
+ */
+function frameAbove(a: DescribeFrame, b: DescribeFrame): boolean {
+  return a.y + a.height <= b.y + WITHIN_EPS;
+}
+
+/** Where `node` sits relative to an anchor in reading order. */
+type FollowKind = "below" | "band" | "no";
+
+/**
+ * Does `node` FOLLOW `anchor` in reading order, and how — on a row below it, or
+ * sharing its row band and entirely to its right? The geometric reading of a
+ * CSS sibling combinator on a flattened tree.
+ *
+ * ONE classification, read by both {@link frameAfter} and {@link nearestAfter},
+ * so the follower test and the grouping of followers can never disagree.
+ *
+ * A mutual verdict on either axis never decides: frames thinner than the
+ * tolerance and closer together than it read as ordered BOTH ways, which would
+ * otherwise let an element to the anchor's LEFT follow it. Vertically such a
+ * pair falls through to the row rule; horizontally it means no order at all.
+ * The relation is therefore antisymmetric, which the `next` reduction relies on.
+ *
+ * Mostly not a containment test, but a child flush with the anchor's bottom or
+ * right edge and no thicker than the tolerance (a hairline divider) both
+ * follows the anchor and sits {@link frameWithin} it.
+ */
+function followKind(node: DescribeFrame, anchor: DescribeFrame): FollowKind {
+  const below = frameAbove(anchor, node);
+  const above = frameAbove(node, anchor);
+  if (below !== above) return below ? "below" : "no";
+  const right = anchor.x + anchor.width <= node.x + WITHIN_EPS;
+  const left = node.x + node.width <= anchor.x + WITHIN_EPS;
+  return right !== left && right ? "band" : "no";
+}
+
+function frameAfter(node: DescribeFrame, anchor: DescribeFrame): boolean {
+  return followKind(node, anchor) !== "no";
+}
+
+/**
+ * Build a predicate `follows(node)` — true when the node follows a DISTINCT
+ * anchor in reading order (the CSS `~` an `after` scope needs).
+ *
+ * A direct scan, deliberately: unlike {@link containmentTester}'s grid, an
+ * index buys nothing here — the pruning it could offer is already subsumed by
+ * the `some` short-circuit on the first matching anchor.
+ */
+function afterTester(anchors: DescribeNode[]): (node: DescribeNode) => boolean {
+  return (node) => anchors.some((a) => a !== node && frameAfter(node.frame, a.frame));
+}
+
+// Ranking among an anchor's followers. Position first, then frame AREA so that
+// coincident top-left corners — a container and the label leaf flush inside it,
+// an everyday flattened-tree shape — resolve to the smaller, more specific
+// element (the "smallest frame wins" doctrine `selectorToFrame` and
+// `nodeAtPoint` rank by), then the individual extents, which separate shapes
+// equal area cannot. Only frames identical on all four fields fall back to tree
+// order, and those are indistinguishable to act on anyway.
+function comparePick(a: DescribeFrame, b: DescribeFrame): number {
+  return frameArea(a) - frameArea(b) || a.width - b.width || a.height - b.height;
+}
+
+function compareBandPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.x - b.x || a.y - b.y || comparePick(a, b);
+}
+
+function compareBelowPick(a: DescribeFrame, b: DescribeFrame): number {
+  return a.y - b.y || a.x - b.x || comparePick(a, b);
+}
+
+/**
+ * The CSS `+` reduction: keep only the nearest candidate following each anchor,
+ * unioned over anchors, returned in the candidates' own order.
+ *
+ * "Nearest" splits the followers the way a reader does: one sharing the
+ * anchor's row band beats anything on the rows below, because that is the row's
+ * own control — the locator `next` exists for. Within each group the leftmost
+ * (band) / topmost (below) wins, then the smaller frame.
+ *
+ * A direct scan per anchor: unlike {@link afterTester} it cannot short-circuit,
+ * but the index this replaced was a second implementation of the rules above
+ * and the two disagreed on frames near the tolerance. The quadratic tail only
+ * bites when the anchor selector matches essentially every node.
+ *
+ * The pick is made over ALL candidates, visible or not — it reduces the match
+ * SET before any condition looks at it. Where the flow adapter keeps zero-area
+ * nodes (Vega), a ghost node between the anchor and the real control therefore
+ * wins the pick and a `visible` check on it fails — scope by
+ * {@link Selector.after} or {@link Selector.within} there instead.
+ */
+function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): DescribeNode[] {
+  if (candidates.length === 0 || anchors.length === 0) return [];
+  const picked = new Set<DescribeNode>();
+  for (const anchor of anchors) {
+    const af = anchor.frame;
+    let band: DescribeNode | undefined;
+    let below: DescribeNode | undefined;
+    for (const c of candidates) {
+      if (c === anchor) continue;
+      const f = c.frame;
+      const kind = followKind(f, af);
+      if (kind === "band") {
+        if (band === undefined || compareBandPick(f, band.frame) < 0) band = c;
+      } else if (kind === "below") {
+        if (below === undefined || compareBelowPick(f, below.frame) < 0) below = c;
+      }
+    }
+    const best = band ?? below;
+    if (best !== undefined) picked.add(best);
+  }
+  return candidates.filter((c) => picked.has(c));
+}
+
+// Every node matching the selector, EXCLUDING `root` — the synthetic
+// full-screen container at the head of a describe tree. Matching it would let a
+// broad role selector satisfy `visible`/`exists` on any screen, and would make
+// `within` vacuous since the root wraps everything.
+//
+// Every relation requires a DISTINCT node (`a within a` needs two nested
+// elements), and each nests: `within: { id: b, within: c }` resolves c's
+// containers first, then keeps only the b's sitting inside one of them.
 export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
-  const acc: DescribeNode[] = [];
-  const textRegex = selectorTextRegex(selector);
-  for (const child of root.children) collectMatches(child, selector, textRegex, acc);
-  return acc;
+  const all: DescribeNode[] = [];
+  const collect = (node: DescribeNode): void => {
+    all.push(node);
+    for (const child of node.children) collect(child);
+  };
+  for (const child of root.children) collect(child);
+  return resolveSelector(all, selector);
 }
 
-// describe prunes off-screen / zero-size nodes, so a non-zero frame area is a
-// cheap, reliable proxy for "visible".
+/**
+ * The relational scopes a selector can carry, in the order
+ * {@link resolveSelector} applies them. Shared with flow YAML's parser,
+ * serializer and loose-alternative expansion so the layers cannot drift on
+ * which keys are relations.
+ */
+export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
+
+export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+
+/**
+ * How each scope narrows a match set. `within` and `after` are per-node
+ * predicates; `next` reduces the SET, which is why the order above applies it
+ * last — `{ any: true, next: X, within: Y }` means "the first element inside Y
+ * that follows X", not "the first element after X, if it is inside Y".
+ *
+ * Keyed by the relation union, so adding a scope without teaching the engine
+ * what it means is a compile error rather than a silently ignored constraint.
+ */
+const RELATION_RESOLVERS: Record<
+  SelectorRelation,
+  (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
+> = {
+  within: (matches, scope) => matches.filter(containmentTester(scope)),
+  after: (matches, scope) => matches.filter(afterTester(scope)),
+  next: (matches, scope) => nearestAfter(matches, scope),
+};
+
+/** Own-field matches from `all`, narrowed by every scope the selector carries. */
+function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
+  const regex = selectorTextRegex(selector);
+  let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
+  for (const relation of SELECTOR_RELATIONS) {
+    const scope = selector[relation];
+    if (scope === undefined) continue;
+    matches = RELATION_RESOLVERS[relation](matches, resolveSelector(all, scope));
+  }
+  return matches;
+}
+
+// describe prunes off-screen nodes, so a non-zero frame area stands in for
+// "visible".
 export function isVisible(node: DescribeNode): boolean {
   return node.frame.width > 0 && node.frame.height > 0;
 }
 
-// The element a reader "sees first": smallest (y, then x), matching how
-// format-tree renders iOS leaves in reading order. Returns undefined for [].
+// The nodes of the frontmost `layer` among `nodes`: a match in a Mac app's open
+// menu or sheet is the one in front of a same-named control of the window.
+function frontmost(nodes: DescribeNode[]): DescribeNode[] {
+  let top = 0;
+  for (const n of nodes) top = Math.max(top, n.layer ?? 0);
+  return top === 0 ? nodes : nodes.filter((n) => n.layer === top);
+}
+
+// The element a reader "sees first": in the frontmost layer, smallest (y, then
+// x), matching the order format-tree renders flat iOS leaves in.
 export function firstInReadingOrder(matches: DescribeNode[]): DescribeNode | undefined {
   let best: DescribeNode | undefined;
-  for (const n of matches) {
+  let bestFrame: DescribeFrame | undefined;
+  for (const n of frontmost(matches)) {
+    const f = n.frame;
     if (
-      best === undefined ||
-      n.frame.y < best.frame.y ||
-      (n.frame.y === best.frame.y && n.frame.x < best.frame.x)
+      bestFrame === undefined ||
+      f.y < bestFrame.y ||
+      (f.y === bestFrame.y && f.x < bestFrame.x)
     ) {
       best = n;
+      bestFrame = f;
     }
   }
   return best;
 }
 
-// Evaluate a wait/assert condition over ALL elements matching a selector.
-// `visible` holds if ANY match is on-screen; `hidden` only if NONE is; `text`
-// inspects the first VISIBLE match in reading order (falling back to the first
-// overall if none is visible) — so a stale zero-area node can't shadow the
-// element the check was meant to read, and the check agrees with the failure
-// messages (flow assertReason, await-ui-element's timeout note), which quote
-// the same visible-first node.
+const MAC_TEXT_FIELD_ROLES: ReadonlySet<string> = new Set([
+  "AXTextField",
+  "AXTextArea",
+  "AXComboBox",
+]);
+
+// The text a `text` check reads off a Mac app's text field: only its value, ""
+// when it is empty, also when its placeholder is its label. Undefined for any
+// other element, and for a password field, whose text argent never reads.
+export function macFieldText(node: DescribeNode, macos: boolean): string | undefined {
+  return macos && MAC_TEXT_FIELD_ROLES.has(node.role) && !node.password
+    ? (node.value ?? "")
+    : undefined;
+}
+
+const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
+
+// The match a `text` check reads: the first visible one in reading order (the
+// first overall if none is visible). On a Mac app, not a text area around a
+// matching text: a web editor's value is the text of the paragraphs inside it,
+// so a selector for a paragraph's text reads that paragraph.
+export function textCheckTarget(matches: DescribeNode[], macos: boolean): DescribeNode | undefined {
+  const read = macos
+    ? matches.filter(
+        (n) =>
+          n.role !== "AXTextArea" ||
+          !matches.some(
+            (m) => isVisible(m) && MAC_TEXT_ROLES.has(m.role) && frameWithin(m.frame, n.frame)
+          )
+      )
+    : matches;
+  return firstInReadingOrder(read.filter(isVisible)) ?? firstInReadingOrder(read);
+}
+
+// Evaluated over ALL elements matching a selector. `visible` holds if ANY match
+// is on-screen; `hidden` only if NONE is; `text` reads the first VISIBLE match
+// in reading order (the first overall if none is visible), so a stale zero-area
+// node can't shadow the element the check meant to read, and the failure
+// messages (flow assertReason, await-ui-element's timeout note) quote the same
+// node.
 export function evaluateCondition(
   condition: WaitCondition,
   expectedText: string | undefined,
   matches: DescribeNode[],
-  textMatch: TextMatchMode = "contains"
+  textMatch: TextMatchMode = "contains",
+  textFieldsShowText = false
 ): boolean {
   switch (condition) {
     case "exists":
@@ -278,14 +561,32 @@ export function evaluateCondition(
     case "hidden":
       return !matches.some(isVisible);
     case "text": {
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      const first = textCheckTarget(matches, textFieldsShowText);
       if (first === undefined || expectedText === undefined) return false;
-      // Hoisted subtree text is ADDITIVE evidence, never a replacement: a
-      // check the element's own label/value satisfies on a plain describe
-      // tree (`equals: "Save"` on a container labelled "Save" that wraps a
-      // "Saved successfully" child) must not start failing because the flow
-      // adapters stamped a compound `subtreeText` ("Save Saved successfully")
-      // onto the node — so the expected text may match either.
+      const field = macFieldText(first, textFieldsShowText);
+      if (field !== undefined) {
+        return textMatch === "matches"
+          ? uiTreeMatchInternals.createRegExp(expectedText).test(field)
+          : textMatches(field, expectedText, textMatch);
+      }
+      // An element with no text at all reads as "", so `matches: '^$'` or a
+      // negative lookahead can check an empty field. Selector matching still
+      // skips empty text, or `.*` would select every unlabeled view. Not an
+      // iOS text field: a secure field's text is never read, so a filled one
+      // reads "" there (an empty field reads its placeholder). Nor a Mac app's
+      // password field, whose text argent never reads.
+      if (
+        textMatch === "matches" &&
+        (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&
+        !assertText(first) &&
+        !nodeText(first) &&
+        uiTreeMatchInternals.createRegExp(expectedText).test("")
+      ) {
+        return true;
+      }
+      // Hoisted subtree text is ADDITIVE: a check the element's own
+      // label/value satisfies on a plain describe tree must not start failing
+      // because the flow adapters stamped a compound `subtreeText` on the node.
       return (
         textMatches(assertText(first), expectedText, textMatch) ||
         textMatches(nodeText(first), expectedText, textMatch)
@@ -296,24 +597,18 @@ export function evaluateCondition(
   }
 }
 
-// ── Settle detection ────────────────────────────────────────────────────────
-
 /**
- * A stable fingerprint of the tree's visible structure — every node's role,
- * rounded frame, and text/identifier. Two consecutive identical fingerprints
- * mean the UI has settled (a scroll's momentum has stopped, an animation has
- * finished): the flow runner uses this to wait out a fling before reading or
- * tapping, so a tap can't land mid-deceleration (where a scroll view would
- * swallow it to halt the scroll) and a resolved frame can't be stale by the time
- * we act on it. Frames are rounded to 1e-3 so sub-pixel jitter does not read as
- * motion.
+ * A fingerprint of the tree's structure — every node's role, rounded frame and
+ * text/identifier. Two consecutive identical fingerprints mean the UI has
+ * settled: the flow runner waits out a fling before tapping, so a tap can't
+ * land mid-deceleration (a scroll view would swallow it to halt the scroll) and
+ * a resolved frame can't already be stale. Frames are rounded so sub-pixel
+ * jitter does not read as motion.
  *
  * The optional `include` predicate restricts the fingerprint to a subset of
- * nodes (children of an excluded node are still walked) — e.g. the flow
- * runner's end-of-scroll check fingerprints only the scrolled region (the
- * `within` container, or the scroll containers under the gesture anchor) so an
- * animating node outside that region can't keep the fingerprint changing and
- * mask the end of the scroll.
+ * nodes (children of an excluded node are still walked) — the end-of-scroll
+ * check fingerprints only the scrolled region, so an animating node elsewhere
+ * can't keep the fingerprint changing and mask the end of the scroll.
  */
 export function treeFingerprint(
   root: DescribeNode,
@@ -335,8 +630,6 @@ export function treeFingerprint(
   return parts.join("\n");
 }
 
-// ── Reverse lookup & selector → frame ──────────────────────────────────────
-
 export function frameContains(frame: DescribeFrame, x: number, y: number): boolean {
   return x >= frame.x && x <= frame.x + frame.width && y >= frame.y && y <= frame.y + frame.height;
 }
@@ -346,10 +639,9 @@ function frameArea(frame: DescribeFrame): number {
 }
 
 /**
- * Reverse lookup for recording: the smallest visible node whose frame contains
- * the tapped point. "Smallest" picks the most specific element (a button over
- * its container). Skips the synthetic root. Returns undefined if nothing
- * sensible is under the point.
+ * Reverse lookup for recording: the smallest visible node of the frontmost
+ * layer whose frame contains the tapped point: the most specific element (a
+ * button over its container). Skips the synthetic root.
  */
 export function nodeAtPoint(
   root: DescribeNode,
@@ -358,7 +650,14 @@ export function nodeAtPoint(
   let best: DescribeNode | undefined;
   const walk = (node: DescribeNode): void => {
     if (isVisible(node) && frameContains(node.frame, point.x, point.y)) {
-      if (best === undefined || frameArea(node.frame) < frameArea(best.frame)) best = node;
+      const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
+      if (
+        best === undefined ||
+        layerDelta > 0 ||
+        (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
+      ) {
+        best = node;
+      }
     }
     for (const child of node.children) walk(child);
   };
@@ -366,20 +665,18 @@ export function nodeAtPoint(
   return best;
 }
 
-// Does the regex consume the WHOLE non-empty string? The regex analog of an exact
-// text match, for ranking: `^Order #\d+$`-style full hits on a leaf must beat
-// a container whose aggregated label merely contains the same text. Wrapping
-// in `^(?:…)$` is safe for any valid pattern (non-capturing, so backreference
-// numbering is unchanged; inner `^`/`$` stay valid).
+// Does the regex consume the WHOLE non-empty string? The regex analog of an
+// exact text match, for ranking: a full hit on a leaf must beat a container
+// whose aggregated label merely contains the same text. The `(?:…)` wrapper is
+// non-capturing, so backreference numbering is unchanged.
 function fullConsumptionRegex(selector: Selector): RegExp | undefined {
   return selector.textMatches === undefined
     ? undefined
     : uiTreeMatchInternals.createRegExp(`^(?:${selector.textMatches})$`);
 }
 
-// How many of the selector's provided fields this node matches exactly
-// (case-insensitive equality; full-string consumption for a regex) rather
-// than merely as a substring / partial hit.
+// How many of the selector's provided fields this node matches exactly rather
+// than merely as a substring.
 function exactFieldCount(
   node: DescribeNode,
   selector: Selector,
@@ -405,19 +702,36 @@ function exactFieldCount(
 }
 
 /**
- * Resolve a selector to the on-screen frame of its best visible match — the
- * element a `tap`/`type` action should target. An accessible container (e.g. a
- * Touchable on iOS) aggregates its descendants' labels, so a substring text
- * selector matches the container as well as the leaf that actually carries the
- * text — and the container's centre can sit over a different nested child
- * entirely. Matches are therefore ranked: exact field matches beat substring
- * hits, then the smallest frame wins (the most specific element, mirroring
- * nodeAtPoint's reverse lookup), with reading order as the final tiebreak.
- * Returns undefined when no visible element matches.
+ * The best visible match of a selector — the element a `tap`/`type` action
+ * targets. An accessible container (e.g. a Touchable on iOS) aggregates
+ * its descendants' labels, so a substring text selector matches the container
+ * as well as the leaf carrying the text, and the container's centre can sit
+ * over a different child entirely. Matches are therefore ranked: exact field
+ * matches beat substring hits, then the smallest frame (mirroring
+ * {@link nodeAtPoint}), with reading order as the final tiebreak. Only the
+ * matches of the frontmost layer take part.
+ *
+ * The universal selector (flow YAML's `any: true`) is the case ranking cannot
+ * serve: with no field to be exact about, "smallest" degenerates to whatever
+ * hairline spacer the scope contains. A field-less selector names a REGION, so
+ * its matches are read the way conditions read a match set — first in reading
+ * order — keeping an action's target the element an `assert` would quote.
+ *
+ * {@link compareBelowPick} rather than {@link firstInReadingOrder}: both order
+ * by (y, x), but a bare reading order leaves an exact positional tie to adapter
+ * emission order, and two frames with different extents are two different tap
+ * centres, so the tie continues into "most specific" instead.
  */
-export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
-  const visible = findAll(root, selector).filter(isVisible);
+export function selectorToNode(root: DescribeNode, selector: Selector): DescribeNode | undefined {
+  const visible = frontmost(findAll(root, selector).filter(isVisible));
   if (visible.length === 0) return undefined;
+  if (!hasOwnConstraint(selector)) {
+    let first: DescribeNode | undefined;
+    for (const n of visible) {
+      if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
+    }
+    return first;
+  }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
   let bestExact = -1;
@@ -431,23 +745,20 @@ export function selectorToFrame(root: DescribeNode, selector: Selector): Describ
       continue;
     }
     const areaDelta = frameArea(n.frame) - frameArea(best.frame);
-    if (
-      areaDelta < 0 ||
-      (areaDelta === 0 &&
-        (n.frame.y < best.frame.y || (n.frame.y === best.frame.y && n.frame.x < best.frame.x)))
-    ) {
+    const nf = n.frame;
+    const bf = best.frame;
+    if (areaDelta < 0 || (areaDelta === 0 && (nf.y < bf.y || (nf.y === bf.y && nf.x < bf.x)))) {
       best = n;
     }
   }
-  return best?.frame;
+  return best;
 }
 
-/**
- * Derive the most stable selector that identifies a node, used by the recorder
- * to turn a tapped element into a `tap: { selector }` step. Prefers identifier,
- * then text; falls back to a specific (non-generic) role. Returns null when the
- * node has nothing stable to match on — the caller then keeps coordinates.
- */
+/** The frame of {@link selectorToNode}'s match. */
+export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
+  return selectorToNode(root, selector)?.frame;
+}
+
 const GENERIC_ROLES = new Set([
   "axgroup",
   "group",
@@ -460,48 +771,22 @@ const GENERIC_ROLES = new Set([
   "android.view.viewgroup",
 ]);
 
+/**
+ * The most stable selector identifying a node, used by the recorder to turn a
+ * tapped element into a `tap: { selector }` step. Prefers identifier, then
+ * text, then a non-generic role. Null when the node has nothing stable to match
+ * on — the caller then keeps coordinates.
+ */
 export function deriveSelector(node: DescribeNode): Selector | null {
   if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
-  // Derive text from label OR value individually — never nodeText's joined
-  // form: matchNode compares a text selector against label and value
-  // separately, so a joined "Volume 50%" would match nothing, not even the
-  // node it was derived from. Label first — a value like "50%" is the
-  // volatile part of a control, the label is the stabler replay anchor.
-  // Only visibly-rendered text counts as stable: icon-font labels are Private
-  // Use Area glyphs that serialize to invisible YAML (see hasVisibleText), so
-  // a node carrying only those falls through to role/coordinates.
+  // Label OR value individually — never nodeText's joined form: matchNode
+  // compares a text selector against label and value separately, so a joined
+  // "Volume 50%" would match nothing, not even the node it came from. Label
+  // first: a value like "50%" is the volatile part of a control. Icon-font
+  // labels are invisible in YAML (see hasVisibleText), so a node carrying only
+  // those falls through to role/coordinates.
   const text = [node.label, node.value].map((t) => t?.trim()).find((t) => t && hasVisibleText(t));
   if (text) return { text };
   if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
   return null;
-}
-
-// ── Tree fetch ─────────────────────────────────────────────────────────────
-
-/**
- * Fetch the describe tree for a device, resolving services through the registry
- * (the chromium CDP session is the only one that flows in as a service). iOS /
- * Android describe resolve their own services internally; Vega reads the
- * on-device automation toolkit's page source (`describeVega`).
- */
-export async function fetchTree(
-  registry: Registry,
-  device: DeviceInfo,
-  opts: { bundleId?: string } = {}
-): Promise<DescribeTreeData> {
-  if (device.platform === "ios") {
-    return describeIos(registry, device, { bundleId: opts.bundleId });
-  }
-  if (device.platform === "android") {
-    return describeAndroid(registry, device.id);
-  }
-  if (device.platform === "chromium") {
-    const ref = chromiumCdpRef(device);
-    const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-    return describeChromium(api);
-  }
-  if (device.platform === "vega") {
-    return describeVega(device.id);
-  }
-  throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
 }

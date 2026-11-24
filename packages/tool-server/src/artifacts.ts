@@ -1,21 +1,24 @@
 /**
- * Artifact HTTP transport — the tool-server's `/artifacts/:id` route.
+ * Artifact HTTP transport: streams a registered file — or, for a directory
+ * bundle, a compressed tar on demand — to a remote client over `GET /artifacts/:id`.
+ * A co-located client never hits this route; it reads the file in place via the
+ * handle's `hostPath`.
  *
- * The store itself (registration, the id→entry map, the {@link ArtifactHandle}
- * wire contract) lives in `@argent/registry` and is owned by the {@link Registry}
- * (`registry.artifacts`). This module is only the transport: it streams a
- * registered file — or, for a directory bundle, a gzipped tar on demand — to a
- * remote client over `GET /artifacts/:id`. A co-located client never hits this
- * route; it reads the file in place via the handle's `hostPath`.
- *
- * The wire types are re-exported here so existing `../artifacts` importers keep
- * working; new code may import them straight from `@argent/registry`.
+ * The store itself lives in `@argent/registry`, owned by the {@link Registry}
+ * (`registry.artifacts`); its wire types are re-exported here so existing
+ * `../artifacts` importers keep working.
  */
 
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createTarGzArgs } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  archiveFormatsFromAccept,
+  createCompressor,
+  createTarArgs,
+  pickArchiveFormat,
+} from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
   Registry,
@@ -25,20 +28,12 @@ import type {
   ToolContext,
 } from "@argent/registry";
 
-export {
-  ArtifactStore,
-  ARTIFACT_MARKER,
-  type ArtifactHandle,
-  type ArtifactEntry,
-  type ArtifactListItem,
-  type RegisterArtifactOptions,
-} from "@argent/registry";
+export { ArtifactStore, type ArtifactHandle } from "@argent/registry";
 
 /**
  * Pull the registry-owned artifact store from a tool's `execute` context.
- * The registry always injects it via `invokeTool`, so this only throws when a
- * tool's `execute` is called directly (bypassing the registry) without a
- * context — i.e. a misconfigured unit test, not a real invocation.
+ * Throws only when `execute` is called directly, bypassing `invokeTool`'s
+ * injection — a misconfigured unit test, not a real invocation.
  */
 export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
   if (!ctx?.artifacts) {
@@ -51,9 +46,8 @@ export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
 }
 
 /**
- * Build the Express handler for `GET /artifacts/:id`, closed over the registry
- * that owns the store. Streams the registered file with its content type; 404
- * if the id is unknown, 410 if the file has since vanished from the host.
+ * Express handler for `GET /artifacts/:id`: 404 if the id is unknown, 410 if the
+ * file has since vanished from the host.
  */
 export function makeArtifactRoute(registry: Registry) {
   return async function handleArtifactRequest(req: Request, res: Response): Promise<void> {
@@ -72,11 +66,11 @@ export function makeArtifactRoute(registry: Registry) {
       return;
     }
 
-    // Directory bundle (e.g. a `.trace`): archive on demand. This only runs when
-    // a remote client actually downloads it — local clients use the directory in
-    // place via the gate, so we never spend time zipping in local mode.
+    // Archive a directory bundle (e.g. a `.trace`) on demand: only a remote
+    // download pays for zipping, since local clients use the directory in place
+    // via the gate.
     if (entry.isDirectory) {
-      streamDirectoryAsTarGz(id, entry, res);
+      streamDirectoryAsArchive(id, entry, req, res);
       return;
     }
 
@@ -93,10 +87,7 @@ export function makeArtifactRoute(registry: Registry) {
   };
 }
 
-/**
- * Build the Express handler for `GET /artifacts`. Returns the current
- * in-memory artifact inventory without exposing tool-server host paths.
- */
+/** Express handler for `GET /artifacts`: the inventory, minus host paths. */
 export function makeArtifactListRoute(registry: Registry) {
   return function handleArtifactListRequest(_req: Request, res: Response): void {
     const artifacts: ArtifactListItem[] = registry.artifacts.list();
@@ -105,36 +96,60 @@ export function makeArtifactListRoute(registry: Registry) {
 }
 
 /**
- * Stream a directory as a gzipped tar via the system `tar` (already relied on
- * for `xctrace` in the same profiling flow). `-C <parent> <base>` keeps the
- * bundle's own directory as the single top-level entry, so the client unpacks
- * it back to `<dir>/<base>`.
+ * Stream a directory as a compressed tar: zstd when the request's `Accept` lists
+ * `application/zstd`, else gzip. `-C <parent> <base>` keeps the bundle's own
+ * directory as the single top-level entry, so the client unpacks it back to
+ * `<dir>/<base>`.
  */
-function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response): void {
-  res.setHeader("Content-Type", "application/gzip");
-  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
+function streamDirectoryAsArchive(
+  id: string,
+  entry: ArtifactEntry,
+  req: Request,
+  res: Response
+): void {
+  const format = pickArchiveFormat(archiveFormatsFromAccept(req.headers.accept));
+  const ext = format === "zstd" ? "tar.zst" : "tar.gz";
+  res.setHeader("Content-Type", ARCHIVE_CONTENT_TYPES[format]);
+  res.setHeader("Vary", "Accept");
+  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.${ext}"`);
 
-  // stdin/stderr are ignored, not piped: an unread stderr pipe can fill its
-  // buffer (e.g. tar's "file changed as we read it" warnings on a live trace)
-  // and deadlock the child. A truncated archive from a non-zero exit is caught
-  // client-side, where extraction fails and the artifact resolves to null.
-  const child = spawn("tar", createTarGzArgs(entry.path, "-"), {
+  // stderr is ignored, not piped: an unread pipe can fill its buffer (e.g.
+  // tar's "file changed as we read it" on a live trace) and deadlock the child.
+  const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
   });
   child.on("error", (err) => {
     if (!res.headersSent) {
+      // The answer is an error now, not the archive the headers above name.
+      res.removeHeader("Content-Disposition");
+      res.type("json");
       res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
     } else {
       res.destroy();
     }
   });
-  // Don't leave tar running if the client aborts the download mid-stream.
-  // `writableFinished` distinguishes an abort from normal completion, so we
-  // don't signal an already-finished child on a clean end.
+  // EMFILE leaves no pipe. The spawn error handler above answers the request.
+  if (!child.stdout) return;
+  const compressor = createCompressor(format);
+  // On a client abort, stop tar and the compressor, which would otherwise stay
+  // alive undrained with its buffers; `writableFinished` tells an abort apart
+  // from a clean end.
   res.on("close", () => {
-    if (!res.writableFinished && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-    }
+    if (res.writableFinished) return;
+    compressor.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
-  child.stdout.pipe(res);
+  // tar still writes the end-of-archive marker after skipping a member it
+  // couldn't read, or (GNU tar) saw change. So the frame ends only on exit 0;
+  // otherwise the client gets a cut stream, even through a proxy that turns the
+  // destroy into a clean end.
+  compressor.on("error", () => res.destroy());
+  child.on("close", (code) => {
+    if (code === 0) return void compressor.end();
+    compressor.destroy();
+    // A tar that never started also closes, after the `error` handler above
+    // answered: leave that answer whole.
+    if (!res.writableEnded) res.destroy();
+  });
+  child.stdout.pipe(compressor, { end: false }).pipe(res);
 }

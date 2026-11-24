@@ -1,11 +1,9 @@
-// Coarse identity of the AI coding tool driving the MCP server. We record only
-// a canonical client slug (which tool) — never prompts, model output, or args.
-//
-// The single signal is the MCP `initialize` handshake `clientInfo.name` (ground
-// truth of what is actually connecting), read at runtime via
-// `Server.getClientVersion()`. Anything we can't map is reported as the coarse
-// `other` bucket — we never capture the raw client name, so a non-standard
-// client that names itself after the machine or user can't leak that string.
+// Coarse identity of the AI coding tool driving the MCP server: a canonical slug
+// only. The signal is the MCP `initialize` handshake `clientInfo.name`, read via
+// `Server.getClientVersion()`, plus one host env var where the name alone is too
+// generic (Devin Desktop); the raw name is never recorded, so a client that
+// names itself after the machine or user can't leak that string. Names we can't
+// map become the coarse `other` bucket.
 
 export const AI_CLIENTS = [
   "codex",
@@ -26,9 +24,9 @@ export type AiTelemetryProps = {
   ai_client?: AiClient;
 };
 
-// Runtime MCP `clientInfo.name` → canonical slug. Patterns are tested against the
-// trimmed, lower-cased name. Each is verified against the tool's source; we match
-// the CLIENT identity precisely so decoys are excluded
+// Runtime MCP `clientInfo.name` → canonical slug, matched against the trimmed,
+// lower-cased name. Patterns match a tool's client identity only, never its
+// server-side name (`codex-mcp-client`, not `codex-mcp-server`).
 const RUNTIME_CLIENT_PATTERNS: ReadonlyArray<readonly [RegExp, AiClient]> = [
   [/^codex-mcp-client\b/, "codex"],
   [/^claude-code\b/, "claude_code"],
@@ -43,9 +41,8 @@ const RUNTIME_CLIENT_PATTERNS: ReadonlyArray<readonly [RegExp, AiClient]> = [
 ];
 
 /**
- * Pick out only the AI-client telemetry keys from a wider metadata object,
- * omitting any that are absent so events never carry `undefined` values. Shared
- * by every emitter so the spread shape stays identical across call sites.
+ * Pick the AI-client telemetry keys out of a wider metadata object, omitting
+ * absent ones so events never carry `undefined` values.
  */
 export function aiTelemetryFromMeta(meta: AiTelemetryProps): AiTelemetryProps {
   return {
@@ -54,16 +51,23 @@ export function aiTelemetryFromMeta(meta: AiTelemetryProps): AiTelemetryProps {
 }
 
 /**
- * Normalize a runtime MCP `clientInfo.name` to an {@link AiClient}. Returns
- * `undefined` for anything unrecognized (callers may then fall back to the
- * coarse `other` bucket).
+ * Normalize a runtime MCP `clientInfo.name` to an {@link AiClient}. Unrecognized
+ * names return `undefined`; falling back to `other` is the caller's decision.
+ * `env` is the MCP server's own environment, inherited from the spawning client.
  */
-export function canonicalizeAiClient(value: string | undefined | null): AiClient | undefined {
+export function canonicalizeAiClient(
+  value: string | undefined | null,
+  env: Readonly<Record<string, string | undefined>> = {}
+): AiClient | undefined {
   if (typeof value !== "string") return undefined;
   const lower = value.trim().toLowerCase();
   if (!lower) return undefined;
   for (const [pattern, slug] of RUNTIME_CLIENT_PATTERNS) {
     if (pattern.test(lower)) return slug;
   }
+  // Devin Desktop (Windsurf, renamed) runs MCP servers through its bundled Devin
+  // agent, which sends the rmcp library's default name. Only the WINDSURF_IDE_TYPE
+  // its extension host sets tells it apart from the standalone Devin CLI.
+  if (lower === "rmcp" && env.WINDSURF_IDE_TYPE) return "windsurf";
   return undefined;
 }

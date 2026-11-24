@@ -1,8 +1,14 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-
-// Package manager type, detection, and the install/uninstall command builders
-// for both install topologies (global PATH binary vs project devDependency).
+import { canonicalPath } from "@argent/configuration-core";
+import { PACKAGE_NAME } from "./constants.js";
+import {
+  getRemainingGlobalBinaryPath,
+  packageRootOf,
+  readShimScript,
+  shimTargetOf,
+} from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -16,6 +22,13 @@ export function formatShellCommand(cmd: ShellCommand): string {
   return parts.join(" ");
 }
 
+// `dir` as one POSIX shell word, for a command the reader pastes. Single
+// quotes, because a discovered path can hold `$`, a backtick or `\`, which
+// double quotes leave live - retargeting the line.
+export function shellQuotePath(dir: string): string {
+  return "'" + dir.split("'").join("'\\''") + "'";
+}
+
 export function detectPackageManager(): PackageManager {
   const agent = process.env.npm_config_user_agent ?? "";
   if (agent.startsWith("yarn")) return "yarn";
@@ -24,12 +37,105 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+// pnpm keeps globals under <pnpm home>/global/<5 | v11/<hash>>/node_modules.
+const PNPM_GLOBAL_TARGET = new RegExp(
+  String.raw`[\\/]global[\\/]v?\d+[\\/][^"'\s]*node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    String.raw`[\\/]`
+);
+
+// bun keeps globals under <BUN_INSTALL>/install/global/node_modules.
+const BUN_GLOBAL_ROOT = new RegExp(
+  String.raw`[\\/]install[\\/]global[\\/]node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    "$"
+);
+
+// The manager that owns the global argent on PATH, read from its layout: any
+// other would add a second argent beside it. With no global the launcher's
+// manager installs, but Yarn 2+ has no `yarn global` and gets npm (over a Yarn
+// classic global it gets `yarn`, which fails there without installing anything).
+// npm's layout puts <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent,
+// or on Windows <prefix>\argent.cmd beside <prefix>\node_modules\@swmansion\argent.
+// A global in bun's folder gets bun; on Windows its bin is an .exe beside a
+// .bunx. A bin that resolves to no package is a shim script: pnpm's names its
+// global folder, so pnpm owns it. A shim that names no node_modules path
+// (nodenv's, asdf's) or is a binary (Volta's) runs a version manager's npm
+// global, so it keeps npm. Any other global sits outside npm's layout: a
+// lockfile above it names its manager, which covers a folder moved by pnpm's
+// global-dir or BUN_INSTALL_GLOBAL_DIR, and with none it is Yarn classic's.
+export function detectGlobalPackageManager(): PackageManager {
+  const binaryPath = getRemainingGlobalBinaryPath();
+  if (!binaryPath) return isYarnBerryLauncher() ? "npm" : detectPackageManager();
+  const root = packageRootOf(binaryPath);
+  if (root) {
+    if (isInNpmLayout(binaryPath, root)) return "npm";
+    return BUN_GLOBAL_ROOT.test(root) ? "bun" : (lockfileOwnerOf(root) ?? "yarn");
+  }
+  if (process.platform === "win32") {
+    if (fs.existsSync(path.join(npmCopyBeside(path.dirname(binaryPath)), "package.json"))) {
+      return "npm";
+    }
+    if (fs.existsSync(binaryPath.replace(/\.exe$/i, "") + ".bunx")) return "bun";
+  }
+  const shim = readShimScript(binaryPath);
+  if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
+  if (PNPM_GLOBAL_TARGET.test(shim)) return "pnpm";
+  // The shim's own target, not its realpath: pnpm 11 links that into its store.
+  const target = shimTargetOf(binaryPath);
+  return (target ? lockfileOwnerOf(target) : null) ?? "yarn";
+}
+
+function lockfileOwnerOf(root: string): PackageManager | null {
+  for (let dir = path.dirname(root); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+    const pm = pmFromLockfile(dir);
+    if (pm) return pm;
+  }
+  return null;
+}
+
+function npmCopyBeside(binDir: string): string {
+  return process.platform === "win32"
+    ? path.join(binDir, "node_modules", PACKAGE_NAME)
+    : path.join(path.dirname(binDir), "lib", "node_modules", PACKAGE_NAME);
+}
+
+// The PATH entry can be a link to npm's bin, or sit in a linked directory, so
+// each hop of the bin's link chain is checked from its real directory.
+function isInNpmLayout(binaryPath: string, root: string): boolean {
+  const realRoot = canonicalPath(root);
+  let link = binaryPath;
+  for (let hop = 0; hop < 40; hop++) {
+    const binDir = canonicalPath(path.dirname(link));
+    if (canonicalPath(npmCopyBeside(binDir)) === realRoot) return true;
+    try {
+      link = path.resolve(binDir, fs.readlinkSync(link));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isYarnBerryLauncher(): boolean {
+  const agent = process.env.npm_config_user_agent ?? "";
+  return agent.startsWith("yarn") && !agent.startsWith("yarn/1.");
+}
+
+// Appended to a pasted `yarn global` command when the launcher is Yarn 2+, whose
+// own `yarn` rejects it.
+export function yarnClassicNote(cmd: ShellCommand): string {
+  return cmd.bin === "yarn" && cmd.args[0] === "global" && isYarnBerryLauncher()
+    ? " (with Yarn classic, outside this Yarn 2+ project)"
+    : "";
+}
+
 function asKnownPm(name: unknown): PackageManager | null {
   return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
 }
 
 // corepack's `packageManager` field ("pnpm@9.1.0") is the project's own
-// declaration — the strongest signal there is.
+// declaration — the strongest signal.
 function pmFromPackageManagerField(dir: string): PackageManager | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
@@ -44,19 +150,12 @@ function pmFromPackageManagerField(dir: string): PackageManager | null {
   }
 }
 
-// `devEngines.packageManager` MUST be honored for the fresh-`pnpm init` case:
-// pnpm 10+ writes ONLY devEngines (no packageManager field, no lockfile), and
-// without it detection fell through to npm, whose own devEngines gate then
-// instantly rejected the install (EBADDEVENGINES) as "Local install failed."
-//
-// But it is a weaker signal than corepack's field or a real lockfile:
-//  - An array is an OR-set of ACCEPTABLE managers, not an ordered preference
-//    (npm errors only when every entry fails to validate), so a multi-entry
-//    declaration says nothing about which manager the project actually uses —
-//    only the lockfile does. A single distinct name is the only unambiguous
-//    array shape.
-//  - yarn and bun neither read nor update devEngines, so a declaration can
-//    survive a migration indefinitely while the lockfile tracks reality.
+// Needed for a fresh `pnpm init`: pnpm 10+ writes ONLY devEngines, and falling
+// through to npm made npm's own devEngines gate reject the install
+// (EBADDEVENGINES). Still weaker than corepack's field or a lockfile: an array
+// is an OR-set of ACCEPTABLE managers, not a preference order, so only a single
+// distinct name identifies anything; and yarn and bun never update devEngines,
+// so a declaration outlives a migration while the lockfile tracks reality.
 function pmFromDevEngines(dir: string): PackageManager | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")) as {
@@ -83,23 +182,19 @@ function pmFromLockfile(dir: string): PackageManager | null {
   return null;
 }
 
-// pnpm-workspace.yaml is pnpm-exclusive (workspace layout AND, since pnpm 10,
-// plain settings), so it identifies pnpm even before the first install creates
-// a lockfile — but it is the weakest signal: a stray copy can survive a
-// migration to yarn/bun, and unlike devEngines it isn't even an explicit
-// declaration about the package manager.
+// pnpm-workspace.yaml is pnpm-exclusive (workspace layout and, since pnpm 10,
+// plain settings), so it identifies pnpm before any lockfile exists — but it is
+// the weakest signal: a stray copy survives a migration to yarn/bun, and it is
+// not a declaration about the package manager at all.
 function pmFromWorkspaceMarker(dir: string): PackageManager | null {
   return fs.existsSync(path.join(dir, "pnpm-workspace.yaml")) ? "pnpm" : null;
 }
 
-// Detect the package manager the *project* uses: the `packageManager`
-// (corepack) field first, then real lockfiles (what actually records the
-// project's dependency state), then a devEngines declaration, then the
-// pnpm-workspace.yaml marker — walking up ancestors (workspaces keep the
-// single lockfile at the monorepo root) and stopping at the repo boundary
-// (.git). Only then fall back to detectPackageManager(): npm_config_user_agent
-// reflects whoever launched `argent` (often npx), not the host project, and the
-// local-install commands must update the project's own lockfile.
+// Ranked project signals, walking up ancestors (workspaces keep the single
+// lockfile at the monorepo root) and stopping at the repo boundary (.git).
+// detectPackageManager() is the last resort: npm_config_user_agent reflects
+// whoever launched `argent` (often npx), not the host project, whose own
+// lockfile the local-install commands must update.
 export function detectProjectPackageManager(projectRoot: string): PackageManager {
   let dir = path.resolve(projectRoot);
   for (;;) {
@@ -130,6 +225,26 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): ShellComm
   }
 }
 
+// Where and with what env a global command of `pm` runs. In a project, Yarn
+// classic defers to its yarnPath and corepack's shims to its `packageManager`
+// pin, which can swap in Yarn 2+ or refuse to run, so the other managers run in
+// home: Yarn reads a .yarnrc in every parent of its cwd, and only root can write
+// home's parents, unlike a shared /tmp. npm keeps the caller's cwd: it ignores
+// project config under -g, and under nodenv or asdf the cwd picks the Node whose
+// prefix holds the global. npm exec exports its prefix as npm_config_prefix,
+// which Yarn classic would take for its global bin dir.
+export function globalCommandOptions(pm: PackageManager): {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+} {
+  if (pm === "npm") return {};
+  const home = os.homedir();
+  const cwd = fs.existsSync(home) ? { cwd: home } : {};
+  if (pm !== "yarn" || !process.env.npm_config_user_agent?.startsWith("npm/")) return cwd;
+  const { npm_config_prefix: _npmPrefix, ...env } = process.env;
+  return { ...cwd, env };
+}
+
 export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
@@ -143,17 +258,19 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
   }
 }
 
-// ── Local (repo-local / committable) install commands ─────────────────────────
-// Local mode adds @swmansion/argent to the project's devDependencies and
-// commits MCP configs that run the project-local copy. Every command that
-// mutates the project's manifest MUST run with `cwd` set to the project root.
+// Every command below mutates the project's manifest, so it MUST run with `cwd`
+// set to the project root.
 
 export function localInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
       return { bin: "yarn", args: ["add", "--dev", pkg] };
     case "pnpm":
-      return { bin: "pnpm", args: ["add", "-D", pkg] };
+      // At a workspace root pnpm refuses a bare `add` (ERR_PNPM_ADDING_TO_ROOT).
+      // Not `-w`: from a package inside a workspace it retargets the install to
+      // the root, and outside a workspace pnpm rejects it. This flag only skips
+      // the check, so the dependency still lands in the cwd's manifest.
+      return { bin: "pnpm", args: ["add", "-D", "--ignore-workspace-root-check", pkg] };
     case "bun":
       return { bin: "bun", args: ["add", "-d", pkg] };
     default:
@@ -161,9 +278,9 @@ export function localInstallCommand(pm: PackageManager, pkg: string): ShellComma
   }
 }
 
-// Materialize the project's DECLARED dependencies without touching any pin —
-// for when the manifest declares argent but node_modules is empty (a fresh
-// clone), where the `add` form would rewrite the committed pin to @latest.
+// For a manifest that already declares argent but has no node_modules (fresh
+// clone): honors the committed pin, which the `add` form would rewrite to
+// @latest.
 export function projectInstallCommand(pm: PackageManager): ShellCommand {
   switch (pm) {
     case "yarn":

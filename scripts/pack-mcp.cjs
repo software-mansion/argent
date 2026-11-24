@@ -2,40 +2,28 @@
 // @ts-check
 "use strict";
 
-// Wraps the @swmansion/argent pack pipeline so callers can pin which
-// argent-private-releases tag the native binaries come from:
+// Pins the argent-private-releases tag the native binaries and the
+// trace-processor bundle are downloaded from (default: the newest
+// argent-private main build, argent-main-<sha>; see
+// scripts/resolve-main-binaries-tag.sh):
 //
-//   npm run pack:mcp                          # default: argent-main
-//   npm run pack:mcp -- argent-v0.7.1         # specific release tag
-//   npm run pack:mcp -- argent-my-branch      # tag produced by triggering
-//                                             # build-native-binaries.yml on a
-//                                             # branch
+//   bun run pack:mcp argent-v0.7.1
 //
-// Only `download-native-binaries.sh` takes the tag; simulator-server lives in
-// a separate release stream with its own default and is left untouched.
+// simulator-server is a separate release stream with its own default, so it
+// never takes the tag.
 
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "..");
 
-// First positional after `--` becomes the tag. Anything else is rejected so
-// typos like `npm run pack:mcp -- --tag=foo` don't silently get ignored.
 const args = process.argv.slice(2);
 if (args.length > 1) {
   console.error(`Unexpected extra arguments: ${args.slice(1).join(" ")}`);
-  console.error("Usage: npm run pack:mcp -- [argent-release-tag]");
+  console.error("Usage: bun run pack:mcp [argent-release-tag]");
   process.exit(1);
 }
 const tag = args[0];
-
-// The Android trace-processor engine ships as three third-party WASM artifacts
-// (trace_processor.wasm + emscripten glue + the EngineBase decoder) plus the
-// Perfetto LICENSE. They are NOT committed to the repo; download-trace-processor.sh
-// fetches and sha256-verifies them from argent-private-releases at pack time
-// (same tag as the native binaries) so they land in the published tarball under
-// packages/native-devtools-android/assets/trace-processor/. download-native-binaries.sh
-// still fetches the iOS binaries and the Android helper APK.
 
 /** @param {string} cmd @param {string[]} cmdArgs */
 function run(cmd, cmdArgs) {
@@ -55,6 +43,7 @@ function run(cmd, cmdArgs) {
 run("bash", ["scripts/download-simulator-server.sh"]);
 run("bash", ["scripts/download-native-binaries.sh", ...(tag ? [tag] : [])]);
 run("bash", ["scripts/download-trace-processor.sh", ...(tag ? [tag] : [])]);
-run("npm", ["run", "build"]);
-run("npm", ["run", "build", "-w", "@swmansion/argent"]);
-run("npm", ["pack", "-w", "@swmansion/argent", "--pack-destination", "."]);
+run("bun", ["run", "build"]);
+run("node", ["scripts/check-trace-processor.cjs"]);
+run("bun", ["run", "--filter", "@swmansion/argent", "build"]);
+run("bun", ["pm", "pack", "--cwd", "packages/argent", "--destination", WORKSPACE_ROOT]);

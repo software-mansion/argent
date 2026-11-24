@@ -1,50 +1,52 @@
 import type { CpuSample, RawHang, RawLeak, UiHang, MemoryLeak } from "../types";
-import { findDominantFunction, extractAppCallChain } from "./02-aggregate";
-
-// ---------------------------------------------------------------------------
-// Hang <-> CPU correlation
-// ---------------------------------------------------------------------------
+import { TOOLING_LABEL, findDominantFunction, extractAppCallChain } from "./02-aggregate";
+import { normalizeThreadName } from "../../profiler-shared/thread";
 
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
+/** A hang's thread that ran for less than this share of the hang mostly waited during it. */
+const MIN_HANG_THREAD_RUN_SHARE = 0.1;
 
-export interface CorrelationResult {
+interface CorrelationResult {
   uiHangs: UiHang[];
   hangSampleTimestamps: Set<number>;
 }
 
+/** `suspendedNs`: of each hang, the time when the app was suspended, which is not the hang's run. */
 export function correlateHangsWithCpu(
   hangs: RawHang[],
-  cpuSamples: CpuSample[]
+  cpuSamples: CpuSample[],
+  suspendedNs: readonly number[] = []
 ): CorrelationResult {
-  // Sort samples by timestamp for efficient windowing
   const sortedSamples = [...cpuSamples].sort((a, b) => a.timestampNs - b.timestampNs);
+  const sampleThreads = new Set(sortedSamples.map((s) => normalizeThreadName(s.threadFmt)));
 
   const hangSampleTimestamps = new Set<number>();
 
-  const uiHangs = hangs.map((hang) => {
+  const uiHangs = hangs.map((hang, hangIndex) => {
     const windowStart = hang.startNs;
     const windowEnd = hang.startNs + hang.durationNs;
 
-    // Find CPU samples within the hang window
     const windowSamples = sortedSamples.filter(
       (s) => s.timestampNs >= windowStart && s.timestampNs <= windowEnd
     );
 
-    // Track all sample timestamps that fell in hang windows
     for (const sample of windowSamples) {
       hangSampleTimestamps.add(sample.timestampNs);
     }
 
-    // Count function frequency across all threads in the window
     const funcCounts = new Map<string, number>();
-    // Count call chain frequency
     const chainCounts = new Map<string, { chain: string[]; count: number }>();
+    // Only the report shows the labels: profiler-stack-query matches the plain names.
+    const toolingLabels: Record<string, string> = {};
 
     for (const sample of windowSamples) {
       const dominant = findDominantFunction(sample.stack);
       if (dominant) {
         funcCounts.set(dominant, (funcCounts.get(dominant) ?? 0) + 1);
+      }
+      for (const frame of sample.stack) {
+        if (frame.tooling) toolingLabels[frame.name] = TOOLING_LABEL[frame.tooling];
       }
 
       const chain = extractAppCallChain(sample.stack);
@@ -59,13 +61,23 @@ export function correlateHangsWithCpu(
       }
     }
 
-    // Sort by frequency, take top N
+    // A hang is a stall of one thread, the main thread in Instruments' hangs. When that
+    // thread ran for less than 10% of the hang, it mostly waited: in a sleep, for a lock,
+    // for I/O or for another thread. A thread with no sample in the whole trace can have
+    // another name in the samples, so how long it ran is not known.
+    const hangThread = normalizeThreadName(hang.threadFmt);
+    const ranNs = windowSamples.reduce(
+      (sum, s) => (normalizeThreadName(s.threadFmt) === hangThread ? sum + s.weightNs : sum),
+      0
+    );
+    const ownLengthNs = hang.durationNs - (suspendedNs[hangIndex] ?? 0);
+    const waited = sampleThreads.has(hangThread) && ranNs < ownLengthNs * MIN_HANG_THREAD_RUN_SHARE;
+
     const suspectedFunctions = [...funcCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, TOP_N_FUNCTIONS)
       .map(([fn]) => fn);
 
-    // Top call chains by frequency
     const appCallChains = [...chainCounts.values()]
       .sort((a, b) => b.count - a.count)
       .slice(0, TOP_N_CHAINS)
@@ -74,7 +86,6 @@ export function correlateHangsWithCpu(
     const durationMs = Math.round(hang.durationNs / 1_000_000);
     const severity = classifyHangSeverity(hang.hangType);
 
-    // Format start time from nanoseconds
     const totalMs = Math.round(hang.startNs / 1_000_000);
     const minutes = Math.floor(totalMs / 60_000);
     const seconds = Math.floor((totalMs % 60_000) / 1000);
@@ -91,6 +102,8 @@ export function correlateHangsWithCpu(
       endNs: hang.startNs + hang.durationNs,
       suspectedFunctions,
       appCallChains,
+      ...(Object.keys(toolingLabels).length > 0 ? { toolingLabels } : {}),
+      ...(waited ? { hangThreadRanMs: Math.round(ranNs / 1_000_000) } : {}),
       severity,
     };
   });
@@ -101,24 +114,14 @@ export function correlateHangsWithCpu(
 function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
   const lower = hangType.toLowerCase();
   if (lower.includes("severe") || lower === "hang") return "RED";
-  return "YELLOW"; // Microhang
+  return "YELLOW";
 }
 
-// ---------------------------------------------------------------------------
-// Leak aggregation
-// ---------------------------------------------------------------------------
-
 /**
- * xctrace only records malloc-stack history when the target is launched under
- * the Allocations/Leaks instrument. Argent records via `xctrace --attach`, so
- * leaks of pre-existing allocations — in practice most leaks on the simulator —
- * come back with no responsible frame: xctrace emits the sentinel
- * `<Call stack limit reached>` and an empty library. Those leaks are not
- * actionable and are dominated by benign system allocations (`Malloc N Bytes`,
- * `xpc_*`), so they are reported as a low-confidence (YELLOW) signal rather than
- * a confirmed (RED) app leak. Verified empirically against xctrace 16: both an
- * idle system app and an actively-allocating RN app return only unattributed
- * leaks under `--attach`, while CPU/hang stacks symbolicate normally.
+ * How xctrace spells "no responsible frame": it records malloc-stack history only
+ * for a target cold-launched under malloc_stack_logging, so an attached capture
+ * yields the `<Call stack limit reached>` sentinel (or a missing attribute,
+ * parsed as "Unknown") for every leak.
  */
 const UNATTRIBUTED_LEAK_FRAMES = new Set(["", "Unknown", "<Call stack limit reached>"]);
 
@@ -133,21 +136,12 @@ export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
   >();
 
   for (const leak of rawLeaks) {
-    // Group by object type AND responsible frame: with malloc_stack_logging the
-    // same object type can leak from several distinct call sites, and each site
-    // is its own finding — merging on type alone would attribute them all to
-    // whichever was parsed first and hide the rest. Key on the frame NORMALIZED
-    // the way isLeakAttributed() matches it (trimmed, with every unattributed
-    // spelling — "", "Unknown", the "<Call stack limit reached>" sentinel —
-    // collapsed to one bucket), not verbatim: an export can mix those spellings
-    // for one object type (a missing responsible-frame attribute parses as
-    // "Unknown"), and keying verbatim would split what is a single unattributed
-    // group per type. Under `--attach` (no stacks) everything is unattributed,
-    // so this collapses back to per-type.
-    // The delimiter is a NUL, written as the `\u0000` escape rather than a
-    // raw NUL byte: a raw NUL makes git treat this whole source file as binary
-    // and hides the diff. Object types and demangled frames never contain a NUL,
-    // so the composite key can't collide the way a printable separator could.
+    // Keyed on object type AND responsible frame: one type can leak from several
+    // call sites, each its own finding. The frame is normalized the way
+    // isLeakAttributed() matches it so an export mixing the unattributed spellings
+    // for one type still yields a single unattributed group.
+    // The NUL delimiter is written as the `\u0000` escape because a raw NUL byte
+    // would make git treat this file as binary; types and frames never contain one.
     const frameKey = isLeakAttributed(leak.responsibleFrame) ? leak.responsibleFrame.trim() : "";
     const key = `${leak.objectType}\u0000${frameKey}`;
     const existing = groups.get(key);

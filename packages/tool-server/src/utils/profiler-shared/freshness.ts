@@ -1,18 +1,13 @@
 /**
  * Trace-freshness signal for native-profiler-analyze.
  *
- * The native profiler session lives for the whole tool-server process, so
- * `native-profiler-analyze` (and the query tools) happily operate on whatever
- * trace was last recorded/loaded — even one captured days ago in an earlier
- * working session. Nothing in the report flagged that, so a stale trace read as
- * a fresh result. This computes a one-line warning when the recording is old
- * enough that it clearly isn't from a capture the user just made.
+ * The native profiler session lives for the whole tool-server process, so the
+ * analyze and query tools operate on whatever trace was last recorded or
+ * loaded — possibly one captured in an earlier working session.
  */
 
-// Recordings are capped at 10 min (RECORDING_CAP_MS), and analysis follows
-// stop closely, so a legitimate just-recorded session is well under this. Past
-// it, the trace is from a previous session (or an intentional profiler-load
-// restore) and the user should know which.
+// Recordings are capped at 10 min (RECORDING_CAP_MS) and analysis follows stop
+// closely, so a just-recorded session is well under this.
 const STALE_AFTER_MS = 30 * 60 * 1000;
 
 function formatAge(ms: number): string {
@@ -25,8 +20,8 @@ function formatAge(ms: number): string {
 }
 
 /**
- * Returns a markdown warning line when the recording is stale, or null when it
- * is fresh (or the capture time is unknown). `nowMs` is injected for testing.
+ * Markdown warning line when the recording is stale; null when fresh or the
+ * capture time is unknown. `nowMs` is injected for testing.
  */
 export function formatTraceFreshness(
   capturedAtEpochMs: number | null | undefined,

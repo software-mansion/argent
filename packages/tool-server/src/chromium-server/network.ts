@@ -1,10 +1,10 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
+import type { CdpNetworkConditions } from "../utils/network-conditions";
 
 /**
- * A recorded network request/response, captured passively from the page's CDP
- * `Network` domain events. This is the data source behind `view-network-logs`
- * and `view-network-request-details` on Chromium devices — the browser exposes
- * this natively, so (unlike the RN path) no in-app interceptor is injected.
+ * Backs `view-network-logs` and `view-network-request-details` on Chromium:
+ * recorded passively from CDP `Network` events, with no injected interceptor
+ * as on the RN path.
  */
 export interface NetworkRequestRecord {
   requestId: string;
@@ -16,46 +16,79 @@ export interface NetworkRequestRecord {
   mimeType?: string;
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
-  /** Request body, when the request carried one (POST/PUT/…). */
   postData?: string;
   initiator?: { type: string; url?: string; lineNumber?: number };
-  /** ISO timestamp the request started (from CDP wallTime). */
+  /** ISO timestamp, from CDP wallTime. */
   startedDateTime: string;
-  /** monotonic CDP timestamp of requestWillBeSent (seconds). */
+  /** Monotonic CDP timestamp of requestWillBeSent, in seconds. */
   startTs: number;
   durationMs?: number;
   fromCache?: boolean;
   encodedDataLength?: number;
+  /** Network.loadingFinished arrived: the whole response was received. */
+  finished?: boolean;
   failed?: boolean;
   errorText?: string;
 }
 
+/**
+ * Where the last network-capture-start began in this tab's log, as a sequence
+ * number: a record numbered higher was created after it. A stop keeps the
+ * mark and adds where it ended, so a wait reads only the records between.
+ */
+interface ChromiumCaptureMark {
+  lastSeq: number;
+  stoppedSeq?: number;
+}
+
 export interface NetworkManager {
-  /** All recorded requests, oldest first (capped ring buffer). */
+  /** Oldest first; capped at MAX_RECORDS, evicting the oldest. */
   requests(): NetworkRequestRecord[];
-  /** Look up a single recorded request by its CDP requestId. */
+  /** The kept records created after sequence number `seq`, oldest first, each with its number. */
+  requestsAfter(seq: number): Array<{ seq: number; record: NetworkRequestRecord }>;
   get(requestId: string): NetworkRequestRecord | undefined;
-  /** (Re-)enable the Network domain on the active page. Called on connect and after a tab switch. */
+  /** Marks where a capture starts: the records created from now on come after it. */
+  startCapture(): ChromiumCaptureMark;
+  /** Marks where the started capture ends; undefined when it was never started. */
+  stopCapture(): ChromiumCaptureMark | undefined;
+  captureMark(): ChromiumCaptureMark | undefined;
+  /** Enables the Network domain; called on connect and after a tab switch. */
   reattach(): Promise<void>;
+  /** Conditions are per target, so `reattach` applies them again to the new tab. */
+  setConditions(conditions: CdpNetworkConditions): Promise<void>;
+  /** True while the stored conditions shape traffic, false after a reset. */
+  throttled(): boolean;
   dispose(): void;
 }
 
 const MAX_RECORDS = 1000;
 
+const shapesTraffic = (c: CdpNetworkConditions): boolean =>
+  c.offline || c.latency > 0 || c.downloadThroughput >= 0 || c.uploadThroughput >= 0;
+
 export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   const { cdp } = deps;
   const order: string[] = [];
   const byId = new Map<string, NetworkRequestRecord>();
+  // The sequence number of each kept record, in creation order.
+  const seqOf = new Map<string, number>();
+  let lastSeq = 0;
+  let mark: ChromiumCaptureMark | undefined;
+  let conditions: CdpNetworkConditions | null = null;
 
   function record(requestId: string): NetworkRequestRecord {
     let rec = byId.get(requestId);
     if (!rec) {
       rec = { requestId, method: "", url: "", startedDateTime: "", startTs: 0 };
       byId.set(requestId, rec);
+      seqOf.set(requestId, ++lastSeq);
       order.push(requestId);
       if (order.length > MAX_RECORDS) {
         const evicted = order.shift();
-        if (evicted) byId.delete(evicted);
+        if (evicted) {
+          byId.delete(evicted);
+          seqOf.delete(evicted);
+        }
       }
     }
     return rec;
@@ -73,9 +106,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         const rec = record(params.requestId as string);
         rec.method = r.method ?? rec.method;
         rec.url = r.url ?? rec.url;
-        // Merge (don't replace): the full on-the-wire headers — including ones
-        // added by fetch()/CORS like Authorization — arrive separately in
-        // requestWillBeSentExtraInfo, which may land before or after this event.
+        // Merge, don't replace: requestWillBeSentExtraInfo carries the rest of the
+        // headers and may land before or after this event.
         if (r.headers) rec.requestHeaders = { ...(rec.requestHeaders ?? {}), ...r.headers };
         if (r.postData != null) rec.postData = r.postData;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
@@ -103,9 +135,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         rec.resourceType = (params.type as string) ?? rec.resourceType;
         break;
       }
-      // The *ExtraInfo events carry the actual on-the-wire headers (Authorization,
-      // Set-Cookie, …) that the base events omit. Merge them in; they may arrive
-      // before the base event, so `record()` creates the entry if needed.
+      // The *ExtraInfo events carry on-the-wire headers (Authorization, Set-Cookie, …)
+      // the base events omit, and may arrive before them — hence `record()`, not `get()`.
       case "Network.requestWillBeSentExtraInfo": {
         const h = params.headers as Record<string, string> | undefined;
         if (h) {
@@ -125,6 +156,7 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
       case "Network.loadingFinished": {
         const rec = byId.get(params.requestId as string);
         if (rec) {
+          rec.finished = true;
           rec.encodedDataLength = params.encodedDataLength as number;
           if (rec.startTs) rec.durationMs = ((params.timestamp as number) - rec.startTs) * 1000;
         }
@@ -146,10 +178,30 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
 
   return {
     requests: () => order.map((id) => byId.get(id)).filter((r): r is NetworkRequestRecord => !!r),
+    requestsAfter: (seq) =>
+      order.flatMap((id) => {
+        const at = seqOf.get(id);
+        const rec = byId.get(id);
+        return at !== undefined && at > seq && rec ? [{ seq: at, record: rec }] : [];
+      }),
     get: (requestId: string) => byId.get(requestId),
+    startCapture: () => (mark = { lastSeq }),
+    stopCapture: () => {
+      if (mark && mark.stoppedSeq === undefined) mark = { ...mark, stoppedSeq: lastSeq };
+      return mark;
+    },
+    captureMark: () => mark,
     reattach: async () => {
       await cdp.send("Network.enable").catch(() => {});
+      if (conditions) {
+        await cdp.send("Network.emulateNetworkConditions", conditions).catch(() => {});
+      }
     },
+    setConditions: async (next) => {
+      await cdp.send("Network.emulateNetworkConditions", next);
+      conditions = next;
+    },
+    throttled: () => conditions !== null && shapesTraffic(conditions),
     dispose: () => {
       cdp.events.off("event", onEvent);
       cdp.send("Network.disable").catch(() => {});

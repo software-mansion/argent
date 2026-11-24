@@ -1,43 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Downloads signed native binaries from argent-private-releases:
-#   - iOS dylibs + ax-service
-#   - Android argent-android-devtools.apk (helper APK consumed by
-#     packages/native-devtools-android)
-#
-# The host-side Perfetto trace processor is no longer a native binary: it ships
-# as a single ~13 MB `trace_processor.wasm` vendored into the repo
-# (packages/native-devtools-android/assets/trace-processor/), so there is nothing
-# to download for it here.
+# Downloads signed native binaries from argent-private-releases: the iOS, tvOS
+# and TCP dylibs, the ax-service daemons, the macOS app library and helper, and
+# the Android helper APK and network inspector consumed by packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to the
+#                newest argent-private main build (argent-main-<sha>, see
+#                scripts/resolve-main-binaries-tag.sh).
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, logged in with `gh auth login` (the repo is public, but the
+#     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
 
-TAG="${1:-argent-main}"
+TAG="${1:-$(bash "$(dirname "$0")/resolve-main-binaries-tag.sh")}"
 
-# Verify the release exists before attempting downloads.
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
-  echo "Error: release '${TAG}' not found in ${REPO}." >&2
+  echo "Error: release '${TAG}' not found in ${REPO}, or gh is not logged in (gh auth login)." >&2
   echo "Build and publish the native binaries for this version first, then retry." >&2
   exit 1
 fi
 
+if command -v sha256sum &>/dev/null; then
+  sha256() { sha256sum "$@"; }
+elif command -v shasum &>/dev/null; then
+  sha256() { shasum -a 256 "$@"; }
+else
+  echo "Error: neither sha256sum nor shasum found." >&2
+  exit 1
+fi
+
+# Every temporary download lands here, so it is removed on every exit path,
+# including a failed `gh` or `tar` under `set -e`.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"
 BIN_DIR="packages/native-devtools-ios/bin"
-# ax-service is macOS-only (it spawns inside an iOS Simulator), so it lives
-# under the darwin/ host-platform subdirectory — matching what
-# axServiceBinaryPath() resolves (bin/<platform>/ax-service) and what
-# packages/argent/scripts/bundle-tools.cjs copies into the published package
-# (bin/darwin/ax-service). Writing it to the flat bin/ root instead silently
-# drops it from every release: bundle-tools looks under darwin/, finds nothing,
-# and skips the copy, so describe's ax-service path is unusable (regressed in
-# the Linux-support layout migration, #249).
+# ax-service is macOS-only, and both axServiceBinaryPath() and
+# packages/argent/scripts/bundle-tools.cjs read it from bin/darwin/. Written to
+# the flat bin/ root it is silently dropped from every release: bundle-tools
+# finds nothing under darwin/ and skips the copy (regressed in the Linux-support
+# layout migration, #249).
 IOS_BIN_DIR="${BIN_DIR}/darwin"
 ANDROID_BIN_DIR="packages/native-devtools-android/bin"
 ANDROID_MANIFEST_FILE="packages/native-devtools-android/assets/manifest.json"
@@ -55,6 +62,17 @@ for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectio
     --clobber
 done
 
+# The audio hook ships from releases that have it; an older tag only costs the audio tools, which then
+# say the dylib is missing, so a miss is skipped like the tvOS assets below.
+echo "  Downloading libArgentAudio.dylib..."
+if ! gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "libArgentAudio.dylib" \
+  --dir "${DYLIBS_DIR}" \
+  --clobber; then
+  echo "  Skipping libArgentAudio.dylib: not present on '${TAG}' (pre-audio-mock release)." >&2
+fi
+
 echo "  Downloading ax-service..."
 gh release download "${TAG}" \
   --repo "${REPO}" \
@@ -63,18 +81,14 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
-# tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
-# filenames with the iOS dylibs, so the release ships them as a tarball
-# (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
-# the directory bootstrapDylibPathTvos() reads from. The two daemons
-# (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
-# names and download flat into bin/darwin/.
+# The three tvOS injection dylibs share filenames with the iOS ones, so they
+# ship as a tarball extracted into dylibs/tvos/, the directory
+# bootstrapDylibPathTvos() reads from; the two daemons have unique names and
+# download flat into bin/darwin/.
 #
-# These assets only exist on releases built with TV support. A pre-TV-support
-# tag (the optional [release-tag] arg lets you pull older releases) simply has
-# no tvOS artifacts, so a missing asset is skipped with a warning rather than
-# aborting the whole download (`gh release download` exits non-zero on no match,
-# which under `set -e` would otherwise leave a half-populated tree).
+# Pre-Apple-TV-support tags carry no tvOS assets, so a missing one is skipped
+# with a warning: `gh release download` exits non-zero on no match, which under
+# `set -e` would leave a half-populated tree.
 TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
 mkdir -p "${TVOS_DYLIBS_DIR}"
 
@@ -113,24 +127,45 @@ else
   echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
 fi
 
-# TCP-transport iOS binaries (sim-remote / ios-remote support). The remote
-# (ios-remote) code path spawns the ax-service and injects the native-devtools
-# dylibs over a TCP socket tunnelled by sim-remote, rather than the AF_UNIX
-# sockets the local path uses — so it needs -DARGENT_USE_TCP=1 builds kept in a
-# separate tcp/ slot (axServiceBinaryPathTcp()/bootstrapDylibPathTcp() read from
-# bin/tcp/ and dylibs/tcp/). Both are platform-NEUTRAL: these are darwin/iOS-sim
-# artifacts uploaded to and run on the *remote* macOS orchestrator, so they must
-# resolve from any host platform (a Linux host must not look under bin/linux/).
-# Like the tvOS dylibs, the three TCP dylibs share basenames with the flat iOS
-# dylibs, so they ship as a tarball extracted into dylibs/tcp/; tcp-ax-service
-# has a unique release name and lands flat as bin/tcp/ax-service.
+# Native Mac apps: the library, its bootstrap (which shares its basename with
+# the iOS one) and argent-macos-helper ship as one tarball, extracted into
+# dylibs/macos/; the helper then moves to bin/darwin/ with the other host
+# binaries. Tags from before Mac app support carry no such asset, so a missing
+# one is skipped with a warning; any other gh failure stops the script.
+MACOS_DYLIBS_DIR="${DYLIBS_DIR}/macos"
+mkdir -p "${MACOS_DYLIBS_DIR}"
+
+echo "  Downloading macOS artifacts..."
+TMP_MACOS_TARBALL="$(mktemp -t native-devtools-macos.XXXXXX.tar.gz)"
+if MACOS_GH_ERR="$(gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-macos.tar.gz" \
+  --output "${TMP_MACOS_TARBALL}" \
+  --clobber 2>&1)"; then
+  tar -xzf "${TMP_MACOS_TARBALL}" -C "${MACOS_DYLIBS_DIR}"
+  mv -f "${MACOS_DYLIBS_DIR}/argent-macos-helper" "${IOS_BIN_DIR}/argent-macos-helper"
+  chmod +x "${IOS_BIN_DIR}/argent-macos-helper"
+elif [[ "${MACOS_GH_ERR}" == *"no assets match"* ]]; then
+  echo "  Skipping macOS artifacts: not present on '${TAG}' (pre-Mac-app-support release)." >&2
+else
+  echo "Error: could not download the macOS artifacts from '${TAG}': ${MACOS_GH_ERR}" >&2
+  rm -f "${TMP_MACOS_TARBALL}"
+  exit 1
+fi
+rm -f "${TMP_MACOS_TARBALL}"
+
+# The ios-remote path talks to ax-service and the injected dylibs over AF_INET
+# instead of the AF_UNIX sockets the local path uses, so it needs separate
+# -DARGENT_USE_TCP=1 builds in bin/tcp/ and dylibs/tcp/
+# (axServiceBinaryPathTcp()/bootstrapDylibPathTcp()). Both slots are
+# platform-NEUTRAL: these are darwin artifacts run on the *remote* macOS
+# orchestrator, so a Linux host must not look under bin/linux/. Like the tvOS
+# dylibs they share basenames with the flat iOS ones and ship as a tarball;
+# tcp-ax-service has a unique release name.
 #
-# These assets only exist on releases built with TCP support. A pre-sim-remote
-# tag simply has no TCP artifacts, so a missing asset is skipped with a warning
-# rather than aborting the whole download (`gh release download` exits non-zero
-# on no match, which under `set -e` would otherwise leave a half-populated tree).
+# Pre-sim-remote tags carry no TCP assets, so a missing one is skipped with a
+# warning rather than aborting under `set -e`.
 TCP_DYLIBS_DIR="${DYLIBS_DIR}/tcp"
-# Platform-neutral (bin/tcp, not bin/darwin/tcp): see the comment above.
 TCP_BIN_DIR="${BIN_DIR}/tcp"
 mkdir -p "${TCP_DYLIBS_DIR}" "${TCP_BIN_DIR}"
 
@@ -153,8 +188,8 @@ if gh release download "${TAG}" \
   --pattern "tcp-ax-service" \
   --dir "${TCP_BIN_DIR}" \
   --clobber; then
-  # Uploaded under a unique name to avoid colliding with the iOS ax-service in
-  # the flattened release dir; restore the basename the runtime resolver expects.
+  # Uniquely named to avoid colliding with the iOS ax-service in the flattened
+  # release dir; restore the basename axServiceBinaryPathTcp() expects.
   mv -f "${TCP_BIN_DIR}/tcp-ax-service" "${TCP_BIN_DIR}/ax-service"
   chmod +x "${TCP_BIN_DIR}/ax-service"
 else
@@ -162,40 +197,142 @@ else
 fi
 
 echo "  Downloading argent-android-devtools.apk..."
-# The release publishes the APK under a stable name (no versioning in the
-# filename) so this script doesn't have to know the version ahead of time;
-# the local copy is renamed to match what manifest.json expects.
-TMP_APK="$(mktemp -t argent-android-devtools.XXXXXX.apk)"
-trap 'rm -f "$TMP_APK"' EXIT
+TMP_APK="${TMP_DIR}/argent-android-devtools.apk"
 gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "argent-android-devtools.apk" \
   --output "${TMP_APK}" \
   --clobber
 
-# Read the versionName from the local manifest so the filename matches
-# bundledHelperApkPath()'s expectation.
+# The tool-server installs the helper only when the device's versionCode is
+# below the manifest's, so an APK whose own versionCode differs from the
+# manifest either never upgrades older helpers or is reinstalled on every
+# start. Read both values from the APK's binary AndroidManifest.xml and refuse a
+# mismatch (bump argent-private's ANDROID_DEVTOOLS_VERSION_* pins, rebuild the
+# release). Plain node + unzip, so it runs without an Android SDK.
+unzip -p "${TMP_APK}" AndroidManifest.xml | node -e '
+  const b = require("fs").readFileSync(0);
+  const want = require(process.argv[1]);
+  let strings = [], resIds = [], code, name;
+  const str = (i) => strings[i];
+  for (let o = 8; o < b.length; o += b.readUInt32LE(o + 4)) {
+    const type = b.readUInt16LE(o), hdr = b.readUInt16LE(o + 2);
+    if (type === 0x0001) {
+      const n = b.readUInt32LE(o + 8), utf8 = b.readUInt32LE(o + 16) & 0x100;
+      const base = o + b.readUInt32LE(o + 20);
+      for (let i = 0; i < n; i++) {
+        let p = base + b.readUInt32LE(o + hdr + 4 * i);
+        if (utf8) {
+          p += b[p] & 0x80 ? 2 : 1;
+          const len = b[p] & 0x80 ? ((b[p] & 0x7f) << 8) | b[p + 1] : b[p];
+          p += b[p] & 0x80 ? 2 : 1;
+          strings.push(b.toString("utf8", p, p + len));
+        } else {
+          let len = b.readUInt16LE(p);
+          if (len & 0x8000) { len = ((len & 0x7fff) << 16) | b.readUInt16LE(p + 2); p += 2; }
+          strings.push(b.toString("utf16le", p + 2, p + 2 + 2 * len));
+        }
+      }
+    } else if (type === 0x0180) {
+      for (let p = o + 8; p < o + b.readUInt32LE(o + 4); p += 4) resIds.push(b.readUInt32LE(p));
+    } else if (type === 0x0102) {
+      const start = o + hdr + b.readUInt16LE(o + hdr + 8), size = b.readUInt16LE(o + hdr + 10);
+      for (let i = 0; i < b.readUInt16LE(o + hdr + 12); i++) {
+        const a = start + i * size, id = resIds[b.readUInt32LE(a + 4)];
+        const raw = b.readInt32LE(a + 8), dataType = b[a + 15], data = b.readUInt32LE(a + 16);
+        if (id === 0x0101021b) code = dataType === 0x03 ? Number(str(data)) : data;
+        if (id === 0x0101021c) name = raw >= 0 ? str(raw) : dataType === 0x03 ? str(data) : undefined;
+      }
+      break; // <manifest> is the first element
+    }
+  }
+  if (code !== want.versionCode || name !== want.versionName) {
+    console.error(
+      `  ERROR: the release APK is versionCode ${code} / versionName ${name}, but ` +
+      `${process.argv[1]} expects ${want.versionCode} / ${want.versionName}. Keep ` +
+      `the ANDROID_DEVTOOLS_VERSION_* pins in argent-private and manifest.json in step, ` +
+      `and rebuild the release from the pinned commit.`
+    );
+    process.exit(1);
+  }
+  console.log(`  APK version OK: ${name} (code ${code})`);
+' "$PWD/${ANDROID_MANIFEST_FILE}"
+
+# bundledHelperApkPath() looks for the manifest's versionName in the filename.
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
-trap - EXIT
+
+# The network inspector agent: network-inspector.jar plus the JVMTI agent .so
+# for x86_64 and arm64-v8a, in one tarball.
+NETWORK_INSPECTOR_ASSET="network-inspector.tar.gz"
+NETWORK_INSPECTOR_CHECKSUM="${NETWORK_INSPECTOR_ASSET}.sha256"
+NETWORK_INSPECTOR_DIR="${ANDROID_BIN_DIR}/network-inspector"
+NETWORK_INSPECTOR_TMP="${TMP_DIR}/network-inspector"
+echo "  Downloading ${NETWORK_INSPECTOR_ASSET} (Android network inspector)..."
+mkdir -p "${NETWORK_INSPECTOR_TMP}"
+gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "${NETWORK_INSPECTOR_ASSET}" \
+  --pattern "${NETWORK_INSPECTOR_CHECKSUM}" \
+  --dir "${NETWORK_INSPECTOR_TMP}" \
+  --clobber
+
+# Like the trace-processor bundle, a missing checksum or a mismatch is fatal:
+# it means a corrupt or incomplete download. The checksum comes from the same
+# release as the tarball, so it proves integrity only: whoever can replace the
+# tarball there can replace the checksum too. `gh` succeeds when either
+# pattern matches, so both files are checked here.
+NETWORK_INSPECTOR_EXPECTED=""
+NETWORK_INSPECTOR_ACTUAL=""
+if [[ -f "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_CHECKSUM}" ]]; then
+  NETWORK_INSPECTOR_EXPECTED="$(awk '{print $1}' "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_CHECKSUM}")"
+fi
+if [[ -f "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" ]]; then
+  NETWORK_INSPECTOR_ACTUAL="$(sha256 "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" | awk '{print $1}')"
+fi
+if [[ -z "${NETWORK_INSPECTOR_EXPECTED}" || "${NETWORK_INSPECTOR_EXPECTED}" != "${NETWORK_INSPECTOR_ACTUAL}" ]]; then
+  echo "Error: sha256 check failed for ${NETWORK_INSPECTOR_ASSET} on '${TAG}'." >&2
+  echo "  expected: ${NETWORK_INSPECTOR_EXPECTED:-<missing or empty ${NETWORK_INSPECTOR_CHECKSUM}>}" >&2
+  echo "  actual:   ${NETWORK_INSPECTOR_ACTUAL:-<missing ${NETWORK_INSPECTOR_ASSET}>}" >&2
+  exit 1
+fi
+echo "  sha256 OK (${NETWORK_INSPECTOR_ASSET})"
+
+NETWORK_INSPECTOR_EXTRACTED="${NETWORK_INSPECTOR_TMP}/extracted"
+mkdir -p "${NETWORK_INSPECTOR_EXTRACTED}"
+tar -xzf "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" -C "${NETWORK_INSPECTOR_EXTRACTED}"
+
+# The jar's Implementation-Version must equal versionName in
+# assets/manifest.json. A mismatch fails here, before the agent reaches bin/.
+NETWORK_INSPECTOR_VERSION="$(
+  (unzip -p "${NETWORK_INSPECTOR_EXTRACTED}/network-inspector.jar" META-INF/MANIFEST.MF \
+    | tr -d '\r' | sed -n 's/^Implementation-Version: //p') || true
+)"
+if [[ "${NETWORK_INSPECTOR_VERSION}" != "${ANDROID_VERSION_NAME}" ]]; then
+  echo "Error: network-inspector.jar on '${TAG}' is version '${NETWORK_INSPECTOR_VERSION:-<none>}'," >&2
+  echo "       but versionName in ${ANDROID_MANIFEST_FILE} is '${ANDROID_VERSION_NAME}'." >&2
+  echo "       Release a network inspector at version ${ANDROID_VERSION_NAME}, or fix versionName, then retry." >&2
+  exit 1
+fi
+rm -rf "${NETWORK_INSPECTOR_DIR}"
+mv "${NETWORK_INSPECTOR_EXTRACTED}" "${NETWORK_INSPECTOR_DIR}"
+echo "  ✓ network inspector ${NETWORK_INSPECTOR_VERSION} → ${NETWORK_INSPECTOR_DIR}"
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
-# Verify the downloaded injection dylibs carry the expected Mach-O platform.
-# This is the exact failure a mis-built release can reintroduce: a tvOS-built
-# libArgentInjectionBootstrap.dylib landing in the flat iOS slot. dyld silently
-# skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform does not
-# match the process, so native-devtools never injects on an iOS simulator and
-# every native-* tool returns restart_required — with no error at download,
-# sign, or pack time. Fail loudly here rather than bundle a dead dylib.
-# vtool is macOS-only; on hosts without it (non-macOS) the check is skipped.
+# A mis-built release can land a tvOS-built dylib in the flat iOS slot. dyld
+# silently skips a DYLD_INSERT_LIBRARIES library whose LC_BUILD_VERSION platform
+# does not match the process, so injection never happens and nothing errors at
+# download, sign or pack time; the native-* tools then report service_stale or
+# restart_required and send the agent to fix something that is not broken.
+# vtool is macOS-only, so the check is skipped on other hosts.
 if command -v vtool &>/dev/null; then
   echo "Verifying dylib platforms..."
   dylib_verify_failed=0
-  assert_dylib_platform() { # <file> <expected-platform>
+  assert_dylib_platform() {
     local f="$1" want="$2" arch got
-    [ -f "$f" ] || return 0  # tvOS dylibs are absent on pre-Apple-TV tags
+    [ -f "$f" ] || return 0  # tvOS/TCP/macOS files are absent on older tags
     for arch in arm64 x86_64; do
       got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
       if [ "$got" != "$want" ]; then
@@ -207,17 +344,24 @@ if command -v vtool &>/dev/null; then
   for d in libNativeDevtoolsIos libKeyboardPatch libArgentInjectionBootstrap; do
     assert_dylib_platform "${DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
     assert_dylib_platform "${TVOS_DYLIBS_DIR}/${d}.dylib" TVOSSIMULATOR
-    # TCP dylibs are iOS-simulator Mach-Os (same SDK, -DARGENT_USE_TCP=1), so a
-    # tvOS slice leaking into dylibs/tcp/ is the same dyld-silent-skip failure.
+    # TCP dylibs are iOS-simulator Mach-Os, so a tvOS slice leaking into
+    # dylibs/tcp/ is the same dyld-silent-skip failure.
     assert_dylib_platform "${TCP_DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
   done
+  # The audio hook has no tvOS or TCP build.
+  assert_dylib_platform "${DYLIBS_DIR}/libArgentAudio.dylib" IOSSIMULATOR
+  # The macOS artifacts load into, or run as, host processes: a simulator slice
+  # here is the same silent skip. vtool reads the helper executable the same way.
+  assert_dylib_platform "${MACOS_DYLIBS_DIR}/libNativeDevtoolsMacos.dylib" MACOS
+  assert_dylib_platform "${MACOS_DYLIBS_DIR}/libArgentInjectionBootstrap.dylib" MACOS
+  assert_dylib_platform "${IOS_BIN_DIR}/argent-macos-helper" MACOS
   if [ "${dylib_verify_failed}" -ne 0 ]; then
     echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
     echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
     echo "the build-native-binaries workflow / re-publish the release, then retry." >&2
     exit 1
   fi
-  echo "Dylib platforms OK (iOS/TCP=IOSSIMULATOR, tvOS=TVOSSIMULATOR where present)."
+  echo "Dylib platforms OK (iOS/TCP=IOSSIMULATOR, tvOS=TVOSSIMULATOR, macOS=MACOS where present)."
 fi
 
 if command -v codesign &>/dev/null; then
@@ -225,9 +369,11 @@ if command -v codesign &>/dev/null; then
     "${DYLIBS_DIR}"/*.dylib \
     "${TVOS_DYLIBS_DIR}"/*.dylib \
     "${TCP_DYLIBS_DIR}"/*.dylib \
+    "${MACOS_DYLIBS_DIR}"/*.dylib \
     "${IOS_BIN_DIR}/ax-service" \
     "${IOS_BIN_DIR}/tvos-ax-service" \
     "${IOS_BIN_DIR}/tvos-hid-daemon" \
+    "${IOS_BIN_DIR}/argent-macos-helper" \
     "${TCP_BIN_DIR}/ax-service"; do
     [ -f "$f" ] || continue
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"

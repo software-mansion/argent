@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyStaleness,
+  takeoverOf,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../src/utils/react-profiler/session-ownership";
-import { flattenProfilingData } from "../../src/tools/profiler/react/react-profiler-stop";
+import {
+  flattenProfilingData,
+  createReactProfilerStopTool,
+} from "../../src/tools/profiler/react/react-profiler-stop";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { buildHotCommitSummaries } from "../../src/utils/react-profiler/pipeline/00-hot-commits";
 import type {
   DevToolsFiberCommit,
@@ -28,6 +33,7 @@ describe("classifyStaleness", () => {
     expect(r.stale).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(true);
     expect(r.ageSeconds).toBeNull();
+    expect(r.heartbeatAgeSeconds).toBeNull();
   });
 
   it("keeps a fresh session non-stale and non-reclaimable", () => {
@@ -38,6 +44,16 @@ describe("classifyStaleness", () => {
     expect(r.stale).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(false);
     expect(r.ageSeconds).toBeCloseTo(1, 3);
+    expect(r.heartbeatAgeSeconds).toBe(1);
+  });
+
+  it("keeps a session exactly at the threshold fresh", () => {
+    const r = classifyStaleness({
+      owner: owner({ lastHeartbeatEpochMs: 1_000_000_000 }),
+      nowEpochMs: 1_000_000_000 + DEFAULT_STALE_THRESHOLD_MS,
+    });
+    expect(r.stale).toBe(false);
+    expect(r.heartbeatAgeSeconds).toBe(DEFAULT_STALE_THRESHOLD_MS / 1000);
   });
 
   it("marks a session stale once lastHeartbeat is older than threshold", () => {
@@ -66,6 +82,58 @@ describe("classifyStaleness", () => {
       nowEpochMs: 1_000_000_000,
     });
     expect(r.ageSeconds).toBe(0);
+    expect(r.heartbeatAgeSeconds).toBe(0);
+  });
+});
+
+describe("takeoverOf", () => {
+  const run = { sessionId: "uuid-mine", profileStartWallMs: 1_000 };
+  const recording = (sessionId: string | null) => ({
+    isRunning: true,
+    owner: sessionId ? owner({ sessionId }) : null,
+  });
+  const stopped = (rendererStartedAtEpochMs?: number[]) => ({
+    isRunning: false,
+    owner: null,
+    rendererStartedAtEpochMs,
+  });
+
+  it("finds nothing while the run owns the recording", () => {
+    expect(takeoverOf(recording("uuid-mine"), run)).toBeUndefined();
+  });
+
+  it("names the session that is recording over the run", () => {
+    expect(takeoverOf(recording("uuid-other"), run)).toEqual({
+      by: "uuid-other",
+      stillRecording: true,
+    });
+  });
+
+  it("names nobody for a recording with no owner", () => {
+    expect(takeoverOf(recording(null), run)).toEqual({ by: null, stillRecording: true });
+  });
+
+  it("finds nothing in a stopped app while any renderer has the run's start time", () => {
+    expect(takeoverOf(stopped([999, 1_000]), run)).toBeUndefined();
+    expect(takeoverOf(stopped([1_000, 1_001]), run)).toBeUndefined();
+  });
+
+  it("finds a takeover in a stopped app when no renderer has it", () => {
+    expect(takeoverOf(stopped([2_000, 2_001]), run)).toEqual({ by: null, stillRecording: false });
+  });
+
+  it("cannot tell with no start times to compare", () => {
+    expect(takeoverOf(stopped([]), run)).toBeUndefined();
+    expect(takeoverOf(stopped(), run)).toBeUndefined();
+  });
+
+  it("cannot tell for a run with no start time", () => {
+    expect(takeoverOf(stopped([2_000]), { ...run, profileStartWallMs: null })).toBeUndefined();
+  });
+
+  it("has nothing to check for a session with no run", () => {
+    const noRun = { sessionId: null, profileStartWallMs: null };
+    expect(takeoverOf(recording("uuid-other"), noRun)).toBeUndefined();
   });
 });
 
@@ -142,6 +210,12 @@ describe("flattenProfilingData", () => {
     expect(totalCommits).toBe(3);
     const indices = [...new Set(commits.map((c) => c.commitIndex))].sort();
     expect(indices).toEqual([0, 1, 2]);
+  });
+
+  it("gives one timing per flat commit across roots, for the busiest-second figure", () => {
+    const { commitTimings } = flattenProfilingData(pd(), displayNameById, fiberMeta);
+    expect(commitTimings.map((c) => c.timestamp)).toEqual([10, 30, 50]);
+    expect(commitTimings.map((c) => c.durationMs)).toEqual([20, 5, 10]);
   });
 
   it("produces one entry per rendered fiber per commit", () => {
@@ -357,5 +431,39 @@ describe("buildHotCommitSummaries (unattributed threading)", () => {
     const summaries = buildHotCommitSummaries([commit(0, 20)], [0], [[0, 0, 0]]);
     expect(summaries[0]!.unattributedMs).toBeUndefined();
     expect(summaries[0]!.unattributedFiberCount).toBeUndefined();
+  });
+});
+
+// ── The absent-session message ────────────────────────────────────────
+
+/**
+ * A react-profiler session rides on the device's JS-runtime debugger, which
+ * `stop-all-simulator-servers` reaps — so a teardown (commonly another agent's,
+ * since one tool-server serves every agent using an install) is a live cause of
+ * "no active profiling session", alongside the Metro reload that used to be the
+ * only one named. Nothing pinned the wording, so reverting it left the whole
+ * react-profiler suite green.
+ */
+describe("react-profiler-stop with no live session", () => {
+  it("names the teardown as a cause, not just a Metro reload", async () => {
+    const registry = {
+      getSnapshot: () => ({ services: new Map(), namespaces: [], tools: [] }),
+      resolveService: async () => {
+        throw new Error("must not resolve");
+      },
+    } as unknown as Registry;
+
+    const err = await createReactProfilerStopTool(registry).execute!(
+      {},
+      { port: 8081, device_id: "emulator-5554" }
+    ).catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION);
+    expect(message).toContain("stop-all-simulator-servers");
+    expect(message).toContain("JS-runtime debugger");
+    // The pre-existing cause and the recovery both survive.
+    expect(message).toContain("Metro reload");
+    expect(message).toContain("Call react-profiler-start");
   });
 });

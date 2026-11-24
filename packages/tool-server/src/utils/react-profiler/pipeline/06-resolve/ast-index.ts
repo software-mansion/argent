@@ -1,11 +1,10 @@
 import { promises as fs } from "fs";
-import { join } from "path";
-
-// Tree-sitter requires native bindings loaded via require (CJS context)
+import { basename, dirname, join, sep } from "path";
+import type { RnPlatform as Platform } from "../../types/input";
 
 const _require = require;
 
-export interface TreeSitterNode {
+interface TreeSitterNode {
   startPosition: { row: number; column: number };
   endPosition: { row: number; column: number };
   text: string;
@@ -18,45 +17,43 @@ export interface TreeSitterNode {
 
 interface ParserInstance {
   setLanguage(lang: unknown): void;
-  parse(src: string): { rootNode: TreeSitterNode };
+  parse(
+    src: string,
+    oldTree?: undefined,
+    options?: { bufferSize?: number }
+  ): { rootNode: TreeSitterNode };
 }
 
 type ParserCtor = new () => ParserInstance;
 
-export interface ComponentMatch {
+interface ComponentMatch {
   file: string;
   line: number; // 1-based
   col: number; // 0-based
 }
 
-export interface ComponentIndexEntry {
+interface ComponentIndexEntry {
   file: string;
   line: number; // 1-based
   col: number; // 0-based
   isMemoized: boolean;
   hasUseCallback: boolean;
   hasUseMemo: boolean;
-  // Other components found under the same name elsewhere in the project — most
-  // commonly platform variants (List.tsx vs List.web.tsx). The lookup key is
-  // just the name, so without surfacing these a caller asking for "List" would
-  // be silently handed whichever file happened to be walked first. The fields
-  // above hold the primary match (chosen deterministically — see pickPrimary);
-  // these are the remaining candidates, exposed so callers can tell an
-  // ambiguous name apart instead of trusting a single arbitrary location.
+  // Same-named components elsewhere, usually platform variants (List.tsx vs
+  // List.web.tsx). The fields above hold the primary match; these expose the
+  // rest so a caller can tell an ambiguous name from a single definite hit.
   otherMatches?: ComponentMatch[];
 }
 
-export type ComponentIndex = Map<string, ComponentIndexEntry>;
+type ComponentIndex = Map<string, ComponentIndexEntry>;
 
-export interface AstIndexResult {
+interface AstIndexResult {
   index: ComponentIndex;
   treeSitterAvailable: boolean;
   indexedFiles: number;
 }
 
-// ---------------------------------------------------------------------------
-// Load tree-sitter lazily (graceful fallback if not compiled)
-// ---------------------------------------------------------------------------
+// Loaded lazily: a missing or uncompiled tree-sitter degrades to an empty index.
 
 let _ParserClass: ParserCtor | null = null;
 let _tsLanguage: unknown = null;
@@ -85,7 +82,6 @@ function loadTreeSitter(): {
 
     _tsxLanguage = TSLang.tsx ?? TSLang.default?.tsx;
   } catch {
-    // tree-sitter not available
     return null;
   }
 
@@ -93,12 +89,26 @@ function loadTreeSitter(): {
   return { ParserClass: _ParserClass, ts: _tsLanguage, tsx: _tsxLanguage };
 }
 
-// ---------------------------------------------------------------------------
+const EXCLUDE_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "android",
+  "ios",
+  "dist",
+  "build",
+  ".expo",
+  "__tests__",
+  "__mocks__",
+]);
 
-const EXCLUDE_DIRS = new Set(["node_modules", ".git", "android", "ios", "dist", "build", ".expo"]);
+/** A mock defined in a test is not the app's component, though it may share its name. */
+const TEST_FILE = /\.(test|spec)\.[jt]sx?$/;
 
-async function findSourceFiles(dir: string): Promise<string[]> {
+async function findSourceFiles(
+  dir: string
+): Promise<{ files: string[]; nestedPackages: string[] }> {
   const result: string[] = [];
+  const nestedPackages: string[] = [];
 
   async function walk(current: string): Promise<void> {
     let entries;
@@ -106,6 +116,10 @@ async function findSourceFiles(dir: string): Promise<string[]> {
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
       return;
+    }
+
+    if (current !== dir && entries.some((e) => e.isFile() && e.name === "package.json")) {
+      nestedPackages.push(current + sep);
     }
 
     for (const entry of entries) {
@@ -116,10 +130,11 @@ async function findSourceFiles(dir: string): Promise<string[]> {
       } else if (entry.isFile()) {
         const name = entry.name;
         if (
-          name.endsWith(".ts") ||
-          name.endsWith(".tsx") ||
-          name.endsWith(".js") ||
-          name.endsWith(".jsx")
+          (name.endsWith(".ts") ||
+            name.endsWith(".tsx") ||
+            name.endsWith(".js") ||
+            name.endsWith(".jsx")) &&
+          !TEST_FILE.test(name)
         ) {
           result.push(join(current, name));
         }
@@ -128,7 +143,7 @@ async function findSourceFiles(dir: string): Promise<string[]> {
   }
 
   await walk(dir);
-  return result;
+  return { files: result, nestedPackages };
 }
 
 function isCapitalized(name: string): boolean {
@@ -154,12 +169,9 @@ function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
 }
 
 /**
- * Detect a React component wrapper call: memo(...) / forwardRef(...) /
- * React.memo(...) / React.forwardRef(...) (also nested, e.g. memo(forwardRef(...)),
- * since the outer callee is what we match). Components declared as
- * `const X = memo(...)` / `const X = forwardRef(...)` have a call_expression
- * value node, so without recognising these they would be missed entirely --
- * and profiler-flagged components are disproportionately memo-wrapped.
+ * Match memo()/forwardRef(), including React.* and nesting such as
+ * memo(forwardRef(...)) — only the outer callee is checked. Without this,
+ * `const X = memo(...)` is just a call_expression value and never indexed.
  */
 function reactWrapperCall(node: TreeSitterNode | undefined): {
   isWrapper: boolean;
@@ -177,11 +189,9 @@ function reactWrapperCall(node: TreeSitterNode | undefined): {
 }
 
 /**
- * Collect component names passed by reference to memo()/React.memo(), e.g.
- * `function Card() {}; export default memo(Card)`. This is the cross-reference
- * form that reactWrapperCall (which inspects a declarator's value node) does
- * not catch. Replaces a former regex scan of the raw source text that also
- * matched `memo(...)` inside comments and string literals and ignored AST scope.
+ * Names passed by reference to memo(), e.g. `function Card() {}; export default
+ * memo(Card)` — the cross-reference form reactWrapperCall misses, since it only
+ * inspects a declarator's value node.
  */
 function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   const names = new Set<string>();
@@ -197,30 +207,81 @@ function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   return names;
 }
 
-// React Native / Metro resolves platform-specific extensions (.ios / .android /
-// .native, plus web's .web) over the base file only when bundling for that
-// platform; the base file (no platform segment) is the general default. So when
-// the same component name exists in several files, prefer the base as primary.
-const PLATFORM_SUFFIX = /\.(web|ios|android|native)\.[jt]sx?$/;
+// Metro resolves .ios/.android/.macos/.native/.web over the base file only when
+// bundling for that platform, so the base file is the general default and wins
+// as primary when one component name exists in several files.
+const PLATFORM_SUFFIX = /\.(web|ios|android|macos|native)\.[jt]sx?$/;
+const EXTENSION = /\.[jt]sx?$/;
+const NOT_APP_CODE = /\.(test|spec|stories)\.[jt]sx?$/;
+// Metro's order for one module on a native platform. The other platform's
+// variant and .web are not in that bundle.
+const NOT_BUNDLED = 3;
 
-function isPlatformVariant(file: string): boolean {
-  return PLATFORM_SUFFIX.test(file);
+function variantRank(file: string, platform?: Platform): number {
+  const suffix = PLATFORM_SUFFIX.exec(file)?.[1];
+  if (!platform) return suffix ? 1 : 0;
+  if (suffix === platform) return 0;
+  if (suffix === "native") return 1;
+  return suffix ? NOT_BUNDLED : 2;
+}
+
+/** The import path of a file: every platform variant of it is one module. */
+function moduleOf(file: string): string {
+  return file.replace(PLATFORM_SUFFIX, "").replace(EXTENSION, "");
 }
 
 /**
- * Order same-named component candidates deterministically and split into the
- * primary match plus the rest. Previously the first file the directory walk
- * happened to reach won, so "which List survives" was effectively arbitrary and
- * a lookup could return the wrong platform variant's source. Base files sort
- * ahead of platform variants; ties break on path, then line, then column — all
- * walk-order independent.
+ * Decide from every source file which variant Metro bundles for each module.
+ * Variants compete only inside a module: a helper in Other.ios.tsx says nothing
+ * about Button.tsx. Inside a module a variant competes whether or not it defines
+ * the name looked up, because Metro picks it over the base file either way.
  */
-function pickPrimary(entries: ComponentIndexEntry[]): {
+function bundledFilter(files: string[], platform?: Platform): (file: string) => boolean {
+  if (!platform) return () => true;
+  const best = new Map<string, number>();
+  for (const file of files) {
+    const module = moduleOf(file);
+    best.set(module, Math.min(best.get(module) ?? NOT_BUNDLED, variantRank(file, platform)));
+  }
+  return (file) => {
+    const rank = variantRank(file, platform);
+    return rank !== NOT_BUNDLED && rank === best.get(moduleOf(file));
+  };
+}
+
+function fileNameKey(name: string): string {
+  return name.replace(/[-_]/g, "").toLowerCase();
+}
+
+/** Whether a file is named after a component: Button.tsx, button/index.tsx, button-view.tsx not. */
+function isNamedAfter(file: string, component: string): boolean {
+  const base = basename(moduleOf(file));
+  const stem = base === "index" ? basename(dirname(file)) : base;
+  return fileNameKey(stem) === fileNameKey(component);
+}
+
+/**
+ * Split same-named candidates into a primary plus the rest, walk-order
+ * independently: app code before other packages, then a file named after the
+ * component, then base files before platform variants, then path, line, column.
+ */
+function pickPrimary(
+  name: string,
+  entries: ComponentIndexEntry[],
+  platform: Platform | undefined,
+  nestedPackages: string[]
+): {
   primary: ComponentIndexEntry;
   others: ComponentMatch[];
 } {
+  const foreign = (file: string): number =>
+    NOT_APP_CODE.test(file) || nestedPackages.some((dir) => file.startsWith(dir)) ? 1 : 0;
   const sorted = entries.slice().sort((a, b) => {
-    const variantDelta = Number(isPlatformVariant(a.file)) - Number(isPlatformVariant(b.file));
+    const foreignDelta = foreign(a.file) - foreign(b.file);
+    if (foreignDelta !== 0) return foreignDelta;
+    const nameDelta = Number(isNamedAfter(b.file, name)) - Number(isNamedAfter(a.file, name));
+    if (nameDelta !== 0) return nameDelta;
+    const variantDelta = variantRank(a.file, platform) - variantRank(b.file, platform);
     if (variantDelta !== 0) return variantDelta;
     if (a.file !== b.file) return a.file < b.file ? -1 : 1;
     if (a.line !== b.line) return a.line - b.line;
@@ -233,12 +294,19 @@ function pickPrimary(entries: ComponentIndexEntry[]): {
   };
 }
 
+/** What tree-sitter parses with its default 32 KB buffer. */
+const DEFAULT_PARSE_BUFFER_CHARS = 32 * 1024 - 1;
+/** Limit for .tsx and .jsx. Over this a file is generated or vendored, not a screen someone wrote. */
+const MAX_JSX_FILE_CHARS = 512 * 1024;
+
 /**
- * Build an in-memory index of all React components in the project.
- * Returns the index plus diagnostics (treeSitterAvailable, indexedFiles).
- * Returns empty index with treeSitterAvailable=false if tree-sitter is not available.
+ * Index every React component in the project. Without tree-sitter, returns an
+ * empty index and treeSitterAvailable=false rather than throwing.
  */
-export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise<AstIndexResult> {
+export async function buildAstIndexWithDiagnostics(
+  projectRoot: string,
+  platform?: Platform
+): Promise<AstIndexResult> {
   const index: ComponentIndex = new Map();
 
   const ts = loadTreeSitter();
@@ -246,11 +314,10 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
 
   const { ParserClass, ts: tsLang, tsx: tsxLang } = ts;
 
-  const files = await findSourceFiles(projectRoot);
+  const { files, nestedPackages } = await findSourceFiles(projectRoot);
 
-  // Collect every match per name first, then resolve a deterministic primary
-  // once all files are walked — picking eagerly during the walk would re-tie
-  // the result to directory-walk order.
+  // Resolve the primary only once every file is walked; picking during the walk
+  // would re-tie the result to directory-walk order.
   const candidates = new Map<string, ComponentIndexEntry[]>();
   function addCandidate(name: string, entry: ComponentIndexEntry): void {
     const existing = candidates.get(name);
@@ -266,20 +333,37 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       continue;
     }
 
-    const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
-    const language = isTsxFile ? tsxLang : tsLang;
+    // JSX is common in plain .js files (an Expo App.js); the TypeScript grammar
+    // fails at the first tag and drops every component after it. TSX parses all
+    // of JavaScript, so only .ts, where `<T>value` casts conflict with JSX, keeps
+    // the TypeScript grammar.
+    const isJsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
+    const language = isJsxFile || file.endsWith(".js") ? tsxLang : tsLang;
+    // Walking a tree is the slow part, not parsing it. Large plain .ts files hold
+    // data, not components: Bluesky's 55 cost about 3 s of CPU and add no names,
+    // while its 13 large .tsx files are real screens. A large .js file can be a
+    // minified bundle, whose one-letter function names would be indexed as the
+    // app's components, so it keeps the small limit too.
+    if (source.length > (isJsxFile ? MAX_JSX_FILE_CHARS : DEFAULT_PARSE_BUFFER_CHARS)) continue;
 
     let tree: { rootNode: TreeSitterNode };
     try {
       const parser = new ParserClass();
       parser.setLanguage(language);
-      tree = parser.parse(source);
+      // The binding's default buffer rejects larger files with "Invalid argument".
+      // The size is in UTF-16 code units, plus one for the terminator.
+      tree = parser.parse(source, undefined, { bufferSize: source.length + 1 });
     } catch {
       continue;
     }
 
-    // Names wrapped by a cross-referenced memo() call anywhere in this file.
-    const memoizedNames = collectMemoizedNames(tree.rootNode);
+    let memoizedNames: ReturnType<typeof collectMemoizedNames>;
+    try {
+      memoizedNames = collectMemoizedNames(tree.rootNode);
+    } catch {
+      // A generated expression can nest past the stack limit; skip that file, not the index.
+      continue;
+    }
 
     function findComponents(node: TreeSitterNode): void {
       if (node.type === "function_declaration") {
@@ -328,12 +412,15 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
     try {
       findComponents(tree.rootNode);
     } catch {
-      // ignore parse errors for individual files
+      /* best-effort */
     }
   }
 
+  const isBundled = bundledFilter(files, platform);
   for (const [name, entries] of candidates) {
-    const { primary, others } = pickPrimary(entries);
+    const bundled = entries.filter(({ file }) => isBundled(file));
+    if (bundled.length === 0) continue;
+    const { primary, others } = pickPrimary(name, bundled, platform, nestedPackages);
     index.set(name, others.length > 0 ? { ...primary, otherMatches: others } : primary);
   }
 

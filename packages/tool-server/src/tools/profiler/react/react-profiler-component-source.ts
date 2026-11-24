@@ -3,44 +3,58 @@ import { promises as fs } from "fs";
 import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { astLookupCandidates } from "../../../utils/react-profiler/component-names";
+
+/**
+ * A project tree can't ride along in a tool call, so `kind: "directory"` fails
+ * a remote caller whose checkout isn't mirrored on this host, instead of
+ * indexing nothing and reporting "component not found" for everything.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "directory" },
+];
 
 const zodSchema = z.object({
   component_name: z.string().describe("Name of the React component to look up"),
   project_root: z.string().describe("Absolute path to the RN project root"),
 });
 
-/**
- * The AST lookup scans the whole project tree, which can't ride along in a
- * tool call — so the boundary gates on the directory existing on this host. A
- * remote caller whose checkout isn't mirrored here gets an actionable error
- * instead of a silent empty index ("component not found" for everything).
- */
-const fileInputs: FileInputSpec[] = [
-  { target: "project_root", path: "${project_root}", kind: "directory" },
-];
-
 export const reactProfilerComponentSourceTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
-  description: `Find a React component's source via tree-sitter AST lookup: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
+  description: `Find a named React component's source in the project: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source.
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
-When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col) — check it before assuming the returned file is the one you meant.`,
+When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
   zodSchema,
-  // Companion to react-profiler-analyze. Carries the same RN-only capability
-  // declaration as the rest of react-profiler-* for intent-clarity, even
-  // though the HTTP gate is a no-op here (the tool takes no device_id, so
-  // there's nothing for the gate to inspect). An LLM agent reading the tool
-  // catalogue should see this is paired with the other react-profiler tools
-  // and not reach for it on a Chromium app.
+  readOnly: true,
+  // react-profiler-analyze runs the same AST lookup for each component in its
+  // table (file, line and other matches) and adds the source of the located ones
+  // among the top five; agents read any other file themselves. The SDK still
+  // calls it.
+  hideFromMcp: true,
+  interaction: {
+    startedMsg: ({ params }) => `Finding source for ${params.component_name}`,
+    completedMsg: ({ params, result }) =>
+      `${result.found ? "Found" : "Could not find"} source for ${params.component_name}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to find source for ${params.component_name}: ${failureSignal.error_code}`,
+  },
+  // Declared so the tool catalogue groups this with the other react-profiler-*
+  // tools; the HTTP gate itself is a no-op here, as there is no device arg to
+  // inspect.
   capability: RN_ONLY_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
-    const entry = astIndex.index.get(params.component_name);
+    // The profiler reports DevTools names (`Forget(Foo)`); the index is keyed on
+    // source identifiers (`Foo`).
+    const lookupKeys = astLookupCandidates(params.component_name);
+    const matchedKey = lookupKeys.find((k) => astIndex.index.has(k));
+    const entry = matchedKey ? astIndex.index.get(matchedKey) : undefined;
 
     if (!entry) {
       if (!astIndex.treeSitterAvailable) {
@@ -56,7 +70,14 @@ When several files define a component with the same name (e.g. platform variants
       return {
         found: false,
         component: params.component_name,
-        message: `Component "${params.component_name}" not found in ${params.project_root} (searched ${astIndex.indexedFiles} files).`,
+        message:
+          `Component "${params.component_name}" not found in ${params.project_root} ` +
+          `(searched ${astIndex.indexedFiles} files; also tried ${
+            lookupKeys
+              .slice(1)
+              .map((k) => `"${k}"`)
+              .join(", ") || "no variants"
+          }).`,
       };
     }
 
@@ -68,12 +89,15 @@ When several files define a component with the same name (e.g. platform variants
       const endLine = Math.min(lines.length, startLine + 50);
       source = lines.slice(startLine, endLine).join("\n");
     } catch {
-      // non-fatal — file may have been renamed or deleted
+      // file may have been renamed or deleted
     }
 
     return {
       found: true,
-      component: params.component_name,
+      // The key that matched, so the caller sees when a wrapped name resolved
+      // through to a bare source identifier.
+      component: matchedKey ?? params.component_name,
+      requested: params.component_name,
       file: entry.file,
       line: entry.line,
       col: entry.col,

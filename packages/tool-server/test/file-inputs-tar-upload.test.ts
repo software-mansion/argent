@@ -1,12 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { FILE_INPUT_MARKER, type FileInputSpec } from "@argent/registry";
+import { FILE_INPUT_MARKER, flowMemberKey, type FileInputSpec } from "@argent/registry";
+import { createArchiveFile } from "@argent/archive";
 import { resolveFileInputs, type UploadEntry } from "../src/file-inputs";
+import { redirectTmpdir } from "./helpers/tmpdir-env";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 const execFileAsync = promisify(execFile);
 
@@ -16,7 +23,13 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tar-dir-test-"));
 });
 
+// A tar upload extracts into its own temp dir, released only by the cleanup
+// resolveFileInputs returns — the dispatcher's job in production, this list's
+// here.
+const cleanups: Array<() => Promise<void>> = [];
+
 afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -97,7 +110,11 @@ describe("resolveFileInputs — tar-upload kind", () => {
         { appPath: wire({ path: appDir, size: st.size, mtimeMs: 0 }) },
         () => undefined
       )
-    ).rejects.toThrow(/no upload was provided/);
+    ).rejects.toThrow(
+      `Path "${appDir}" no longer matches the file the client read: its size or ` +
+        `modification time changed, and the client uploaded none. If a build is still ` +
+        `writing it, call again once the build finishes.`
+    );
   });
 
   it("resolves a file in place when it exists on this host with matching stat", async () => {
@@ -124,7 +141,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
     const uploadId = "prefer-upload";
     const entry = await uploadEntry(tarPath);
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       {
         appPath: wire({
@@ -139,6 +156,7 @@ describe("resolveFileInputs — tar-upload kind", () => {
       },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     expect(await fs.readFile(path.join(args.appPath as string, "MyApp"), "utf8")).toBe(
       "upload-bytes"
@@ -167,17 +185,36 @@ describe("resolveFileInputs — tar-upload kind", () => {
     await expect(fs.stat(resolvedPath)).rejects.toThrow();
   });
 
+  it("extracts a zstd upload", async () => {
+    const appDir = await makeFakeApp();
+    const tarPath = path.join(tmpDir, "upload.tar.zst");
+    await createArchiveFile(appDir, tarPath, "zstd");
+    const entry = await uploadEntry(tarPath);
+
+    const { args, cleanup } = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wireUpload("/client/MyApp.app", "u-zstd", entry) },
+      (id) => (id === "u-zstd" ? entry : undefined)
+    );
+    cleanups.push(cleanup);
+
+    expect(await fs.readFile(path.join(args.appPath as string, "Info.plist"), "utf8")).toBe(
+      "<plist/>"
+    );
+  });
+
   it("extracts an uploaded single file (e.g. an .apk) and returns its path", async () => {
     const apk = await makeFakeApk("app.apk");
     const tarPath = await tarApp(apk);
     const uploadId = "test-upload-id-apk";
     const entry = await uploadEntry(tarPath);
 
-    const { args, fileInputs } = await resolveFileInputs(
+    const { args, fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       { appPath: wireUpload("/client/app.apk", uploadId, entry) },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     const resolvedPath = args.appPath as string;
     expect(path.basename(resolvedPath)).toBe("app.apk");
@@ -192,11 +229,12 @@ describe("resolveFileInputs — tar-upload kind", () => {
     const uploadId = "test-upload-id-sidecar";
     const entry = await uploadEntry(tarPath);
 
-    const { args } = await resolveFileInputs(
+    const { args, cleanup } = await resolveFileInputs(
       { fileInputs: TAR_UPLOAD_SPEC },
       { appPath: wireUpload("/client/MyApp.app", uploadId, entry) },
       (id) => (id === uploadId ? entry : undefined)
     );
+    cleanups.push(cleanup);
 
     const resolvedPath = args.appPath as string;
     expect(path.basename(resolvedPath)).toBe("MyApp.app");
@@ -215,21 +253,56 @@ describe("resolveFileInputs — tar-upload kind", () => {
       (id) => (id === uploadId ? entry : undefined)
     );
 
+    cleanups.push(cleanup);
+
     // tar should already be removed by resolveOne after extraction
     await expect(fs.stat(tarPath)).rejects.toThrow();
     await cleanup();
   });
 
-  it("fails with guidance when remote but no uploadId provided", async () => {
+  it("says a path the client sent no stat for was not found, with advice for pre-0.16 clients", async () => {
     const ghost = path.join(tmpDir, "NotHere.app");
 
-    await expect(
-      resolveFileInputs(
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: ghost }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "${ghost}" was not found. The client sent no file for it, and the ` +
+        `tool-server host has none at that path. If the file is on the client, update ` +
+        `argent there: versions before 0.16 do not send it.`
+    );
+  });
+
+  it.each(["~/dl/MyApp.app", "$HOME/dl/MyApp.app", "file:///dl/MyApp.app"])(
+    "says %s is not an absolute path instead of advising an update",
+    async (spelled) => {
+      const err = await resolveFileInputs(
         { fileInputs: TAR_UPLOAD_SPEC },
-        { appPath: wire({ path: ghost }) },
+        { appPath: wire({ path: spelled }) },
         () => undefined
-      )
-    ).rejects.toThrow(/no upload was provided/);
+      ).catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe(
+        `Path "${spelled}" is not an absolute path. Nothing expands "~", variables, ` +
+          `commands or URLs in a file argument, so pass the file's absolute path.`
+      );
+    }
+  );
+
+  it("says a plain relative path is resolved against the tool-server's working directory", async () => {
+    const err = await resolveFileInputs(
+      { fileInputs: TAR_UPLOAD_SPEC },
+      { appPath: wire({ path: "build/MyApp.app" }) },
+      () => undefined
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toBe(
+      `Path "build/MyApp.app" is not an absolute path. The tool-server resolves a relative path ` +
+        `against its own working directory, so pass the file's absolute path.`
+    );
   });
 
   it("fails when uploadId is set without contentHash", async () => {
@@ -317,5 +390,212 @@ describe("resolveFileInputs — tar-upload kind", () => {
     ).rejects.toThrow();
 
     await expect(fs.stat(corruptTar)).rejects.toThrow(); // removed despite the failure
+  });
+});
+
+describe("resolveFileInputs — flow members sent through POST /upload", () => {
+  const FLOWS = "/client/proj/.argent/flows";
+  const FLOW_SPEC: FileInputSpec[] = [
+    { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
+  ];
+
+  /** Hands each entry over once, as the upload store of the HTTP layer does. */
+  function uploadStore(entries: Record<string, UploadEntry>) {
+    const pending = new Map(Object.entries(entries));
+    const lookup = (id: string): UploadEntry | undefined => {
+      const entry = pending.get(id);
+      pending.delete(id);
+      return entry;
+    };
+    return { pending, lookup };
+  }
+
+  /** The client's tar of one fragment, as POST /upload stores it. */
+  async function fragmentUpload(name: string, write: (file: string) => Promise<void>) {
+    const dir = await fs.mkdtemp(path.join(tmpDir, "fragment-"));
+    await write(path.join(dir, name));
+    const tarPath = path.join(dir, `${name}.tar.gz`);
+    await execFileAsync("tar", ["-czf", tarPath, "-C", dir, name]);
+    return uploadEntry(tarPath);
+  }
+
+  function member(name: string, uploadId: string, entry: UploadEntry, extra = {}) {
+    return {
+      role: "flow",
+      key: flowMemberKey(FLOWS, name),
+      path: `${FLOWS}/${name}`,
+      canonical: `${FLOWS}/${name}`,
+      spelling: { state: "listed" },
+      uploadId,
+      contentHash: entry.sha256,
+      ...extra,
+    };
+  }
+
+  function flowWire(members: unknown[]) {
+    const yaml = "steps:\n  - run: a.yaml\n";
+    return wire({
+      path: `${FLOWS}/root.yaml`,
+      size: Buffer.byteLength(yaml),
+      content: Buffer.from(yaml).toString("base64"),
+      canonical: `${FLOWS}/root.yaml`,
+      spelling: { state: "listed" },
+      members,
+    });
+  }
+
+  const FRAGMENT = "steps:\n  - echo: fragment\n";
+
+  it("keeps the text of an uploaded member and removes its upload", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { fileInputs, cleanup } = await resolveFileInputs(
+      { fileInputs: FLOW_SPEC },
+      {
+        e2e_test_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]),
+      },
+      store.lookup
+    );
+    cleanups.push(cleanup);
+
+    expect(fileInputs!.e2e_test_path!.members).toEqual({
+      [flowMemberKey(FLOWS, "a.yaml")]: {
+        role: "flow",
+        state: "present",
+        canonical: `${FLOWS}/a.yaml`,
+        spelling: { state: "listed" },
+        text: FRAGMENT,
+      },
+    });
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
+  });
+
+  it("fails when the uploaded member disagrees with the size the client recorded", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { e2e_test_path: flowWire([member("a.yaml", "a", a, { size: 5 })]) },
+        uploadStore({ a }).lookup
+      )
+    ).rejects.toThrow(`is ${Buffer.byteLength(FRAGMENT)} bytes but the client recorded 5`);
+  });
+
+  it("fails on an uploaded member over the limit without reading it", async () => {
+    // Sparse, so the tar stays small while the file it holds is over the limit.
+    const big = await fragmentUpload("big.yaml", async (file) => {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, 32 * 1024 * 1024 + 1);
+    });
+    vi.mocked(fs.readFile).mockClear();
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { e2e_test_path: flowWire([member("big.yaml", "big", big)]) },
+        uploadStore({ big }).lookup
+      )
+    ).rejects.toThrow("exceeds the 33554432-byte file-input limit");
+    const read = vi.mocked(fs.readFile).mock.calls.map(([file]) => String(file));
+    expect(read.filter((file) => file.endsWith("big.yaml"))).toEqual([]);
+  });
+
+  it("fails once the uploaded members pass the limit together, without reading the rest", async () => {
+    // Sparse, so each tar stays small while the members together pass the limit.
+    const sparse = (bytes: number) => async (file: string) => {
+      await fs.writeFile(file, "");
+      await fs.truncate(file, bytes);
+    };
+    const [a, b, c] = await Promise.all([
+      fragmentUpload("a.yaml", sparse(20 * 1024 * 1024)),
+      fragmentUpload("b.yaml", sparse(20 * 1024 * 1024)),
+      fragmentUpload("c.yaml", (file) => fs.writeFile(file, FRAGMENT)),
+    ]);
+    const store = uploadStore({ a: a!, b: b!, c: c! });
+    // Extract dirs go to os.tmpdir(), so one that stays shows here.
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-tar-upload-scan-"));
+    const restoreTmpdir = redirectTmpdir(scratch);
+    vi.mocked(fs.readFile).mockClear();
+
+    try {
+      await expect(
+        resolveFileInputs(
+          { fileInputs: FLOW_SPEC },
+          {
+            e2e_test_path: flowWire([
+              member("a.yaml", "a", a!),
+              member("b.yaml", "b", b!),
+              member("c.yaml", "c", c!),
+            ]),
+          },
+          store.lookup
+        )
+      ).rejects.toThrow("exceeds the 33554432-byte limit for the members of one call");
+
+      const read = vi.mocked(fs.readFile).mock.calls.map(([file]) => path.basename(String(file)));
+      expect(read).toEqual(["a.yaml"]);
+      expect(await fs.readdir(scratch)).toEqual([]);
+      expect([...store.pending.keys()]).toEqual([]);
+      for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+    } finally {
+      restoreTmpdir();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the upload of a member is not on the tool-server", async () => {
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        { e2e_test_path: flowWire([member("a.yaml", "expired", a)]) },
+        uploadStore({}).lookup
+      )
+    ).rejects.toThrow(/Upload "expired" was not found on the tool-server/);
+  });
+
+  it("removes the uploads of the later members when one member fails", async () => {
+    const write = (file: string) => fs.writeFile(file, FRAGMENT);
+    const [a, b, c] = await Promise.all(
+      ["a.yaml", "b.yaml", "c.yaml"].map((name) => fragmentUpload(name, write))
+    );
+    const store = uploadStore({ a: a!, b: b!, c: c! });
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FLOW_SPEC },
+        {
+          e2e_test_path: flowWire([
+            member("a.yaml", "a", a!, { contentHash: "0".repeat(64) }),
+            member("b.yaml", "b", b!),
+            member("c.yaml", "c", c!),
+          ]),
+        },
+        store.lookup
+      )
+    ).rejects.toThrow(/content hash mismatch/i);
+
+    expect([...store.pending.keys()]).toEqual([]);
+    for (const entry of [a!, b!, c!]) await expect(fs.stat(entry.tarPath)).rejects.toThrow();
+  });
+
+  it("removes the uploads of a wire that the call does not resolve", async () => {
+    // name + e2e_test_path: the tool reports the two sources, so the closure that
+    // came with e2e_test_path is never read.
+    const a = await fragmentUpload("a.yaml", (file) => fs.writeFile(file, FRAGMENT));
+    const store = uploadStore({ a });
+
+    const { args } = await resolveFileInputs(
+      { fileInputs: [{ ...FLOW_SPEC[0]!, unwrapWhenSet: "name" }] },
+      { name: "saved", e2e_test_path: flowWire([member("a.yaml", "a", a)]) },
+      store.lookup
+    );
+
+    expect(args.e2e_test_path).toBe(`${FLOWS}/root.yaml`);
+    expect([...store.pending.keys()]).toEqual([]);
+    await expect(fs.stat(a.tarPath)).rejects.toThrow();
   });
 });

@@ -1,23 +1,12 @@
 /**
- * Best-effort demangler for native (Itanium C++ ABI) symbol names that appear
- * in Perfetto/perf stacks. Perf stores frame names mangled, so a drill-down
- * stack reads like `_ZN16GrDrawingManager5flushE6SkSpan...` — accurate but hard
- * to read. We turn the common forms into `GrDrawingManager::flush` while
- * staying conservative: anything we cannot confidently parse is returned
- * unchanged, so we never corrupt a name (kernel C symbols, JIT frames, template
- * soup all pass through verbatim).
- *
- * This deliberately handles only the subset that dominates real stacks
- * (nested-names and plain function names, with the argument list dropped). It
- * is NOT a full Itanium demangler — substitutions, templates, and special
- * names bail out to the raw string rather than risk a wrong answer.
+ * Best-effort demangler for Itanium C++ ABI symbols in Perfetto/perf stacks.
+ * Not a full demangler: it handles nested-names and plain function names (with
+ * the argument list dropped), and returns anything else — templates,
+ * substitutions, special names, kernel C symbols — unchanged rather than risk
+ * a wrong name.
  */
 
-/**
- * Trailing compiler-internal suffixes hung off a symbol by LLVM/GCC, e.g.
- * `...trampolinePv.__uniq.2640...290.c303f2d2` or `.llvm.123` or `.cold`.
- * They carry no user-facing meaning and bloat the stack lines.
- */
+/** Trailing LLVM/GCC-internal suffixes (`.llvm.123`, `.cold`, …); noise to a reader. */
 const INTERNAL_SUFFIX =
   /\.(?:__uniq\.[0-9]+(?:\.[0-9a-f]+)?|llvm\.[0-9]+|part\.[0-9]+|cold(?:\.[0-9]+)?|constprop\.[0-9]+|isra\.[0-9]+)$/;
 
@@ -37,7 +26,7 @@ interface Cursor {
   i: number;
 }
 
-/** Read a `<decimal-length><identifier>` source-name. Returns null if malformed. */
+/** Read a `<decimal-length><identifier>` source-name; null if malformed. */
 function readSourceName(c: Cursor): string | null {
   let len = 0;
   let digits = 0;
@@ -66,8 +55,7 @@ function readNestedName(c: Cursor): string | null {
       continue;
     }
     const name = readSourceName(c);
-    // A non-source-name component (template `I`, substitution `S`, operator,
-    // ctor/dtor `C`/`D`, …) — bail rather than guess.
+    // A non-source-name component (`I`, `S`, `C`/`D`, operator, …) — bail rather than guess.
     if (name === null) return null;
     parts.push(name);
   }
@@ -75,17 +63,13 @@ function readNestedName(c: Cursor): string | null {
   return parts.join("::");
 }
 
-/**
- * Demangle a single symbol. Returns the readable name, or the original string
- * (sans internal suffix when it was clearly one) if it is not a mangled name we
- * understand.
- */
+/** Demangle a single symbol, or return `name` verbatim if it cannot be parsed. */
 export function demangleSymbol(name: string): string {
   if (!name) return name;
   const stripped = stripInternalSuffix(name);
   if (!stripped.startsWith("_Z")) {
-    // Plain C / kernel symbol — return as-is (keep the original, suffix and all,
-    // since for non-mangled names the "suffix" may be meaningful).
+    // Not mangled: return the original, suffix and all — here the "suffix" may be
+    // part of the real name.
     return name;
   }
   const c: Cursor = { s: stripped, i: 2 };
@@ -97,14 +81,13 @@ export function demangleSymbol(name: string): string {
   } else {
     parsed = readSourceName(c);
   }
-  if (!parsed) return name; // couldn't parse confidently — leave it raw
+  if (!parsed) return name;
   return parsed;
 }
 
 /**
- * Demangle every frame in a ` <- `-joined callstack string (the format produced
- * by function-callers.sql / hang-main-thread-samples.sql). Separator and order
- * are preserved.
+ * Demangle every frame of a ` <- `-joined callstack, the format produced by
+ * function-callers.sql / hang-main-thread-samples.sql.
  */
 export function demangleCallstackText(text: string): string {
   return text

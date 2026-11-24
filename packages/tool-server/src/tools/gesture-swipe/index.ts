@@ -1,103 +1,312 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { dragBetween, getViewport, toPoints } from "../../utils/ios-device/runner-commands";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import {
+  HARMONY_INTERACTION_TIMEOUT_MS,
+  assertHarmonyDisplayReady,
+  harmonyDisplay,
+  holdUitestQueue,
+  HARMONY_DISPLAY_TIMEOUT_MS,
+  remainingBudget,
+  toDevicePoint,
+} from "../../utils/harmony-uitest";
+import { ensureDep } from "../../utils/check-deps";
 import { sendCommand } from "../../utils/simulator-client";
 import {
   describeVerify,
+  joinWarnings,
   runWithDeliveryVerification,
   type DeliveryCheck,
 } from "../../utils/touch-verification";
-import { sleep } from "../../utils/timing";
 
-// Ease-out exponent for a `settle` swipe. The finger follows 1-(1-t)^n rather
-// than a straight line, so it decelerates into the end point and lifts at ~0
-// velocity — the scroll view then skips its fling. Cubic gives a fast glide that
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Ease-out exponent for a `momentum: false` swipe: cubic glides fast then
 // flattens over the final frames; a higher exponent would linger longer at rest.
-const SETTLE_EASE_EXPONENT = 3;
+const MOMENTUM_FREE_EASE_EXPONENT = 3;
 
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
-  fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
-  toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
-  toY: z.number().describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
-  durationMs: z
-    .number()
-    .optional()
-    .describe("Total gesture duration in milliseconds (default 300)"),
-  settle: z
-    .boolean()
-    .optional()
-    .describe(
-      "Momentum-free swipe: decelerate into the end point (ease-out) so the OS reads ~0 release velocity and applies little to no fling. Use for scroll-to-element loops; default false (a natural flinging swipe)."
-    ),
-  verify: z
-    .boolean()
-    .optional()
-    .describe(
-      describeVerify("swipe", {
-        tail:
-          "Frame-diff heuristic: a swipe on content already scrolled to its end can legitimately " +
-          "change nothing.",
-      })
-    ),
-});
+const DEFAULT_DURATION_MS = 300;
 
-type Params = z.infer<typeof zodSchema>;
+// Wall clock a `momentum: false` swipe needs. Both OS velocity trackers fit a
+// curve to the last frames before the lift; given less elapsed time they read
+// the ease-out as a flick and fling harder than a plain swipe - on Android,
+// backwards. 150ms only makes that rare (2 of 47 runs); the quiet regime starts
+// nearer 300ms. Refused rather than floored the way `gesture-drag` floors its
+// step count, because every frame here is a real 16ms sleep and a floor would
+// quietly stretch a 16ms gesture to 150ms.
+const MOMENTUM_FREE_MIN_DURATION_MS = 150;
+
+// Ceiling on the travel time. Every frame below is a real 16ms sleep with the
+// finger held down, so durationMs is wall clock both the run and the device
+// spend under a touch neither can shake off - and 1e21, finite and positive, is
+// a loop that outlives the client and feeds the simulator until the tool-server
+// restarts. 10s is the envelope `rotate:` derives MAX_DERIVED_ROTATE_MS from,
+// applied to the same thing: one finger-down-to-lift stroke.
+const MAX_DURATION_MS = 10_000;
 
 interface Result extends DeliveryCheck {
   swiped: boolean;
   timestampMs: number;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this swipe, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
+  /**
+   * Foldable iOS simulators only: the panel the device renders to could not
+   * be resolved, so the swipe went to the cover panel. Says why and what to check.
+   * Also carries the delivery-check warning (see `DeliveryCheck`).
+   */
+  warning?: string;
 }
 
-// Touch platforms only. A desktop renderer has no touch swipe: a mouse drag
-// selects text instead of scrolling, so Chromium callers use the dedicated
-// `gesture-scroll` tool (wheel-based) and the capability gate rejects this
-// one with a clear error rather than silently doing the wrong thing.
+// Touch platforms only: on a desktop renderer a mouse drag selects text instead
+// of scrolling, so Chromium callers use `gesture-scroll` (wheel-based) instead.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  harmony: { device: true },
 };
+
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .describe(
+        "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      ),
+    fromX: z.number().min(0).max(1).describe("Start x."),
+    fromY: z.number().min(0).max(1).describe("Start y."),
+    toX: z.number().min(0).max(1).describe("End x."),
+    toY: z.number().min(0).max(1).describe("End y."),
+    durationMs: z
+      .number()
+      .max(MAX_DURATION_MS, {
+        message: `durationMs must be at most ${MAX_DURATION_MS} (10s): every frame is a real 16ms sleep with the finger held down, so a larger value is that many milliseconds of wall clock spent holding a touch the device cannot shake off.`,
+      })
+      .optional()
+      .describe(
+        "Total gesture duration in milliseconds (default 300); the finger stays down this long. Below ~32ms the whole travel lands in one or two frames, which the OS flings as hard as any flick."
+      ),
+    momentum: z
+      .boolean()
+      .optional()
+      .describe(
+        `Whether the swipe releases with momentum; default true (a natural flinging swipe). false eases the finger into the end point so the OS applies little to no fling and the content stops where the finger lifts: use it when you need a deterministic scroll distance, e.g. in scroll-to-element loops. false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below that; near ${MOMENTUM_FREE_MIN_DURATION_MS} it can still land short or fling, so keep the default 300.`
+      ),
+    verify: z
+      .boolean()
+      .optional()
+      .describe(
+        describeVerify("swipe", {
+          tail:
+            "iOS simulator and Android only. It is a frame-diff heuristic: a swipe on content " +
+            "already scrolled to its end can change nothing.",
+        })
+      ),
+    // `momentum`'s shipped spelling, with the opposite polarity. Declared so this
+    // non-strict object refuses it instead of stripping it and flinging - the exact
+    // inverse of the gesture the caller asked for.
+    settle: z
+      .never({
+        error:
+          "gesture-swipe's `settle` was renamed to `momentum`, with the opposite sense — write `momentum: false` for the momentum-free swipe that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
+      })
+      .optional()
+      .describe(
+        "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key."
+      ),
+  })
+  .refine(
+    (p) =>
+      p.momentum !== false ||
+      (p.durationMs ?? DEFAULT_DURATION_MS) >= MOMENTUM_FREE_MIN_DURATION_MS,
+    {
+      message: `momentum: false needs durationMs of at least ${MOMENTUM_FREE_MIN_DURATION_MS}: below that the ease-out has too little wall clock for the OS velocity fit to read it as a stop rather than a flick, so it flings harder than a plain swipe and, on Android, backwards. Raise durationMs, or drop momentum: false for a plain flinging swipe at the duration you asked for.`,
+      path: ["durationMs"],
+    }
+  );
+
+type Params = z.infer<typeof zodSchema>;
 
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
-  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
-Generates interpolated Move events for a natural feel (~60fps).
+  // Never interpolate into this description: extract-tools scans it statically,
+  // so a `${}` in it drops the tool out of the scan.
+  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or physical device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Android emulator). All from/to positions are fractions of screen width/height (not pixels), same as gesture-tap.
+Generates interpolated Move events for a natural feel (~60fps)<flag:harmonyos>; HarmonyOS takes the whole gesture in one call and interpolates it on-device</flag:harmonyos>.
 Swipe up (fromY > toY) to scroll content down.
-Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead.
-Pass settle:true for a momentum-free swipe that lands exactly where the finger lifts (no fling), when you need a deterministic scroll distance. Returns { swiped: true, timestampMs }. Touches are automatically delivery-verified until one is confirmed landed (a wedged iOS simulator can accept touches but silently drop them) — usually just the first per device session, but a touch that changes nothing keeps the check on, since that repeat is the wedge signal: when a check runs the result also carries 'verified' and, if the screen never changed, a 'warning'. The warning only names recover-touch-injection on a local iOS simulator, and only once a no-change repeats or verify:true was passed. verify:true forces the check, verify:false skips it. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
-  alwaysLoad: true,
-  searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
+Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.<flag:macos-apps> Not supported on a Mac app; use gesture-scroll or gesture-drag there.</flag:macos-apps>
+Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.<flag:harmonyos>
+HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a short slow swipe ends early and a long fast one runs late.</flag:harmonyos>
+Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator or Android, swipes are checked against the screen until one changes it: verified: false and a warning mean the screen did not change (see the verify parameter). Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
   zodSchema,
+  alwaysLoad: true,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
+  searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
+  interaction: {
+    startedMsg: ({ params }) =>
+      `Swiping from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    completedMsg: ({ params }) =>
+      `Swiped from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
+    failedMsg: ({ failureSignal }) => `Failed to swipe: ${failureSignal.error_code}`,
+  },
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const duration = params.durationMs ?? 300;
-    const settle = params.settle ?? false;
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    // No simulator-server controller exists for HarmonyOS.
+    if (device.platform === "harmony") return {};
+
+    if (isIosPhysicalDevice(device)) {
+      return { iosDeviceRunner: iosDeviceRunnerRef(device) };
+    }
+
+    return { simulatorServer: simulatorServerRef(device) };
+  },
+  async execute(services, params, ctx?: ToolContext) {
+    const duration = params.durationMs ?? DEFAULT_DURATION_MS;
+    const momentumFree = params.momentum === false;
+    const timestampMs = Date.now();
+    const device = resolveDevice(params.udid);
+
+    // HarmonyOS: one `uitest uiInput` call interpolates on-device.
+    if (device.platform === "harmony") {
+      await ensureDep("hdc");
+      const connectKey = harmonyConnectKey(device.id);
+      const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
+      // Prefilter without queueing; the trusted check is inside the hold.
+      const display = await harmonyDisplay(connectKey);
+      assertHarmonyDisplayReady(display, "swipe");
+      await holdUitestQueue(
+        connectKey,
+        deadline,
+        async (ui) => {
+          // Re-read: the geometry of a foldable may have changed while queued.
+          const live = await harmonyDisplay(
+            connectKey,
+            Math.min(
+              HARMONY_DISPLAY_TIMEOUT_MS,
+              remainingBudget(connectKey, deadline, "the display re-read")
+            )
+          );
+          assertHarmonyDisplayReady(live, "swipe");
+          const fromPx = toDevicePoint(params.fromX, params.fromY, live);
+          const toPx = toDevicePoint(params.toX, params.toY, live);
+          const distance = Math.hypot(toPx.x - fromPx.x, toPx.y - fromPx.y);
+          const seconds = Math.max(duration, 1) / 1000;
+          await ui.swipe(momentumFree ? "swipe" : "fling", fromPx, toPx, distance / seconds);
+        },
+        ctx?.signal
+      );
+      return { swiped: true, timestampMs };
+    }
+
+    if (isIosPhysicalDevice(device)) {
+      // XCTest is one planned drag. momentum: false holds at the destination,
+      // so the release velocity is then zero.
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+
+      const drag = await dragBetween(
+        runner,
+        bundleId,
+        toPoints(viewport, params.fromX, params.fromY),
+        toPoints(viewport, params.toX, params.toY),
+        { durationMs: duration, settle: momentumFree }
+      );
+      // Either leg can be the one that re-fronted a backgrounded target: the
+      // viewport read fronts it first, so the drag then finds it foreground.
+      const reactivated = viewport.reactivated === true || drag.reactivated;
+
+      return {
+        swiped: true,
+        timestampMs,
+        ...(reactivated ? { reactivated: true as const } : {}),
+      };
+    }
+
+    const api = services.simulatorServer as SimulatorServerApi;
+    // No sample floor on this ramp, unlike `momentum: false` above: a fast swipe
+    // is delivered as fast as it was authored. At durationMs 16 the whole travel
+    // is one Move, the hardest flick either OS can be handed, but the fling
+    // saturates at the platform's own ceiling rather than at anything invented
+    // here. Flooring the count would only turn durationMs into a lie.
+    const steps = Math.max(1, Math.round(duration / 16));
+    // Last dispatched sample, so an abort can lift from where the finger is.
+    let warning: string | undefined;
+    let lastX = 0;
+    let lastY = 0;
     // Re-stamped at the first Down: a verified swipe captures a frame first, and
     // profiler annotations anchor on this timestamp.
-    let timestampMs = Date.now();
-    const device = resolveDevice(params.udid);
-    const api = services.simulatorServer as SimulatorServerApi;
-    const steps = Math.max(1, Math.round(duration / 16));
-
+    let injectedAtMs = timestampMs;
     const injectSwipe = async () => {
-      timestampMs = Date.now();
+      injectedAtMs = Date.now();
+      // Neither touch backend delivers the Up's coordinates: on both, the finger
+      // lifts wherever the last Move landed. So the end point has to be repeated as
+      // a Move or the swipe lands short of where it was authored - a full step out
+      // for a plain swipe (50% at durationMs 32), (1/steps)^n for a momentum-free
+      // one. Unconditional, because the duplicate sample does not damp the iOS
+      // fling it used to be withheld for (806px with against 803px without, n=14).
       for (let i = 0; i <= steps; i++) {
+        // Every frame below is a 16ms sleep, so without this a cancelled run keeps
+        // driving the device for the rest of the duration, its samples interleaving
+        // into whatever gesture is sent to that device next.
+        if (ctx?.signal?.aborted) {
+          const err = new Error(
+            `gesture-swipe aborted - cancelled mid-gesture after ${i} of ${steps + 1} frames`
+          );
+          err.name = "AbortError";
+          // Down has already landed, so lift the finger before unwinding. Best
+          // effort - a cancel is often the device going away - so a lift that is
+          // refused rides along as the AbortError's `cause` rather than replacing
+          // it, which callers key on by name.
+          if (i > 0) {
+            try {
+              await sendCommand(api, {
+                cmd: "touch",
+                type: "Up",
+                x: lastX,
+                y: lastY,
+                second_x: null,
+                second_y: null,
+              });
+            } catch (liftErr) {
+              err.cause = liftErr;
+            }
+          }
+          throw err;
+        }
+
         const t = i / steps;
-        // A plain swipe advances linearly; `settle` eases-out so the finger lifts
-        // at ~0 velocity (no fling). Its decaying end-of-curve moves stay distinct
-        // (UIKit coalesces identical "hold" samples, which would leave the pre-hold
-        // velocity to fling) and every sample stays on-screen between the endpoints.
-        const progress = settle ? 1 - Math.pow(1 - t, SETTLE_EASE_EXPONENT) : t;
+        // A momentum-free swipe lifts at ~0 velocity, so the OS applies no fling.
+        // Ease-out beats a train of identical "hold" samples: those get coalesced
+        // away, leaving the fast pre-hold velocity to fling, and a beyond-the-end
+        // hold would run off-screen for a swipe that already finishes at an edge.
+        const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
         const x = params.fromX + (params.toX - params.fromX) * progress;
         const y = params.fromY + (params.toY - params.fromY) * progress;
         const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-        sendCommand(api, {
+        // In the Up's own frame, with no added sleep, so the cadence is unchanged.
+        if (type === "Up") {
+          await sendCommand(api, {
+            cmd: "touch",
+            type: "Move",
+            x,
+            y,
+            second_x: null,
+            second_y: null,
+          });
+        }
+        const sent = await sendCommand(api, {
           cmd: "touch",
           type,
           x,
@@ -105,11 +314,21 @@ Pass settle:true for a momentum-free swipe that lands exactly where the finger l
           second_x: null,
           second_y: null,
         });
+        // Only the Down resolves the panel; the rest of the sequence keeps it.
+        if (type === "Down") warning = sent.warning;
+        lastX = x;
+        lastY = y;
         if (i < steps) await sleep(16);
       }
     };
 
     const check = await runWithDeliveryVerification(api, params.verify, injectSwipe, device);
-    return { swiped: true, timestampMs, ...check };
+    warning = joinWarnings(warning, check.warning);
+    return {
+      swiped: true,
+      timestampMs: injectedAtMs,
+      ...(check.verified !== undefined ? { verified: check.verified } : {}),
+      ...(warning !== undefined ? { warning } : {}),
+    };
   },
 };

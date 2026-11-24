@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
@@ -24,6 +24,12 @@ import { createSourceResolver } from "../../src/utils/debugger/source-resolver";
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return { ...actual, realpath: vi.fn(actual.realpath), readFile: vi.fn(actual.readFile) };
+});
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("source-resolver with no project root (RN 0.72 / Vega Metro)", () => {
@@ -103,10 +109,10 @@ describe("source-resolver with no project root (RN 0.72 / Vega Metro)", () => {
 
   it("still resolves normally when Metro does report a project root", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "real-app-"));
+    tempDirs.push(root);
     fs.writeFileSync(path.join(root, "App.js"), "const OK = 'IN_PROJECT';\n");
     const r = createSourceResolver(8081, root);
     const out = await r.readSourceFragment({ file: "App.js", line: 1, column: 0 });
     expect(out).toContain("IN_PROJECT");
-    fs.rmSync(root, { recursive: true, force: true });
   });
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const describeFrameSchema = z.object({
+const describeFrameSchema = z.object({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().min(0).max(1),
@@ -9,40 +9,56 @@ export const describeFrameSchema = z.object({
 
 export type DescribeFrame = z.infer<typeof describeFrameSchema>;
 
+const describePointSchema = z.object({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+});
+
+type DescribePoint = z.infer<typeof describePointSchema>;
+
 export interface DescribeNode {
   role: string;
   frame: DescribeFrame;
   children: DescribeNode[];
   label?: string;
+  // The element's VoiceOver hint (iOS simulator). Not the same thing as the
+  // result-level `hint` on DescribeTreeData, which is a note about the read.
+  hint?: string;
   identifier?: string;
   value?: string;
-  // Text hoisted up from descendant nodes during the flow adapters' flatten
-  // pass (see flow-ios-tree / flow-android-tree). The flat-leaves shape
-  // discards nesting, so a testID container's own `label`/`value` is empty even
-  // when it visibly wraps text (e.g. a counter whose number is a child `Text`).
-  // `subtreeText` carries that descendant text so an `assert`/`text` check can
-  // read "what this container shows" without the structure. Only the flow trees
-  // populate it; the agent-facing describe path leaves it unset.
+  // Descendant text hoisted onto container leaves by the flow adapters'
+  // flatten (`flow-tree-flatten`): the flat shape drops the child that renders
+  // the text, so a flow `text` condition reads this for a testID container.
+  // The describe tool leaves it unset; the tree the await tools judge on a Mac
+  // app carries the flow tree's value.
   subtreeText?: string;
-  // Interactivity flags surfaced by the Android uiautomator dump. iOS
-  // consumers leave these unset; adding them as optional avoids breaking
-  // existing payloads. `scrollHidden` counts children that fell outside an
-  // ancestor scroll's clip rect — the agent should swipe before tapping.
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
+  // A scroll container's content window: `frame` less borders and scrollbars,
+  // where the source measures it (Chromium). Its content is clipped to this.
+  clipFrame?: DescribeFrame;
+  // Where scroll containers cut the element by more than a pixel (Chromium): the
+  // part of their window the clips above them leave showing, along each axis they
+  // cut it, and the whole screen along the other.
+  clipBounds?: DescribeFrame;
+  // Per axis a scroll container cuts the element along, where a wheel scrolls it
+  // against that scroller: a point hit-tested on screen, else the window's centre.
+  clipAnchors?: { x?: DescribePoint; y?: DescribePoint };
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
   password?: boolean;
+  // Children dropped for falling fully outside an ancestor scroll's clip rect
+  // — the agent should swipe before tapping.
   scrollHidden?: number;
-  // Vega (Fire TV) is D-pad driven, so "where is the cursor" is the key signal.
-  // `focused` is the element holding input focus; `selected` is the visually
-  // highlighted / active item (e.g. the current nav tab). On Vega the toolkit
-  // often reports the highlighted item via `selected` while `focused` stays
-  // false, so both are surfaced. Other platforms leave these unset.
+  // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
+  // A Mac app's stacking: 1 in a sheet, alert or popover, one more in each one
+  // attached over it, highest in an open menu, absent in a window. Of a
+  // selector's matches, the frontmost layer wins.
+  layer?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -52,12 +68,18 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       frame: describeFrameSchema,
       children: z.array(describeNodeSchema),
       label: z.string().optional(),
+      hint: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
+      clipFrame: describeFrameSchema.optional(),
+      clipBounds: describeFrameSchema.optional(),
+      clipAnchors: z
+        .object({ x: describePointSchema.optional(), y: describePointSchema.optional() })
+        .optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),
@@ -65,19 +87,18 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
+      layer: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );
 
-// Where the tree came from. "ax-service" / "native-devtools" come from iOS;
-// "uiautomator" / "android-devtools" come from Android; "cdp-dom" is the
-// Chromium branch's DOM walk over Chrome DevTools Protocol; "vega-automation"
-// is the Vega on-device automation toolkit; "tv-focus" is the focus-driven view
-// returned for a TV target (Apple TV / Android TV), which reports focused /
-// focusable elements rather than a tap-oriented tree. Agents that branch on
-// `source` (e.g. to decide whether to also call `native-find-views` for a
-// richer tree) need to distinguish each provider — which a shared label would
-// hide.
+// Where the tree came from. "ax-service" / "native-devtools": iOS.
+// "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
+// over Chrome DevTools Protocol. "vega-automation": the Vega on-device
+// automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
+// dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
+// Android TV), which reports focused / focusable elements rather than a
+// tap-oriented tree.
 export type DescribeSource =
   | "ax-service"
   | "native-devtools"
@@ -85,23 +106,57 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
-  | "tv-focus";
+  | "harmony-uitest"
+  | "tv-focus"
+  // Physical iOS: the XCUITest runner accessibility snapshot.
+  | "xcuitest-runner"
+  // A native Mac app: the in-app library's tree, and the one it reads while the
+  // Mac is locked.
+  | "macos-devtools"
+  | "macos-fallback";
 
-// Internal shape produced by the per-platform adapters. The `tree` is consumed
-// by the formatter in `format-tree.ts` and then dropped before the tool replies
-// — callers see `DescribeResult` below, which surfaces only the rendered text.
+// Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
+// callers get `DescribeResult` below, i.e. only the rendered text.
 export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
+  // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
+  // Each path writes this hint once.
   hint?: string;
+  // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
+  stale?: boolean;
+  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // so an element's absence proves nothing; `hint` says why.
+  partial?: boolean;
+  // Size the frames were normalized against, in the source's native units
+  // (Android px, iOS pt), so only the aspect ratio compares across sources —
+  // which is what the rotate directive's circle geometry reads it for. Set
+  // only by the flow tree adapters that know it.
+  screen?: { width: number; height: number };
+  // `tree` as a result may quote it, node for node, from the iOS simulator
+  // adapter once a secret was typed on the device: the text of each text input
+  // withheld, each typed value in a label named by its placeholder (see
+  // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
+  quotableTree?: DescribeNode;
 }
 
-// Public describe-tool response. The full JSON `tree` (the previous payload's
-// biggest cost — ~6× the byte size of the formatted rendering on a typical iOS
-// screen) is no longer surfaced; `description` is a text rendering produced by
-// `format-tree.ts` that preserves every label, role, and frame the agent needs
-// for taps.
+/** Interface orientation as UIKit names it, relative to the portrait-native screen. */
+export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";
+
+const UI_ORIENTATIONS: readonly UiOrientation[] = [
+  "portrait",
+  "portraitUpsideDown",
+  "landscapeLeft",
+  "landscapeRight",
+];
+
+export function asUiOrientation(v: unknown): UiOrientation | undefined {
+  return typeof v === "string" && (UI_ORIENTATIONS as readonly string[]).includes(v)
+    ? (v as UiOrientation)
+    : undefined;
+}
+
 export interface DescribeResult {
   description: string;
   source: DescribeSource;

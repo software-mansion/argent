@@ -2,23 +2,22 @@
 
 # Build native-devtools-ios dylibs for Argent.
 # ObjC source lives in the argent-private submodule at packages/argent-private.
-# Run from the workspace root: bash packages/native-devtools-ios/scripts/build.sh [dev|release] [--transport unix|tcp]
-# Or from this package: bash scripts/build.sh [dev|release] [--transport unix|tcp]
 #
 # Usage: build.sh [dev|release] [--transport unix|tcp]
 #   mode: dev (fast) or release (optimized, optional signing). Default: release.
 #   --transport: unix (default) builds against AF_UNIX sockets at /tmp/*.sock paths;
 #                tcp builds with -DARGENT_USE_TCP=1 so the dylib/daemon use AF_INET
-#                on 127.0.0.1 with a port. Artifacts go to dylibs/tcp/ and bin/tcp/
-#                so both variants can coexist.
+#                on 127.0.0.1 with a port, into dylibs/tcp/ and bin/tcp/ so both
+#                variants can coexist.
 #
 # Environment:
 #   PREBUILT_NATIVE_DEVTOOLS_IOS  - if set, copy this path to dylibs/ instead of building (CI on non-macOS)
 #   PREBUILT_KEYBOARD_PATCH       - same for keyboard patch dylib
 #   PREBUILT_INJECTION_BOOTSTRAP  - same for bootstrap dylib
+#   PREBUILT_ARGENT_AUDIO         - same for the audio mock dylib (unix transport only)
 #   PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS / PREBUILT_KEYBOARD_PATCH_TVOS /
 #   PREBUILT_INJECTION_BOOTSTRAP_TVOS - tvOS-slice counterparts, copied to
-#     dylibs/tvos/ on the prebuilt path (all three required together)
+#     dylibs/tvos/; all three required together on the prebuilt path
 #   PREBUILT_TVOS_AX_SERVICE / PREBUILT_TVOS_HID_DAEMON - prebuilt tvOS daemon binaries
 #   Release signing: set IDENTITY (or CODESIGN_IDENTITY), or for CI keychain import set
 #     CERTIFICATE, PRIVATE_KEY_BASE64, PRIVATE_KEY_PASSWORD, KEYCHAIN_PASSWORD, IDENTITY.
@@ -54,16 +53,15 @@ SRC_DIR="${SUBMODULE_DIR}/Sources/NativeDevtoolsIos"
 
 if [[ "$TRANSPORT" == "tcp" ]]; then
   DEST_DIR="${ROOT_DIR}/dylibs/tcp"
-  # Platform-neutral: the tcp ax-service is an iOS-sim binary uploaded to the
-  # remote macOS orchestrator, so it must be resolvable from any host platform
-  # (not nested under bin/darwin/). Matches tcpBinDir() in src/index.ts.
+  # Platform-neutral (not bin/darwin/): the tcp ax-service is an iOS-sim binary
+  # uploaded from any host to the remote macOS orchestrator. Matches tcpBinDir()
+  # in src/index.ts.
   BIN_DIR="${ROOT_DIR}/bin/tcp"
 else
   DEST_DIR="${ROOT_DIR}/dylibs"
   BIN_DIR="${ROOT_DIR}/bin/darwin"
 fi
 
-# Verify the submodule is initialised before trying to build.
 if [[ ! -d "${SRC_DIR}" ]]; then
   echo "Error: ObjC source not found at ${SRC_DIR}" >&2
   echo "       Run: git submodule update --init packages/argent-private" >&2
@@ -73,16 +71,18 @@ fi
 DEST_FILE="${DEST_DIR}/libNativeDevtoolsIos.dylib"
 DEST_FILE_KB="${DEST_DIR}/libKeyboardPatch.dylib"
 DEST_FILE_BS="${DEST_DIR}/libArgentInjectionBootstrap.dylib"
+DEST_FILE_AU="${DEST_DIR}/libArgentAudio.dylib"
 
-# If pre-built dylibs are provided, copy them and exit.
 if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PATCH:-}" ]] && [[ -n "${PREBUILT_INJECTION_BOOTSTRAP:-}" ]]; then
   echo "Using pre-built dylibs"
   mkdir -p "$DEST_DIR"
   cp "$PREBUILT_NATIVE_DEVTOOLS_IOS" "$DEST_FILE"
   cp "$PREBUILT_KEYBOARD_PATCH" "$DEST_FILE_KB"
   cp "$PREBUILT_INJECTION_BOOTSTRAP" "$DEST_FILE_BS"
-  # tvOS slice (dylibs/tvos/). Only on the unix transport — the tvOS dylibs have
-  # no TCP variant — and only when all three are supplied, since
+  if [[ "$TRANSPORT" == "unix" && -n "${PREBUILT_ARGENT_AUDIO:-}" ]]; then
+    cp "$PREBUILT_ARGENT_AUDIO" "$DEST_FILE_AU"
+  fi
+  # tvOS dylibs have no TCP variant, and all three must ship together because
   # InjectionBootstrap dlopen()s the other two from its own directory.
   if [[ "$TRANSPORT" == "unix" \
     && -n "${PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS:-}" \
@@ -94,12 +94,9 @@ if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PA
     cp "$PREBUILT_KEYBOARD_PATCH_TVOS" "${ROOT_DIR}/dylibs/tvos/libKeyboardPatch.dylib"
     cp "$PREBUILT_INJECTION_BOOTSTRAP_TVOS" "${ROOT_DIR}/dylibs/tvos/libArgentInjectionBootstrap.dylib"
   fi
-  # tvOS daemon binaries (bin/<dir>/). These are the tvos-ax-service (runs inside
-  # the sim) and tvos-hid-daemon (runs on the host) — without them the Apple TV
-  # control service has nothing to spawn. They're advertised as prebuilt inputs
-  # in the header, but the build path below sits after this early exit, so on the
-  # prebuilt (non-macOS CI) route they must be copied here too. Unix transport
-  # only, matching the build path's guard.
+  # The tvOS daemons are built below, after this early exit, so the prebuilt
+  # (non-macOS CI) route has to copy them here too or tv-control has nothing to
+  # spawn. Unix transport only, matching the build path's guard.
   if [[ "$TRANSPORT" == "unix" ]]; then
     if [[ -n "${PREBUILT_TVOS_AX_SERVICE:-}" ]]; then
       echo "Using pre-built tvos-ax-service"
@@ -115,13 +112,11 @@ if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PA
   exit 0
 fi
 
-# On non-macOS we cannot build.
 if [[ "$OSTYPE" != "darwin"* ]]; then
   echo "Skipping native-devtools-ios build on non-macOS host ($OSTYPE)"
   exit 0
 fi
 
-# In release mode, set up keychain for CI signing when secrets are present.
 if [[ "$MODE" == "release" && -n "${CERTIFICATE:-}" && -n "${PRIVATE_KEY_BASE64:-}" ]]; then
   KEYCHAIN_PATH="${KEYCHAIN_PATH:-${TMPDIR:-/tmp}/codesign.keychain-db}"
   security create-keychain -p "${KEYCHAIN_PASSWORD:?}" "$KEYCHAIN_PATH"
@@ -199,6 +194,26 @@ xcrun --sdk iphonesimulator clang \
   "${SRC_DIR}/InjectionBootstrap.c" \
   -o "${DEST_FILE_BS}"
 
+# The audio mock is its own dylib, inserted by the tool-server into every process of a locally armed simulator at
+# arming time (ios-audio-always-inserted, on by default; off, only once an audio tool is used). Local iOS only: no
+# tvOS or tcp variant.
+if [[ "$TRANSPORT" == "unix" ]]; then
+  echo "Building libArgentAudio.dylib..."
+  # CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
+  xcrun --sdk iphonesimulator clang \
+    -dynamiclib \
+    ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+    -isysroot "${SDK_PATH}" \
+    -mios-simulator-version-min=13.0 \
+    -arch arm64 \
+    -arch x86_64 \
+    -Wl,-U,_AudioDeviceCreateIOProcID \
+    -Wl,-U,_AudioObjectGetPropertyData \
+    -Wl,-U,_AudioObjectGetPropertyDataSize \
+    "${SRC_DIR}/ArgentAudio.c" \
+    -o "${DEST_FILE_AU}"
+fi
+
 echo "Building ax-service..."
 AX_SRC_DIR="${SUBMODULE_DIR}/Sources/AXService"
 AX_DEST="${BIN_DIR}/ax-service"
@@ -212,24 +227,22 @@ else
     ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
     -isysroot "${SDK_PATH}" \
     -target arm64-apple-ios17.0-simulator \
+    -arch arm64 \
+    -arch x86_64 \
     -framework Foundation -framework UIKit -framework CoreGraphics \
     -lobjc \
     -o "${AX_DEST}" "${AX_SRC_DIR}/ax_service.m"
 fi
 
-# tvOS control binaries + injection dylibs. Unix-socket only (no TCP variant),
-# so only built for the default transport. tvos-ax-service runs inside an
-# appletvsimulator; tvos-hid-daemon runs on the macOS host and injects HID via
-# SimulatorKit.
+# tvOS control binaries + injection dylibs: unix-socket only, no TCP variant.
+# tvos-ax-service runs inside an appletvsimulator; tvos-hid-daemon runs on the
+# macOS host and injects HID via SimulatorKit.
 if [[ "$TRANSPORT" == "unix" ]]; then
-  # tvOS injection dylibs. Same ObjC/C sources as the iOS dylibs, recompiled
-  # against the appletvsimulator SDK (platform TVOSSIMULATOR) — injecting the
-  # iOS slice into an Apple TV sim makes dyld silently skip the library, so
-  # native-devtools never connects (see ensureEnv's isTvos branch). They live
-  # next to their iOS counterparts under dylibs/tvos/ because
-  # bootstrapDylibPathTvos() reads from there regardless of transport, and
-  # InjectionBootstrap dlopen()s the other two from its own directory, so all
-  # three must ship together.
+  # Same sources as the iOS dylibs, recompiled against the appletvsimulator SDK:
+  # dyld silently skips an iOS slice injected into an Apple TV sim, so
+  # native-devtools never connects. bootstrapDylibPathTvos() reads dylibs/tvos/
+  # regardless of transport, and InjectionBootstrap dlopen()s the other two from
+  # its own directory, so all three must ship together.
   TVOS_DYLIB_DIR="${ROOT_DIR}/dylibs/tvos"
   TVOS_DEST_FILE="${TVOS_DYLIB_DIR}/libNativeDevtoolsIos.dylib"
   TVOS_DEST_FILE_KB="${TVOS_DYLIB_DIR}/libKeyboardPatch.dylib"
@@ -312,6 +325,8 @@ if [[ "$TRANSPORT" == "unix" ]]; then
       ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
       -isysroot "${TVOS_SDK_PATH}" \
       -target arm64-apple-tvos17.0-simulator \
+      -arch arm64 \
+      -arch x86_64 \
       -framework Foundation -framework UIKit -framework CoreGraphics \
       -lobjc \
       -o "${TVOS_AX_DEST}" "${TVOS_SRC_DIR}/tvos_ax_service.m"
@@ -324,8 +339,32 @@ if [[ "$TRANSPORT" == "unix" ]]; then
     clang \
       -fobjc-arc \
       ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -mmacosx-version-min=14.0 \
+      -arch arm64 \
+      -arch x86_64 \
       -framework Foundation -framework AppKit -framework CoreGraphics \
       -o "${TVOS_HID_DEST}" "${TVOS_SRC_DIR}/tvos_hid_daemon.m"
+  fi
+fi
+
+# Native Mac apps (unix transport only): the submodule's build-macos.sh builds
+# and signs the library, its bootstrap and argent-macos-helper into build/macos/,
+# on this volume, and each is renamed into place, so an app that has the old
+# file mapped keeps it. The bootstrap shares its basename with the iOS one,
+# hence dylibs/macos/.
+MACOS_BUILD="${SUBMODULE_DIR}/scripts/build-macos.sh"
+if [[ "$TRANSPORT" == "unix" && ! -f "${MACOS_BUILD}" ]]; then
+  echo "Skipping macOS app artifacts: no ${MACOS_BUILD}" >&2
+elif [[ "$TRANSPORT" == "unix" ]]; then
+  MACOS_OUT="${ROOT_DIR}/build/macos"
+  MACOS_IDENTITY="-"
+  [[ "$MODE" == "release" ]] && MACOS_IDENTITY="${CODESIGN_IDENTITY:-${IDENTITY:--}}"
+  OUT_DIR="${MACOS_OUT}" IDENTITY="${MACOS_IDENTITY}" bash "${MACOS_BUILD}"
+  mkdir -p "${ROOT_DIR}/dylibs/macos"
+  mv -f "${MACOS_OUT}/libNativeDevtoolsMacos.dylib" "${MACOS_OUT}/libArgentInjectionBootstrap.dylib" \
+    "${ROOT_DIR}/dylibs/macos/"
+  if [[ -f "${MACOS_OUT}/argent-macos-helper" ]]; then
+    mv -f "${MACOS_OUT}/argent-macos-helper" "${BIN_DIR}/argent-macos-helper"
   fi
 fi
 
@@ -339,6 +378,8 @@ if [[ "$MODE" == "release" ]]; then
     codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_BS}"
     codesign --verify --verbose "${DEST_FILE_BS}"
     if [[ "$TRANSPORT" == "unix" ]]; then
+      codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_AU}"
+      codesign --verify --verbose "${DEST_FILE_AU}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE}"
       codesign --verify --verbose "${TVOS_DEST_FILE}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE_KB}"
