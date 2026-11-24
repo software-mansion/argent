@@ -830,9 +830,12 @@ describe("stop-all-simulator-servers device scoping", () => {
     expect(registry.disposeService).toHaveBeenCalledOnce();
   });
 
-  it("disposes an external device's services without listing them as stopped", async () => {
-    // An `ext:` device belongs to its provider, so none of its services is
-    // listed. Each is still disposed, which drops Argent's cached handle.
+  it("lists an external device's own services as stopped but not its borrowed simulator-server or native devtools", async () => {
+    // An `ext:` device's simulator-server belongs to its provider: Argent only
+    // borrows it and its `dispose()` is a no-op, so claiming it stopped would
+    // be false. Its native devtools only hangs up Argent's connection and the
+    // provider's agent keeps running. The AX daemon is Argent's own and really
+    // is shut down, so it must be reported like any other device's.
     const ext = "ext:acme-abc123:39EEA8E5-94DF-4EED-BE6E-586E4BA9AEC8";
 
     const services = new Map([
@@ -846,9 +849,9 @@ describe("stop-all-simulator-servers device scoping", () => {
     const tool = createStopAllSimulatorServersTool(registry);
     const result = await tool.execute!({}, { devices: [ext] });
 
-    expect(result).toEqual({ stopped: [] });
+    expect(result).toEqual({ stopped: [`AXService:${ext}`] });
+    // What is left out is still disposed, which drops Argent's cached handle.
     expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${ext}`);
-    expect(registry.disposeService).toHaveBeenCalledWith(`AXService:${ext}`);
     expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${ext}`);
     expect(registry.disposeService).not.toHaveBeenCalledWith(`AXService:${THEIRS}`);
   });
@@ -1266,6 +1269,28 @@ describe("stop-all-simulator-servers on a device of a device provider", () => {
       expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED}:tcp`);
     }
   );
+
+  // Argent's own services of the device are listed, under either name. What the
+  // provider runs is not: its simulator-server and its agent that the native
+  // devtools only attaches to.
+  it("lists the device's own accessibility service but not the provider's services", async () => {
+    const services = new Map([
+      [`AXService:${EXT_ID}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`SimulatorServer:${EXT_ID}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${EXT_ID}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`NativeDevtools:${CLAIMED}:tcp`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    expect(await tool.execute!({}, { devices: [EXT_ID] })).toEqual({
+      stopped: [`AXService:${EXT_ID}`],
+    });
+    for (const urn of services.keys()) {
+      expect(registry.disposeService).toHaveBeenCalledWith(urn);
+    }
+  });
 });
 
 describe("stop-all-simulator-servers unmatched ids", () => {

@@ -25,6 +25,7 @@ import {
   externalClaimForNativeId,
   externalNativeId,
   isExternalDeviceUrn,
+  isExternalId,
 } from "../../utils/external-devices";
 
 /**
@@ -223,17 +224,21 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
 }
 
 /**
- * Whether `urn` is a device provider's service, which a teardown drops without
- * shutting anything down. An `ext:`-keyed URN is one. A native devtools URN holds
- * the udid under both of the device's names, and on a device a provider claims,
- * that service only attaches to the agent the provider lends.
+ * Whether `urn` is the native devtools service of a device a provider lends,
+ * under its `ext:` id or under the udid the provider claims. That service only
+ * attaches to the agent the provider lends and its `dispose()` only hangs up
+ * Argent's connection: the agent, with any network capture in it, keeps
+ * running. So a teardown drops it without listing it as stopped. Every other
+ * service of such a device (its accessibility service, TV-control daemons, ...)
+ * is Argent's own and a teardown lists it like any other. Its borrowed
+ * simulator-server is left out by {@linkcode isBorrowedSimulatorServer}.
  */
-export function isProviderOwnedUrn(urn: string): boolean {
-  if (isExternalDeviceUrn(urn)) return true;
+function isProviderOwnedUrn(urn: string): boolean {
   const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
   if (portion === undefined) return false;
   const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
-  return externalClaimForNativeId(portion.slice(0, portion.length - suffix.length)) !== undefined;
+  const id = portion.slice(0, portion.length - suffix.length);
+  return isExternalId(id) || externalClaimForNativeId(id) !== undefined;
 }
 
 /**
@@ -260,12 +265,9 @@ export function unnameableSessionUrns(urns: readonly string[]): string[] {
 /**
  * Whether `urn` is a simulator-server Argent borrowed from an external provider
  * rather than spawned itself. Its `dispose()` is a no-op by design, so both
- * stop tools drop the cached handle but never report it as stopped. Every other
- * namespace of that device (AXService, NativeDevtools, TvControl, ...) is
- * disposed and reported like any other. NativeDevtools is the one that is not
- * Argent's own there: it is always attached to the agent the provider lends,
- * and its `dispose()` only hangs up Argent's end, leaving the provider's socket
- * and agent in place.
+ * stop tools drop the cached handle but never report it as stopped. The
+ * device's native devtools is left out too (see {@linkcode isProviderOwnedUrn});
+ * every other service of it is Argent's own and is reported like any other.
  *
  * Read from the running instance (`api.external`), which the factory set when
  * it built it, rather than from the provider's claim at stop time. The claim
@@ -294,24 +296,28 @@ export async function isBorrowedSimulatorServer(registry: Registry, urn: string)
 }
 
 /**
- * Of `urns`, the simulator-servers that are borrowed (see
- * {@linkcode isBorrowedSimulatorServer}). Call it right after taking the
- * snapshot the URNs come from, before awaiting any disposal: tool calls are not
- * serialized, so another call can dispose a borrowed server while this one
- * waits. Its node is then IDLE and a later check would count it as Argent's own
- * and report it stopped although it keeps running. A RUNNING node resolves
- * without yielding to another request, so this reads the same moment as the
- * snapshot.
+ * Of `urns`, the ones a stop disposes without listing as stopped, because what
+ * they run belongs to a device provider and keeps running: borrowed
+ * simulator-servers (see {@linkcode isBorrowedSimulatorServer}) and the native
+ * devtools of a provider's device (see {@linkcode isProviderOwnedUrn}). Call it
+ * right after taking the snapshot the URNs come from, before awaiting any
+ * disposal: tool calls are not serialized, so another call can dispose a
+ * borrowed server while this one waits. Its node is then IDLE and a later check
+ * would count it as Argent's own and report it stopped although it keeps
+ * running. A RUNNING node resolves without yielding to another request, so this
+ * reads the same moment as the snapshot.
  */
-export async function borrowedSimulatorServers(
+export async function providerOwnedUrns(
   registry: Registry,
   urns: Iterable<string>
 ): Promise<Set<string>> {
-  const borrowed = new Set<string>();
+  const owned = new Set<string>();
 
   for (const urn of urns) {
-    if (await isBorrowedSimulatorServer(registry, urn)) borrowed.add(urn);
+    if (isProviderOwnedUrn(urn) || (await isBorrowedSimulatorServer(registry, urn))) {
+      owned.add(urn);
+    }
   }
 
-  return borrowed;
+  return owned;
 }

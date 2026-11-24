@@ -3,8 +3,8 @@ import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import {
-  borrowedSimulatorServers,
   deviceIdOwningUrn,
+  providerOwnedUrns,
   transportNamespacesForPlatform,
 } from "./device-services";
 
@@ -49,7 +49,7 @@ export function createStopSimulatorServerTool(
         (urn) => deviceIdOwningUrn(urn, namespaces, [udid]) !== undefined
       );
 
-      const borrowedUrns = await borrowedSimulatorServers(registry, urns);
+      const providerUrns = await providerOwnedUrns(registry, urns);
 
       for (const urn of urns) {
         const entry = snapshot.services.get(urn);
@@ -60,7 +60,7 @@ export function createStopSimulatorServerTool(
         // against the provider's state, but do not report it stopped. Only that
         // one URN is borrowed; TvControl and IosDeviceRunner of the same device
         // are Argent's own and fall through like any other.
-        if (borrowedUrns.has(urn)) {
+        if (providerUrns.has(urn)) {
           await registry.disposeService(urn);
           continue;
         }
