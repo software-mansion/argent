@@ -70,15 +70,13 @@ const zodSchema = z.object({
     .min(1)
     .max(RECENT_PER_LEVEL)
     .optional()
-    .describe(
-      "How many of the newest console entries to return in `entries`. Default 20, max 100."
-    ),
+    .describe("How many of the newest entries to return in `entries`. Default 20."),
   levels: z
     .array(z.enum(CONSOLE_LEVELS))
     .min(1)
     .optional()
     .describe(
-      'Return only entries of these levels in `entries`, e.g. ["warning", "error"]. console.warn is "warning". Stats and clusters stay unfiltered.'
+      'Return only these levels in `entries`, e.g. ["warning", "error"]. Stats and clusters stay unfiltered.'
     ),
 });
 
@@ -87,7 +85,7 @@ export function createDebuggerLogRegistryTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, LogRegistryResponse | DebuggerNotConnectedResult> {
   return {
     id: "debugger-log-registry",
-    description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, each message cut to 300 characters; filter with levels and tail).
+    description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, messages cut to 300 characters).
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Supports React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> and Chromium.
 Use when investigating warnings, errors, or unexpected output. Read { entries } first; Grep the returned file only for older lines or full messages, and never Read it whole: capture stops at 50,000 lines per session. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). Without that note, empty means the app has logged nothing.
 When the debugger cannot be reached, it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Grep a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
