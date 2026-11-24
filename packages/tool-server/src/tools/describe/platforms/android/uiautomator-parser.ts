@@ -256,6 +256,8 @@ interface UiNode {
   checked: boolean;
   disabled: boolean;
   password: boolean;
+  focused: boolean;
+  selected: boolean;
   scrollHidden: number;
   children: UiNode[];
   // Set on the node emitted for a `WEBVIEW_CLASSES` host, so the doubled
@@ -276,8 +278,11 @@ export function attrIsTrue(attrs: Record<string, string>, key: string): boolean 
 
 function isInteractive(attrs: Record<string, string>): boolean {
   if (hasGestureFlag(attrs)) return true;
-  // Focusable without a label is just a focus trap on a layout wrapper.
-  if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
+  // Focusable without a label is just a focus trap on a layout wrapper, unless
+  // it holds focus: on a TV that is the D-pad cursor.
+  if (attrIsTrue(attrs, "focusable") && (labelOf(attrs) !== "" || attrIsTrue(attrs, "focused"))) {
+    return true;
+  }
   return false;
 }
 
@@ -378,6 +383,8 @@ function makeUiNode(
     checked: attrIsTrue(attrs, "checked"),
     disabled: attrs.enabled === "false",
     password: attrIsTrue(attrs, "password"),
+    focused: attrIsTrue(attrs, "focused"),
+    selected: attrIsTrue(attrs, "selected"),
     scrollHidden: 0,
   };
   if (label) out.label = label;
@@ -502,6 +509,7 @@ function computeNodeOutput(
       node.clickable ||= inner.clickable;
       node.longClickable ||= inner.longClickable;
       node.scrollable ||= inner.scrollable;
+      node.focused ||= inner.focused;
       if (!node.identifier && inner.identifier) node.identifier = inner.identifier;
     }
     const hidden = hiddenInScroll + (inner?.scrollHidden ?? 0);
@@ -519,14 +527,17 @@ function computeNodeOutput(
     label = "[password]";
   }
 
+  // A list that holds focus marks its D-pad cursor row selected.
+  const selected = attrIsTrue(attrs, "selected");
+
   // Decorative ImageView — drop it, passing surviving descendants through.
-  if (cls.endsWith(".ImageView") && !interactive && !label) {
+  if (cls.endsWith(".ImageView") && !interactive && !label && !selected) {
     return keptChildren;
   }
 
   // Layout container with no own info — pass children through, flattening the
   // FrameLayout > LinearLayout > ConstraintLayout chains --compressed leaves.
-  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label) {
+  if (LAYOUT_CONTAINERS.has(cls) && !interactive && !label && !selected) {
     return keptChildren;
   }
 
@@ -552,6 +563,8 @@ function computeNodeOutput(
       // accessibilityLabel` around a bare clickable native view), so fall back to
       // the wrapper's values instead of dropping them.
       if (!c.label && label) c.label = label;
+      c.focused ||= attrIsTrue(attrs, "focused");
+      c.selected ||= attrIsTrue(attrs, "selected");
       const rid = attrs["resource-id"];
       if (!c.identifier && rid) c.identifier = rid;
       return [c];
@@ -658,6 +671,8 @@ function finalizeUiNode(
   if (n.scrollable) out.scrollable = true;
   if (n.checkable) out.checkable = true;
   if (n.checked) out.checked = true;
+  if (n.focused) out.focused = true;
+  if (n.selected) out.selected = true;
   if (n.disabled) out.disabled = true;
   if (n.password) out.password = true;
   if (n.scrollHidden > 0) out.scrollHidden = n.scrollHidden;

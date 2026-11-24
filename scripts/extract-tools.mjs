@@ -5,7 +5,7 @@
  * suitable for `spidershield scan --tools-json`.
  *
  * Must stay dependency-free (node: builtins only): tool-description-quality.yml
- * runs it on a bare checkout without `npm ci`. extract-tools.test.mjs reparses
+ * runs it on a bare checkout without `bun install`. extract-tools.test.mjs reparses
  * the same tree with the real TypeScript parser and requires an exact match, so
  * a lexing gap on a shape that reaches the tree fails CI.
  *
