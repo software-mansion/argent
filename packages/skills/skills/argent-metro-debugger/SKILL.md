@@ -32,9 +32,11 @@ A component missing from `debugger-component-tree`? `includeSkipped` only adds c
 
 ### Inspect HTTP requests
 
-On iOS, Android, and Mac apps, call `network-capture-start` before reproducing the request. Check that `js` reports `armed: true`. Start again after a reload or relaunch. Read the requests with `view-network-logs`, then call `network-capture-stop` when you have what you need. If the stop reports `armed: true`, follow its `reason` before relying on the stop.
+On iOS simulators, Android, and Mac apps, call `network-capture-start` before reproducing the request and check that `js` reports `armed: true`. Start again once JavaScript is ready after a reload or relaunch.
 
-Use the device ID as `udid` for start and stop. If shared Metro requires a logical ID on iOS or Android, pass it as `logicalDeviceId` for start and stop, and as `device_id` when reading. Keep the Metro port consistent across calls.
+After the action, use `await-network-request` if you know which request to check. Use `view-network-logs` to explore the traffic. Open the details with `view-network-request-details` when needed. Stop capture when you have what you need. If the stop still reports `armed: true`, follow its `reason`.
+
+Use the device ID as `udid` for start, stop, and the wait. On shared Metro, pass the logical ID as `logicalDeviceId` for start and stop, or `device_id` for the log tools. The wait reuses the Metro target from the start. Keep the Metro port consistent across the other calls.
 
 On Vega, call `view-network-logs` before reproducing the request and again after a reload.
 

@@ -93,8 +93,11 @@ export interface IosNetworkCaptureState {
 /** What a reader of one app's iOS native records sees. */
 export interface IosNetworkRecords {
   state(): IosNetworkCaptureState;
-  /** The listed records, oldest first, without Metro's own traffic on `metroPort`. */
-  records(metroPort: number): NativeNetworkRecord[];
+  /**
+   * The listed records, oldest first, without Metro's own traffic on `metroPort`. With
+   * `includeHidden`, also the records a `clear` hid.
+   */
+  records(metroPort: number, options?: { includeHidden?: boolean }): NativeNetworkRecord[];
   record(id: string): NativeNetworkRecord | undefined;
   /** Hides every record from the listing; ids still resolve. */
   clear(): void;
@@ -580,8 +583,12 @@ export function createIosNetworkRecords(
       for (const record of open) resize(record);
     },
 
-    records: (port) =>
-      records.filter((r) => !cleared.has(r) && !isMetroTraffic(r.request.url, port)),
+    records: (port, options) =>
+      records.filter(
+        (r) =>
+          (options?.includeHidden === true || !cleared.has(r)) &&
+          !isMetroTraffic(r.request.url, port)
+      ),
 
     record: (id) => byId.get(id),
 

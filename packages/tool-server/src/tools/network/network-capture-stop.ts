@@ -61,7 +61,7 @@ export function createNetworkCaptureStopTool(
   return {
     id: "network-capture-stop",
     description: `Stop network capture and keep the recorded requests. Use when you have the requests you need, before profiling, or to end capture in an e2e test.
-On Chromium, mark the end of the capture window using the existing connection. view-network-logs still includes requests outside the window. If the reason says capture was not started, call network-capture-start before reproducing the request.
+On Chromium, mark the end of the window for await-network-request. The existing connection keeps recording for view-network-logs. If no window was started, call network-capture-start before reproducing the request.
 On other supported targets, read the retained requests with native-network-logs or view-network-logs. Use view-network-request-details with an ID from the log. JS request IDs expire on reload. Capture stays off until network-capture-start, including after relaunch. In-flight requests can finish in the log. Stopping Android native capture marks them failed in the log without interrupting the app's requests. Only bodies read before that stop remain available.
 Returns { status, layers }. Check armed and reason to confirm the stop. If the stop fails to reach the JS runtime, retry once the app reconnects to Metro. total counts the retained requests, or is 0 when the stop cannot count them.`,
     zodSchema: captureSchema,
@@ -386,7 +386,7 @@ async function stopMacosLayer(app: MacosAppApi, port: number): Promise<StoppedLa
 
 /**
  * A Chromium app's one layer: the tab's requests stay recorded for view-network-logs,
- * so the stop only marks where the capture window ends.
+ * so the stop only marks where the requests that await-network-request reads end.
  */
 async function stopChromiumLayer(registry: Registry, device: DeviceInfo): Promise<StoppedLayer> {
   const ref = chromiumCdpRef(device);
@@ -404,7 +404,7 @@ async function stopChromiumLayer(registry: Registry, device: DeviceInfo): Promis
     armed: false,
     total: network.requests().length,
     reason:
-      "view-network-logs keeps listing the tab's requests while argent is attached; the stop marks where the capture window ends",
+      "view-network-logs keeps listing the tab's requests while argent is attached; await-network-request reads only the requests up to this stop",
   };
 }
 

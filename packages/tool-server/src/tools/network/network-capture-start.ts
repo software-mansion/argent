@@ -15,12 +15,14 @@ import {
   type NativeDevtoolsPrecheckBlock,
 } from "../../blueprints/native-devtools";
 import {
+  lastAndroidRecordNumber,
   androidNetworkInspectorRef,
   type AndroidNetworkInspectorApi,
 } from "../../blueprints/android-network-inspector";
 import {
   findJsCapture,
   forgetJsCapture,
+  jsCapture,
   installNetworkInterceptor,
   NO_XHR_YET,
   jsCapturePayload,
@@ -43,6 +45,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
 import { macosLaunchRefusal, type MacosAppApi } from "../../blueprints/macos-app";
+import { lastIosRecordNumber } from "../../blueprints/ios-network-records";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { classifyNotConnected } from "../debugger/not-connected";
 import {
@@ -56,6 +59,7 @@ import {
   requestedLayers,
   runLayers,
   withLayerInRetries,
+  noteCaptureStart,
   appleAppNoJs,
   macosAppOfCall,
   setNativeUnavailable,
@@ -75,9 +79,9 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you need to inspect requests from an upcoming action, including in an e2e test. A new start keeps existing requests. Capture can slow the app.
-On Chromium, Argent connects if needed and marks the start of a capture window in the network log. Recording continues while connected.
-The JavaScript layer needs an app connected to Metro. Start again after its JavaScript loads, including after a reload or relaunch. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
+    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you need to inspect traffic from an upcoming action or check a request with await-network-request. A new start keeps the log and begins a new window for the wait. Capture can slow the app.
+On Chromium, Argent connects if needed and marks the start of the wait window. The log records while connected.
+The JavaScript layer needs an app connected to Metro. After a reload or relaunch, start capture again once JavaScript loads and before triggering the request. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
 Returns { status, layers }: check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On a device whose devtools agent Argent attached to, start native capture again after a relaunch.
 When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING.`,
     zodSchema: captureSchema,
@@ -120,6 +124,9 @@ When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_U
       // The checks run under the lock too: a stop called while they run waits for
       // this start, so the start cannot install capture after that stop.
       const layers = await withCaptureLock(params.udid, params.bundleId, async () => {
+        // Before any layer starts: a native request numbered after it came after this start.
+        const nativeFloor =
+          device.platform === "android" ? lastAndroidRecordNumber() : lastIosRecordNumber();
         // A Mac app's service is resolved under the lock, so a start that waited for a
         // stop-all-simulator-servers of the app arms the service that comes after it.
         // The bundle id is the device's, checked before any layer starts.
@@ -154,13 +161,19 @@ When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_U
           ...(run.native
             ? [
                 app
-                  ? startMacosLayer(app, device, params.bundleId)
+                  ? startMacosLayer(app, device, params.bundleId, port)
                   : device.platform === "android"
                     ? startAndroidLayer(registry, device, params.bundleId, port)
                     : startIosLayer(registry, device, params.bundleId, port, run.js),
               ]
             : []),
-        ]);
+        ]).then((started) => {
+          // A start that fails leaves the window of the last start that did not.
+          if (!started.every((layer) => layer.unavailable)) {
+            noteCaptureStart(params.udid, params.bundleId, started, nativeFloor);
+          }
+          return started;
+        });
       });
       if (layers.every((layer) => layer.unavailable)) {
         const error = unavailableError(params, layers);
@@ -184,7 +197,8 @@ When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_U
 async function startMacosLayer(
   app: MacosAppApi,
   device: DeviceInfo,
-  bundleId: string
+  bundleId: string,
+  port: number
 ): Promise<StartedLayer> {
   // Capture is off after this start, also one that an earlier start left on for
   // the next copy argent starts, so a read and a stop say what this start found.
@@ -203,14 +217,14 @@ async function startMacosLayer(
   const refusal = app.isConnected() ? undefined : await macosLaunchRefusal(bundleId);
   if (refusal) return notTurnedOn(refusal);
   setNativeUnavailable(device.id, bundleId);
-  const { armed, reason } = await app.startNetworkCapture();
+  const { armed, reason } = await app.startNetworkCapture(port);
   return { layer: "macos-native", armed, ...(reason ? { reason } : {}) };
 }
 
 /**
  * A Chromium app's one layer: the tool-server records the tab's requests from
- * its first tool call on the app, so a start only marks where a capture
- * window of them begins.
+ * its first tool call on the app, so a start only marks where the requests
+ * that await-network-request reads begin.
  */
 async function startChromiumLayer(registry: Registry, device: DeviceInfo): Promise<StartedLayer> {
   const ref = chromiumCdpRef(device);
@@ -321,6 +335,8 @@ async function startJsLayer(
       return lost ? unavailable("js", text) : { layer: "js", armed: false, reason: text };
     }
     if (lost && recording) {
+      // The entry stays for the reads; its mark is an earlier start's, which this one did not move.
+      dropJsMark(payload);
       return {
         layer: "js",
         armed: false,
@@ -338,10 +354,10 @@ async function startJsLayer(
     }
     // The app may connect, or answer, after this call; the next start arms it.
     // This start did not reach the JS context, so a pause a stop left there stays.
+    // No mark: this start did not see the context, which may hold an earlier interceptor's log.
     setJsCapture(payload, {
       bundleId,
       intent: "started",
-      mark: { install: null },
       installed: installedHere,
       physicalDeviceId: udid,
       ...(installedHere && found?.paused ? { paused: true as const } : {}),
@@ -357,6 +373,7 @@ async function startJsLayer(
   if (appId !== undefined && appId !== bundleId) {
     const notOurs = `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s`;
     if (recording) {
+      dropJsMark(payload);
       return {
         layer: "js",
         armed: false,
@@ -385,8 +402,8 @@ async function startJsLayer(
   } catch (err) {
     // A runtime that does not answer the mark does not answer the install either,
     // and each evaluate of the install waits for the full CDP timeout. This start
-    // did not reach the JS context, so a pause a stop left there stays.
-    capture.mark = { install: null };
+    // did not reach the JS context, so a pause a stop left there stays. No mark either:
+    // the context may hold an earlier interceptor's log, which no request after this start is in.
     if (installedHere && found?.paused) capture.paused = true;
     return {
       layer: "js",
@@ -418,6 +435,12 @@ async function startJsLayer(
       reason: `the interceptor did not install: ${errorMessage(err)}`,
     };
   }
+}
+
+/** Drops the mark of the entry under `payload`, which a start that did not read one leaves. */
+function dropJsMark(payload: string): void {
+  const kept = jsCapture(payload);
+  if (kept) delete kept.mark;
 }
 
 /**
