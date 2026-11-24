@@ -2,6 +2,7 @@ import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../blueprints/ios-device-runner";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
+import { ANDROID_NETWORK_SHAPER_NAMESPACE } from "../../blueprints/android-network-shaper";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 import { CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/chromium-js-runtime-debugger";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
@@ -106,6 +107,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   IOS_DEVICE_RUNNER_NAMESPACE,
   NATIVE_DEVTOOLS_NAMESPACE,
   ANDROID_DEVTOOLS_NAMESPACE,
+  ANDROID_NETWORK_SHAPER_NAMESPACE,
   CHROMIUM_CDP_NAMESPACE,
   CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
   TV_CONTROL_NAMESPACE,

@@ -170,6 +170,27 @@ export function findJsCapture(
   return jsCapturesOn(device).find((capture) => capture.bundleId === bundleId);
 }
 
+/**
+ * The app's entry for the device `udid`, with its payload: under that id, or under the
+ * logicalDeviceId a start gave on a Metro that several devices share, whose entry keeps the
+ * udid as `physicalDeviceId`. An entry under the id itself wins.
+ */
+export function findJsCaptureOfDevice(
+  udid: string,
+  bundleId: string
+): { payload: string; port: number; capture: JsCapture } | undefined {
+  let byPhysical: { payload: string; port: number; capture: JsCapture } | undefined;
+  for (const [payload, capture] of jsCaptures) {
+    if (capture.bundleId !== bundleId) continue;
+    const { port, device } = splitPayload(payload);
+    if (sameDevice(device, udid)) return { payload, port, capture };
+    if (capture.physicalDeviceId !== undefined && sameDevice(capture.physicalDeviceId, udid)) {
+      byPhysical ??= { payload, port, capture };
+    }
+  }
+  return byPhysical;
+}
+
 /** The app's entries on the Metro port under any device id but `exceptDevice`. */
 export function jsCapturesOfAppOn(
   port: number,

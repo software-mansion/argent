@@ -10,7 +10,7 @@ import { scopeTempHome } from "./temp-home";
  * files: a fresh HOME holds the global one, and a fresh project folder, the
  * working directory during the test, holds the project one, which shadows the
  * global one. Under vitest the project file is otherwise the `.argent/flags.json`
- * of the directory the run starts in (the repo root under `npm test`), which
+ * of the directory the run starts in (the repo root under `bun run test`), which
  * `.gitignore` hides.
  *
  * Call at file top level, or at the top of a describe.
