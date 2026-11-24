@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // Compile src/fatal-handlers.ts to a tmp .mjs once before all tests so the
 // spawned child node processes can `import` it without depending on a prior
-// `npm run build` step. Self-contained: no dist/ build dependency.
+// `bun run build` step. Self-contained: no dist/ build dependency.
 let handlerUrl = "";
 let tmpDir = "";
 
