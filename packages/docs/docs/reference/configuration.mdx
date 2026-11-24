@@ -49,6 +49,8 @@ Argent reads `scripts.maxTimeoutMs` and `scripts.heapLimitMb` from the global fi
 
 A path value is absolute, starts with `~`, or is relative. For `ios.additionalDeviceSets`, Argent resolves a relative entry against the scope that set it: the project root for the project file, the home directory for the global file.
 
+Argent also adds the device set of Radon IDE, `~/Library/Caches/com.swmansion.radon-ide/Devices/iOS`, when that directory exists. You do not have to configure it. Thus `list-devices` shows a simulator that Radon IDE started, and `boot-device` reuses it instead of starting a second simulator.
+
 Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
 
 `android.adbServerPort` does not change the adb server of the agent's own shell. When Argent uses an adb server other than the default, the result of `list-devices` shows the agent how to reach that server. The agent puts the environment variables from that result before each `adb` command that it runs itself.

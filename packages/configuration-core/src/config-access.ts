@@ -4,6 +4,7 @@
 // `unsetConfigValue` validate against the schema before writing. `argent config`
 // and the lens getters wrap these.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
 import { isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
@@ -270,10 +271,19 @@ export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**
+ * Radon IDE keeps its iOS simulators in this device set, relative to home. It is
+ * added without configuration whenever the directory exists, so a simulator
+ * Radon IDE already booted is listed and reused instead of argent booting a
+ * second one.
+ */
+const RADON_IDE_IOS_DEVICE_SET = "Library/Caches/com.swmansion.radon-ide/Devices/iOS";
+
+/**
  * The extra CoreSimulator device-set directories, as normalized absolute paths.
  * Relative entries resolve per scope — project root for project, home for global
  * — and `~`/`~/…` expands to home in either. Order follows the `union` preset
- * (global first, project after), duplicates dropped after normalization.
+ * (global first, project after), then Radon IDE's set when it exists on disk,
+ * duplicates dropped after normalization.
  */
 export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): string[] {
   const def = requireDefinition(IOS_ADDITIONAL_DEVICE_SETS_KEY) as ConfigDefinition<string[]>;
@@ -295,7 +305,9 @@ export function getAdditionalIosDeviceSets(options: ConfigPathOptions = {}): str
     isHomeDir(projectRoot, options) ? home : projectRoot,
     home
   );
-  return Array.from(new Set([...global, ...project]));
+  const radon = path.resolve(home, RADON_IDE_IOS_DEVICE_SET);
+  const detected = fs.existsSync(radon) ? [radon] : [];
+  return Array.from(new Set([...global, ...project, ...detected]));
 }
 
 /** Resolve one scope's entries against its base. `path.resolve` rather than
