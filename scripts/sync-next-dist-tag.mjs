@@ -21,7 +21,7 @@ import { pathToFileURL } from "node:url";
 const TAG = "next";
 
 // Self-contained SemVer 2.0.0 precedence (build metadata ignored): the script
-// must run in a CI job without `npm ci`, so it takes zero npm dependencies.
+// must run in a CI job with no install step, so it takes zero npm dependencies.
 // Verified against the `semver` library in scripts/sync-next-dist-tag.test.mjs.
 
 export function parseSemver(version) {

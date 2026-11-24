@@ -20,6 +20,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
         env:
@@ -35,11 +39,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
-      - run: npm run build
+      - run: bun run build
 
-      - run: npm run build -w @swmansion/argent
+      - name: Check the trace-processor engine loads
+        run: node scripts/check-trace-processor.cjs
+
+      - run: bun run --filter @swmansion/argent build
 
       # Keep the artifact build checks aligned with the publish workflow so the
       # uploaded tarball has the same required runtime assets as an npm release.
@@ -99,9 +106,7 @@ jobs:
       - run: test -f packages/argent/dist/flow-script-watchdog-deadline.mjs
 
       - name: Pack npm package
-        run: |
-          mkdir -p package-artifact
-          npm pack -w @swmansion/argent --pack-destination package-artifact
+        run: bun pm pack --cwd packages/argent --destination "$PWD/package-artifact"
 
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v7

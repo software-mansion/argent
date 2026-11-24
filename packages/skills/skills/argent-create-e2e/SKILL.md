@@ -40,6 +40,9 @@ The recorder adds `within` or `next` to a non-unique tap. Add `within`, `after`,
 1. Choose the e2e test type:
    - **standalone:** the first step that is not `echo:` or `script:` is `launch:`. The test controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
+
+   When a test needs the state that an earlier test leaves, put both in a [suite](references/e2e-yaml.md#suites).
+
 2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
 

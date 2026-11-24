@@ -18,6 +18,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -205,7 +208,6 @@ describe("within (descendant) selector resolution", () => {
     ]);
   });
 
-  // An unresolved action intentionally consumes its 7.5s auto-wait budget.
   it("a failed scoped tap names the scope in its reason", async () => {
     currentTree = () =>
       screen([n({ label: "Delete", frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 } })]);
@@ -224,7 +226,7 @@ describe("within (descendant) selector resolution", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toContain('within (id="billing-card")');
     expect(result.taps).toHaveLength(0);
-  }, 10_000);
+  });
 });
 
 // A settings list: three rows, each a label plus a switch to its right. The
@@ -349,7 +351,6 @@ describe("after / next (sibling) selector resolution", () => {
     ]);
   });
 
-  // An unresolved action intentionally consumes its 7.5s auto-wait budget.
   it("a failed sibling-scoped tap names the scope in its reason", async () => {
     currentTree = () =>
       screen([n({ role: "AXSwitch", frame: { x: 0.8, y: 0.1, width: 0.15, height: 0.05 } })]);
@@ -363,5 +364,5 @@ describe("after / next (sibling) selector resolution", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(result.steps[0].reason).toContain('next (text="Wi-Fi")');
     expect(result.taps).toHaveLength(0);
-  }, 10_000);
+  });
 });

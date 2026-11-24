@@ -65,6 +65,9 @@ import {
   STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { n } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
@@ -1355,8 +1358,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // A determinate verdict costs TWO full reads, so a ceiling of "grace plus one
   // read" turns a merely slow device into an indeterminate warning.
   it("still reaches a determinate verdict when each read is slower than the grace window", async () => {
-    // 1.9s per read is over the 1s grace, so the loop takes two reads, near 3.8s.
-    // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
+    // 1.9s per read is over the 1s grace, so the loop takes two reads, 3.8s:
+    // above the 3500ms ceiling, under the 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "ax-service" };
@@ -1443,10 +1446,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "tail") ?? "";
 
     // This tier holds only while the dark tail is inside
-    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms). Host load breaks it.
+    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms).
     expect(
       warning,
-      "expected the blip tier: under host load the dark tail can exceed CONDITION_DARK_TAIL_TOLERANCE_MS, which turns this indeterminate"
+      "expected the blip tier: a dark tail past CONDITION_DARK_TAIL_TOLERANCE_MS turns this indeterminate"
     ).toContain("does NOT hold against the tree the runner resolves");
     expect(warning).toContain("Lorem ipsum");
     expect(warning).toContain("more chars)");

@@ -19,6 +19,9 @@ import {
   type FlowSelector,
 } from "../../src/tools/flows/flow-utils";
 import { createFlowTestHarness, label, n, screen } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const { run, runWithCalls, writeFlow } = createFlowTestHarness({
   tempDirectoryPrefix: "flow-sel-matches-",

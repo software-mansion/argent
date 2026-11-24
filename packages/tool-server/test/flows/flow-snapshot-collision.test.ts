@@ -5,6 +5,9 @@ import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { ArtifactStore } from "../../src/artifacts";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // The baseline key has no app component, so one run capturing the same
 // snapshot name from two different apps must fail the colliding step instead

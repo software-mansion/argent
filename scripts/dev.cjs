@@ -5,8 +5,8 @@
  * Full dev mode — runs argent from this checkout: no packing, no global install.
  *
  * Usage:
- *   npm run dev
- *   PORT=4000 npm run dev
+ *   bun run dev
+ *   PORT=4000 bun run dev
  */
 
 const { execSync, spawn } = require("child_process");
@@ -92,7 +92,7 @@ if (process.platform === "darwin") {
     } else {
       console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
       console.error("  Get SSH access to github.com/software-mansion/argent-private,");
-      console.error("  or download the pre-built dylibs: npm run download:native-binaries");
+      console.error("  or download the pre-built dylibs: bun run download:native-binaries");
       process.exit(1);
     }
   }
@@ -110,7 +110,7 @@ if (process.platform === "darwin") {
 }
 
 console.log("Building dispatcher TypeScript...");
-execSync("npm run build:dispatcher -w @swmansion/argent", {
+execSync("bun run --filter @swmansion/argent build:dispatcher", {
   cwd: ROOT,
   stdio: "inherit",
 });
@@ -166,7 +166,7 @@ if (!fs.existsSync(STUB)) {
   fs.mkdirSync(path.dirname(STUB), { recursive: true });
   fs.writeFileSync(
     STUB,
-    "throw new Error('dev mode: tool-server stub — start npm run dev first');\n"
+    "throw new Error('dev mode: tool-server stub — start bun run dev first');\n"
   );
 }
 
@@ -383,8 +383,8 @@ async function main() {
 
   if (await isPortAnswering(PORT)) {
     console.error(
-      `✗ Port ${PORT} is already in use (another tool-server, e.g. npm run start?).\n` +
-        `  Stop it, or pick another port: PORT=4000 npm run dev`
+      `✗ Port ${PORT} is already in use (another tool-server, e.g. bun run start?).\n` +
+        `  Stop it, or pick another port: PORT=4000 bun run dev`
     );
     process.exit(1);
   }
@@ -439,8 +439,8 @@ async function main() {
 
   Start a new Claude Code or Cursor session to pick up the local MCP.
 
-  After tool-server code changes → Ctrl+C and re-run npm run dev
-  After MCP code changes         → re-run npm run dev (rebuilds MCP automatically)
+  After tool-server code changes → Ctrl+C and re-run bun run dev
+  After MCP code changes         → re-run bun run dev (rebuilds MCP automatically)
 
 Press Ctrl+C to stop and restore global argent.
 `);

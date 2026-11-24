@@ -11,7 +11,7 @@
  * `id:`-like text in comments or strings cannot cause a false red.
  *
  * The TypeScript package is test-only (a root devDependency, installed by
- * unit-tests.yml's `npm ci`): the extractor itself must stay dependency-free
+ * unit-tests.yml's `bun install`): the extractor itself must stay dependency-free
  * because tool-description-quality.yml runs it on a bare checkout without
  * installing.
  *

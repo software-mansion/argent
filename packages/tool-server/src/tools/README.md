@@ -20,7 +20,7 @@ reaches the agent. Messages from `.refine()` and thrown errors reach it only whe
 ## Seeing what agents receive
 
 ```bash
-npm run render:agent-context
+bun run render:agent-context
 ```
 
 This renders what `@argent/mcp` sends for the current source into
@@ -29,5 +29,5 @@ server instructions, and a README that explains how clients pass all of it on to
 It runs the real registry, `GET /tools` route and MCP mapping, with every feature flag at its
 default. Run it after you change a description, a schema or the server instructions.
 
-- To render with a flag on: `npm run render:agent-context -- --out <dir> --enable <flag>`.
+- To render with a flag on: `bun run render:agent-context --out <dir> --enable <flag>`.
 - To review a change: render `main` and your branch into two folders with `--out`, and diff them.
