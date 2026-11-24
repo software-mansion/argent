@@ -14,8 +14,8 @@
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
-# Prereq: the package bundle is already built (`npm run build -w
-# @swmansion/argent` on the runner, bind-mounted in at /workspace), so
+# Prereq: the package bundle is already built (`bun run --filter
+# @swmansion/argent build` on the runner, bind-mounted in at /workspace), so
 # `packages/argent/dist/tool-server.cjs` exists. It is the tool-server that ships.
 #
 # NOT `set -e`: gated checks are captured for a per-tool summary, then we exit

@@ -86,19 +86,19 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
       - name: Install dependencies
         if: needs.changes.outputs.relevant == 'true'
-        run: npm ci
-
-      - name: Fix rollup native bindings (win32)
-        if: needs.changes.outputs.relevant == 'true'
-        # vitest 4 transforms via rollup, whose platform binary is an optional
-        # dep npm ci sometimes skips; install the win32 one explicitly.
-        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+        run: bun install --frozen-lockfile
 
       - name: Build workspace
         if: needs.changes.outputs.relevant == 'true'
-        run: npm run build
+        run: bun run build
 
       - name: Resolver unit tests on Windows (tool-server)
         if: needs.changes.outputs.relevant == 'true'
@@ -108,7 +108,7 @@ jobs:
         # this is the curated cross-platform subset.
         working-directory: packages/tool-server
         run: >
-          npx vitest run
+          bunx vitest run
           test/command-on-path.test.ts
           test/android-binary-windows.test.ts
           test/adb-resolve-avd-path.test.ts
@@ -120,7 +120,7 @@ jobs:
       - name: Resolver unit tests on Windows (native-devtools-ios)
         if: needs.changes.outputs.relevant == 'true'
         working-directory: packages/native-devtools-ios
-        run: npx vitest run
+        run: bunx vitest run
 
       - name: adb.exe resolves on Windows
         if: needs.changes.outputs.relevant == 'true'

@@ -91,10 +91,19 @@ describe("view-network-request-details: Mac app IDs", () => {
     expect(
       networkRequestTool.services!({ device_id: "chromium-cdp-9222", requestId: ID } as never)
     ).toEqual({});
-    expect(networkRequestTool.services!({ device_id: MAC, requestId: ID } as never)).toEqual({});
-    expect(
-      networkRequestTool.services!({ device_id: MAC, requestId: "rn-net-1" } as never)
-    ).toEqual({ inspector: `NetworkInspector:${jsCapturePayload(8081, MAC)}` });
+    setJsCapture(jsCapturePayload(8081, MAC), {
+      bundleId: "com.example.app",
+      intent: "started",
+      installed: true,
+    });
+    try {
+      expect(networkRequestTool.services!({ device_id: MAC, requestId: ID } as never)).toEqual({});
+      expect(
+        networkRequestTool.services!({ device_id: MAC, requestId: "rn-net-1" } as never)
+      ).toEqual({ debugger: `JsRuntimeDebugger:${jsCapturePayload(8081, MAC)}` });
+    } finally {
+      forgetJsCapturesOf();
+    }
   });
 
   it("renders a macos- record with secret headers redacted and its body as the app sent it", async () => {

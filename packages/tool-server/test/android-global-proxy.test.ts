@@ -9,6 +9,7 @@ vi.mock("../src/utils/adb", async (importOriginal) => ({
 import { adbShell, runAdb } from "../src/utils/adb";
 import {
   clearArgentProxy,
+  parseAdbReverses,
   parseGlobalProxyState,
   setArgentProxy,
 } from "../src/utils/android-global-proxy";
@@ -245,5 +246,17 @@ describe("clearArgentProxy", () => {
     await clearArgentProxy(SERIAL);
 
     expect(writes()).toEqual([]);
+  });
+});
+
+describe("parseAdbReverses", () => {
+  it("maps each device port to its host port", () => {
+    const output =
+      "host-15 tcp:8081 tcp:8081\nhost-15 tcp:3000 tcp:4000\nhost-15 localabstract:x tcp:5\n";
+
+    expect([...parseAdbReverses(output)]).toEqual([
+      [8081, 8081],
+      [3000, 4000],
+    ]);
   });
 });

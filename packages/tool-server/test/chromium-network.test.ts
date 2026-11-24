@@ -150,6 +150,22 @@ describe("NetworkManager (recording)", () => {
     await net.setConditions(toCdpNetworkConditions(null));
     expect(net.throttled()).toBe(false);
   });
+
+  it("marks where a capture starts and where its stop ends, and keeps the mark after the stop", () => {
+    // No mark before a start, and a stop without a start marks nothing.
+    emitRequest(f.events, { id: "before", url: "https://x.test/before" });
+    expect(net.stopCapture()).toBeUndefined();
+
+    expect(net.startCapture()).toEqual({ lastSeq: 1 });
+    emitRequest(f.events, { id: "during", url: "https://x.test/during" });
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    emitRequest(f.events, { id: "after", url: "https://x.test/after" });
+    // A second stop keeps where the first one ended.
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+
+    // A new start begins a new mark, without an end.
+    expect(net.startCapture()).toEqual({ lastSeq: 3 });
+  });
 });
 
 // ── view-network-logs / view-network-request-details: Chromium branch ────────

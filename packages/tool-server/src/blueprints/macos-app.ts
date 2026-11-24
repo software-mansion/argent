@@ -167,6 +167,18 @@ export interface MacosLaunchResult extends MacosLibraryHandshake {
   note?: string;
 }
 
+/**
+ * One connection to the library, from {@link MacosAppApi.connect}. The library
+ * drops what a connection started, such as a screen recording, when that
+ * connection closes: when the app quits, when stop-simulator-server closes it,
+ * or when another tool-server connects to the app.
+ */
+export interface MacosAppConnection {
+  /** The app process at the other end. */
+  readonly pid: number;
+  readonly isOpen: boolean;
+}
+
 export interface MacosAppApi {
   readonly bundleId: string;
   /**
@@ -175,12 +187,20 @@ export interface MacosAppApi {
    * names `boot-device` / `launch-app` when the app is not running. Reconnects
    * through the library's listening socket when the first channel is gone.
    * A request that times out never runs in the app later, unless `runLate`.
+   * With `connection`, the request goes over that connection only and never
+   * over a new one: it fails with `MACOS_APP_CONNECTION_LOST` once that
+   * connection closed.
    */
   call<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
-    opts?: { timeoutMs?: number; runLate?: boolean }
+    opts?: { timeoutMs?: number; runLate?: boolean; connection?: MacosAppConnection }
   ): Promise<T>;
+  /**
+   * Waits for a launch in flight, connects when there is no connection, and
+   * returns the connection that calls go over now.
+   */
+  connect(): Promise<MacosAppConnection>;
   launch(opts?: MacosLaunchOptions): Promise<MacosLaunchResult>;
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
@@ -207,6 +227,13 @@ export interface MacosAppApi {
    * Never rejects.
    */
   stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }>;
+  /**
+   * Turns off the capture that an earlier start left on for the app's next
+   * connection, as before any start, when a later start finds that argent
+   * cannot capture the copy that runs. A stop stays, and so do the records.
+   * Does nothing while the app is connected.
+   */
+  forgetNetworkCaptureStart(): void;
   isNetworkCaptureStarted(): boolean;
   isNetworkCaptureStopped(): boolean;
   /**
@@ -373,24 +400,30 @@ async function noLaunchedCopyError(bundleId: string): Promise<FailureError> {
 
 /**
  * Why argent refuses to start the app, so that no launch arms its capture: an
- * Electron app or a build that the hardened runtime keeps the library out of. Undefined while argent's own copy runs, and when argent
- * cannot tell, for example when Spotlight does not know the app. Before argent
- * started the app, Spotlight's copy is only a guess at the build that runs
- * next, so its hardened runtime does not refuse: a Debug build can still run.
+ * Electron app or a build that the hardened runtime keeps the library out of.
+ * Undefined while argent's own copy runs, and when argent cannot tell, for
+ * example when Spotlight does not know the app. The build is the one argent
+ * started last. Before argent started the app, it is the build of a copy that
+ * runs without the library (the user's, or one that Xcode Run started), which
+ * is the app under test. With no such copy, Spotlight's build is only a guess
+ * at the build that runs next, so its hardened runtime does not refuse: a Debug
+ * build can still run.
  */
 export async function macosLaunchRefusal(bundleId: string): Promise<string | undefined> {
   if (await runningTrackedApp(bundleId)) return undefined;
   const tracked = getTrackedMacosApp(bundleId)?.appPath;
   const appPath = tracked ?? (await findMacosAppByBundleId(bundleId));
   if (!appPath) return undefined;
-  let info: MacosAppInfo;
-  try {
-    info = await inspectMacosApp(appPath);
-  } catch {
-    return undefined;
-  }
-  if (info.bundleId !== bundleId) return undefined;
-  return chromiumRefusal(info) ?? (tracked ? hardenedRuntimeRefusal(info) : undefined) ?? undefined;
+  const inspect = (at: string) => inspectMacosApp(at).catch(() => undefined);
+  const info = await inspect(appPath);
+  if (info?.bundleId !== bundleId) return undefined;
+  const refusal = chromiumRefusal(info);
+  if (refusal || tracked) return refusal ?? hardenedRuntimeRefusal(info) ?? undefined;
+  const copies = await findRunningCopies(bundleId, info.executable);
+  const other = copies.otherBuilds[0];
+  const running = copies.same.length > 0 ? info : other && (await inspect(other.appPath));
+  if (!running) return undefined;
+  return chromiumRefusal(running) ?? hardenedRuntimeRefusal(running) ?? undefined;
 }
 
 function errorMessage(err: unknown): string {
@@ -898,6 +931,39 @@ const lifecycles = new Map<
   string,
   { key: string; run: Promise<MacosLaunchResult>; settled: Promise<unknown>; pending: boolean }
 >();
+
+/** The connection handed out for each channel, and the channel behind each one. */
+const connections = new WeakMap<LibraryChannel, MacosAppConnection>();
+const connectionChannels = new WeakMap<MacosAppConnection, LibraryChannel>();
+
+function connectionOf(ch: LibraryChannel): MacosAppConnection {
+  let connection = connections.get(ch);
+  if (!connection) {
+    connection = {
+      pid: ch.handshake!.pid,
+      get isOpen() {
+        return ch.isOpen;
+      },
+    };
+    connections.set(ch, connection);
+    connectionChannels.set(connection, ch);
+  }
+  return connection;
+}
+
+/** A call pinned to a connection that closed is not sent over a new one. */
+function connectionGoneError(bundleId: string, method: string, cause?: unknown): FailureError {
+  return macosFailure(
+    `The connection to ${bundleId} that ${method} was bound to has closed: the app quit or ` +
+      `restarted, stop-simulator-server closed it, or another tool-server connected to the ` +
+      `app. argent did not send ${method} over a new connection, as the app dropped what the ` +
+      `old one started.`,
+    FAILURE_CODES.MACOS_APP_CONNECTION_LOST,
+    "macos_app_connection",
+    "unknown",
+    cause
+  );
+}
 
 /**
  * The quit of argent's own copy that a prompt holds up, by bundle id: the pid
@@ -1687,21 +1753,28 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     async call<T = unknown>(
       method: string,
       params: Record<string, unknown> = {},
-      opts: { timeoutMs?: number; runLate?: boolean } = {}
+      opts: { timeoutMs?: number; runLate?: boolean; connection?: MacosAppConnection } = {}
     ): Promise<T> {
-      await lifecycles.get(bundleId)?.settled;
+      const pinned = opts.connection ? connectionChannels.get(opts.connection) : undefined;
+      if (opts.connection && !pinned?.isOpen) throw connectionGoneError(bundleId, method);
+      if (!pinned) await lifecycles.get(bundleId)?.settled;
       try {
-        const ch = await ensureChannel();
+        const ch = pinned ?? (await ensureChannel());
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
         const suspensions = suspensionWatches.get(bundleId);
         if (suspensions) await waitWhileSuspended(suspensions, method);
         return (await ch.request(method, params, timeoutMs, opts.runLate, suspensions)) as T;
       } catch (err) {
+        if (pinned && !pinned.isOpen) throw connectionGoneError(bundleId, method, err);
         if (errorCode(err) === FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED) {
           throw closedByArgentError(bundleId, method);
         }
         throw err;
       }
+    },
+    async connect() {
+      await lifecycles.get(bundleId)?.settled;
+      return connectionOf(await ensureChannel());
     },
     launch: (opts = {}) => {
       const key = JSON.stringify(opts);
@@ -1841,6 +1914,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       } finally {
         if (ch.confirmDisabling === confirm) ch.confirmDisabling = undefined;
       }
+    },
+    forgetNetworkCaptureStart() {
+      // A connected app is a copy that argent captures.
+      if (liveChannel()) return;
+      captureStarted = false;
+      captureGap = false;
+      armedSinceLaunch = false;
     },
     isNetworkCaptureStarted: () => captureStarted,
     isNetworkCaptureStopped: () => captureStopped,
