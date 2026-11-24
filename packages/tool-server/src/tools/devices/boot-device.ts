@@ -51,6 +51,12 @@ import {
   waitForBootCompleted,
   type AndroidDevice,
 } from "../../utils/adb";
+import {
+  __clearReadOnlyBootsForTesting,
+  forgetReadOnlyBoot,
+  readOnlyBootEntries,
+  rememberReadOnlyBoot,
+} from "../../utils/android-read-only-boots";
 import { ensureDep } from "../../utils/check-deps";
 import {
   consoleOwnership,
@@ -574,8 +580,9 @@ async function dropUnreachableSerials(
  * side by side, so another one can register during this boot. So first the
  * process listening on each serial's console port is asked: a serial the
  * spawned emulator listens on is ours, one another process (or nothing)
- * listens on is not. Only serials whose listener cannot be read (Windows, no
- * `lsof`) go through the name and getprop checks.
+ * listens on is not. When a probe fails this time, the pick waits for the next
+ * poll rather than guess by name. Only where this host cannot read listeners at
+ * all (Windows) do serials go through the name and getprop checks.
  */
 async function pickOwnSerial(
   avdName: string,
@@ -587,7 +594,8 @@ async function pickOwnSerial(
     const owners = await Promise.all(newSerials.map((s) => consoleOwnership(s, ownPid)));
     const own = newSerials.find((_, i) => owners[i] === "own");
     if (own) return own;
-    candidates = newSerials.filter((_, i) => owners[i] === "unknown");
+    if (owners.includes("unknown")) return null;
+    candidates = newSerials.filter((_, i) => owners[i] === "unavailable");
     if (candidates.length === 0) return null;
   }
   const names = await Promise.all(candidates.map((s) => readEmulatorConsoleAvdName(s)));
@@ -903,9 +911,11 @@ function isPortInUse(err: unknown): boolean {
  * name it, and one that binds the pinned port first (a person following the
  * docs, another tool-server) would be taken for ours, then killed by serial
  * on a failure path. So the process listening on the console port decides
- * (see `consoleOwnership`). Only where that cannot be read (Windows) does the
- * name decide, and then an emulator of this AVD counts as ours only while
- * ours has not exited early.
+ * (see `consoleOwnership`). A probe that fails this time leaves the port
+ * undecided ("none") while ours runs, so the next poll asks again. Only where
+ * this host cannot read listeners at all (Windows) does the name decide, and
+ * then an emulator of this AVD counts as ours only while ours has not exited
+ * early. Once ours has exited, whatever answers on the port is not ours.
  */
 async function pinnedPortHolder(
   serial: string,
@@ -913,9 +923,10 @@ async function pinnedPortHolder(
   child: import("node:child_process").ChildProcess,
   exitedEarly: boolean
 ): Promise<"own" | "none"> {
-  const owner = child.pid === undefined ? "unknown" : await consoleOwnership(serial, child.pid);
+  const owner = child.pid === undefined ? "unavailable" : await consoleOwnership(serial, child.pid);
   if (owner === "own") return "own";
   if (owner === "free") return "none";
+  if (owner === "unknown" && !exitedEarly) return "none";
   const answer = await readEmulatorConsoleAvdName(serial);
   const holderAvd = answer.status === "ok" ? answer.avdName : undefined;
   if (owner === "other") throw portTakenError(serial, holderAvd);
@@ -1223,10 +1234,16 @@ async function attemptBoot(params: {
 // (5554 -> 8554).
 const GRPC_PORT_OFFSET = 3000;
 
-const inFlightBoots = new Map<
-  string,
-  { avdName: string; readOnly: boolean; port?: number; promise: Promise<AndroidBootResult> }
->();
+type InFlightBoot = {
+  avdName: string;
+  readOnly: boolean;
+  port?: number;
+  /** False while it waits for clashing boots ahead of it, before any spawn. */
+  started: boolean;
+  promise: Promise<AndroidBootResult>;
+};
+
+const inFlightBoots = new Map<string, InFlightBoot>();
 
 type AndroidBootParams = {
   avdName: string;
@@ -1242,20 +1259,17 @@ function inFlightBootKey(params: AndroidBootParams): string {
   return `${params.avdName}\u0000${params.readOnly ? "ro" : "rw"}\u0000${params.port ?? ""}`;
 }
 
-// Read-only emulators argent booted, by serial. One launched without `-port`
-// shows no port in its command line, so only the pid ties it to its serial; the
-// pid also tells it from another emulator that later took the same console port.
-// `pinned` marks one launched with `-port`: it belongs to the calls that name
-// that port.
-const readOnlyBoots = new Map<string, { avdName: string; pid: number; pinned: boolean }>();
+// Read-only emulators argent booted are recorded by serial and pid, also across
+// tool-server restarts: see utils/android-read-only-boots.
 
 /** What argent knows about the running instances of one AVD. */
 type AvdInstances = {
   /** Serials of the read-only instances. */
   readOnly: Set<string>;
   /**
-   * Serials pinned with `-port`, by anyone, plus the ports of pinned boots in
-   * flight here. A call without `port` never takes one of these.
+   * Serials pinned with `-port`, by anyone, plus the ports of pinned boots that
+   * have started here (not those still queued). A call without `port` never
+   * takes one of these.
    */
   pinned: Set<string>;
 };
@@ -1275,21 +1289,26 @@ async function avdInstances(avdName: string, listed?: Set<string>): Promise<AvdI
   const readOnly = new Set<string>();
   const pinned = new Set<string>();
   for (const b of inFlightBoots.values()) {
-    if (b.port !== undefined) pinned.add(`emulator-${b.port}`);
+    if (b.port !== undefined && b.started) pinned.add(`emulator-${b.port}`);
   }
   for (const p of processes ?? []) {
     if (p.port === null) continue;
     pinned.add(`emulator-${p.port}`);
     if (p.readOnly) readOnly.add(`emulator-${p.port}`);
   }
-  for (const [serial, boot] of readOnlyBoots) {
+  for (const boot of readOnlyBootEntries()) {
+    const serial = boot.serial;
     if (boot.avdName !== avdName) continue;
+    // A record an earlier tool-server left is believed only where the process
+    // table confirms it: without one, its emulator may have exited between
+    // the two tool-servers and another one taken the serial.
+    if (processes === null && !boot.ownProcess) continue;
     const gone =
       processes !== null
         ? !processes.some((p) => p.pid === boot.pid && p.readOnly)
         : listed !== undefined && !listed.has(serial);
     if (gone) {
-      readOnlyBoots.delete(serial);
+      forgetReadOnlyBoot(serial, boot.pid);
       continue;
     }
     readOnly.add(serial);
@@ -1305,7 +1324,7 @@ async function avdInstances(avdName: string, listed?: Set<string>): Promise<AvdI
  */
 export function __resetInFlightBootsForTesting(): void {
   inFlightBoots.clear();
-  readOnlyBoots.clear();
+  __clearReadOnlyBootsForTesting();
 }
 
 /**
@@ -1340,8 +1359,11 @@ async function blockersBesides(
   const processes = await readEmulatorProcessesForAvd(avdName);
   if (processes === null) return [];
   const port = Number(serial.match(/^emulator-(\d+)$/)?.[1]);
-  const record = readOnlyBoots.get(serial);
-  const knownPid = record?.avdName === avdName ? record.pid : undefined;
+  const record = readOnlyBootEntries().find((b) => b.serial === serial);
+  const knownPid =
+    record?.avdName === avdName && processes.some((p) => p.pid === record.pid)
+      ? record.pid
+      : undefined;
   const others: EmulatorProcess[] = [];
   for (const p of processes.filter(filter)) {
     if (p.port !== null) {
@@ -1355,10 +1377,36 @@ async function blockersBesides(
   return others;
 }
 
+/**
+ * What a writable boot blocked by a writable instance can do. A boot with
+ * `port` was refused because the instance runs elsewhere, so the call that
+ * reaches it is named. A boot without `port` already takes any writable
+ * instance, so this one was not ready to reuse (for example frozen), and only
+ * closing it helps.
+ */
+function writableConflictAdvice(
+  params: AndroidBootParams,
+  writable: EmulatorProcess[],
+  shutDown: boolean
+): string {
+  if (params.port === undefined) {
+    return shutDown
+      ? `This call shut that emulator down, and it has not exited yet. Retry once it exits.`
+      : `That emulator did not become ready to reuse. Close it, then retry.`;
+  }
+  const ports = [...new Set(writable.flatMap((p) => (p.port !== null ? [p.port] : [])))];
+  const reach =
+    ports.length === 1 && writable.every((p) => p.port !== null)
+      ? `Boot without \`port\`, or with \`port: ${ports[0]}\`, to use it`
+      : `Boot without \`port\` to use it`;
+  return `${reach}, or close it, then retry.`;
+}
+
 /** The emulator refuses to start this boot next to the `blocking` instances. */
 function readOnlyConflictError(
   params: AndroidBootParams,
-  blocking: EmulatorProcess[]
+  blocking: EmulatorProcess[],
+  shutDown = false
 ): FailureError {
   const describe = (p: EmulatorProcess) =>
     `pid ${p.pid}${p.port !== null ? ` on emulator-${p.port}` : ""}`;
@@ -1369,8 +1417,8 @@ function readOnlyConflictError(
       `emulator, or start it with \`-read-only\` too, then retry.`
     : writable.length > 0
       ? `AVD "${params.avdName}" is already running writable (${writable.map(describe).join(", ")}), ` +
-        `and the emulator runs one writable instance of an AVD at a time. Boot without \`port\`, ` +
-        `or with that instance's \`port\`, to use it, or close it, then retry.`
+        `and the emulator runs one writable instance of an AVD at a time. ` +
+        writableConflictAdvice(params, writable, shutDown)
       : `AVD "${params.avdName}" is running read-only (${blocking.map(describe).join(", ")}), and ` +
         `the emulator cannot start a writable instance next to it. Pass \`readOnly: true\`, or ` +
         `close the read-only emulators, then retry.`;
@@ -1382,28 +1430,76 @@ function readOnlyConflictError(
   });
 }
 
+/**
+ * Start an Android boot, or join the one in flight for the same instance. A
+ * boot that clashes with boots already in flight or queued (see
+ * `bootsClash`) waits for them first. It waits only for those that came before
+ * it: any clashing boot that comes later waits for this one, so a queued boot
+ * is not overtaken. The wait counts against `bootTimeoutMs`.
+ */
 async function bootAndroid(params: AndroidBootParams): Promise<AndroidBootResult> {
   const key = inFlightBootKey(params);
-  for (;;) {
-    const existing = inFlightBoots.get(key);
-    if (existing) return existing.promise;
-    const clashing = [...inFlightBoots.values()].filter((b) => bootsClash(b, params));
-    if (clashing.length === 0) break;
-    await Promise.allSettled(clashing.map((b) => b.promise));
-  }
-  const promise = bootAndroidImpl(params).finally(() => {
-    inFlightBoots.delete(key);
-  });
-  inFlightBoots.set(key, {
+  const existing = inFlightBoots.get(key);
+  if (existing) return existing.promise;
+  const deadline = Date.now() + params.bootTimeoutMs;
+  const ahead = [...inFlightBoots.values()].filter((b) => bootsClash(b, params));
+  const entry: Omit<InFlightBoot, "promise"> & { promise?: Promise<AndroidBootResult> } = {
     avdName: params.avdName,
     readOnly: params.readOnly,
     ...(params.port !== undefined ? { port: params.port } : {}),
-    promise,
+    started: ahead.length === 0,
+  };
+  const promise = (async () => {
+    if (ahead.length > 0) {
+      await waitForBootsAhead(params, ahead, deadline);
+      entry.started = true;
+    }
+    return bootAndroidImpl(params, deadline);
+  })().finally(() => {
+    inFlightBoots.delete(key);
   });
+  entry.promise = promise;
+  inFlightBoots.set(key, entry as InFlightBoot);
   return promise;
 }
 
-async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootResult> {
+/** Wait for the clashing boots `ahead` to settle, or fail once `deadline` passes. */
+async function waitForBootsAhead(
+  params: AndroidBootParams,
+  ahead: InFlightBoot[],
+  deadline: number
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = await Promise.race([
+    Promise.allSettled(ahead.map((b) => b.promise)).then(() => true),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+    }),
+  ]);
+  clearTimeout(timer);
+  if (settled) return;
+  const samePort = params.port !== undefined && ahead.some((b) => b.port === params.port);
+  const which = samePort
+    ? `another boot on port ${params.port}`
+    : `another boot of AVD "${params.avdName}" that cannot run next to this one`;
+  throw new FailureError(
+    `This boot waited for ${which}, and it did not finish within ` +
+      `${Math.round(params.bootTimeoutMs / 1000)}s (\`bootTimeoutMs\`). Retry once it finishes.`,
+    {
+      error_code: samePort
+        ? FAILURE_CODES.BOOT_ANDROID_PORT_IN_USE
+        : FAILURE_CODES.BOOT_ANDROID_READ_ONLY_CONFLICT,
+      failure_stage: "boot_android_queue",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
+async function bootAndroidImpl(
+  params: AndroidBootParams,
+  overallDeadline: number
+): Promise<AndroidBootResult> {
   // Preflight both Android binaries up front so a missing emulator package
   // surfaces as an install hint, not a misleading "no AVDs" from `listAvds()`.
   // `ensureDep` resolves through `$ANDROID_HOME` as well as PATH.
@@ -1442,8 +1538,6 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
     console.warn(`[boot-device:linux] ${msg}`);
   }
   const emulatorBinary = await resolveEmulatorOrThrow();
-  const overallDeadline = Date.now() + params.bootTimeoutMs;
-
   // Stage 0: validate the AVD exists. The preflight ruled out a missing binary,
   // so an empty list here really means the user has no AVDs.
   const avds = await listAvds();
@@ -1518,7 +1612,7 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // misleading "Running multiple emulators" error.
   let hotBootFailureReason: string | null;
   const dropKilledEmulator = async (serial: string) => {
-    readOnlyBoots.delete(serial);
+    forgetReadOnlyBoot(serial);
     await awaitEmulatorsGone([serial]);
     const refreshed = await listAndroidDevices().catch(() => existingDevices);
     existingDevices.splice(0, existingDevices.length, ...refreshed);
@@ -1618,7 +1712,7 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
     blocks,
     killedRunning ? Math.min(overallDeadline, Date.now() + EMULATOR_GONE_BUDGET_MS) : 0
   );
-  if (blocking.length > 0) throw readOnlyConflictError(params, blocking);
+  if (blocking.length > 0) throw readOnlyConflictError(params, blocking, killedRunning);
 
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
   await dropUnreachableSerials(existingDevices, serialsBefore);
@@ -1654,9 +1748,9 @@ async function bootAndroidImpl(params: AndroidBootParams): Promise<AndroidBootRe
   // writable boot that comes up there is not the read-only one that left.
   const rememberReadOnly = (serial: string, pid: number | undefined) => {
     if (params.readOnly && pid !== undefined) {
-      readOnlyBoots.set(serial, { avdName: params.avdName, pid, pinned: portSerial !== null });
+      rememberReadOnlyBoot(serial, { avdName: params.avdName, pid, pinned: portSerial !== null });
     } else {
-      readOnlyBoots.delete(serial);
+      forgetReadOnlyBoot(serial);
     }
   };
 

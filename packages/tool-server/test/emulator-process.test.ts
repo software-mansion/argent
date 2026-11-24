@@ -5,6 +5,7 @@ import {
   parseParentPids,
   parseEmulatorPidsForAvd,
   parseEmulatorProcessesForAvd,
+  parseProcNetTcpListeners,
 } from "../src/utils/emulator-process";
 
 const QEMU_MAC =
@@ -114,6 +115,29 @@ describe("parseEmulatorProcessesForAvd", () => {
       { pid: 503, readOnly: false, port: 5560 },
       { pid: 504, readOnly: false, port: null },
     ]);
+  });
+});
+
+describe("parseProcNetTcpListeners", () => {
+  // /proc/net/tcp with an emulator console on 127.0.0.1:5554 (0x15B2), a
+  // connection from it, and a listener on another port.
+  const TCP = [
+    "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+    "   0: 0100007F:15B2 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41234 1 0000000000000000 100 0 0 10 0",
+    "   1: 0100007F:15B2 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 41299 1 0000000000000000 20 4 30 10 -1",
+    "   2: 0100007F:15B4 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41300 1 0000000000000000 100 0 0 10 0",
+  ].join("\n");
+
+  it("returns the inodes of the sockets listening on the port, not its connections", () => {
+    expect(parseProcNetTcpListeners(TCP, 5554)).toEqual(["41234"]);
+    expect(parseProcNetTcpListeners(TCP, 5558)).toEqual([]);
+  });
+
+  it("reads the IPv6 table's longer addresses", () => {
+    const tcp6 =
+      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +
+      "   0: 00000000000000000000000001000000:15B2 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 52001 1 0000000000000000 100 0 0 10 0";
+    expect(parseProcNetTcpListeners(tcp6, 5554)).toEqual(["52001"]);
   });
 });
 

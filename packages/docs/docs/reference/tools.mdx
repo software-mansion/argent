@@ -99,6 +99,7 @@ The emulator runs an AVD writable one time, or read-only any number of times. It
 - A writable boot fails with the same code while the AVD runs and Argent cannot reuse that emulator. This includes a writable emulator on another port.
 - A read-only boot reuses only a read-only emulator. A writable boot reuses any running emulator of the AVD that it is allowed to take.
 - When two boots of one AVD cannot run at the same time, the second boot waits for the first. Then it reuses the emulator or fails with the conflict code.
+- The wait counts against `bootTimeoutMs`. When the first boot does not finish in that time, the second boot fails with the conflict code, or with `BOOT_ANDROID_PORT_IN_USE` when both boots give the same `port`.
 
 An emulator started with `-port` belongs to the boots that give that `port`:
 
@@ -107,7 +108,12 @@ An emulator started with `-port` belongs to the boots that give that `port`:
 - With `force: true`, a boot stops an emulator only when no other emulator of the AVD would still block the boot. Otherwise it fails with `BOOT_ANDROID_READ_ONLY_CONFLICT` and stops nothing.
 - A read-only boot with `port` fails with `BOOT_ANDROID_PORT_IN_USE` when the AVD runs writable on that port. Add `force: true` to stop that emulator and boot it read-only.
 
-A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. On Windows, Argent cannot read the command lines of the emulators. There, a read-only boot reuses only an emulator that Argent started.
+A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
+
+On Windows, Argent cannot read the command lines of the emulators. There:
+
+- A read-only boot reuses only an emulator that the running tool-server started.
+- Argent tells its emulator from another emulator of the AVD by the AVD name. Thus, do not start other emulators of the AVD while Argent boots one.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 

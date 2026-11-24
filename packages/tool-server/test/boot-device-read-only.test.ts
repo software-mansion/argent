@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 import { getFailureSignal, type Registry } from "@argent/registry";
 
@@ -80,6 +80,7 @@ import {
   __resetInFlightBootsForTesting,
   createBootDeviceTool,
 } from "../src/tools/devices/boot-device";
+import { __restartReadOnlyBootsForTesting } from "../src/utils/android-read-only-boots";
 
 const registry: Registry = { resolveService: async () => ({}) } as unknown as Registry;
 const AVD = "Pixel_7_API_34";
@@ -106,6 +107,8 @@ let world: FakeEmulator[] = [];
 let nextPid = 1000;
 /** False: `ps` fails, as when it times out, or as on Windows where there is none. */
 let psAvailable = true;
+/** How many `lsof` calls still time out, as under host load. */
+let lsofTimeouts = 0;
 
 function emulator(serial: string, opts: Partial<Omit<FakeEmulator, "serial">> = {}): FakeEmulator {
   return {
@@ -162,7 +165,13 @@ function installWorld() {
       if (!psAvailable) return new Error("ps: timed out");
       return { stdout: world.map((e) => `${e.pid} 1\n`).join(""), stderr: "" };
     }
-    if (cmd.endsWith("lsof")) return lsof(args);
+    if (cmd.endsWith("lsof")) {
+      if (lsofTimeouts > 0) {
+        lsofTimeouts--;
+        return Object.assign(new Error("lsof: timed out"), { killed: true, code: null });
+      }
+      return lsof(args);
+    }
     if (cmd === "adb" && args[0] === "devices") {
       const lines = world.map((e) => `${e.serial}\t${e.stale ? "offline" : "device"}\n`).join("");
       return { stdout: `List of devices attached\n${lines}`, stderr: "" };
@@ -254,6 +263,7 @@ beforeEach(() => {
   probeMock.mockReset();
   world = [];
   psAvailable = true;
+  lsofTimeouts = 0;
   listeningPorts.clear();
   __resetInFlightBootsForTesting();
   installWorld();
@@ -261,6 +271,9 @@ beforeEach(() => {
   hasSnapshotMock.mockResolvedValue(true);
   probeMock.mockResolvedValue({ loadable: true, reason: null });
 });
+
+// The records file lives under the temp directory (see test/setup).
+afterAll(() => __resetInFlightBootsForTesting());
 
 describe("boot-device Android — readOnly and port", () => {
   it("passes -read-only and -port to the snapshot probe and the hot-boot spawn", async () => {
@@ -672,6 +685,140 @@ describe("boot-device Android — readOnly and port", () => {
 
     expect(result).toMatchObject({ serial: "emulator-5554" });
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses a read-only emulator it booted without a port after the tool-server restarts", async () => {
+    const first = await boot({ readOnly: true });
+    __restartReadOnlyBootsForTesting();
+
+    const again = await boot({ readOnly: true });
+
+    expect(again).toMatchObject({ serial: (first as { serial: string }).serial });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not take a record an earlier tool-server left on trust where ps cannot confirm it", async () => {
+    const first = await boot({ readOnly: true });
+    __restartReadOnlyBootsForTesting();
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const again = await boot({ readOnly: true });
+
+      expect(again).not.toMatchObject({ serial: (first as { serial: string }).serial });
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(process, "platform", { value: platform });
+    }
+  });
+
+  it("does not take another instance of the AVD for its own while the listener probe times out", async () => {
+    // Theirs takes 5554 first, and the probes that would tell the two apart
+    // time out for a while. The AVD name is the same for both, so it decides
+    // nothing.
+    spawnMock.mockImplementationOnce((cmd: string, args: string[]) => {
+      world.push(emulator("emulator-5554", { readOnly: true }));
+      lsofTimeouts = 3;
+      installSpawn();
+      return spawnMock(cmd, args);
+    });
+
+    const result = await boot({ readOnly: true });
+
+    expect(result).toMatchObject({ serial: "emulator-5556" });
+  });
+
+  it("does not take another instance on its pinned port for its own while the listener probe times out", async () => {
+    const theirs = emulator("emulator-5584", { readOnly: true, portArg: true });
+    const ours = Object.assign(new EventEmitter(), {
+      pid: nextPid++,
+      unref: () => {},
+      kill: vi.fn(),
+      exitCode: null,
+      signalCode: null,
+    });
+    spawnMock.mockImplementationOnce(() => {
+      world.push(theirs);
+      lsofTimeouts = 2;
+      return ours;
+    });
+
+    expect(await failureCode(boot({ readOnly: true, port: 5584 }))).toBe(
+      "BOOT_ANDROID_PORT_IN_USE"
+    );
+    expect(world).toEqual([theirs]);
+  });
+
+  it("does not start a boot that clashes with one queued ahead of it", async () => {
+    // Another AVD's boot holds 5556. A read-only boot of ours on 5556 queues
+    // behind it, and a writable boot of ours queues behind that one, though it
+    // does not clash with the boot in flight.
+    let release!: () => void;
+    spawnMock.mockImplementationOnce((_cmd: string, args: string[]) => {
+      const proc = Object.assign(new EventEmitter(), {
+        pid: nextPid++,
+        unref: () => {},
+        kill: () => {},
+        exitCode: null,
+        signalCode: null,
+      });
+      release = () =>
+        world.push(
+          emulator("emulator-5556", {
+            avdName: args[args.indexOf("-avd") + 1]!,
+            pid: proc.pid,
+            portArg: true,
+          })
+        );
+      return proc;
+    });
+    const other = boot({ avdName: "Other_AVD", port: 5556 });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    const queued = boot({ readOnly: true, port: 5556 });
+    const writable = boot({});
+    await new Promise((r) => setTimeout(r, 300));
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    release();
+    const results = await Promise.allSettled([other, queued, writable]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected", "fulfilled"]);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the wait for a clashing boot against bootTimeoutMs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      // Every emulator spawned hangs before it registers with adb.
+      spawnMock.mockImplementation(() =>
+        Object.assign(new EventEmitter(), {
+          pid: nextPid++,
+          unref: () => {},
+          kill: () => {},
+          exitCode: null,
+          signalCode: null,
+        })
+      );
+      const first = boot({ readOnly: true, port: 5584, bootTimeoutMs: 300_000 });
+      first.catch(() => {});
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+      const started = Date.now();
+      let settledAt = -1;
+      const second = boot({ port: 5584, bootTimeoutMs: 30_000 }).finally(() => {
+        settledAt = Date.now();
+      });
+      second.catch(() => {});
+      for (let i = 0; i < 400 && settledAt < 0; i++) await vi.advanceTimersByTimeAsync(500);
+
+      expect(settledAt - started).toBeLessThanOrEqual(31_000);
+      expect(await failureCode(second)).toBe("BOOT_ANDROID_PORT_IN_USE");
+
+      let firstDone = false;
+      void first.catch(() => {}).finally(() => (firstDone = true));
+      for (let i = 0; i < 1_000 && !firstDone; i++) await vi.advanceTimersByTimeAsync(500);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([5555, 5552, 5586])("rejects port %i in the schema", (port) => {

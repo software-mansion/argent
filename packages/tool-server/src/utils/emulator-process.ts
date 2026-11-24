@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile, readdir, readlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import { PS_ARGS_WITH_PID, PS_BIN } from "./vega-process";
 
@@ -109,17 +110,21 @@ const LSOF_BIN = ["/usr/sbin/lsof", "/usr/bin/lsof"].find((p) => existsSync(p)) 
  * consoles of all of them name the same AVD, so the listener is the only proof
  * of which one a spawn started.
  *
- * "free" when nothing listens on it, as for a stale `offline` adb entry or an
- * emulator still opening its console. "unknown" when it cannot be read: on
- * Windows, without `lsof` or `ps`, or when a probe fails.
+ * - "free": nothing listens on it, as for a stale `offline` adb entry or an
+ *   emulator still opening its console.
+ * - "unknown": a probe failed this time (a timeout under load, a failed `ps`).
+ *   The caller asks again rather than guess.
+ * - "unavailable": this host offers no way to read the listener: Windows, or
+ *   neither `lsof` nor a readable `/proc`. Only then may a caller fall back to
+ *   weaker evidence, such as the AVD name the console reports.
+ *
+ * Where `lsof` is missing on Linux, as in a slim image, `/proc` answers instead.
  */
-export async function consoleOwnership(
-  serial: string,
-  ownPid: number
-): Promise<"own" | "other" | "free" | "unknown"> {
+export async function consoleOwnership(serial: string, ownPid: number): Promise<ConsoleOwnership> {
   const port = serial.match(/^emulator-(\d+)$/)?.[1];
-  if (port === undefined || process.platform === "win32") return "unknown";
-  let listener: number;
+  if (port === undefined || process.platform === "win32") return "unavailable";
+  let listener: number | "free" | "unseen";
+  let parentOf: ((pid: number) => Promise<number | null>) | null = null;
   try {
     const { stdout } = await execFileAsync(
       LSOF_BIN,
@@ -131,14 +136,103 @@ export async function consoleOwnership(
     if (pid === undefined) return "unknown";
     listener = parseInt(pid, 10);
   } catch (err) {
-    // lsof exits 1 and prints nothing when no process listens on the port.
     const e = err as { code?: unknown; killed?: boolean; stdout?: unknown };
-    return e.code === 1 && !e.killed && !e.stdout ? "free" : "unknown";
+    // lsof exits 1 and prints nothing when no process listens on the port.
+    if (e.code === 1 && !e.killed && !e.stdout) return "free";
+    if (e.code !== "ENOENT") return "unknown";
+    if (process.platform !== "linux") return "unavailable";
+    const fromProc = await procConsoleListener(parseInt(port, 10));
+    if (fromProc === null) return "unavailable";
+    listener = fromProc;
+    parentOf = procParentPid;
   }
+  if (listener === "free") return "free";
+  // A listener whose process this user cannot inspect is not one this
+  // tool-server spawned.
+  if (listener === "unseen") return "other";
   if (listener === ownPid) return "own";
-  const parents = await readParentPids();
-  if (parents === null) return "unknown";
-  return isDescendantOf(listener, ownPid, parents) ? "own" : "other";
+  if (parentOf === null) {
+    const parents = await readParentPids();
+    if (parents === null) return "unknown";
+    return isDescendantOf(listener, ownPid, parents) ? "own" : "other";
+  }
+  const seen = new Set<number>();
+  for (let p: number | null = listener; p !== null && p > 1 && !seen.has(p);) {
+    if (p === ownPid) return "own";
+    seen.add(p);
+    p = await parentOf(p);
+  }
+  return "other";
+}
+
+export type ConsoleOwnership = "own" | "other" | "free" | "unknown" | "unavailable";
+
+/**
+ * The inodes of the sockets listening on TCP `port`, from the text of
+ * `/proc/net/tcp` or `/proc/net/tcp6`: hex `address:port` in the second
+ * column, state `0A` (LISTEN) in the fourth, the inode in the tenth.
+ */
+export function parseProcNetTcpListeners(text: string, port: number): string[] {
+  const inodes: string[] = [];
+  for (const line of text.split("\n").slice(1)) {
+    const f = line.trim().split(/\s+/);
+    const localPort = f[1]?.split(":").pop();
+    if (f[3] !== "0A" || localPort === undefined || f[9] === undefined || f[9] === "0") continue;
+    if (parseInt(localPort, 16) === port) inodes.push(f[9]);
+  }
+  return inodes;
+}
+
+/**
+ * The pid listening on TCP `port`, read from `/proc`: "free" when no socket
+ * listens on it, "unseen" when one does but belongs to a process this user
+ * cannot inspect, null when `/proc` cannot be read.
+ */
+async function procConsoleListener(port: number): Promise<number | "free" | "unseen" | null> {
+  const inodes = new Set<string>();
+  let read = false;
+  for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    try {
+      for (const i of parseProcNetTcpListeners(await readFile(table, "utf8"), port)) inodes.add(i);
+      read = true;
+    } catch {
+      // tcp6 is absent without IPv6.
+    }
+  }
+  if (!read) return null;
+  if (inodes.size === 0) return "free";
+  const targets = new Set([...inodes].map((i) => `socket:[${i}]`));
+  let pids: string[];
+  try {
+    pids = (await readdir("/proc")).filter((d) => /^\d+$/.test(d));
+  } catch {
+    return null;
+  }
+  for (const pid of pids) {
+    let fds: string[];
+    try {
+      fds = await readdir(`/proc/${pid}/fd`);
+    } catch {
+      continue;
+    }
+    for (const fd of fds) {
+      const link = await readlink(`/proc/${pid}/fd/${fd}`).catch(() => "");
+      if (targets.has(link)) return parseInt(pid, 10);
+    }
+  }
+  return "unseen";
+}
+
+/** The parent of `pid` from `/proc/<pid>/stat`, or null once it is gone. */
+async function procParentPid(pid: number): Promise<number | null> {
+  try {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    // The command name in parentheses can hold spaces, so split after it.
+    const ppid = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1];
+    return ppid === undefined ? null : parseInt(ppid, 10);
+  } catch {
+    return null;
+  }
 }
 
 /** Each process's parent, from `ps -o pid=,ppid=` output. */

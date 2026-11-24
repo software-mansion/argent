@@ -997,6 +997,9 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       expect(getFailureSignal((outcome as { e: unknown }).e)?.error_code).toBe(
         "BOOT_ANDROID_READ_ONLY_CONFLICT"
       );
+      // The call had no `port` and could not reuse that emulator, so booting
+      // without `port` cannot help.
+      expect(String((outcome as { e: unknown }).e)).not.toContain("port");
       expect(spawnedAt).toBe(-1);
     } finally {
       vi.useRealTimers();
