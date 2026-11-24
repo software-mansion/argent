@@ -332,7 +332,9 @@ describe("dark-tail diagnostics (non-hidden conditions)", () => {
     const result = await run("clamped-await");
 
     expect(result.steps[0].status).toBe("fail");
-    expect(readsAt.at(-1)! - readsAt[0]!).toBeLessThan(1_200);
+    const span = readsAt.at(-1)! - readsAt[0]!;
+    expect(span).toBeGreaterThan(900);
+    expect(span).toBeLessThan(1_200);
   });
 
   it("assert text: does not quote stale element text from before the reads went dark", async () => {

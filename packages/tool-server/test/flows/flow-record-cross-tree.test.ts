@@ -1490,9 +1490,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Trusted reads keep the condition false; the source dies at 900ms, so the
     // dark tail runs from the 600ms read: 400ms, past one poll interval but
     // inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays firm.
-    const probeStartedAt = Date.now();
+    let firstReadAt: number | undefined;
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt >= 900) throw new Error("native devtools went away");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");
