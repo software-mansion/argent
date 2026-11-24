@@ -1283,7 +1283,8 @@ export function makeNetworkWaitReadScript(
       url: e.request ? e.request.url : undefined,
       status: e.response ? e.response.status : undefined,
       durationMs: e.durationMs,
-      errorText: e.errorText
+      errorText: e.errorText,
+      timestamp: e.timestamp
     });
   }
   return JSON.stringify({

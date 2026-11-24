@@ -49,7 +49,7 @@ export const ALLOWED_TOOLS = new Set([
   "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
-  // Returns its match, never an image: after network-capture-start, an
+  // Returns its match or near misses, never an image: after network-capture-start, an
   // action and its wait run as one sequence, and an unmet wait stops it.
   AWAIT_NETWORK_REQUEST_TOOL_ID,
 ]);

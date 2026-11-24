@@ -378,7 +378,7 @@ Use `tool: await-network-request` to check that an action sends a request. Start
 
 The runner supplies the device ID. Keep the `tool:` form. Argent rejects secret placeholders in `url`. Match on a URL fragment that contains no secret. The result includes the full matched URL.
 
-The step reports `fail` when the wait returns `success: false`. It reports `error` if capture has no start for the target. A failed step skips the remaining steps. If replay skips the stop, stop capture before you rerun the test. See [Wait for a request](/docs/reference/tools#wait-for-a-request).
+The step reports `fail` when the wait returns `success: false`. The failure reason includes any near misses and the criteria they missed. The step reports `error` if capture has no start for the target. A failed step skips the remaining steps. If replay skips the stop, stop capture before you rerun the test. See [Wait for a request](/docs/reference/tools#wait-for-a-request).
 
 ## Conditions
 

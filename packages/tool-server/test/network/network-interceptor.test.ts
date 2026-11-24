@@ -5188,6 +5188,7 @@ describe("makeNetworkWaitReadScript", () => {
         url: "https://api.test/after",
         status: 200,
         durationMs: expect.any(Number),
+        timestamp: expect.any(Number),
       },
     ]);
     // A reload gives the context another token, and its ids start at 1 again.
