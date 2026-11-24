@@ -31,6 +31,9 @@ import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { fakeMacosLibrary, rect, webTree } from "./helpers/macos-tree-fixture";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 useMacosAppsFlag();
 
