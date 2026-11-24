@@ -35,7 +35,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 | Rotate device                  | `rotate`             | Orientation changes                                                      |
 | Fold device                    | `fold`               | Foldables only: `references/foldables.md`                                |
 | Shake device                   | `shake`              | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu           |
-| Slow or offline network        | `network-conditions` | Latency, bandwidth, offline. iOS sim app, Chromium tab; Android: offline |
+| Slow or offline network        | `network-conditions` | Latency, bandwidth, offline. iOS sim app, Chromium tab, Android emulator |
 | Wait for UI                    | `await-ui-element`   | Block until an element is visible/hidden/exists/contains text            |
 | Wait for idle                  | `await-screen-idle`  | Block until a non-empty tree holds for `minStableMs` (§4)                |
 
