@@ -11,6 +11,7 @@ import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-contro
 import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { SCREEN_RECORDING_SESSION_NAMESPACE } from "../../blueprints/screen-recording-session";
 import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
+import { IOS_REMOTE_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-remote-audio-session";
 import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
@@ -117,6 +118,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
   IOS_AUDIO_SESSION_NAMESPACE,
+  IOS_REMOTE_AUDIO_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
   MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
