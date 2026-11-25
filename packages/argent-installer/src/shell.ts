@@ -56,18 +56,26 @@ export class ShellCommandError extends Error {
   }
 }
 
-// Captures stderr for the rejection message; Windows shell handling mirrors
+// Captures output for the rejection message; Windows shell handling mirrors
 // execShellCommandSync. Local-install commands must pass `opts.cwd` so they
 // mutate the project's manifest, not whatever cwd argent runs in.
-export function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}): Promise<void> {
+export function runShellCommand(
+  cmd: ShellCommand,
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd.bin, cmd.args, {
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
     });
 
+    let stdout = "";
     let stderr = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
@@ -78,6 +86,7 @@ export function runShellCommand(cmd: ShellCommand, opts: { cwd?: string } = {}):
         reject(
           new ShellCommandError(
             stderr.trim() ||
+              stdout.trim() ||
               (signal !== null
                 ? `Command terminated by signal ${signal}`
                 : `Command exited with code ${code}`),

@@ -13,7 +13,7 @@ import type { StepStatus } from "./flow-run";
  * "`ok: false` fails the step" rule: the generic `tool` step dispatches results
  * typed `unknown`, several carrying app-derived payloads, and a blanket rule
  * would bind all of them — and every tool added later — to "a key called `ok`
- * decides my flow's verdict". `isUnmetUiWaitResult` set the precedent for
+ * decides my flow's verdict". `isUnmetWaitResult` set the precedent for
  * naming the tool instead.
  *
  * Results cross the registry boundary as `unknown`: a shape not recognised
@@ -25,12 +25,17 @@ const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
 interface NestedOutcome {
-  status: StepStatus;
+  status: Exclude<StepStatus, "pass">;
   reason: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function reasonText(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || "no reason given";
 }
 
 function firstFailingStep(steps: unknown): string | undefined {
@@ -46,8 +51,7 @@ function firstFailingStep(steps: unknown): string | undefined {
         : typeof entry.kind === "string"
           ? entry.kind
           : "step";
-    const why = typeof entry.reason === "string" ? entry.reason : "no reason given";
-    return `${what}: ${why}`;
+    return `${what}: ${reasonText(entry.reason)}`;
   }
   return undefined;
 }
@@ -73,7 +77,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "error",
       reason:
         `e2e test "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
-        `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
+        `Set prerequisiteAcknowledged to true once it holds; an e2e test can compose it with run: instead.`,
     };
   }
 
@@ -114,7 +118,7 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${reasonText(failed.error)}`,
     };
   }
 

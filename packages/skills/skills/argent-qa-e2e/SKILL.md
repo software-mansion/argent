@@ -1,13 +1,13 @@
 ---
 name: argent-qa-e2e
-description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
+description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, Mac apps, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
 ---
 
 # Create a QA regression e2e test
 
 Load `argent-create-e2e` as the authoring engine. Follow its required references for recorder syntax, selectors, polish, platform exceptions, and repair. This skill adds the QA contract and completion gate.
 
-**Vega** supports every item below: `launch: { vega: ... }`, `await:`/`assert:` selectors, `snapshot:`, and `idle` all run there. Only the touch directives are missing, because Vega is remote-driven. Navigate with recorded `tool: tv-remote` steps and type with `tool: keyboard`, which leaves item 5 with nothing to govern. A D-pad path is relative to where focus already is, so gate every move with item 4's identity check rather than assuming the cursor landed. Read `argent-tv-interact` for focus reading and remote navigation.
+**Vega** supports `launch: { vega: ... }`, `await:`/`assert:` selectors, `snapshot:`, and `idle`. Network checks are unavailable on Vega. Navigate with recorded `tool: tv-remote` steps and type with `tool: keyboard`, which leaves item 5 with nothing to govern. A D-pad path is relative to where focus already is, so gate every move with item 4's identity check rather than assuming the cursor landed. Read `argent-tv-interact` for focus reading and remote navigation.
 
 **Apple TV and Android TV are out of scope.** The runner does not reject touch directives there: on Apple TV they fail at the gesture layer, and on Android TV a `tap:` can pass without doing anything. Use `argent-tv-interact` and report the limitation.
 
@@ -19,7 +19,7 @@ A QA e2e test is complete only when:
 
 1. The first step that is not `echo:` or `script:` is `launch:`. In-test setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
-3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
+3. Every requirement maps to an executable check: `await:`, `assert:`, a reviewed `snapshot:`, or `tool: await-network-request`. Echoes and screenshots are not verdicts. A negative UI check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
 5. Targets satisfy the stable-selector and coordinate-fallback rules. QA keeps coordinates only for genuinely unlabeled targets. Vacuous on Vega, which has no coordinate targets.
 6. The unchanged YAML passes twice with the same runner. Pass 1 starts with fresh mobile Argent services, and pass 2 follows immediately.
@@ -34,7 +34,7 @@ Before touching the app, write a compact table. Restate it in the final report. 
 - Stable executable evidence for each row.
 - Required data and side effects.
 
-Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test.
+Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test. Do not make it depend on the state that another test leaves. A suite does not change this rule.
 
 Do not invent a material value or weaken ambiguity. Choose the strongest UI-verifiable reading and report it. Ask when the choice changes test meaning.
 
@@ -83,6 +83,7 @@ A snapshot has no recorder form. Inspect its stable state during the walkthrough
 - **Repeated controls:** prefer an id. Otherwise use YAML-only `within` with a stable container. Use `text.in` to prove rendered membership inside that container.
 - **Dynamic content:** assert controlled state or stable app chrome. Use anchored structure for unavoidable dynamic values and disclose the dependency.
 - **Visual state:** snapshot only a correct, settled, deterministic screen. Use full screen for global changes and `cropOn` for one component.
+- **Network requests:** record capture inside the test, after `launch:`, so both replays establish their own capture window. On Android, start just before the triggering action and stop after the wait. For many related requests, stop after the last wait. A wait requires a match, so use it only for requests the app must send. See [Network capture](../argent-create-e2e/references/live-authoring.md#network-capture).
 
 Never put acceptance evidence inside `when:`. Use `when:` only for optional setup that reconverges to the required path.
 

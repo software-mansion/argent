@@ -14,6 +14,7 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 }));
 
 import { fetchFlowTree } from "../../src/tools/flows/flow-tree";
+import { adaptFullHierarchyToDescribeResult } from "../../src/tools/flows/flow-ios-tree";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
@@ -243,6 +244,77 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Volume" } }]);
   });
 
+  // The simulator tree as the runner reads it: the real adapter over a raw
+  // hierarchy, so the role the recorder tells a text input by is the adapter's.
+  function setSimulatorFields(...fields: Array<Record<string, unknown>>) {
+    const window = { x: 0, y: 0, width: 400, height: 800 };
+    const tree = adaptFullHierarchyToDescribeResult({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: window,
+          windowFrame: window,
+          children: fields.map((field, i) => ({
+            className: "UITextField",
+            windowFrame: { x: 40, y: 100 + i * 100, width: 320, height: 44 },
+            children: [],
+            ...field,
+          })),
+        },
+      ],
+    });
+    currentTreeData = () => ({ tree, source: "native-devtools" });
+  }
+
+  it("does not record the text an iOS simulator text field holds as its selector", async () => {
+    // What a field holds is what a step typed into it: no name for the field,
+    // and the value of a `{{secret:…}}` placeholder when the step typed one.
+    setSimulatorFields({ value: "tok-REVIEW-4242" });
+
+    const result = await recordTap({ x: 0.5, y: 0.15 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { role: "AXTextField" } }]);
+    expect(JSON.stringify(result)).not.toContain("tok-REVIEW-4242");
+    const yaml = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${FLOW}.yaml`), "utf8");
+    expect(yaml).not.toContain("tok-REVIEW-4242");
+  });
+
+  it("still records the text a text field holds on a tree that is not the simulator's", async () => {
+    // The same node from the runner of a physical iPhone or from a Mac app:
+    // only the simulator tree gained this text, so only there is it left out.
+    const filled = n({
+      role: "AXTextField",
+      value: "linda",
+      frame: { x: 0.1, y: 0.125, width: 0.8, height: 0.055 },
+    });
+    for (const source of ["xcuitest-runner", "macos-devtools"] as const) {
+      setTree([filled], source);
+      await recordTap({ x: 0.5, y: 0.15 });
+    }
+
+    const tap = { kind: "tap", selector: { text: "linda" } };
+    expect(await recordedSteps()).toEqual([tap, tap]);
+  });
+
+  it("records an iOS simulator text field that holds text by its label", async () => {
+    setSimulatorFields({ label: "Token", value: "tok-REVIEW-4242" });
+
+    await recordTap({ x: 0.5, y: 0.15 });
+
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Token" } }]);
+  });
+
+  it("keeps coordinates when only the text in them tells two simulator text fields apart", async () => {
+    setSimulatorFields({ value: "first" }, { value: "second" });
+
+    const result = await recordTap({ x: 0.5, y: 0.28 });
+
+    // By role alone the first field wins, which is not the one tapped.
+    expect(await recordedSteps()).toEqual([{ kind: "tap", x: 0.5, y: 0.28 }]);
+    expect(result.message).toContain("resolves to a different element");
+    expect(JSON.stringify(result)).not.toContain("second");
+  });
+
   it("carries a recorded clickCount into the tap step's times", async () => {
     // A recorded double-tap must not silently replay as a single tap.
     setTree([n({ label: "Photo", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })]);
@@ -328,6 +400,18 @@ describe("flow-add-step tap selector capture", () => {
 
     expect(result.message).toContain("fallback ax-service tree");
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  it("says replay cannot read a Chrome tab's web content taken over DevTools", async () => {
+    setTree(
+      [n({ label: "Buy", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],
+      "android-devtools+cdp"
+    );
+
+    const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
+
+    expect(result.message).toContain("web content came from Chrome DevTools");
+    expect(result.message).not.toContain("android-devtools unavailable");
   });
 
   it("reports both caveats when a role-only selector comes off the fallback tree", async () => {

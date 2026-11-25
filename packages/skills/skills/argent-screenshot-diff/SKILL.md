@@ -7,7 +7,7 @@ description: Compare saved or live app screenshots with the argent screenshot-di
 
 Use `screenshot-diff` as supporting visual evidence for UI QA and visual regression checks. It highlights pixel-visible change or stability; it does not replace visual inspection, accessibility/component-tree state, frame/attribute checks, logs, network evidence, or app behavior. Its description covers the input combinations, physical-iPhone captures and the result.
 
-Do not use screenshot diffing for tap-coordinate discovery. Use `describe` or `native-describe-screen` to find targets first.
+Do not use screenshot diffing for tap-coordinate discovery. Use `describe` to find targets first.
 
 ## 2. When To Use
 
@@ -19,7 +19,7 @@ Do not use screenshot diffing for tap-coordinate discovery. Use `describe` or `n
 ## 3. Deterministic Flow
 
 1. Navigate to the known-good state. Capture the baseline before the relevant interaction or before editing whenever feasible.
-2. Save a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`, so the full-size image stays out of context; keep the returned `path`. Use normal downscaled screenshots for everything else.
+2. Save a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`, so the full-size image stays out of context; keep the returned `path`. Use normal downscaled screenshots for everything else. Images of different sizes return `dimension_mismatch` and are not compared, so keep one baseline per device model.
 3. Perform the interaction, apply the code change and navigate to the state under test, after the app reloads or rebuilds.
 4. Call `screenshot-diff` with that `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`. If both images are already saved, pass `currentPath` instead of `captureCurrent`.
 5. Inspect the summary and artifact paths, then combine the diff with normal visual inspection and any structural/runtime evidence needed for the assertion.

@@ -22,7 +22,7 @@ import {
   isCaptureInFlight,
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
-import { renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
+import { hangSuspendedNote, renderUnattributedLeaksNote } from "../../../utils/ios-profiler/render";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
@@ -43,7 +43,9 @@ interface HangCommitCorrelation {
 
 const zodSchema = z.object({
   port: metroPortField,
-  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
+  device_id: metroDeviceIdParam(
+    "Device ID from list-devices used for the native profile (iOS simulator UDID, Android serial<flag:macos-apps>, or Mac app ID</flag:macos-apps>)."
+  ),
 });
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -52,7 +54,7 @@ export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema
 Maps native hangs to React commits using wall-clock time alignment.
 Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
-Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
+Fails if either react-profiler-analyze or native-profiler-analyze has not been called first, or if the session stored no React commits.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -61,11 +63,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     failedMsg: ({ failureSignal }) =>
       `Failed to build combined performance report: ${failureSignal.error_code}`,
   },
-  // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
-  // loadAndroidCombinedData. Chromium has no native trace capture.
+  // iOS and Mac apps read xctrace output; Android re-queries the Perfetto
+  // .pftrace via loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
     apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
+    macos: { app: true, catalyst: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
@@ -120,6 +123,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     }
 
     let uiHangs: UiHang[];
+    let hangsRecorded = true;
     let memoryLeaks: MemoryLeak[];
     // Android has no leak capture; on iOS the trace may lack a Leaks table.
     let leaksRecorded: boolean;
@@ -155,6 +159,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         });
       }
       uiHangs = nativeApi.parsedData.uiHangs;
+      hangsRecorded = nativeApi.parsedData.hangsRecorded;
       memoryLeaks = nativeApi.parsedData.memoryLeaks;
       leaksRecorded = nativeApi.parsedData.leaksRecorded;
     }
@@ -173,7 +178,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const onDisk = await readCommitTree(sessionPaths.commitsPath);
     const commitTree = { commits: onDisk.commits, hookNames: new Map() };
     if (commitTree.commits.length === 0) {
-      throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
+      // Analyzing again would change nothing. Name the storage rule, not a cause:
+      // the list is also empty after a slow commit with no named components, and
+      // when nothing rendered at all.
+      const message =
+        "No React commits are stored for this session: only commits of 16ms or more with named " +
+        "components, and their neighbours, are kept. There is nothing to correlate with the native " +
+        "profile. Use the native-profiler-analyze report on its own.";
+      throw new FailureError(message, {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
         failure_stage: "profiler_combined_report_load_react_data",
         failure_area: "tool_server",
@@ -284,10 +296,10 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       "React Profiler + Native Profiler — Cross-Tool Correlation",
       "",
       `**React Profiler:** ${nonMarginCommits.length} hot commits  `,
-      `**Native Profiler:** ${uiHangs.length} hangs, ` +
+      `**Native Profiler:** ${hangsRecorded ? `${uiHangs.length} hangs` : "hangs not recorded"}, ` +
         (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
-      `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
+      `**Clock offset:** React started ${(Math.abs(reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",
     ];
 
@@ -305,7 +317,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           const topCommit = overlappingCommits[0]!;
 
           lines.push(
-            `### ${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms) ↔ Commit #${topCommit.commit.commitIndex} (${topCommit.commit.totalRenderMs}ms)`
+            `### ${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)}) ↔ Commit #${topCommit.commit.commitIndex} (${topCommit.commit.totalRenderMs}ms)`
           );
           lines.push("");
 
@@ -373,7 +385,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         for (const corr of uncorrelated) {
           const { hang } = corr;
           lines.push(
-            `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms)` +
+            `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})` +
               (hang.suspectedFunctions.length > 0 ? ` — \`${hang.suspectedFunctions[0]}\`` : "")
           );
         }
@@ -394,7 +406,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
           mountComponents,
           // From parsedData, not the live session field: a recording started
           // after analyze must not re-label the data rendered here.
-          nativeApi.parsedData?.mallocStackLogging ?? null
+          nativeApi.parsedData?.mallocStackLogging ?? null,
+          nativeApi.platform === "macos"
         )
       );
     }
@@ -438,12 +451,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
  * That caveat comes from render.ts's shared `renderUnattributedLeaksNote`, so
  * its wording and capture-mode handling cannot drift from the analyze report.
  * A null/undefined `mallocStackLogging` makes it infer the capture mode from
- * the attributed count. Exported for unit testing.
+ * the attributed count; `macApp` gives a Mac app's note, as analyze does.
+ * Exported for unit testing.
  */
 export function renderCombinedMemoryLeaks(
   memoryLeaks: MemoryLeak[],
   mountComponents: Set<string>,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  macApp = false
 ): string[] {
   if (memoryLeaks.length === 0) return [];
 
@@ -472,7 +487,12 @@ export function renderCombinedMemoryLeaks(
   if (unattributedLeaks.length > 0) {
     lines.push(
       ``,
-      renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+      renderUnattributedLeaksNote(
+        unattributedLeaks,
+        attributedLeaks.length,
+        mallocStackLogging,
+        macApp
+      )
     );
   }
 

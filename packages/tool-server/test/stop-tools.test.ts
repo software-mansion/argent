@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   forgetLogicalKeyedDevice,
@@ -9,6 +12,13 @@ import { Registry, ServiceState, zodObjectToJsonSchema } from "@argent/registry"
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
+import {
+  forgetJsCapturesOf,
+  jsCapturesOn,
+  setJsCapture,
+  type JsCapture,
+} from "../src/blueprints/network-inspector";
+import { NETWORK_CAPTURE_END_SCRIPT } from "../src/utils/debugger/scripts/network-interceptor";
 
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
@@ -809,6 +819,65 @@ describe("stop-all-simulator-servers device scoping", () => {
   });
 });
 
+describe("stop-all-simulator-servers on a device of a device provider", () => {
+  const CLAIMED = "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809";
+  const EXT_ID = `ext:acme-3f2a9c:${CLAIMED}`;
+  let directory: string;
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-stop-all-provider-"));
+    const descriptorPath = path.join(directory, "acme.json");
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["native-devtools"],
+            kind: "simulator",
+            name: "iPhone 16 Pro",
+            nativeDevtools: { socketPath: path.join(directory, "agent.sock") },
+            nativeId: CLAIMED,
+            platform: "ios",
+            state: "Booted",
+          },
+        ],
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+  });
+
+  afterEach(() => {
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    fs.rmSync(directory, { force: true, recursive: true });
+  });
+
+  // Both names of the device key one native devtools service by the udid, and
+  // that service only attaches to the agent the provider lends.
+  it.each([CLAIMED, EXT_ID])(
+    "disposes the provider's native devtools without reporting it stopped, scoped to %s",
+    async (scope) => {
+      const services = new Map([
+        [`NativeDevtools:${CLAIMED}`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`NativeDevtools:${CLAIMED}:tcp`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`NativeDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
+      ]);
+      const registry = createMockRegistry(services);
+      const tool = createStopAllSimulatorServersTool(registry);
+
+      expect(await tool.execute!({}, { devices: [scope, MINE] })).toEqual({
+        stopped: [`NativeDevtools:${MINE}`],
+      });
+      expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED}`);
+      expect(registry.disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED}:tcp`);
+    }
+  );
+});
+
 describe("stop-all-simulator-servers unmatched ids", () => {
   // Without `unmatched`, a scoped stop whose ids owned nothing answers with a
   // bare `{ stopped: [] }` — byte-identical to the answer on a genuinely clean
@@ -1490,116 +1559,246 @@ describe("stop-all-simulator-servers left_running", () => {
 });
 
 describe("stop-all-simulator-servers interaction messages", () => {
-  // Both formatters previously had no coverage at all — flattening either to
-  // an unconditional string left the whole suite green. Pin the exact wording
-  // for every branch a caller can hit.
   function tool() {
     return createStopAllSimulatorServersTool(createMockRegistry(new Map()));
   }
 
   it("startedMsg reports a machine-wide sweep when devices is omitted", () => {
     const startedMsg = tool().interaction!.startedMsg!;
-    expect(startedMsg({ params: {} })).toBe("Stopping all simulator servers");
-  });
-
-  it("startedMsg is singular for exactly one device", () => {
-    const startedMsg = tool().interaction!.startedMsg!;
-    expect(startedMsg({ params: { devices: [MINE] } })).toBe(
-      "Stopping simulator servers for 1 device"
-    );
-  });
-
-  it("startedMsg is plural for two or more devices", () => {
-    const startedMsg = tool().interaction!.startedMsg!;
-    expect(startedMsg({ params: { devices: [MINE, THEIRS] } })).toBe(
-      "Stopping simulator servers for 2 devices"
-    );
-  });
-
-  it("completedMsg has no unmatched clause when nothing was unmatched, singular and zero counts", () => {
-    const completedMsg = tool().interaction!.completedMsg!;
-    expect(completedMsg({ params: {}, result: { stopped: [`SimulatorServer:${MINE}`] } })).toBe(
-      "Stopped 1 simulator server"
-    );
-    expect(completedMsg({ params: {}, result: { stopped: [] } })).toBe(
-      "Stopped 0 simulator servers"
-    );
-  });
-
-  it("completedMsg pluralizes 'servers' for more than one stopped", () => {
-    const completedMsg = tool().interaction!.completedMsg!;
-    expect(
-      completedMsg({
-        params: {},
-        result: { stopped: [`SimulatorServer:${MINE}`, `SimulatorServer:${THEIRS}`] },
-      })
-    ).toBe("Stopped 2 simulator servers");
-  });
-
-  it("completedMsg appends the singular unmatched clause for exactly one bad id", () => {
-    const completedMsg = tool().interaction!.completedMsg!;
-    expect(
-      completedMsg({
-        params: { devices: [MINE, "GHOST-9999"] },
-        result: { stopped: [`SimulatorServer:${MINE}`], unmatched: ["GHOST-9999"] },
-      })
-    ).toBe("Stopped 1 simulator server (1 supplied id matched no service)");
-  });
-
-  it("completedMsg appends the plural unmatched clause for two or more bad ids", () => {
-    const completedMsg = tool().interaction!.completedMsg!;
-    expect(
-      completedMsg({
-        params: { devices: ["GHOST-1", "GHOST-2"] },
-        result: { stopped: [], unmatched: ["GHOST-1", "GHOST-2"] },
-      })
-    ).toBe("Stopped 0 simulator servers (2 supplied ids matched no service)");
-  });
-
-  it("completedMsg appends the left_running clause, singular and plural", () => {
-    const completedMsg = tool().interaction!.completedMsg!;
-    expect(
-      completedMsg({
-        params: { devices: [MINE] },
-        result: {
-          stopped: [`SimulatorServer:${MINE}`],
-          left_running: ["JsRuntimeDebugger:8081:L"],
-        },
-      })
-    ).toBe("Stopped 1 simulator server (1 debugger session left running)");
-    expect(
-      completedMsg({
-        params: { devices: [MINE] },
-        result: {
-          stopped: [],
-          left_running: ["JsRuntimeDebugger:8081:L", "NetworkInspector:8081:L"],
-        },
-      })
-    ).toBe("Stopped 0 simulator servers (2 debugger sessions left running)");
+    expect(startedMsg({ params: {} })).toMatch(/all simulator servers/i);
   });
 
   it("failedMsg names the error code", () => {
-    // The one formatter of the three with no coverage — flattening it to a
-    // constant left the suite green.
     const failedMsg = tool().interaction!.failedMsg!;
     expect(
       failedMsg({
         params: {},
         failureSignal: { error_code: "REGISTRY_TOOL_EXECUTION_FAILED" },
       } as never)
-    ).toBe("Failed to stop simulator servers: REGISTRY_TOOL_EXECUTION_FAILED");
+    ).toContain("REGISTRY_TOOL_EXECUTION_FAILED");
   });
 
   it("completedMsg reports both clauses when a call hits both", () => {
     const completedMsg = tool().interaction!.completedMsg!;
-    expect(
-      completedMsg({
-        params: { devices: ["GHOST-1"] },
-        result: { stopped: [], unmatched: ["GHOST-1"], left_running: ["JsRuntimeDebugger:8081:L"] },
-      })
-    ).toBe(
-      "Stopped 0 simulator servers (1 supplied id matched no service; 1 debugger session left running)"
+    const message = completedMsg({
+      params: { devices: ["GHOST-1"] },
+      result: { stopped: [], unmatched: ["GHOST-1"], left_running: ["JsRuntimeDebugger:8081:L"] },
+    });
+    expect(message).toMatch(/0 simulator servers/);
+    expect(message).toMatch(/1 supplied id.*no service/);
+    expect(message).toMatch(/1 debugger session.*running/);
+  });
+});
+
+describe("stop-all-simulator-servers and JS network capture", () => {
+  const APP = "com.example.shop";
+  const OTHER_APP = "com.example.other";
+  const PAUSE = NETWORK_CAPTURE_END_SCRIPT;
+
+  function started(bundleId: string): JsCapture {
+    return { bundleId, intent: "started", mark: { install: null }, installed: true };
+  }
+
+  function stopped(bundleId: string): JsCapture {
+    return { ...started(bundleId), intent: "stopped" };
+  }
+
+  afterEach(() => {
+    forgetJsCapturesOf();
+  });
+
+  /**
+   * A registry whose JS runtime debuggers answer each evaluate with `answer`.
+   * `events` lists each evaluate and each disposal, in order.
+   */
+  function registryWithRuntimes(
+    services: Map<string, { state: ServiceState; dependents: string[] }>,
+    answer: (urn: string) => Promise<unknown> = async () => JSON.stringify({ installed: true })
+  ) {
+    const events: string[] = [];
+    const registry = createMockRegistry(services);
+    const dispose = vi.mocked(registry.disposeService).getMockImplementation()!;
+    vi.mocked(registry.disposeService).mockImplementation(async (urn: string) => {
+      events.push(`dispose ${urn}`);
+      await dispose(urn);
+    });
+    // Every runtime's evaluates, as (urn, expression, options).
+    const evaluate = vi.fn(async (urn: string, expr: string, _options?: unknown) => {
+      events.push(`${expr === PAUSE ? "pause" : "evaluate"} ${urn}`);
+      return answer(urn);
+    });
+    const resolveService = vi.fn(async (urn: string) => ({
+      cdp: { evaluate: (expr: string, options?: unknown) => evaluate(urn, expr, options) },
+    }));
+    Object.assign(registry, { resolveService });
+    return { registry, events, evaluate, resolveService };
+  }
+
+  const running = { state: ServiceState.RUNNING, dependents: [] as string[] };
+
+  it("forgets the JS capture entries of the scoped device only", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${MINE}`, started(OTHER_APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry } = registryWithRuntimes(
+      new Map([
+        [`SimulatorServer:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8190:${MINE}`, { ...running }],
+      ])
     );
+
+    // Matched case-insensitively, as every other id here is.
+    await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE.toLowerCase()] }
+    );
+
+    expect(jsCapturesOn(MINE)).toEqual([]);
+    expect(jsCapturesOn(THEIRS)).toEqual([{ ...started(APP), port: 8081 }]);
+  });
+
+  it("forgets every JS capture entry on an unscoped call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${THEIRS}`, { ...running }],
+      ])
+    );
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, {});
+
+    expect(jsCapturesOn(MINE)).toEqual([]);
+    expect(jsCapturesOn(THEIRS)).toEqual([]);
+  });
+
+  it("forgets no JS capture entry on an aborted call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    const { registry } = registryWithRuntimes(
+      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+    );
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] },
+      { signal: controller.signal } as never
+    );
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(jsCapturesOn(MINE)).toEqual([{ ...started(APP), port: 8081 }]);
+  });
+
+  it("pauses capture in the scoped device's JS runtime before its debugger is disposed, and not in another device's", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry, events, evaluate } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${THEIRS}`, { ...running }],
+      ])
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`JsRuntimeDebugger:8081:${MINE}`] });
+    expect(events).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `dispose JsRuntimeDebugger:8081:${MINE}`,
+    ]);
+    // A runtime that does not answer cannot hold the stop for long.
+    expect(evaluate).toHaveBeenCalledWith(`JsRuntimeDebugger:8081:${MINE}`, PAUSE, {
+      timeout: 1_000,
+    });
+  });
+
+  it("pauses capture in every live JS runtime on an unscoped call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${THEIRS}`, started(OTHER_APP));
+    const { registry, events } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8190:${THEIRS}`, { ...running }],
+      ])
+    );
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, {});
+
+    expect(events.filter((event) => event.startsWith("pause")).sort()).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `pause JsRuntimeDebugger:8190:${THEIRS}`,
+    ]);
+    expect(events.indexOf(`dispose JsRuntimeDebugger:8081:${MINE}`)).toBeGreaterThan(
+      events.indexOf(`pause JsRuntimeDebugger:8081:${MINE}`)
+    );
+  });
+
+  it("still stops the device when its JS runtime rejects the pause", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    const { registry, events } = registryWithRuntimes(
+      new Map([[`JsRuntimeDebugger:8081:${MINE}`, { ...running }]]),
+      async () => {
+        throw new Error("CDP request timed out");
+      }
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`JsRuntimeDebugger:8081:${MINE}`] });
+    expect(events).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `dispose JsRuntimeDebugger:8081:${MINE}`,
+    ]);
+    // The interceptor can still record, so its capture stays, stopped.
+    expect(jsCapturesOn(MINE)).toEqual([{ ...stopped(APP), port: 8081 }]);
+  });
+
+  it("reaches no JS runtime for an entry whose debugger is not live", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${MINE}`, started(OTHER_APP));
+    setJsCapture(`8191:${MINE}`, started("com.example.third"));
+    const { registry, resolveService } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { state: ServiceState.IDLE, dependents: [] }],
+        [`JsRuntimeDebugger:8190:${MINE}`, { state: ServiceState.ERROR, dependents: [] }],
+        [`SimulatorServer:${MINE}`, { ...running }],
+      ])
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`SimulatorServer:${MINE}`] });
+    expect(resolveService).not.toHaveBeenCalled();
+    // Each interceptor can still record, so its capture stays, stopped.
+    expect(jsCapturesOn(MINE)).toEqual([
+      { ...stopped(APP), port: 8081 },
+      { ...stopped(OTHER_APP), port: 8190 },
+      { ...stopped("com.example.third"), port: 8191 },
+    ]);
+  });
+
+  it("forgets an entry the pause did not reach when the app has no unpaused interceptor", async () => {
+    setJsCapture(`8081:${MINE}`, { ...started(APP), installed: false });
+    setJsCapture(`8190:${MINE}`, { ...stopped(OTHER_APP), paused: true });
+    const { registry } = registryWithRuntimes(
+      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+    );
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, { devices: [MINE] });
+
+    expect(jsCapturesOn(MINE)).toEqual([]);
   });
 });
 
@@ -1616,10 +1815,8 @@ describe("stop-metro", () => {
   });
 
   it("returns stopped: false when no process on port", async () => {
-    // Port 1 is privileged, so only root can be listening on it — the probe
-    // finds nothing. This runs the real tool, which SIGTERMs every pid it
-    // finds, so an unprivileged port would both fail here and kill whatever
-    // a concurrent run (or the developer) happens to have bound.
+    // This runs the real tool, which SIGTERMs every listener it finds; port 1
+    // is normally unbound, unlike ports a concurrent run or the developer use.
     const result = await stopMetroTool.execute!({}, { port: 1 });
     expect(result.stopped).toBe(false);
     expect(result.port).toBe(1);

@@ -2,13 +2,16 @@
 // Command layer only — argv parsing and console output; the registry and JSON
 // storage live in `@argent/configuration-core`.
 
+import * as path from "node:path";
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import { linkedSecretsNote } from "./secrets.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   FLAG_REGISTRY,
   getFlagDefinition,
   getFlagsPath,
+  isHomeDir,
   readFlags,
   setFlag,
   unsetFlag,
@@ -114,6 +117,8 @@ function runToggle(
   }
 
   const filePath = getFlagsPath(parsed.scope);
+  const warning = degenerateProjectScopeWarning(parsed.scope, filePath);
+  let wrote = true;
   try {
     if (command === "enable") {
       setFlag(parsed.name, true, parsed.scope);
@@ -123,19 +128,40 @@ function runToggle(
       setFlag(parsed.name, false, parsed.scope);
     } else {
       // Opt-in flag: the off default takes over once the entry is gone.
-      unsetFlag(parsed.name, parsed.scope);
+      wrote = unsetFlag(parsed.name, parsed.scope);
     }
   } catch (err) {
     console.error(`Failed to ${command} flag: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
+  if (wrote && warning) console.error(pc.yellow(warning));
   if (command === "enable") {
     console.log(`Enabled flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
   } else {
     console.log(`Disabled flag "${parsed.name}" (${parsed.scope}).`);
   }
+  const shadow = projectShadowNote(parsed.name, parsed.scope, command);
+  if (shadow) console.log(pc.yellow(shadow));
   return parsed.name;
+}
+
+// A project value wins over the global one, so a global toggle that the project
+// file contradicts changes nothing. Said now, not when the feature still refuses.
+function projectShadowNote(
+  name: string,
+  scope: FlagScope,
+  command: "enable" | "disable"
+): string | undefined {
+  if (scope !== "global") return undefined;
+  const wanted = command === "enable";
+  const project = readFlags("project");
+  if (!Object.hasOwn(project, name) || project[name] === wanted) return undefined;
+  return (
+    `The project flags file ${getFlagsPath("project")} sets "${name}" to ${project[name]}, ` +
+    `which overrides the global value, so the flag stays ${wanted ? "off" : "on"} in this project. ` +
+    `Run: argent ${command} ${name} --scope project`
+  );
 }
 
 export function enable(
@@ -152,6 +178,8 @@ export function enable(
 export function disable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
   runToggle(argv, "disable", registry);
 }
+
+const FLAGS_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
 
 // `argent flags` — every registry flag with its description and effective state
 // (project overrides global).
@@ -170,8 +198,21 @@ Options:
     return;
   }
 
-  const json = argv.includes("--json");
-  const projectFlags = readFlags("project");
+  let json: boolean;
+  try {
+    const { positionals, options } = parseCommandArgs(argv, FLAGS_OPTIONS);
+    if (positionals.length > 0) {
+      throw new UsageError(`Unexpected extra argument: "${positionals[0]}"`);
+    }
+    json = options.json === true;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}`);
+    process.exit(2);
+  }
+  // A home-rooted project's flags file is the global one.
+  const projectIsHome = isHomeDir(path.dirname(path.dirname(getFlagsPath("project"))));
+  const projectFlags = projectIsHome ? {} : readFlags("project");
   const globalFlags = readFlags("global");
 
   const effective: Record<string, { value: boolean; scope: FlagScope }> = {};
@@ -241,5 +282,5 @@ Options:
   }
 
   console.log(`\n  Global:  ${getFlagsPath("global")}`);
-  console.log(`  Project: ${getFlagsPath("project")}`);
+  if (!projectIsHome) console.log(`  Project: ${getFlagsPath("project")}`);
 }

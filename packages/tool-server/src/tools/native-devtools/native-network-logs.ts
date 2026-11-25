@@ -2,65 +2,86 @@ import { z } from "zod";
 import {
   FAILURE_CODES,
   FailureError,
-  ServiceState,
   type Registry,
   type ServiceRef,
   type ToolDefinition,
 } from "@argent/registry";
 import {
+  isInjectableBundleId,
   nativeDevtoolsRef,
+  nonInjectableError,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
   type NativeDevtoolsPrecheckBlock,
-  type NetworkEvent,
 } from "../../blueprints/native-devtools";
 import {
   androidNetworkInspectorRef,
   liveAndroidNetworkCaptures,
   type AndroidCaptureState,
-  type AndroidNativeRecord,
-  type AndroidNativeRecordState,
   type AndroidNetworkInspectorApi,
   type AndroidNetworkInspectorState,
-  type AndroidNetworkNotAttachable,
 } from "../../blueprints/android-network-inspector";
+import { liveIosNetworkCaptures } from "../../blueprints/ios-network-records";
+import type { NativeNetworkRecord, NativeRecordState } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { nativeUnavailableReason, isLiveService } from "../network/network-capture";
+import type { AppleNativeLayer, IosNetworkRecords } from "../../blueprints/ios-network-records";
+import type { MacosAppApi } from "../../blueprints/macos-app";
+import { macosAppServices } from "../../utils/macos-input";
+import { requireMacosAppOfBundle } from "./macos-view-hierarchy";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
-  bundleId: z.string().describe("App bundle ID on iOS or package name on Android"),
+  udid: z
+    .string()
+    .describe(
+      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+    ),
+  bundleId: z
+    .string()
+    .describe(
+      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On macOS, omit the macos-app- prefix</flag:macos-apps>."
+    ),
   port: metroPortField.describe(
-    "Android only: the app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
+    "Exclude requests to this Metro port on local addresses. Omit it to use the device's Metro port (usually 8081)."
   ),
   limit: z
     .number()
+    .int()
+    .nonnegative()
     .optional()
     .default(50)
-    .describe("Maximum number of entries to return: the most recent ones, oldest first"),
+    .describe(
+      "Take the newest matching requests and return them oldest first. Use 0 for capture status and totals without entries."
+    ),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details"
+      "Hide existing history from later lists. Cleared request IDs still work in view-network-request-details."
     ),
+  // Declared so this non-strict object refuses the old stop instead of stripping it: the read
+  // would succeed while capture records on.
   stop: z
-    .boolean()
+    .never({
+      error:
+        "native-network-logs no longer stops capture: call network-capture-stop with this udid and bundleId, which keeps what was captured (stop-all-simulator-servers for the device also ends it). Drop `stop` from this call; `stop: false` was a plain read",
+    })
     .optional()
     .describe(
-      "Android only: turn native capture off for this app instead of listing. Other apps keep theirs."
+      "Retired. Omit even when false. Use network-capture-stop with the same udid and bundleId."
     ),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
-interface AndroidNativeRequestLine {
+interface NativeRequestLine {
   id: string;
   method: string;
   url: string;
-  state: AndroidNativeRecordState;
+  state: NativeRecordState;
   status?: number;
   mimeType?: string;
   durationMs?: number;
@@ -68,33 +89,27 @@ interface AndroidNativeRequestLine {
   rnRequestId?: number;
 }
 
-interface AndroidNativeListing {
+interface NativeListing {
   status: "ok";
   header: string;
   armed: boolean;
+  /** Only on the answer before any network-capture-start for the app, or after one that found the layer unavailable. */
+  started?: false;
+  /** Only while network-capture-stop has capture stopped for the app. */
+  stopped?: true;
+  /** Android: the capture state the in-app agent reports, or unavailable after a start that found the layer unavailable. */
   capture?: AndroidCaptureState;
-  /** The detail the in-app agent sent with the capture state, for example why only some requests are captured. */
+  /** Android: the detail the in-app agent sent with the capture state, for example why only some requests are captured, or why the start found the layer unavailable. */
   captureDetail?: string;
   count: number;
   total: number;
-  requests: AndroidNativeRequestLine[];
+  requests: NativeRequestLine[];
 }
 
-interface AndroidNativeStopped {
-  status: "ok";
-  stopped: boolean;
-  message: string;
-}
+type Result = NativeDevtoolsPrecheckBlock | NativeListing;
 
-type Result =
-  | NativeDevtoolsPrecheckBlock
-  | { status: "ok"; count: number; events: NetworkEvent[] }
-  | AndroidNetworkNotAttachable
-  | AndroidNativeListing
-  | AndroidNativeStopped;
-
-/** `stop` reads and disposes the app's inspector without ever creating one. */
-type InspectorRegistry = Pick<Registry, "getSnapshot" | "resolveService" | "disposeService">;
+/** Only reads which services are live: a read never creates one. */
+type InspectorRegistry = Pick<Registry, "getSnapshot">;
 
 export function createNativeNetworkLogsTool(
   registry: InspectorRegistry
@@ -102,60 +117,92 @@ export function createNativeNetworkLogsTool(
   return {
     id: "native-network-logs",
     interaction: {
-      startedMsg: ({ params }) =>
-        params.stop
-          ? `Stopping native network capture for ${params.bundleId}`
-          : `Reading native network activity for ${params.bundleId}`,
-      completedMsg: ({ params }) =>
-        params.stop
-          ? `Stopped native network capture for ${params.bundleId}`
-          : `Read native network activity for ${params.bundleId}`,
+      startedMsg: ({ params }) => `Reading native network activity for ${params.bundleId}`,
+      completedMsg: ({ params }) => `Read native network activity for ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
-        params.stop
-          ? `Failed to stop native network capture for ${params.bundleId}: ${failureSignal.error_code}`
-          : `Failed to read native network activity for ${params.bundleId}: ${failureSignal.error_code}`,
+        `Failed to read native network activity for ${params.bundleId}: ${failureSignal.error_code}`,
     },
     capability: {
       apple: { simulator: true },
       appleRemote: { simulator: true },
       android: { emulator: true, device: true },
+      macos: { app: true, catalyst: true },
     },
-    description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
-Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
-On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
-On iOS: returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
-On Android: needs a debuggable build, and native-devtools-status does not run there. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
-Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
-Returns { status, header, armed, capture, captureDetail, count, total, requests }. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
-Capture can slow the app. It stays on, and launch-app and restart-app attach it to each new process, until a call with stop: true turns it off for this app (stop-all-simulator-servers for the device also does); restart-app then starts the app without the agent. stop: true returns { status, stopped, message }, where stopped is false when capture was not on for the app. On iOS stop: true fails: capture there ends only when stop-all-simulator-servers stops this device's services and the app restarts.
-When status is not_attachable, use view-network-logs and do not retry.`,
+    description: `List native HTTP requests from URLSession and NSURLConnection on iOS simulators<flag:macos-apps> and Mac apps</flag:macos-apps>, or OkHttp in a debuggable Android build. Use when debugging traffic from a native module or SDK. Coverage excludes background URLSession transfers, WKWebView and Network.framework.
+Call network-capture-start before triggering requests. Returns recent requests oldest first, with capture status and coverage in header. The log stays readable after capture stops. Pass an ID to view-network-request-details.<flag:macos-apps> If the Mac log stays stopped after a failed start, check the start result.</flag:macos-apps>
+On an iOS simulator, a blocked read returns status and a message with the next action. Follow the message before retrying.
+If the call fails with NATIVE_DEVTOOLS_NOT_CONNECTED, follow its message.
+An Apple system app is rejected outright (terminal: never retry it).`,
     zodSchema,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
-      // Stopping must not create the inspector it is asked to stop, and iOS
-      // has nothing to stop.
-      if (params.stop) return {};
+      if (device.platform === "macos") return macosAppServices(device);
+      // A read never starts capture, so it names only a service that already runs.
+      const live = (urn: string): boolean => isLiveService(registry, urn);
       if (device.platform === "android") {
         const port = metroPort({ device_id: params.udid, port: params.port });
-        return { androidNetwork: androidNetworkInspectorRef(device, params.bundleId, port) };
+        const ref = androidNetworkInspectorRef(device, params.bundleId, port);
+        return live(ref.urn) ? { androidNetwork: ref } : {};
       }
-      return { nativeDevtools: nativeDevtoolsRef(device) };
+      const ref = nativeDevtoolsRef(device);
+      return live(ref.urn) ? { nativeDevtools: ref } : {};
     },
     async execute(services, params) {
-      if (params.stop) return stopAndroidNative(registry, params);
-
-      if (services.androidNetwork) {
-        await ensureDeps(["adb"]);
-        return listAndroidNative(services.androidNetwork as AndroidNetworkInspectorApi, params);
+      const device = resolveDevice(params.udid);
+      const port = metroPort({ device_id: params.udid, port: params.port });
+      if (device.platform === "macos") {
+        const app = requireMacosAppOfBundle(
+          services,
+          device,
+          "native-network-logs",
+          params.bundleId
+        );
+        // network-capture-start fails for an Apple app, so pointing at it would loop.
+        if (!isInjectableBundleId(params.bundleId)) throw macosNotInjectable(params.bundleId);
+        return listMacosNative(
+          app,
+          params,
+          port,
+          nativeUnavailableReason(device.id, params.bundleId)
+        );
       }
 
-      const device = resolveDevice(params.udid);
+      if (device.platform === "android") {
+        const api = services.androidNetwork as AndroidNetworkInspectorApi | undefined;
+        if (!api || (!api.isStarted() && !api.isStopped())) {
+          const reason =
+            api?.unavailableReason() ?? nativeUnavailableReason(device.id, params.bundleId);
+          return reason
+            ? {
+                ...unavailableListing("android-native", reason),
+                capture: "unavailable",
+                captureDetail: reason,
+              }
+            : notStarted("android-native", params.bundleId);
+        }
+        return listAndroidNative(api, params, port);
+      }
+
+      // Start never captures one, so pointing at it would loop.
+      if (!isInjectableBundleId(params.bundleId)) throw nonInjectableError(params.bundleId);
+      const api = services.nativeDevtools as NativeDevtoolsApi | undefined;
+      const unavailable = nativeUnavailableReason(device.id, params.bundleId);
+      if (api?.isNetworkCaptureStopped(params.bundleId)) {
+        return listStopped(
+          "ios-native",
+          api.networkRecords(params.bundleId),
+          params,
+          port,
+          stoppedDetail(liveIosNetworkCaptures(params.udid).includes(params.bundleId), unavailable)
+        );
+      }
+      if (!api?.isNetworkCaptureStarted(params.bundleId)) {
+        return unavailable
+          ? unavailableListing("ios-native", unavailable)
+          : notStarted("ios-native", params.bundleId);
+      }
+
       await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-      const api = services.nativeDevtools as NativeDevtoolsApi;
-
       const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
       if (blocked) return blocked;
 
@@ -163,116 +210,234 @@ When status is not_attachable, use view-network-logs and do not retry.`,
        * `{count: 0}` reads as "the screen made no requests", so say when the
        * truth is "nothing is capturing them", as the hierarchy tools do.
        */
-      if (!api.isConnected(params.bundleId)) {
-        throw new FailureError(
-          `Native devtools not connected for bundleId: ${params.bundleId}. ` +
-            `No network log is being captured for it.`,
-          {
-            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
-            error_kind: "not_found",
-            failure_area: "tool_server",
-            failure_stage: "native_network_logs_connection",
-          }
-        );
-      }
+      if (!api.isConnected(params.bundleId)) throw notConnected(api, params.bundleId);
+      await api.refreshLentNetworkCapture(params.bundleId);
+      const store = api.networkRecords(params.bundleId);
+      if (!store) throw notConnected(api, params.bundleId);
 
-      api.activateNetworkInspection(params.bundleId);
-
-      const events = api.getNetworkLog(params.bundleId).slice(-params.limit);
-      if (params.clear) api.clearNetworkLog(params.bundleId);
-      return { status: "ok", count: events.length, events };
+      const all = store.records(port);
+      const state = store.state();
+      const detail: string[] = [];
+      if (state.pid !== undefined) detail.push(`pid ${state.pid}`);
+      if (state.note) detail.push(state.note);
+      if (api.takeCaptureGap(params.bundleId)) detail.push(captureGapNote(api.armsEnv));
+      const listing = listNative("ios-native", all, params.limit, {
+        armed: state.armed,
+        state: state.armed ? "armed" : "not armed",
+        detail,
+      });
+      if (params.clear) store.clear();
+      return listing;
     },
   };
 }
 
+const STOPPED_DETAIL =
+  "capture stopped by network-capture-stop; network-capture-start turns it on again";
+
+/** What the stop kept needs no connection, and nothing is armed. */
+function listStopped(
+  layer: AppleNativeLayer,
+  store: IosNetworkRecords | undefined,
+  params: Params,
+  port: number,
+  detail: string[] = [STOPPED_DETAIL]
+): NativeListing {
+  const listing = listNative(layer, store?.records(port) ?? [], params.limit, {
+    armed: false,
+    state: "stopped",
+    detail,
+  });
+  if (params.clear) store?.clear();
+  return { ...listing, stopped: true };
+}
+
 /**
- * Turns native capture off for one app by disposing its inspector, the same
- * teardown stop-all-simulator-servers runs: the agent stops capturing, and the
- * session file, the agent's files and the reverse are removed. Nothing else on
- * the device changes. `stopped` is true only when capture was on.
+ * A Mac app's records: argent connects to the app itself, so a read needs no
+ * connection check, and the header names the pid from the app's handshake.
  */
-async function stopAndroidNative(
-  registry: InspectorRegistry,
-  params: Params
-): Promise<AndroidNativeStopped> {
-  const device = resolveDevice(params.udid);
-  if (device.platform !== "android") {
-    // The iOS devtools can turn network inspection on for an app, never off.
-    throw new FailureError(
-      "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
-      {
-        error_code: FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED,
-        failure_stage: "native_network_logs_stop",
-        failure_area: "tool_server",
-        error_kind: "unsupported",
-      }
+function listMacosNative(
+  app: MacosAppApi,
+  params: Params,
+  port: number,
+  /** Why the last network-capture-start found the native layer unavailable, if it did. */
+  unavailable: string | undefined
+): NativeListing {
+  const store = app.networkRecords();
+  if (app.isNetworkCaptureStopped()) {
+    return listStopped(
+      "macos-native",
+      store,
+      params,
+      port,
+      stoppedDetail(app.isNetworkCaptureStopUnconfirmed())
     );
   }
-  const notOn: AndroidNativeStopped = {
-    status: "ok",
-    stopped: false,
-    message: `native network capture was not on for ${params.bundleId} on ${params.udid}`,
-  };
-  const port = metroPort({ device_id: params.udid, port: params.port });
-  const { urn } = androidNetworkInspectorRef(device, params.bundleId, port);
-  const state = registry.getSnapshot().services.get(urn)?.state;
-  if (state === undefined || state === ServiceState.IDLE) return notOn;
-  // An inspector whose first call did not go through never turned capture on,
-  // but it may hold a session or a reverse, so it is disposed all the same.
-  const wasOn =
-    state === ServiceState.RUNNING &&
-    liveAndroidNetworkCaptures(params.udid).includes(params.bundleId);
-  let pid: number | undefined;
-  if (wasOn) {
-    const api = await registry.resolveService<AndroidNetworkInspectorApi>(urn);
-    pid = api.state().process?.pid;
+  if (!app.isNetworkCaptureStarted()) {
+    return unavailable
+      ? unavailableListing("macos-native", unavailable)
+      : notStarted("macos-native", params.bundleId);
   }
-  await registry.disposeService(urn);
-  if (!wasOn) return notOn;
+  const state = store.state();
+  const detail: string[] = [];
+  if (state.pid !== undefined) detail.push(`pid ${state.pid}`);
+  if (state.note) detail.push(state.note);
+  if (app.takeCaptureGap()) {
+    detail.push(
+      "capture started while the app was already running, so the requests before that were not recorded"
+    );
+  }
+  const listing = listNative("macos-native", store.records(port), params.limit, {
+    armed: state.armed,
+    state: state.armed ? "armed" : "not armed",
+    detail,
+  });
+  if (params.clear) store.clear();
+  return listing;
+}
+
+/** argent does not load its library into an Apple app, so nothing ever captures it. */
+function macosNotInjectable(bundleId: string): FailureError {
+  return new FailureError(
+    `${bundleId} is an Apple app; argent captures only apps it can load its library into, ` +
+      `such as your own builds. Treat its native network log as unavailable rather than retrying.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+      error_kind: "validation",
+      failure_area: "tool_server",
+      failure_stage: "native_network_logs_macos_bundle_id",
+    }
+  );
+}
+
+/**
+ * While stopped, the capture lookups list an app only while its connected
+ * process has not acknowledged the stop, as launch-app and the profiler starts
+ * say.
+ */
+function stoppedDetail(mayIntercept: boolean, unavailableReason?: string): string[] {
+  // A start after the stop that found the layer unavailable kept the stop, and
+  // another start finds the same.
+  const stopped = unavailableReason
+    ? `capture stopped by network-capture-stop; a later network-capture-start found the layer unavailable: ${unavailableReason}`
+    : STOPPED_DETAIL;
+  return mayIntercept
+    ? [
+        stopped,
+        "the app's process did not acknowledge Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture",
+      ]
+    : [stopped];
+}
+
+/** The answer before any start: no service was reached, and nothing was turned on. */
+function notStarted(layer: NativeNetworkRecord["layer"], bundleId: string): NativeListing {
   return {
     status: "ok",
-    stopped: true,
-    message:
-      `native network capture stopped for ${params.bundleId} on ${params.udid}. ` +
-      (pid !== undefined
-        ? `The in-app agent stays loaded in pid ${pid}, without capturing, until that process ends; `
-        : "An in-app agent that was attached stays loaded until its process ends; ") +
-      "restart-app starts the app without it.",
+    header: `${layer}: not started, 0 requests (network capture is off for ${bundleId}; call network-capture-start for it, then repeat the action)`,
+    armed: false,
+    started: false,
+    count: 0,
+    total: 0,
+    requests: [],
   };
 }
 
-async function listAndroidNative(
+/** The answer after a start that found the layer unavailable: another start finds the same. */
+function unavailableListing(layer: NativeNetworkRecord["layer"], reason: string): NativeListing {
+  return {
+    status: "ok",
+    header: `${layer}: unavailable, 0 requests (${reason})`,
+    armed: false,
+    started: false,
+    count: 0,
+    total: 0,
+    requests: [],
+  };
+}
+
+function notConnected(api: NativeDevtoolsApi, bundleId: string): FailureError {
+  const remedy = api.armsEnv
+    ? `Network capture is on for it and arms once it connects, so call again in a few seconds. ` +
+      `Requests made before then are not recorded.`
+    : `Native devtools here are an external provider's agent, which serves only the app that provider ` +
+      `chose to lend. ${bundleId} is either not that app or its connection has not landed yet, so no ` +
+      `native network log is being captured for it. argent did not launch this process and cannot ` +
+      `re-point it, so restarting anything is the provider's call rather than argent's. Retry if the ` +
+      `app has just started; otherwise, for a React Native app, read its JavaScript requests with view-network-logs.`;
+  return new FailureError(`Native devtools not connected for bundleId: ${bundleId}. ${remedy}`, {
+    error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+    error_kind: "not_found",
+    failure_area: "tool_server",
+    failure_stage: "native_network_logs_connection",
+  });
+}
+
+/** Said once, by the first answer after capture started for an app that was already running. */
+function captureGapNote(armsEnv: boolean): string {
+  return armsEnv
+    ? "capture started while the app was already running, so the requests before that, its launch among them, were not recorded; to capture the launch, call restart-app, then network-capture-start again, since a relaunch ends the JS layer's capture, then call this again"
+    : "argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded; on this device a relaunch ends capture, so the launch cannot be recorded here: do not restart the app for it";
+}
+
+/** Lists without any adb work: a read attaches nothing, also while capture is started. */
+function listAndroidNative(
   api: AndroidNetworkInspectorApi,
-  params: Params
-): Promise<AndroidNetworkNotAttachable | AndroidNativeListing> {
-  const port = metroPort({ device_id: params.udid, port: params.port });
-  const attached = await api.ensureAttached(port);
-  if (attached?.status === "not_attachable") return attached;
-
+  params: Params,
+  port: number
+): NativeListing {
   const all = api.records(port);
-  const shown = all.slice(-params.limit);
-  const requests = shown.map(toRequestLine);
-  if (params.clear) api.clear();
-
   const state = api.state();
-  const detail = headerDetail(state, attached?.note);
+  const unavailable = state.stopped ? api.unavailableReason() : undefined;
+  const listing = listNative("android-native", all, params.limit, {
+    armed: state.armed,
+    state: state.stopped
+      ? "stopped"
+      : state.armed
+        ? "armed"
+        : state.notAttached
+          ? "not attached"
+          : "not armed",
+    detail: state.stopped
+      ? stoppedDetail(
+          liveAndroidNetworkCaptures(params.udid).includes(params.bundleId),
+          unavailable
+        )
+      : headerDetail(state),
+  });
+  if (params.clear) api.clear();
+  return {
+    ...listing,
+    ...(state.stopped ? { stopped: true as const } : {}),
+    ...(unavailable
+      ? { started: false as const, capture: "unavailable" as const, captureDetail: unavailable }
+      : {}),
+    ...(state.capture ? { capture: state.capture.state } : {}),
+    ...(state.capture?.detail ? { captureDetail: state.capture.detail } : {}),
+  };
+}
+
+/** The listing both native layers return: a header line, then the `limit` most recent requests. */
+function listNative(
+  layer: NativeNetworkRecord["layer"],
+  all: NativeNetworkRecord[],
+  limit: number,
+  shape: { armed: boolean; state: string; detail: string[] }
+): NativeListing {
+  const shown = limit === 0 ? [] : all.slice(-limit);
   const noun = all.length === 1 ? "request" : "requests";
   return {
     status: "ok",
     header:
-      `android-native: ${state.armed ? "armed" : "not armed"}, ${all.length} ${noun}` +
-      (detail.length > 0 ? ` (${detail.join("; ")})` : ""),
-    armed: state.armed,
-    ...(state.capture ? { capture: state.capture.state } : {}),
-    ...(state.capture?.detail ? { captureDetail: state.capture.detail } : {}),
-    count: requests.length,
+      `${layer}: ${shape.state}, ${all.length} ${noun}` +
+      (shape.detail.length > 0 ? ` (${shape.detail.join("; ")})` : ""),
+    armed: shape.armed,
+    count: shown.length,
     total: all.length,
-    requests,
+    requests: shown.map(toRequestLine),
   };
 }
 
-/** `callNote` is about this call alone, as when adb did not answer it. */
-function headerDetail(state: AndroidNetworkInspectorState, callNote?: string): string[] {
+function headerDetail(state: AndroidNetworkInspectorState): string[] {
   const parts: string[] = [];
   if (state.process) parts.push(`pid ${state.process.pid}`);
   const capture = state.capture;
@@ -287,20 +452,18 @@ function headerDetail(state: AndroidNetworkInspectorState, callNote?: string): s
       `capture waiting: ${capture.detail ?? "the app has not loaded OkHttp yet, and capture starts when it does"}`
     );
   }
+  // No read is a remedy: view-network-logs only reads too.
   if (capture?.state === "unavailable") {
-    parts.push(
-      `capture unavailable${capture.detail ? `: ${capture.detail}` : ""}; use view-network-logs`
-    );
+    parts.push(`capture unavailable${capture.detail ? `: ${capture.detail}` : ""}`);
   }
   if (state.droppedEvents) {
     parts.push(`${state.droppedEvents} events were lost while the agent was disconnected`);
   }
   if (state.note) parts.push(state.note);
-  if (callNote) parts.push(callNote);
   return parts;
 }
 
-function toRequestLine(record: AndroidNativeRecord): AndroidNativeRequestLine {
+function toRequestLine(record: NativeNetworkRecord): NativeRequestLine {
   return {
     id: record.id,
     method: record.request.method,

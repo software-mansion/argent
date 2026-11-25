@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
@@ -42,9 +43,11 @@ type Params = z.infer<typeof zodSchema>;
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
+  // An uninstall plus install can take minutes, past the 30s MCP fetch timeout.
+  longRunning: true,
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled.`,
+Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled. On Android it also fails, without installing, when bundleId is still on the device after the uninstall or that check fails (the app may then be gone), and on a local iOS simulator when the uninstall does not finish within 30s.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,
@@ -68,10 +71,10 @@ Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not
   >({
     toolId: "reinstall-app",
     capability,
-    ios: iosImpl,
+    ios: forgettingUiOrientation(iosImpl),
     android: androidImpl,
     iosDevice: iosDeviceImpl,
-    iosRemote: iosRemoteImpl,
+    iosRemote: forgettingUiOrientation(iosRemoteImpl),
     vega: vegaImpl,
     harmony: harmonyImpl,
   }),

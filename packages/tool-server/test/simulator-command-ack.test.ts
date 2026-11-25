@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { sendCommand } from "../src/utils/simulator-client";
+import { KEY_ACK_TIMEOUT_MS, sendCommand } from "../src/utils/simulator-client";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
@@ -170,6 +170,92 @@ describe("sendCommand — command acknowledgement", () => {
     expect(signal?.error_kind).toBe("timeout");
     vi.useRealTimers();
     await server.close();
+  });
+
+  it("waits the longer key budget when asked, then times out (#2030)", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { ...TOUCH });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    let settled = false;
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 4, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    )
+      .catch((e: unknown) => e)
+      .finally(() => (settled = true));
+    // A stall past the default budget does not fail a key.
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
+    vi.useRealTimers();
+    await server.close();
+  });
+
+  // A stalled server still applies the Down it never answered once it
+  // resumes; an Up on a new socket could not open while it stalls (#2030).
+  it("releases the keys still down on the same socket when a key times out", async () => {
+    const server = await startServer();
+    const SHIFT = 225;
+    await sendCommand(server.api, { cmd: "key", code: SHIFT, direction: "Down" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 5, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    ).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(server.received).toHaveLength(4));
+    // Last pressed, first released, behind the Down it releases.
+    expect(server.received.slice(2)).toMatchObject([
+      { cmd: "key", code: 5, direction: "Up" },
+      { cmd: "key", code: SHIFT, direction: "Up" },
+    ]);
+    expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("releases nothing when no key is down at the timeout", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Down" });
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Up" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await inFlight;
+    vi.useRealTimers();
+    // The next command reconnects, so anything the drop wrote has arrived.
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.received.map((m) => m.cmd)).toEqual(["key", "key", "touch", "touch"]);
+    await server.close();
+  });
+
+  it("waits for a cold edge Down while other commands on the socket complete", async () => {
+    const server = await startServer();
+    try {
+      await sendCommand(server.api, { ...TOUCH });
+      server.setReply((cmd) => (cmd === "edgeTouch" ? "withhold" : "ok"));
+      vi.useFakeTimers();
+      const down = sendCommand(server.api, { ...TOUCH, cmd: "edgeTouch", edge: "bottom" });
+      await sendCommand(server.api, { cmd: "button", button: "home", direction: "Up" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      server.flushWithheld();
+      await expect(down).resolves.toEqual({});
+    } finally {
+      vi.useRealTimers();
+      await server.close();
+    }
   });
 
   it("never resolves a command that was refused — no phantom success", async () => {

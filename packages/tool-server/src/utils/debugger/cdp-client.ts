@@ -1,6 +1,9 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
+import { sleep } from "../timing";
+import { expoManifestOrigin, metroOriginCandidates } from "./metro-origin";
+import { WATCH_PROMISE_FUNCTION, takeSettledScript } from "./scripts/await-promise";
 
 export interface ScriptInfo {
   scriptId: string;
@@ -100,6 +103,20 @@ function formatExceptionDetails(details: CDPExceptionDetails): string {
   return `${description}\n${frameLines}`;
 }
 
+interface RuntimeResponse {
+  result?: { type?: string; value?: unknown; objectId?: string };
+  exceptionDetails?: CDPExceptionDetails;
+}
+
+function runtimeException(details: CDPExceptionDetails): FailureError {
+  return new FailureError(formatExceptionDetails(details), {
+    error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+    failure_stage: "debugger_cdp_evaluate",
+    failure_area: "tool_server",
+    error_kind: "unknown",
+  });
+}
+
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
@@ -113,6 +130,17 @@ interface PendingBinding {
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const PROMISE_POLL_INTERVAL_MS = 100;
+
+/**
+ * How long a Metro socket must stay open before argent trusts its Origin. Expo
+ * terminates a socket it rejects as soon as the upgrade completes, which on
+ * loopback lands within a few milliseconds.
+ */
+const ORIGIN_SETTLE_MS = 100;
+
+/** The Origin each Metro (by `host:port`) last kept a socket open for. */
+const acceptedOrigins = new Map<string, string>();
 
 export class CDPClient {
   readonly events = new TypedEventEmitter<CDPClientEvents>();
@@ -121,7 +149,7 @@ export class CDPClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private pendingBindings = new Map<string, PendingBinding>();
-  /** Set by addBinding when the runtime ACKs the command but installs nothing. */
+  /** Set by addBinding when the runtime rejects the command, or ACKs it but installs nothing. */
   private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
@@ -134,34 +162,111 @@ export class CDPClient {
   private paused: { callFrames: unknown; reason: string } | undefined;
   private wsUrl: string;
   private sendOrigin: boolean;
+  /**
+   * Hermes ignores `awaitPromise`, so {@linkcode evaluateAwaited} waits for a
+   * returned Promise inside the app instead. Set only for Hermes behind the
+   * modern inspector: it relies on `Runtime.callFunctionOn`.
+   */
+  private readonly awaitPromisesInApp: boolean;
 
-  constructor(wsUrl: string, options?: { sendOrigin?: boolean }) {
+  constructor(wsUrl: string, options?: { sendOrigin?: boolean; awaitPromisesInApp?: boolean }) {
     this.wsUrl = wsUrl;
     // Default true matches Metro / Expo. Chromium's devtools target rejects an
     // upgrade carrying an Origin header, so those callers pass `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
+    this.awaitPromisesInApp = options?.awaitPromisesInApp === true;
   }
 
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      // RN >= 0.85 Metro requires an Origin header; Expo matches it exactly
-      // against its serverBaseUrl (127.0.0.1), hence the localhost rewrite.
-      let headers: Record<string, string> | undefined;
-      if (this.sendOrigin) {
-        const { protocol, host } = new URL(this.wsUrl);
-        const origin =
-          (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
-        headers = { Origin: origin };
+  async connect(): Promise<void> {
+    if (!this.sendOrigin) {
+      await this.open(undefined);
+      return;
+    }
+
+    // RN >= 0.85 Metro requires an Origin header, and Expo accepts only the one
+    // naming its own server URL. Every upgrade with a wrong Origin still evicts
+    // the debugger holding the page before Expo drops it, so argent asks first:
+    // the Origin that worked last time, then the one Expo's manifest names. Only
+    // when Expo drops even that does it fall back to guessing.
+    const metro = new URL(this.wsUrl).host;
+    const tried: string[] = [];
+    const attempt = async (origin: string | undefined) => {
+      if (!origin || tried.includes(origin)) return false;
+      tried.push(origin);
+      if ((await this.open(origin)) === "rejected") return false;
+      acceptedOrigins.set(metro, origin);
+      return true;
+    };
+
+    const remembered = acceptedOrigins.get(metro);
+    if (await attempt(remembered)) return;
+    if (await attempt(await expoManifestOrigin(this.wsUrl))) return;
+    for (const origin of metroOriginCandidates(this.wsUrl)) {
+      if (await attempt(origin)) return;
+    }
+
+    acceptedOrigins.delete(metro);
+    throw new FailureError(
+      `Metro at ${metro} refused the debugger connection for every Origin argent tried ` +
+        `(${tried.join(", ")}): it answered the upgrade with 401 or 403, or dropped the ` +
+        `socket without a close frame right after it. Expo's dev server drops it when the ` +
+        `Origin does not match its server URL, which REACT_NATIVE_PACKAGER_HOSTNAME moves ` +
+        `to another host. Restart Metro with REACT_NATIVE_PACKAGER_HOSTNAME unset, or set ` +
+        `to 127.0.0.1, then retry.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_ORIGIN_REJECTED,
+        failure_stage: "debugger_cdp_connect",
+        failure_area: "tool_server",
+        error_kind: "network",
       }
-      const ws = new WebSocket(this.wsUrl, headers ? { headers } : undefined);
+    );
+  }
+
+  /**
+   * Open one socket. Without an Origin this is a plain connect.
+   *
+   * With one, the socket must then stay open for {@linkcode ORIGIN_SETTLE_MS}
+   * (or carry a message) before it counts, since Expo completes the upgrade for
+   * any Origin and only then terminates a socket whose Origin it rejects.
+   * `rejected` is that termination (close code 1006, no close frame) or a
+   * 401/403 for the upgrade, and the socket is discarded without emitting
+   * `connected` or `disconnected`. Any other close inside the window, such as
+   * React Native's `[PAGE_NOT_FOUND]` or `[NEW_DEBUGGER_OPENED]`, which carry a
+   * close frame, is not about the Origin: the socket counts as opened and then
+   * lost, as it would without the window.
+   */
+  private open(origin: string | undefined): Promise<"open" | "rejected"> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(this.wsUrl, origin ? { headers: { Origin: origin } } : undefined);
       this.ws = ws;
 
-      const onOpen = () => {
+      let state: "opening" | "settling" | "open" | "dropped" = "opening";
+      let settle: ReturnType<typeof setTimeout> | undefined;
+      const accept = () => {
         cleanup();
+        state = "open";
         this.events.emit("connected");
-        resolve();
+        resolve("open");
+      };
+      const drop = () => {
+        cleanup();
+        state = "dropped";
+        ws.terminate();
+        if (this.ws === ws) this.ws = null;
+        resolve("rejected");
+      };
+
+      const onOpen = () => {
+        clearTimeout(timer);
+        if (!origin) return accept();
+        state = "settling";
+        settle = setTimeout(accept, ORIGIN_SETTLE_MS);
+        ws.once("message", accept);
       };
       const onError = (err: Error) => {
+        // An error after the upgrade is followed by `close`, which decides.
+        if (state === "settling") return;
+        if (origin && /Unexpected server response: 40[13]\b/.test(err.message)) return drop();
         cleanup();
         reject(
           new FailureError(
@@ -176,7 +281,8 @@ export class CDPClient {
           )
         );
       };
-      const onClose = () => {
+      const onClose = (code: number) => {
+        if (state === "settling") return code === 1006 ? drop() : accept();
         cleanup();
         reject(
           new FailureError("WebSocket closed before open", {
@@ -187,22 +293,52 @@ export class CDPClient {
           })
         );
       };
+      // `ws` sets no handshake deadline: a target that accepts the TCP connection
+      // but never answers the upgrade would leave this pending indefinitely.
+      const timer = setTimeout(() => {
+        cleanup();
+        ws.terminate();
+        reject(
+          new FailureError(
+            `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
+              `${DEFAULT_TIMEOUT_MS}ms. The host may be unreachable, or the target frozen ` +
+              `or not a CDP endpoint.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
+              failure_stage: "debugger_cdp_connect",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+            }
+          )
+        );
+      }, DEFAULT_TIMEOUT_MS);
       const cleanup = () => {
+        clearTimeout(timer);
+        clearTimeout(settle);
         ws.removeListener("open", onOpen);
         ws.removeListener("error", onError);
         ws.removeListener("close", onClose);
+        ws.removeListener("message", accept);
       };
 
       ws.on("open", onOpen);
       ws.on("error", onError);
       ws.on("close", onClose);
 
+      // Attached last, so a close the settle window turns into `accept` reports
+      // `connected` before `disconnected`. Every failure except a rejected
+      // Origin reports `disconnected`, as callers such as a Chromium tab switch
+      // rely on to tear a dead session down.
+      const ignored = () => state === "settling" || state === "dropped";
       ws.on("message", (raw: WebSocket.RawData) => this.handleMessage(raw));
       ws.on("close", () => {
+        if (ignored()) return;
         this.cleanup();
         this.events.emit("disconnected");
       });
       ws.on("error", (err) => {
+        if (ignored()) return;
         this.cleanup();
         this.events.emit("disconnected", err as Error);
       });
@@ -375,35 +511,106 @@ export class CDPClient {
     // awaitPromise a Promise expression yields a bare Promise handle.
     const returnByValue = options?.returnByValue ?? true;
     const awaitPromise = options?.awaitPromise ?? true;
-    const result = (await this.send(
+    const result = await this.runtimeCall(
       "Runtime.evaluate",
       { expression, returnByValue, awaitPromise },
       options?.timeout
-    )) as {
-      result?: { type?: string; value?: unknown; description?: string };
-      exceptionDetails?: CDPExceptionDetails;
-    };
-
-    if (result.exceptionDetails) {
-      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
-        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
-        failure_stage: "debugger_cdp_evaluate",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    return result.result?.value;
+    );
+    return result?.value;
   }
 
-  async addBinding(name: string): Promise<void> {
-    await this.send("Runtime.addBinding", { name });
+  /**
+   * {@linkcode evaluate}, also on runtimes that ignore `awaitPromise`: a
+   * returned Promise yields the value it resolves to, and a rejection throws
+   * like an exception. A Promise still pending after {@linkcode DEFAULT_TIMEOUT_MS}
+   * fails with DEBUGGER_CDP_REQUEST_TIMEOUT.
+   */
+  async evaluateAwaited(expression: string): Promise<unknown> {
+    if (!this.awaitPromisesInApp) return this.evaluate(expression);
 
-    // The legacy Hermes inspector ACKs Runtime.addBinding and never installs the
-    // binding: no Runtime.bindingCalled fires, so waiters hang for the full
-    // timeout. Probe once here so evaluateWithBinding can fail fast. Only a
-    // positive observation of absence disables it — a probe that throws or
-    // answers unexpectedly leaves the binding assumed working.
+    const result = await this.runtimeCall("Runtime.evaluate", { expression, returnByValue: false });
+    const objectId = result?.objectId;
+    if (!objectId || (result?.type !== "object" && result?.type !== "function")) {
+      return result?.value;
+    }
+
+    const slot = `__argentPromise_${crypto.randomUUID().replace(/-/g, "")}`;
+    let watched: unknown;
+    try {
+      const response = await this.runtimeCall("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: WATCH_PROMISE_FUNCTION,
+        arguments: [{ value: slot }],
+        returnByValue: true,
+      });
+      watched = response?.value;
+    } finally {
+      this.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    }
+
+    if (watched !== slot) return watched;
+    return this.waitForSettled(slot);
+  }
+
+  private async runtimeCall(
+    method: string,
+    params: Record<string, unknown>,
+    timeout?: number
+  ): Promise<RuntimeResponse["result"]> {
+    const response = (await this.send(method, params, timeout)) as RuntimeResponse;
+    if (response.exceptionDetails) throw runtimeException(response.exceptionDetails);
+    return response.result;
+  }
+
+  private async waitForSettled(slot: string): Promise<unknown> {
+    const take = takeSettledScript(slot);
+    const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+
+    let taken = await this.evaluate(take);
+    while (taken === slot && Date.now() < deadline) {
+      await sleep(PROMISE_POLL_INTERVAL_MS);
+      taken = await this.evaluate(take);
+    }
+    if (taken !== slot) return taken;
+
+    this.evaluate(`delete globalThis[${JSON.stringify(slot)}]`).catch(() => {});
+    throw new FailureError(
+      `The expression returned a Promise that did not settle within ${DEFAULT_TIMEOUT_MS}ms. The ` +
+        `expression ran, and running it again repeats its side effects.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+        failure_stage: "debugger_cdp_await_promise",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
+    );
+  }
+
+  /**
+   * With `legacyInspector`, a protocol error leaves the binding unavailable
+   * instead of failing: that inspector (RN 0.73 - 0.75) has no such method and
+   * answers -32601. A modern host answers the same while it has no JS instance
+   * (mid-reload), where disabling the binding for the session would be wrong.
+   */
+  async addBinding(name: string, options?: { legacyInspector?: boolean }): Promise<void> {
+    try {
+      await this.send("Runtime.addBinding", { name });
+    } catch (error) {
+      if (
+        !options?.legacyInspector ||
+        getFailureSignal(error)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR
+      ) {
+        throw error;
+      }
+      this.bindingUnavailable = true;
+      return;
+    }
+
+    // The legacy Hermes inspector of RN <= 0.72 ACKs Runtime.addBinding and never
+    // installs the binding: no Runtime.bindingCalled fires, so waiters hang for
+    // the full timeout. Probe once here so evaluateWithBinding can fail fast.
+    // Only a positive observation of absence disables it — a probe that throws
+    // or answers unexpectedly leaves the binding assumed working.
     const probe = await this.evaluate(`typeof ${name}`).catch(() => undefined);
     this.bindingUnavailable = probe === "undefined";
   }
@@ -423,8 +630,8 @@ export class CDPClient {
     if (this.bindingUnavailable) {
       return Promise.reject(
         new FailureError(
-          "This JS runtime acknowledges Runtime.addBinding but never installs the binding " +
-            "(legacy Hermes, React Native <= 0.72), so it cannot deliver a result over the " +
+          "This JS runtime has no working Runtime.addBinding (the legacy Hermes inspector " +
+            "rejects it or never installs the binding), so it cannot deliver a result over the " +
             "binding channel. Tools that read the React tree this way are unavailable here; " +
             "use `describe` to read on-screen structure.",
           {

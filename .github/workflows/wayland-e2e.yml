@@ -5,22 +5,29 @@ name: Wayland E2E
 # = swiftshader` and that screenshots + gesture-tap work without a display.
 # A future change that re-introduces `-gpu host` (silent black-window
 # failure mode) or drops `ARGENT_EMULATOR_NO_WINDOW` support fails this job.
-# Manual + on-change trigger only — the job takes ~12-15 min.
+# Boot the emulator on manual runs and relevant PRs. It takes ~12-15 min.
 
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - main
-    paths:
-      - "packages/tool-server/src/tools/devices/boot-device.ts"
-      - "packages/tool-server/src/utils/linux-preflight.ts"
-      - "packages/tool-server/src/utils/android-binary.ts"
-      - ".github/workflows/wayland-e2e.yml"
 
 jobs:
+  changes:
+    name: Select Wayland E2E paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      paths: |-
+        packages/tool-server/src/tools/devices/boot-device.ts
+        packages/tool-server/src/utils/linux-preflight.ts
+        packages/tool-server/src/utils/android-binary.ts
+        .github/workflows/wayland-e2e.yml
+
   wayland-e2e:
     name: Boot + drive AVD on headless Weston
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -46,21 +53,38 @@ jobs:
       ARGENT_EMULATOR_NO_WINDOW: "1"
 
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - name: Checkout
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
+
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - name: Set up JDK 17
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-java@v6
         with:
           distribution: "temurin"
           java-version: "17"
 
       - name: Enable KVM (nested virt on ubuntu-latest)
+        if: needs.changes.outputs.relevant == 'true'
         # ubuntu-latest exposes /dev/kvm but the runner user isn't in the
         # `kvm` group; this matches `usermod -aG kvm $USER` from the README
         # and gives qemu the access it needs. Without it the boot falls
@@ -73,6 +97,7 @@ jobs:
           ls -l /dev/kvm
 
       - name: Install Weston + emulator native deps
+        if: needs.changes.outputs.relevant == 'true'
         # libgoogle-perftools4t64 ships libtcmalloc_minimal.so.4 which
         # qemu-system-x86_64 links against; ubuntu-latest usually has it
         # but slimmer images don't (verified blocker in ubuntu:24.04).
@@ -82,6 +107,7 @@ jobs:
             weston xkb-data libxkbcommon0 seatd libgoogle-perftools4t64
 
       - name: Start Weston (headless backend)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
@@ -104,6 +130,7 @@ jobs:
           test -S "$XDG_RUNTIME_DIR/wayland-0" || { cat /tmp/weston.log; exit 1; }
 
       - name: Install Android SDK packages
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           # No `pipefail` here: `yes | sdkmanager --licenses` SIGPIPEs
           # `yes` (rc 141) as soon as sdkmanager closes stdin, which is
@@ -128,6 +155,7 @@ jobs:
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
 
       - name: Create AVD (4 GB / 2 vCPUs, sized for the 4-vCPU runner)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           set -e
           # avdmanager has a long-standing bug where it can write errors to
@@ -158,30 +186,31 @@ jobs:
           grep -E "^(hw\.ramSize|hw\.cpu\.ncore|hw\.gpu)" "$CFG"
 
       - name: Install argent dependencies + build
+        if: needs.changes.outputs.relevant == 'true'
         run: |
-          npm ci
-          npm install @rollup/rollup-linux-x64-gnu --no-save
-          npm run build
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Download signed simulator-server binary
+        if: needs.changes.outputs.relevant == 'true'
         # The screenshot/gesture-tap tools spawn the simulator-server out
         # of packages/native-devtools-ios/bin/<platform>/; without this
         # download the linux binary is missing and the boot succeeds but
         # every downstream tool call fails.
         #
-        # Pinned to `radon-daily` because `simulator-server-argent-linux`
-        # only ships there until radon#118 lands a release into the default
-        # channel (`radon-main`). Drop the `radon-daily` arg once that lands.
-        run: bash scripts/download-simulator-server.sh radon-daily
+        # Follows Radon's nightly: the newest complete `radon-daily-<sha>`
+        # release, not the script's default `radon-main-<sha>`.
+        run: bash scripts/download-simulator-server.sh --channel daily
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Start tool-server (ts-node from src)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           mkdir -p ~/.argent
           : > ~/.argent/tool-server.log
           cd packages/tool-server
-          nohup env ARGENT_PORT=3033 npx ts-node src/index.ts start \
+          nohup env ARGENT_PORT=3033 bunx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           echo "tool-server pid=$!"
           # Wait for /tools to respond.
@@ -193,6 +222,7 @@ jobs:
           echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
 
       - name: Boot AVD via tool-server
+        if: needs.changes.outputs.relevant == 'true'
         id: boot
         # Bigger budget than the local-box numbers because CI runners are
         # smaller (4 vCPU instead of 16) and KVM is sometimes slower under
@@ -213,6 +243,7 @@ jobs:
           echo "gpu_mode=$GPU" >> $GITHUB_OUTPUT
 
       - name: Verify GPU mode is swiftshader
+        if: needs.changes.outputs.relevant == 'true'
         # Pins the selectGpuMode() decision: any future change that
         # re-introduces `-gpu host` / `auto` will fail here.
         run: |
@@ -221,6 +252,7 @@ jobs:
           echo "$GPU" | grep -qi swiftshader || { echo "expected swiftshader"; exit 1; }
 
       - name: Screenshot returns real pixels (not all-zero framebuffer)
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           # After boot_completed=1 two things still need to settle before a
@@ -267,6 +299,7 @@ jobs:
           exit 1
 
       - name: gesture-tap round-trips
+        if: needs.changes.outputs.relevant == 'true'
         run: |
           OUT=$(curl -sS -m 30 -X POST http://127.0.0.1:3033/tools/gesture-tap \
             -H 'Content-Type: application/json' \
@@ -274,7 +307,7 @@ jobs:
           echo "$OUT" | grep -q '"tapped":true' || { echo "gesture-tap failed"; exit 1; }
 
       - name: Upload artifacts on failure or success
-        if: always()
+        if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: wayland-e2e-artifacts
