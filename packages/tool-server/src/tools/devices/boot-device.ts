@@ -2304,6 +2304,8 @@ async function startHarmonyEmulator(
   const child = spawn(bin, ["-start", instanceName], {
     detached: true,
     stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
+    // Same windowsHide as attemptBoot, for the same reason; no-op off Windows.
+    windowsHide: true,
   });
   child.unref();
   if (logFd !== null) {
