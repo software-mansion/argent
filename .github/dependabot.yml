@@ -3,8 +3,8 @@
 version: 2
 
 updates:
-  # npm: root + every workspace package (packages/*)
-  - package-ecosystem: "npm"
+  # bun: root + every workspace package (packages/*)
+  - package-ecosystem: "bun"
     directories:
       - "/"
       - "/packages/*"
@@ -16,15 +16,14 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "npm"
+      - "bun"
     commit-message:
       prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
       include: "scope"
     ignore:
       # tree-sitter 0.25.0 ships no Node 24 prebuilds and its binding.gyp forces
       # C++17 while Node 22+ v8 (cppgc) headers require C++20, so the native
-      # build fails `npm install`/`npm ci` on current Node. Stay on ^0.21.1,
+      # build fails `bun install` on current Node. Stay on ^0.21.1,
       # which ships N-API prebuilds (no compile). Patch updates stay allowed;
       # drop this ignore once upstream restores prebuilt binaries.
       - dependency-name: "tree-sitter"
@@ -71,11 +70,6 @@ updates:
           - "*"
         update-types:
           - "major"
-      # Group security updates across all directories.
-      npm-security:
-        applies-to: security-updates
-        patterns:
-          - "*"
 
   # GitHub Actions used by workflows under .github/workflows
   - package-ecosystem: "github-actions"

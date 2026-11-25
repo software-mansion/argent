@@ -1,8 +1,10 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { forgettingUiOrientation } from "../../utils/ios-ui-orientation";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { macosAppRef } from "../../blueprints/macos-app";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
@@ -11,6 +13,7 @@ import { androidImpl } from "./platforms/android";
 import { harmonyImpl } from "./platforms/harmony";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
+import { macosImpl } from "./platforms/macos";
 
 // Keep credentials, paths, query parameters, and fragments out of the event log.
 function safeDestination(value: string): string {
@@ -30,6 +33,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
+  macos: { app: true, catalyst: true },
 };
 
 const zodSchema = z.object({
@@ -79,6 +83,7 @@ Returns { opened, url, note? }. \`note\` explains the routing caveat when a web 
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (device.platform === "macos") return { macosApp: macosAppRef(device) };
     return {};
   },
   execute: dispatchByPlatform<
@@ -93,11 +98,12 @@ Returns { opened, url, note? }. \`note\` explains the routing caveat when a web 
   >({
     toolId: "open-url",
     capability,
-    ios: iosImpl,
+    ios: forgettingUiOrientation(iosImpl),
     iosDevice: iosDeviceImpl,
     android: androidImpl,
     harmony: harmonyImpl,
-    iosRemote: iosRemoteImpl,
+    iosRemote: forgettingUiOrientation(iosRemoteImpl),
     chromium: chromiumImpl,
+    macos: macosImpl,
   }),
 };

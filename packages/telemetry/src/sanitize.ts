@@ -176,12 +176,16 @@ export const ALLOWED: ValidatorMap = {
   },
   "installation:allowlist_decision": {
     is_enabled: bool,
+    decided_by: oneOf(["flag", "default", "prompt"] as const),
   },
   "installation:stale_config_cleanup": {
     removed_count: COUNT,
     warned_count: COUNT,
   },
   "installation:skill_install": {
+    source: oneOf(["pinned", "bundled"]),
+    used_fallback: bool,
+    fallback_reason: oneOf(["ref_missing", "unclassified"]),
     method: oneOf(["default", "interactive", "manual"] as const),
     is_online: bool,
     has_offline_cache: bool,

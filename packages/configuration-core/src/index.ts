@@ -17,12 +17,16 @@ export {
 export {
   argentHomeDir,
   resolveHomeDir,
+  isHomeDir,
+  canonicalPath,
   configDir,
   configFilePath,
   type ConfigPathOptions,
 } from "./paths.js";
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
+
+export { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "./whats-new.js";
 
 // Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
 // `argent secrets` resolve names through.

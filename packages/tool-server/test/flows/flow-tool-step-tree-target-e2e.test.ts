@@ -6,6 +6,9 @@ import { FAILURE_CODES, FailureError, type Registry } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // Composition of the two halves the sibling suites pin separately
 // (flow-launch-pins-tree-target.test.ts and

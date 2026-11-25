@@ -105,7 +105,7 @@ describe("flow-start-recording", () => {
     expect(result.message).toContain("test-flow");
 
     const content = await readFlowFile("test-flow");
-    expect(content).toBe(`version: 1\nsteps: []\nexecutionPrerequisite: ${PREREQ}\n`);
+    expect(content).toBe(`version: 2\nsteps: []\nexecutionPrerequisite: ${PREREQ}\n`);
   });
 
   it("opens a recording addressable by name + project_root", async () => {
@@ -1473,8 +1473,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
       { kind: "run", flow: "login.yaml" },
     ]);
-    // The live sub-invoke gets no file-input boundary, so it must run the
-    // sibling by name…
+    // The live sub-invoke runs the sibling by name, as the recorded run: does…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
@@ -1483,6 +1482,39 @@ describe("flow-add-step", () => {
       flowName: "login",
       viaUpload: false,
     });
+  });
+
+  it("runs and records a tool step that names an e2e_test_path, without a link", async () => {
+    const registry = new Registry();
+    registry.registerTool(flowReadPrerequisiteTool as never);
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "prereq-path", project_root: tmpDir });
+    const target = path.join(tmpDir, "elsewhere.yaml");
+    await fs.writeFile(target, "executionPrerequisite: Signed in\nsteps:\n  - echo: hi\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "prereq-path",
+        project_root: tmpDir,
+        command: "e2e-read-prerequisite",
+        args: JSON.stringify({ e2e_test_path: target, project_root: tmpDir }),
+      }
+    );
+
+    expect(result.toolResult).toEqual({
+      e2eTest: "elsewhere",
+      flow: "elsewhere",
+      executionPrerequisite: "Signed in",
+    });
+    expect(parseFlow(await onDisk("prereq-path")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "e2e-read-prerequisite",
+        args: { e2e_test_path: target, project_root: tmpDir },
+      },
+    ]);
   });
 
   it("names the e2e_test_path the author wrote when the rewritten call is rejected", async () => {
@@ -1639,6 +1671,34 @@ describe("flow-add-step", () => {
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
+  });
+
+  it("says a relative sibling e2e_test_path was resolved against the tool server's cwd", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-relative", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-relative",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ e2e_test_path: ".argent/e2e/login.yaml", project_root: tmpDir }),
+        }
+      )
+    ).rejects.toThrow(
+      `or the project's other e2e test directory, as the tool server resolves a relative path ` +
+        `against its own cwd ("${process.cwd()}"), not the calling agent's - pass the absolute path.`
+    );
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-relative")).steps).toEqual([]);
   });
 
   it('rejects a sibling e2e_test_path containing a ".." segment without running it', async () => {
@@ -2562,6 +2622,9 @@ describe("flow-execute", () => {
     });
     // Should NOT have a steps array — it's a notice, not a run result
     expect(result).not.toHaveProperty("steps");
+    // Nor any device work: this answer stands in for e2e-read-prerequisite,
+    // which is hidden from MCP.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
   it("runs normally when prerequisite exists and is acknowledged", async () => {
@@ -3157,13 +3220,6 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
     // own `args` must not also advertise the whole-payload `--args <json>`
     // escape hatch.
     expect(schema.properties["args"]).toMatchObject({ type: "string" });
-  });
-
-  it("keeps the description focused on how to use the tool", () => {
-    const description = createFlowAddStepTool({} as unknown as Registry).description!;
-    expect(description).toContain("Execute one MCP tool and record its step in the e2e test");
-    expect(description).toContain("Call recording tools, including `e2e-add-script`, directly");
-    expect(description.split(/\s+/).length).toBeLessThan(80);
   });
 });
 

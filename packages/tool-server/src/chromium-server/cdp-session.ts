@@ -16,6 +16,8 @@ interface CdpVersionInfo {
   "Browser"?: string;
   "webSocketDebuggerUrl"?: string;
   "Protocol-Version"?: string;
+  /** Chrome on Android: the browser's package name. */
+  "Android-Package"?: string;
 }
 
 /** Liveness probe for a CDP endpoint (`/json/version`). */

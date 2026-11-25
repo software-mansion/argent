@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
 // plus a `send` spy that records commands.
@@ -138,102 +139,152 @@ describe("NetworkManager (recording)", () => {
     expect(net.get("late")).toBeUndefined();
   });
 
-  it("does not carry a redirected POST's body onto the GET it redirects to", () => {
-    // CDP reuses the requestId across redirect hops; the second requestWillBeSent
-    // carries the 303 as redirectResponse and no postData.
+  it("keeps redirect hops in the shared schema with per-hop headers", () => {
     f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "POST", url: "https://x.test/authenticate", postData: "password=hunter2" },
-      type: "Document",
-      timestamp: 1,
-    });
-    f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "GET", url: "https://x.test/login" },
-      redirectResponse: { status: 303, statusText: "See Other", headers: { location: "/login" } },
-      type: "Document",
-      timestamp: 2,
-    });
-    expect(net.get("1")).toMatchObject({ method: "GET", url: "https://x.test/login" });
-    expect(net.get("1")!.postData).toBeUndefined();
-  });
-
-  it("keeps the redirect hop (303 and Location) in redirects", () => {
-    f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "POST", url: "https://x.test/authenticate", postData: "password=hunter2" },
-      type: "Document",
-      timestamp: 1,
-    });
-    f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "GET", url: "https://x.test/login" },
-      redirectResponse: {
-        status: 303,
-        statusText: "See Other",
-        headers: { Location: "/login" },
-      },
-      type: "Document",
-      timestamp: 2,
-    });
-    expect(net.get("1")!.redirects).toEqual([
-      {
+      requestId: "redirected",
+      request: {
         method: "POST",
         url: "https://x.test/authenticate",
-        status: 303,
-        statusText: "See Other",
-        location: "/login",
-        timestamp: 2,
+        headers: { "authorization": "Bearer secret", "x-hop": "first" },
+        postData: "password=secret",
       },
-    ]);
-  });
-
-  it("measures a redirect chain from its first hop", () => {
-    f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "POST", url: "https://x.test/authenticate" },
       type: "Document",
       timestamp: 1,
       wallTime: 1_700_000_000,
     });
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "redirected",
+      type: "Document",
+      response: { status: 302, statusText: "Found", headers: { "content-type": "text/plain" } },
+    });
     f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
-      request: { method: "GET", url: "https://x.test/login" },
-      redirectResponse: { status: 303, statusText: "See Other", headers: {} },
+      requestId: "redirected",
+      request: {
+        method: "GET",
+        url: "https://x.test/login",
+        headers: { accept: "text/html" },
+      },
+      redirectResponse: {
+        status: 303,
+        statusText: "See Other",
+        headers: { "Location": "/login", "set-cookie": "session=secret" },
+      },
       type: "Document",
       timestamp: 2,
       wallTime: 1_700_000_001,
     });
-    f.events.emit("event", "Network.loadingFinished", {
-      requestId: "1",
-      timestamp: 5,
-      encodedDataLength: 10,
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "redirected",
+      type: "Document",
+      response: { status: 200, statusText: "OK", headers: { "content-type": "text/html" } },
     });
-    const rec = net.get("1")!;
-    expect(rec.startedDateTime).toBe(new Date(1_700_000_000 * 1000).toISOString());
-    expect(rec.durationMs).toBeCloseTo(4000, 0);
+
+    expect(net.get("redirected")).toMatchObject({
+      method: "GET",
+      url: "https://x.test/login",
+      requestHeaders: { accept: "text/html" },
+      responseHeaders: { "content-type": "text/html" },
+      redirects: [
+        {
+          method: "POST",
+          url: "https://x.test/authenticate",
+          status: 303,
+          statusText: "See Other",
+          requestHeaders: { "authorization": "Bearer secret", "x-hop": "first" },
+          headers: { "Location": "/login", "set-cookie": "session=secret" },
+        },
+      ],
+    });
+    expect(net.get("redirected")?.postData).toBeUndefined();
+    expect(net.get("redirected")?.startedDateTime).toBe(
+      new Date(1_700_000_000 * 1000).toISOString()
+    );
   });
 
-  it("keeps a 307 request body that is resent on the new hop", () => {
+  it("keeps a 307 request body that Chromium resends on the next hop", () => {
     f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
+      requestId: "preserved",
       request: { method: "POST", url: "https://x.test/old", postData: "a=1" },
-      type: "Fetch",
       timestamp: 1,
     });
     f.events.emit("event", "Network.requestWillBeSent", {
-      requestId: "1",
+      requestId: "preserved",
       request: { method: "POST", url: "https://x.test/new", postData: "a=1" },
       redirectResponse: { status: 307, statusText: "Temporary Redirect", headers: {} },
-      type: "Fetch",
       timestamp: 2,
     });
-    expect(net.get("1")).toMatchObject({
+
+    expect(net.get("preserved")).toMatchObject({
       method: "POST",
       url: "https://x.test/new",
       postData: "a=1",
+      redirects: [{ method: "POST", url: "https://x.test/old", status: 307 }],
     });
-    expect(net.get("1")!.redirects).toHaveLength(1);
+  });
+
+  it("reports throttled only while the stored conditions shape traffic", async () => {
+    expect(net.throttled()).toBe(false);
+    await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ offline: true }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ downloadKbps: 500 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions(null));
+    expect(net.throttled()).toBe(false);
+  });
+
+  it("marks a record finished only once Network.loadingFinished arrives", () => {
+    emitRequest(f.events, { id: "open", url: "https://x.test/open", status: 200 });
+    emitRequest(f.events, { id: "failed", url: "https://x.test/boom", failed: "net::ERR_FAILED" });
+    emitRequest(f.events, { id: "done", url: "https://x.test/done", finished: true });
+
+    expect(net.get("open")?.finished).toBeUndefined();
+    expect(net.get("failed")?.finished).toBeUndefined();
+    expect(net.get("done")?.finished).toBe(true);
+  });
+
+  it("numbers the records in creation order, and requestsAfter lists the ones after a number", () => {
+    emitRequest(f.events, { id: "a", url: "https://x.test/a" });
+    emitRequest(f.events, { id: "b", url: "https://x.test/b" });
+    // A later event of a record keeps its number.
+    emitRequest(f.events, { id: "a", url: "https://x.test/a", status: 200, finished: true });
+
+    const after = (n: number) =>
+      net.requestsAfter(n).map(({ seq, record }) => `${seq}:${record.requestId}`);
+    expect(after(0)).toEqual(["1:a", "2:b"]);
+    expect(after(1)).toEqual(["2:b"]);
+    expect(net.requestsAfter(0)[0]!.record).toBe(net.get("a"));
+  });
+
+  it("marks where a capture starts and where its stop ends, and keeps the mark after the stop", () => {
+    // No mark before a start, and a stop without a start marks nothing.
+    emitRequest(f.events, { id: "before", url: "https://x.test/before" });
+    expect(net.stopCapture()).toBeUndefined();
+    expect(net.captureMark()).toBeUndefined();
+
+    expect(net.startCapture()).toEqual({ lastSeq: 1 });
+    emitRequest(f.events, { id: "during", url: "https://x.test/during" });
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    emitRequest(f.events, { id: "after", url: "https://x.test/after" });
+    // A second stop keeps where the first one ended.
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    expect(net.captureMark()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+
+    // A new start begins a new mark, without an end.
+    expect(net.startCapture()).toEqual({ lastSeq: 3 });
+    expect(net.captureMark()).toEqual({ lastSeq: 3 });
+  });
+
+  it("drops an evicted record's number, so requestsAfter never lists it", () => {
+    // The store keeps 1000 records.
+    for (let i = 1; i <= 1001; i++) {
+      emitRequest(f.events, { id: `r${i}`, url: `https://x.test/${i}` });
+    }
+
+    const kept = net.requestsAfter(0);
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]).toMatchObject({ seq: 2, record: { requestId: "r2" } });
   });
 });
 
@@ -309,6 +360,28 @@ describe("view-network-logs (chromium branch)", () => {
     expect(out).toContain('{id: 2} "POST /api" 500 Err');
   });
 
+  it("reads pageIndex null as the latest page, like an omitted pageIndex", async () => {
+    const requests = Array.from({ length: 60 }, (_, i) =>
+      rec({ requestId: String(i + 1), url: `https://x.test/r${i + 1}`, status: 200 })
+    );
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const render = async (pageIndex: unknown) => {
+      const params = networkLogsTool.zodSchema!.parse({
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        pageIndex,
+      });
+      return (await networkLogsTool.execute(
+        services,
+        params as Parameters<typeof networkLogsTool.execute>[1]
+      )) as string;
+    };
+    expect(await render(null)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(undefined)).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+    expect(await render(0)).toContain("=== NETWORK LOGS (page 1/2, 60 total) ===");
+    expect(await render("1")).toContain("=== NETWORK LOGS (page 2/2, 60 total) ===");
+  });
+
   it("reports no-traffic when the recording is empty", async () => {
     const services = { chromium: { server: { network: { requests: () => [] } } } } as never;
     const out = (await networkLogsTool.execute(services, {
@@ -322,6 +395,55 @@ describe("view-network-logs (chromium branch)", () => {
 });
 
 describe("view-network-request-details (chromium branch)", () => {
+  it("returns the shared redirect shape and redacts each hop's headers", async () => {
+    const record = rec({
+      requestId: "redirected",
+      method: "GET",
+      url: "https://x.test/login",
+      requestHeaders: { accept: "text/html" },
+      redirects: [
+        {
+          method: "POST",
+          url: "https://x.test/authenticate",
+          status: 303,
+          statusText: "See Other",
+          requestHeaders: { "authorization": "Bearer secret", "x-hop": "first" },
+          headers: { "Location": "/login", "set-cookie": "session=secret" },
+        },
+      ],
+    });
+    const services = {
+      chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "redirected",
+      includeBody: false,
+    })) as {
+      redirects: Array<{
+        method: string;
+        url: string;
+        status: number;
+        statusText: string;
+        requestHeaders?: Record<string, string>;
+        responseHeaders?: Record<string, string>;
+      }>;
+    };
+
+    expect(details.redirects).toEqual([
+      {
+        method: "POST",
+        url: "https://x.test/authenticate",
+        status: 303,
+        statusText: "See Other",
+        requestHeaders: { "authorization": "[REDACTED]", "x-hop": "first" },
+        responseHeaders: { "Location": "/login", "set-cookie": "[REDACTED]" },
+      },
+    ]);
+  });
+
   it("returns redacted details + body via Network.getResponseBody", async () => {
     const record = rec({
       requestId: "r1",
