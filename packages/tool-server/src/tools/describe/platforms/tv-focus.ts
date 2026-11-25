@@ -145,17 +145,20 @@ export function tvFocusTree(
   hierarchy: TvHierarchyResponse | null = null
 ): DescribeTreeData {
   const elements = [...res.focusable];
-  // Some reads report a focused element that is absent from the focusable list;
-  // it still has to be matchable, and it is the single most useful node here.
+  // Some reads report a focused element that is absent from the focusable list
+  // (mid-transition, see `hasTvCursor`); it still has to be matchable, and it is
+  // the single most useful node here.
   //
   // Detect that by looking for a focusable already MARKED focused, not by object
   // identity: the two arrive as separate objects from the same JSON payload, so
   // an identity check would append a duplicate of an element that is already
   // there — and the cursor would then match twice. It is the cursor whatever the
   // read marked on it, so mark it here or `role: "focused"` cannot match it.
-  if (res.focused && !res.focusable.some((e) => e.isFocused)) {
+  const cursorNotListed = !!res.focused && !res.focusable.some((e) => e.isFocused);
+  if (cursorNotListed) {
     elements.push({ ...res.focused, isFocused: true });
   }
+  const flags = cursorNotListed ? { cursorNotListed } : {};
 
   // A focusable's label and value also appear as its own children in the hierarchy.
   const focusText = new Set<string>();
@@ -170,8 +173,8 @@ export function tvFocusTree(
   }
   // The daemon stops walking past its node cap, so text beyond it is missing.
   return (hierarchy?.nodeCount ?? 0) > TV_HIERARCHY_NODE_CAP
-    ? { tree: root, source: "tv-focus", partial: true, hint: TV_HIERARCHY_CAPPED_HINT }
-    : { tree: root, source: "tv-focus" };
+    ? { tree: root, source: "tv-focus", ...flags, partial: true, hint: TV_HIERARCHY_CAPPED_HINT }
+    : { tree: root, source: "tv-focus", ...flags };
 }
 
 /** `walkTree` in the tvOS ax daemon stops once it has visited this many nodes. */
@@ -179,9 +182,14 @@ const TV_HIERARCHY_NODE_CAP = 800;
 const TV_HIERARCHY_CAPPED_HINT =
   "The Apple TV hierarchy stopped at its 800-element cap, so text past it was not read.";
 
-/** Whether the focus engine has placed its cursor, on a tree from {@link tvFocusTree}. */
-export function hasTvCursor(tree: DescribeNode): boolean {
-  return tree.children.some((n) => n.focused);
+/**
+ * Whether the focus engine has placed its cursor on the screen a read from
+ * {@link tvFocusTree} shows: on one of its focusable elements. While the keyboard
+ * opens or closes, the element that had focus keeps it for about half a second
+ * after the new screen's focusable elements are listed (none when it closes).
+ */
+export function hasTvCursor(data: DescribeTreeData): boolean {
+  return !data.cursorNotListed && data.tree.children.some((n) => n.focused);
 }
 
 /**

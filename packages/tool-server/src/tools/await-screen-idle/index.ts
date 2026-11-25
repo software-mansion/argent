@@ -35,8 +35,9 @@ const DEFAULT_MIN_STABLE_MS = 250;
  * How long an Apple TV screen with no cursor must hold before it counts as
  * settled. After a push or pop in Settings the list appears at 130-260 ms and the
  * cursor at 820-950 ms, up to 720 ms later (20 presses), and a remote press sent
- * in that gap is lost. A screen with nothing focusable never gets a cursor, so
- * this can only be a bound.
+ * in that gap is lost. When the keyboard opens or closes, the old element keeps
+ * focus outside the new focusable list for about 550 ms. A screen with nothing
+ * focusable never gets a cursor, so this can only be a bound.
  */
 const TV_NO_CURSOR_STABLE_MS = 1200;
 /**
@@ -271,7 +272,7 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
             if (minStableMs === 0) return { done: true, result: true };
           }
           const requiredMs =
-            tvApi && !hasTvCursor(data.tree)
+            tvApi && !hasTvCursor(data)
               ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
               : minStableMs;
           if (startedMs - stableSince >= requiredMs) return { done: true, result: true };
@@ -296,7 +297,7 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
           : undefined
         : unsettledNote(poll.lastData, poll.lastError, hung ? darkTailMs : undefined);
       const populatedNoCursor =
-        tvApi && poll.lastData?.tree.children.length && !hasTvCursor(poll.lastData.tree);
+        tvApi && poll.lastData?.tree.children.length && !hasTvCursor(poll.lastData);
       const cursorNote = populatedNoCursor ? TV_NO_CURSOR_NOTE : undefined;
       return {
         settled,

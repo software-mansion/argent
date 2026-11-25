@@ -155,6 +155,30 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(res.waitedMs).toBe(400);
   });
 
+  it("waits for the cursor to land when the keyboard closes", async () => {
+    // Captured on tvOS 27: after `select` on the keyboard's `done`, `done` keeps
+    // focus with nothing focusable for about 550 ms (three 200 ms polls), and
+    // then the cursor lands on the field.
+    const closing: TvDescribeResponse = {
+      bundleId: "com.example.app",
+      focused: row("done", 0.9, { isFocused: true }),
+      focusable: [],
+    };
+    const field: TvDescribeResponse = {
+      bundleId: "com.example.app",
+      focused: row("hello", 0.3, { isFocused: true }),
+      focusable: [row("hello", 0.3, { isFocused: true }), row("Probe button", 0.4)],
+    };
+    const api = makeTvApi([closing, closing, closing, field]);
+
+    const res = await runIdle(api);
+
+    expect(res.settled).toBe(true);
+    expect(res.note).toBeUndefined();
+    // The field's read, and the one that confirms it.
+    expect(api.calls()).toBe(5);
+  });
+
   it("does not settle while the cursor is still moving", async () => {
     // Only the cursor differs between the two reads.
     const moved: TvDescribeResponse = {

@@ -147,6 +147,19 @@ describe("tvFocusTree — the focus view as a describe tree", () => {
     expect(findAll(tree, { text: "Orphan", role: "focused" })).toHaveLength(1);
   });
 
+  it("does not count a cursor missing from the list as landed", () => {
+    // The tvOS keyboard closing: `done` keeps focus for about 550 ms after the
+    // keyboard's focusable elements are gone.
+    const closing = tvFocusTree({
+      focused: { label: "done", traits: ["button"], isFocused: true },
+      focusable: [],
+    });
+
+    expect(findAll(closing.tree, { text: "done", role: "focused" })).toHaveLength(1);
+    expect(hasTvCursor(closing)).toBe(false);
+    expect(hasTvCursor(tvFocusTree(SETTINGS))).toBe(true);
+  });
+
   it("marks a cursor missing from the list even when the read did not", () => {
     const { tree } = tvFocusTree({
       focused: { label: "Orphan", traits: ["button"] },
@@ -217,13 +230,13 @@ describe("tvFocusTree — the rest of the screen", () => {
   });
 
   it("leaves the cursor to the focus view", () => {
-    const { tree } = tvFocusTree(
+    const read = tvFocusTree(
       { focused: null, focusable: [] },
       hierarchy([{ label: "Stale", isFocused: true } as TvHierarchyNode])
     );
 
-    expect(hasTvCursor(tree)).toBe(false);
-    expect(findAll(tree, { role: "focused" })).toHaveLength(0);
+    expect(hasTvCursor(read)).toBe(false);
+    expect(findAll(read.tree, { role: "focused" })).toHaveLength(0);
   });
 
   it("keeps `role` to what the remote can reach", () => {
