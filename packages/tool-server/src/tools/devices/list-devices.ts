@@ -43,6 +43,7 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import { claimKey, deviceClaims, type ClaimOwner } from "../../utils/device-claims";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -161,7 +162,7 @@ type AndroidAvdEntry = {
 
 type ChromiumListedDevice = ChromiumDevice & { kind: "app" };
 
-type ListedDevice =
+type ListedDevice = (
   | AndroidDevice
   | AndroidAvdEntry
   | ChromiumListedDevice
@@ -171,7 +172,8 @@ type ListedDevice =
   | IosPhysicalDevice
   | IosRemoteDevice
   | MacosAppDevice
-  | VegaDevice;
+  | VegaDevice
+) & { claim?: ClaimOwner };
 
 type ListDevicesResult = {
   devices: ListedDevice[];
@@ -444,6 +446,19 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
+function listedDeviceId(device: ListedDevice): string | undefined {
+  if ("udid" in device && typeof device.udid === "string") return device.udid;
+  if ("serial" in device && typeof device.serial === "string") return device.serial;
+  if ("id" in device && typeof device.id === "string") return device.id;
+  return undefined;
+}
+
+function withClaim(device: ListedDevice, session: string | undefined): ListedDevice {
+  const id = listedDeviceId(device);
+  const claim = id === undefined ? undefined : deviceClaims.ownerOf(claimKey(id), session);
+  return claim ? { ...device, claim } : device;
+}
+
 function toListedExternal(device: ExternalDevice): ExternalListedDevice {
   return {
     capabilities: Array.from(device.capabilities).sort(),
@@ -489,6 +504,7 @@ Start a stopped device with boot-device: an iOS simulator by 'udid', an Android 
 </flag:harmonyos>platform 'ios-remote' is an iOS simulator hosted on Argent Cloud, usable from Linux too (https://argent.swmansion.com/cloud/); drive it with the same tools by its 'remote:' udid. A 'deviceSet' simulator (e.g. from Radon IDE) runs headless.
 runtimeKind 'tv' marks a focus-driven TV target: use describe, tv-remote and keyboard, not gestures. 'foldable: true' marks a device the fold tool folds.
 Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-device with electronAppPath launches one.
+claim 'another session' marks a device another agent is driving: use a different one.
 'notes' says which platform this machine cannot reach and what would change that; tell the user when their task needs that platform.`,
   zodSchema,
   alwaysLoad: true,
@@ -502,7 +518,7 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
   services: () => ({}),
-  async execute(_services, _params) {
+  async execute(_services, _params, ctx) {
     const harmonyEnabled = isHarmonyEnabled();
     const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
@@ -692,6 +708,7 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       ...external.map(toListedExternal),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+    const listed = devices.map((device) => withClaim(device, ctx?.session));
 
     const [localIos, androidSdk] = await Promise.all([
       xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
@@ -712,6 +729,6 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
-    return { devices, ...(notes.length > 0 ? { notes } : {}) };
+    return { devices: listed, ...(notes.length > 0 ? { notes } : {}) };
   },
 };

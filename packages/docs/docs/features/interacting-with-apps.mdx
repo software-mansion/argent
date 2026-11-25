@@ -70,6 +70,10 @@ The agent does not take screenshots in a loop. The agent waits for a condition o
 
 If the agent knows several actions before the start, and there is nothing to examine between them, the agent runs them as one sequence. One call replaces several round trips.
 
+## Several agents on one machine
+
+All agents and scripts on one computer use the same tool-server. Each agent connection is a session. When a session uses a device, Argent gives the device to that session. A different session that tries to use the device gets an error, and the agent selects a different device. Argent frees the device when the session ends or stops using the device. For a script, set `ARGENT_SESSION` to get the same protection.
+
 ## Example instructions
 
 - "Open the app and go to the settings screen."

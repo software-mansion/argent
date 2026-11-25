@@ -186,6 +186,24 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 
 **Chromium and Electron (`tab`).** Conditions apply to the active page. Workers and cross-site iframes remain outside its scope. Argent reapplies settings when `chromium-tabs` changes the active tab. Reapply the settings if the tab closes outside Argent or another DevTools client detaches.
 
+### Device claims
+
+One tool-server serves all MCP connections and CLI calls of an installation. A device claim keeps two sessions off one device:
+
+- Each MCP connection is one session. A CLI or SDK process is a session when `ARGENT_SESSION` is set. Processes with the same value share one session.
+- A tool call that names a device claims the device for its session.
+- A call from a different session to a claimed device fails with `DEVICE_IN_USE`. The error names the device and does not name the other session.
+- A call without a session claims no device and is never refused.
+- `list-devices` adds `claim: "this session"` or `claim: "another session"` to a claimed device.
+
+A claim ends when one of these events occurs:
+
+- The session calls `release-device`. With `udid`, the call releases that device. Without `udid`, the call releases all devices of the session. A release of a device that the session does not hold does nothing.
+- The MCP connection closes.
+- No call of the session to the device is in progress, and the last call ended more than 10 minutes ago.
+
+The claims are in the memory of the tool-server. A restart of the tool-server removes all claims.
+
 ## Inspecting the screen
 
 | Tool                | Description                                                                      |
@@ -1096,6 +1114,7 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `react-profiler-renders`                 | Count mounted instances of each component in the live fiber tree         | `profiler-commit-query`, mode `render_counts`    |
 | `e2e-read-prerequisite`                  | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
 | `gather-workspace-data`                  | Fetch a structured snapshot of the app project's workspace               | None                                             |
+| `release-device`                         | End the [device claim](#device-claims) of the session                    | None                                             |
 
 Some agent tools do not always give the same result as the hidden tool:
 

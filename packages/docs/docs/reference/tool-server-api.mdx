@@ -323,6 +323,12 @@ The object is empty when the client does not define any of the names. The tool-s
 
 The tool-server resolves each placeholder of the call with these values first, then with its own sources. A sub-tool call of `run-sequence` or `e2e-execute` uses the same values. The tool-server accepts 16 KiB of request headers in total. The tool-server answers `400` and runs no tool when the header is not base64 text of a JSON object, a key is not a valid secret name, or a value is not a string.
 
+## The `x-argent-session` header
+
+The header names the session of the caller. The MCP server sends a new random value for each connection. The CLI and the SDK send the value of the `ARGENT_SESSION` environment variable, when it is set. A value has 1 to 128 printable ASCII characters and no spaces. The tool-server answers `400` to a call with a different value.
+
+A call that names a device claims that device for its session. The tool-server reads the device from `udid`, `device_id`, `devices` and the `device` parameter of `e2e-execute`. A call from a different session to a claimed device gets `409` with `error_code: "DEVICE_IN_USE"`, and no tool runs. A call without the header claims no device and is never refused. See [Device claims](/docs/reference/tools#device-claims).
+
 ## Archive formats
 
 A bundle moves between the client and the tool-server as one compressed tar. The client uploads an input of kind `tar-upload` and each e2e test member that is not in the call body to `POST /upload`. The client downloads a directory artifact, for example a `.trace` bundle, from `GET /artifacts/<id>`. The compression is zstd or gzip:

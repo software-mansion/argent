@@ -15,6 +15,7 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  SESSION_HEADER,
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
@@ -132,7 +133,7 @@ export interface CreateToolsClientOptions {
   /**
    * Headers added to GET /tools and POST /tools/:name. Set here rather than in
    * `fetchImpl`, so they count toward the header limit a call that forwards
-   * secrets is checked against.
+   * secrets is checked against. A session header here replaces `ARGENT_SESSION`.
    */
   headers?: () => Record<string, string>;
   /**
@@ -541,6 +542,11 @@ function failedRun(result: unknown): unknown {
   return result;
 }
 
+function sessionFromEnv(): Record<string, string> {
+  const session = process.env.ARGENT_SESSION?.trim();
+  return session ? { [SESSION_HEADER]: session } : {};
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -702,6 +708,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
+      ...sessionFromEnv(),
       ...options.headers?.(),
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to

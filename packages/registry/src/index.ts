@@ -3,6 +3,7 @@ export {
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
+  SESSION_HEADER,
   ServiceState,
   isLiveServiceState,
 } from "./types";

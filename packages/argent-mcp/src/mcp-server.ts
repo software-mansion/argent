@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
@@ -7,6 +8,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
+  SESSION_HEADER,
   canonicalToolId,
   ensureToolsServer,
   getResolvedToolsUrl,
@@ -150,6 +152,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return {};
   }
 
+  const sessionId = randomUUID();
+
+  function callerHeaders(): Record<string, string> {
+    return { ...aiClientHeaders(), [SESSION_HEADER]: sessionId };
+  }
+
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
@@ -186,7 +194,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
     remote,
     reconnect,
-    extraHeaders: aiClientHeaders,
+    extraHeaders: callerHeaders,
   });
 
   /**
@@ -550,6 +558,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }, HEALTH_INTERVAL_MS);
     healthInterval.unref();
   }
+
+  let devicesReleased = false;
+  function releaseSessionDevices(): void {
+    if (devicesReleased) return;
+    devicesReleased = true;
+    fetch(`${TOOLS_URL}/tools/release-device`, {
+      method: "POST",
+      headers: { ...authHeader(), "Content-Type": "application/json", [SESSION_HEADER]: sessionId },
+      body: "{}",
+      signal: AbortSignal.timeout(3_000),
+    }).catch(() => {});
+  }
+  server.onclose = releaseSessionDevices;
+  // The stdio transport does not close when the editor ends stdin.
+  if (!options.transport) process.stdin.on("close", releaseSessionDevices);
 
   if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {

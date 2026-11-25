@@ -35,6 +35,13 @@ export const E2E_DIR_CLIENT_HEADER = "x-argent-e2e-dir";
 export const CLIENT_SECRETS_HEADER = "x-argent-client-secrets";
 
 /**
+ * The request header that names the caller's session: one per MCP connection,
+ * or `ARGENT_SESSION` for the CLI and the SDK. The tool-server reads it as
+ * {@link InvokeToolOptions.session}.
+ */
+export const SESSION_HEADER = "x-argent-session";
+
+/**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
  * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
@@ -154,6 +161,8 @@ export interface InvokeToolOptions {
    * passes it on as it does {@link flowStack}. The HTTP route never sets it.
    */
   flowSecret?: { typed?: boolean };
+  /** The caller's session from the header `x-argent-session`. Absent for a caller without one. */
+  session?: string;
 }
 
 /**

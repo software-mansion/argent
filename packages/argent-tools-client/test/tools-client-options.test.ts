@@ -299,6 +299,29 @@ describe("createToolsClient options", () => {
     }
   });
 
+  it("sends ARGENT_SESSION as the session header, and a session the caller sets wins", async () => {
+    const sessionOf = async (headers?: () => Record<string, string>) => {
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        fetchImpl,
+        ...(headers ? { headers } : {}),
+      });
+      await callTool("reinstall-app", {});
+      const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+      return (init.headers as Record<string, string>)["x-argent-session"];
+    };
+    vi.stubEnv("ARGENT_SESSION", "");
+    try {
+      expect(await sessionOf()).toBeUndefined();
+      vi.stubEnv("ARGENT_SESSION", " ci-job-7 ");
+      expect(await sessionOf()).toBe("ci-job-7");
+      expect(await sessionOf(() => ({ "x-argent-session": "mcp-1" }))).toBe("mcp-1");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);

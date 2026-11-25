@@ -494,6 +494,20 @@ describe("startMcpServer tool calls", () => {
     expect(posts[0]!.headers["x-argent-ai-client"]).toBe("other");
   });
 
+  it("sends one session id per connection and releases its devices when the connection closes", async () => {
+    await client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } });
+    const session = requests.find((r) => r.url === "/tools/gesture-tap")?.headers[
+      "x-argent-session"
+    ];
+    expect(session).toMatch(/^[0-9a-f-]{36}$/);
+
+    await client.close();
+    await vi.waitFor(() => {
+      const release = requests.find((r) => r.url === "/tools/release-device");
+      expect(release?.headers["x-argent-session"]).toBe(session);
+    });
+  });
+
   it("keeps uploading after the link is removed mid-session", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", "");
 

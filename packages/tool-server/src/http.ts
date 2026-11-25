@@ -12,6 +12,7 @@ import {
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
+  SESSION_HEADER,
   ToolParamAliasError,
   canonicalToolArgs,
   describeParamIssues,
@@ -74,6 +75,13 @@ import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
+import {
+  RELEASE_DEVICE_TOOL_ID,
+  claimTargets,
+  deviceClaims,
+  deviceInUseMessage,
+  parseSession,
+} from "./utils/device-claims";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -790,6 +798,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
+      const session = parseSession(firstHeader(req.headers[SESSION_HEADER]));
+      if (session === null) {
+        res.status(400).json({
+          error: `The ${SESSION_HEADER} header must be 1 to 128 printable ASCII characters without spaces.`,
+        });
+        return;
+      }
+
       let clientSecrets: Map<string, string> | undefined;
       const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
       if (clientSecretsHeader !== undefined) {
@@ -996,6 +1012,29 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Nobody is left to read the result.
       if (callerGone) return;
 
+      let endClaim: (() => void) | undefined;
+      if (session && def.id !== RELEASE_DEVICE_TOOL_ID) {
+        const claim = deviceClaims.claim(session, claimTargets(parsedData));
+        if (!claim.ok) {
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.DEVICE_IN_USE,
+              failure_stage: "http_device_claim",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            parsedData
+          );
+          res.status(409).json({
+            error: deviceInUseMessage(claim.device),
+            error_code: FAILURE_CODES.DEVICE_IN_USE,
+            error_kind: "validation",
+          });
+          return;
+        }
+        endClaim = claim.done;
+      }
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -1066,6 +1105,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             ? {}
             : { legacyE2eDir: true }),
           ...(clientSecrets ? { clientSecrets } : {}),
+          ...(session ? { session } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -1218,6 +1258,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
+        endClaim?.();
         releaseInvocationMeta?.();
       }
     }
