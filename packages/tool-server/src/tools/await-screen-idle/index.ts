@@ -87,6 +87,17 @@ function treeSignature(root: DescribeNode): string {
 }
 
 /**
+ * The wait before the next read while the screen holds, `leftMs` before a read
+ * may start that can end the window. A read sent sooner can only see a change,
+ * so when the window ends before the read after next, the next read waits for
+ * its end. On the defaults (200 ms poll, 250 ms window) a read taking under
+ * 50 ms otherwise starts short of the window and costs a third poll.
+ */
+function confirmWaitMs(leftMs: number, pollIntervalMs: number): number {
+  return leftMs > pollIntervalMs && leftMs <= 2 * pollIntervalMs ? leftMs : pollIntervalMs;
+}
+
+/**
  * Explain an unsettled wait from whatever the last read reported. Mirrors the
  * diagnostics `await-ui-element` folds onto its timeout note — this tool had no
  * equivalent, so a caller got a silent stall on a degraded read.
@@ -243,7 +254,7 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs,
         signal: ctx?.signal,
-        onSample: (data, nowMs) => {
+        onSample: (data, nowMs, startedMs) => {
           lastReadAt = nowMs;
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
@@ -251,19 +262,21 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
             stableSince = 0;
             return { done: false };
           }
+          // The window runs between the starts of the reads: the next one is
+          // sent after a wait, so its start is what the wait can place.
           const signature = treeSignature(data.tree);
-          if (signature === stableSignature) {
-            const requiredMs =
-              tvApi && !hasTvCursor(data.tree)
-                ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
-                : minStableMs;
-            if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
-          } else {
+          if (signature !== stableSignature) {
             stableSignature = signature;
-            stableSince = nowMs;
+            stableSince = startedMs;
             if (minStableMs === 0) return { done: true, result: true };
           }
-          return { done: false };
+          const requiredMs =
+            tvApi && !hasTvCursor(data.tree)
+              ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
+              : minStableMs;
+          if (startedMs - stableSince >= requiredMs) return { done: true, result: true };
+          const leftMs = stableSince + requiredMs - nowMs;
+          return { done: false, waitMs: confirmWaitMs(leftMs, pollIntervalMs) };
         },
       });
 

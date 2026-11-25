@@ -133,6 +133,28 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(describeIosMock).not.toHaveBeenCalled();
   });
 
+  it("settles a static screen on its second read", async () => {
+    // The 250 ms window is longer than the 200 ms poll, so a second read at the
+    // poll interval landed short of it and every remote press paid a third poll.
+    const res = await runIdle(makeTvApi([SCREEN]));
+
+    expect(res.settled).toBe(true);
+    expect(res.polls).toBe(2);
+    expect(res.waitedMs).toBe(250);
+  });
+
+  it("does not wait longer for that read when reads are slow", async () => {
+    // A 100 ms read already starts the second one past the window: one 200 ms
+    // poll between them, as before.
+    const api = makeTvApi([SCREEN]);
+    api.describe = () => new Promise((resolve) => setTimeout(resolve, 100, SCREEN));
+
+    const res = await runIdle(api);
+
+    expect(res.polls).toBe(2);
+    expect(res.waitedMs).toBe(400);
+  });
+
   it("does not settle while the cursor is still moving", async () => {
     // Only the cursor differs between the two reads.
     const moved: TvDescribeResponse = {

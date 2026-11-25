@@ -13,8 +13,12 @@ const UNWAITABLE_FAILURES: ReadonlySet<string> = new Set([
   FAILURE_CODES.VEGA_MULTIPLE_DEVICES,
 ]);
 
-/** Verdict from evaluating one successfully-fetched tree. */
-type PollVerdict<R> = { done: true; result: R } | { done: false };
+/**
+ * Verdict from evaluating one successfully-fetched tree. `waitMs` replaces the
+ * poll interval before the next fetch, for a predicate that knows a sooner fetch
+ * cannot end the wait.
+ */
+type PollVerdict<R> = { done: true; result: R } | { done: false; waitMs?: number };
 
 interface PollDescribeTreeArgs<R> {
   /**
@@ -27,10 +31,11 @@ interface PollDescribeTreeArgs<R> {
   pollIntervalMs: number;
   signal?: AbortSignal;
   /**
-   * `nowMs` is `Date.now()` at the sample, so predicates can track stability
-   * windows without their own timer. Return `{ done: true, result }` to stop early.
+   * `nowMs` is `Date.now()` at the sample and `startedMs` when its fetch was
+   * sent, so predicates can track stability windows without their own timer.
+   * Return `{ done: true, result }` to stop early.
    */
-  onSample: (data: DescribeTreeData, nowMs: number) => PollVerdict<R>;
+  onSample: (data: DescribeTreeData, nowMs: number, startedMs: number) => PollVerdict<R>;
 }
 
 interface PollDescribeTreeResult<R> {
@@ -76,9 +81,11 @@ export async function pollDescribeTree<R>(
   for (;;) {
     if (signal?.aborted) return outcome(undefined, true);
 
-    const remaining = Math.max(0, deadline - Date.now());
+    const startedMs = Date.now();
+    const remaining = Math.max(0, deadline - startedMs);
     const settled = await settleWithin(fetchTree(remaining), remaining, signal);
     polls += 1;
+    let waitMs = pollIntervalMs;
 
     if (settled.type === "aborted") return outcome(undefined, true);
     lastAttempt =
@@ -100,12 +107,13 @@ export async function pollDescribeTree<R>(
     } else {
       lastData = settled.value;
       lastError = undefined;
-      const verdict = onSample(settled.value, Date.now());
+      const verdict = onSample(settled.value, Date.now(), startedMs);
       if (verdict.done) return outcome(verdict.result, false);
+      waitMs = verdict.waitMs ?? pollIntervalMs;
     }
 
     if (Date.now() >= deadline) break;
-    const sleepMs = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
+    const sleepMs = Math.min(waitMs, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, signal))) return outcome(undefined, true);
   }
 
