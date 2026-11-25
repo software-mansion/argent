@@ -25,6 +25,7 @@ import {
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
 import { clearAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { settleWithin } from "./timing";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
@@ -66,6 +67,15 @@ interface IosHost {
    * which a relaunch fixes — from one already launched with it.
    */
   inspectRunningApp(udid: string, bundleId: string): Promise<RunningAppInspection>;
+
+  /**
+   * Turn app accessibility on in the simulator's defaults. An app reads them
+   * when its process starts, and a finished XCTest session (the driver of
+   * Maestro or Appium) leaves them off. An app launched after that has no tab
+   * button identifiers and no label text in its view hierarchy, and nothing
+   * for the ax-service to read.
+   */
+  enableAppAccessibility(udid: string): Promise<void>;
 
   // ax-service steps
   /** Local probes via `defaults read`; remote assumes the orchestrator handled it. */
@@ -278,8 +288,9 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   // SwiftUI views.
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
   /**
-   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal}, so the
-   * native-devtools grant covers these spawns.
+   * Only reached from {@linkcode setupNativeDevtoolsEnvLocal} and from a launch
+   * that resolved the native-devtools service, so the native-devtools grant
+   * covers these spawns.
    */
   const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
@@ -668,6 +679,7 @@ export const localIosHost: IosHost = {
   withdrawNativeDevtoolsEnv: withdrawNativeDevtoolsEnvLocal,
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
+  enableAppAccessibility: ensureAccessibilityEnabled,
   async bootstrapAx(udid) {
     await clearAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
@@ -689,6 +701,17 @@ const ACCESSIBILITY_DEFAULT_FLAGS = [
   "ApplicationAccessibilityEnabled",
 ];
 
+/** Routed through the remote generic spawn: `defaults` runs inside the cloud sim. */
+async function enableAppAccessibilityRemote(udid: string): Promise<void> {
+  await Promise.all(
+    ACCESSIBILITY_DEFAULT_FLAGS.map((flag) =>
+      simRemoteSpawn(udid, {
+        args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
+      })
+    )
+  );
+}
+
 export const remoteIosHost: IosHost = {
   kind: "remote",
   requiresTcp: true,
@@ -709,14 +732,10 @@ export const remoteIosHost: IosHost = {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
-  // Accessibility `defaults write`s routed through the remote generic spawn.
+  enableAppAccessibility: enableAppAccessibilityRemote,
   // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
-    for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
-      await simRemoteSpawn(udid, {
-        args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
-      });
-    }
+    await enableAppAccessibilityRemote(udid);
     return { entitlementBypassActive: true };
   },
   spawnAxDaemon: spawnAxDaemonRemote,
@@ -726,4 +745,37 @@ export const remoteIosHost: IosHost = {
 
 export function pickIosHost(device: DeviceInfo): IosHost {
   return device.platform === "ios-remote" ? remoteIosHost : localIosHost;
+}
+
+/**
+ * How long a launch waits for {@linkcode enableAppAccessibilityBeforeLaunch}.
+ * The write itself is given far longer on a cloud simulator, whose spawn
+ * timeout allows for a binary upload.
+ */
+const APP_ACCESSIBILITY_WAIT_MS = 10_000;
+
+/**
+ * Run by launch-app and restart-app before the app process starts, so that it
+ * starts with accessibility on (see `IosHost.enableAppAccessibility`). The env
+ * setup writes the same defaults on a local simulator, but not on every launch,
+ * and a session of Maestro or Appium on the simulator turns them off again
+ * when it ends.
+ *
+ * Only for a simulator argent arms itself: both tools leave a provider-claimed
+ * device alone before they get here. Never fails the launch: without the write
+ * the app still starts, only less readable.
+ */
+export async function enableAppAccessibilityBeforeLaunch(device: DeviceInfo): Promise<void> {
+  const settled = await settleWithin(
+    pickIosHost(device).enableAppAccessibility(device.id),
+    APP_ACCESSIBILITY_WAIT_MS
+  );
+  if (settled.type === "value") return;
+  const reason =
+    settled.type === "error"
+      ? settled.error
+      : `no answer within ${APP_ACCESSIBILITY_WAIT_MS / 1000}s`;
+  process.stderr.write(
+    `[ios-host] could not turn app accessibility on for ${device.id}: ${reason}\n`
+  );
 }

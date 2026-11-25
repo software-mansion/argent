@@ -7,7 +7,7 @@ import { simctlLaunch, simctlTerminate } from "./sim-remote";
  *
  * One implementation today, `remoteSimctl`, with `ios-remote` as its only
  * caller. The local iOS impl could satisfy the shared handler's parameter:
- * `buildIosLaunchHandler` takes `(services: LaunchAppIosServices, params)`, and
+ * `buildIosLaunchHandler` takes `(services: LaunchAppIosServices, params, device)`, and
  * `launch-app/platforms/ios.ts` resolves a concrete `NativeDevtoolsApi` out of
  * the registry before its own `precheckNativeDevtools`, so `{ nativeDevtools }`
  * is in hand at that point. What keeps it off is one level up: the tool's

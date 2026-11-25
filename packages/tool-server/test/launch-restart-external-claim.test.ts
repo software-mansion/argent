@@ -117,6 +117,8 @@ describe("launch-app and restart-app on a device a provider claims", () => {
     expect(resolveService).not.toHaveBeenCalled();
     /** Both spellings reach simctl as the provider's real udid. */
     expect(execFileMock).toHaveBeenCalledWith("xcrun", ["simctl", "launch", IOS_UDID, BUNDLE_ID]);
+    /** The simulator's accessibility defaults are the provider's to set, like its injection. */
+    expect(execFileMock).not.toHaveBeenCalledWith("xcrun", expect.arrayContaining(["defaults"]));
   });
 
   it.each([
@@ -132,6 +134,7 @@ describe("launch-app and restart-app on a device a provider claims", () => {
     );
 
     expect(resolveService).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalledWith("xcrun", expect.arrayContaining(["defaults"]));
   });
 
   it("still resolves native-devtools for a device argent booted itself", async () => {
