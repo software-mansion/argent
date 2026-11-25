@@ -151,6 +151,22 @@ class FakeTab {
     this.emit("Network.responseReceived", { requestId, response: { status: 200 } });
     if (finish) this.emit("Network.loadingFinished", { requestId, timestamp: 1.25 });
   }
+  /**
+   * The tab gets a no-store 200 with `headers` and its body in `chunks` of decoded
+   * bytes, which the page never reads: Chrome then sends no Network.loadingFinished.
+   */
+  unread(requestId: string, path: string, headers: Record<string, string>, chunks: number[]): void {
+    this.emit("Network.requestWillBeSent", {
+      requestId,
+      request: { method: "GET", url: `${API}${path}` },
+      timestamp: 1,
+    });
+    this.emit("Network.responseReceived", {
+      requestId,
+      response: { status: 200, headers: { "Cache-Control": "no-store", ...headers } },
+    });
+    for (const dataLength of chunks) this.emit("Network.dataReceived", { requestId, dataLength });
+  }
 }
 
 // ── The app's JS runtime: argent's scripts run in a real JS context ─────────
@@ -388,6 +404,29 @@ describe("await-network-request", () => {
     const result = await wait({ url: "/v1/login" }, CHROMIUM);
 
     expect(result.match).toMatchObject({ id: "after", layer: "chromium", state: "complete" });
+  });
+
+  it("matches a Chromium fetch whose body the page never reads, once all of its body arrived", async () => {
+    tab.network.startCapture();
+    await registry.resolveService(chromiumCdpRef(resolveDevice(CHROMIUM)).urn);
+    tab.unread("whole", "/v1/items?body=whole", { "Content-Length": "58" }, [30, 28]);
+    tab.unread("part", "/v1/items?body=part", { "Content-Length": "58" }, [30]);
+    // The page gets a coded body decoded, so its bytes say nothing of its Content-Length.
+    tab.unread(
+      "gzip",
+      "/v1/items?body=gzip",
+      { "Content-Length": "38", "Content-Encoding": "gzip" },
+      [4096]
+    );
+    tab.unread("chunked", "/v1/items?body=chunked", {}, [58]);
+
+    const whole = await wait({ url: "body=whole" }, CHROMIUM);
+    expect(whole.match).toMatchObject({ id: "whole", status: 200, state: "complete" });
+    for (const id of ["part", "gzip", "chunked"]) {
+      const open = await wait({ url: `body=${id}`, outcome: "any" }, CHROMIUM);
+      expect(open.success).toBe(false);
+      expect(open.nearMisses?.[0]).toMatchObject({ id, state: "headers", mismatch: ["outcome"] });
+    }
   });
 
   it("compares the URL as contains, equals or matches", () => {

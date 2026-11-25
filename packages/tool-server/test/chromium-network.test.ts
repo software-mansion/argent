@@ -151,7 +151,7 @@ describe("NetworkManager (recording)", () => {
     expect(net.throttled()).toBe(false);
   });
 
-  it("marks a record finished only once Network.loadingFinished arrives", () => {
+  it("marks a record finished once Network.loadingFinished arrives, not at its response", () => {
     emitRequest(f.events, { id: "open", url: "https://x.test/open", status: 200 });
     emitRequest(f.events, { id: "failed", url: "https://x.test/boom", failed: "net::ERR_FAILED" });
     emitRequest(f.events, { id: "done", url: "https://x.test/done", finished: true });
