@@ -19,29 +19,28 @@ import {
 } from "@argent/tools-client";
 import type { FlagsPathOptions } from "@argent/configuration-core";
 
-export interface AfterActionCapture {
+interface AfterActionCapture {
   lines: string[];
-  /** Printed on stderr in place of a capture that was skipped. */
   note?: string;
   screenshot?: MaterializedImage;
 }
 
-export interface AfterActionCaptureOptions {
+interface AfterActionCaptureOptions {
   client: Pick<ToolsClient, "callTool" | "baseUrl">;
   toolName: string;
   payload: Record<string, unknown>;
   profiling: boolean;
-  /** Where the opt-out flags are read; tests point it at a temp dir. */
   flagsPath?: FlagsPathOptions;
+}
+
+interface CapturedPart {
+  text: string;
+  image?: MaterializedImage;
 }
 
 const NO_CAPTURE: AfterActionCapture = { lines: [] };
 const NEVER_ABORTED = new AbortController().signal;
 
-/**
- * What `argent run` prints after an interaction tool, as the MCP server appends
- * it: the screen once it settles, as a screenshot file and the element tree.
- */
 export async function captureAfterAction(
   options: AfterActionCaptureOptions
 ): Promise<AfterActionCapture> {
@@ -62,17 +61,16 @@ export async function captureAfterAction(
     return { lines: [], note: PROFILING_CAPTURE_SKIPPED_NOTE };
   }
 
-  let screenshot: MaterializedImage | undefined;
-  const captureScreenshot = async (s: AbortSignal): Promise<string[]> => {
-    screenshot = await takeScreenshot(client, call, udid, s);
-    return screenshot ? [`Screen after action: ${screenshot.localPath}`] : [];
+  const captureScreenshot = async (s: AbortSignal): Promise<CapturedPart[]> => {
+    const image = await takeScreenshot(client, call, udid, s);
+    return image ? [{ text: `Screen after action: ${image.localPath}`, image }] : [];
   };
-  const captureTree = async (s: AbortSignal): Promise<string[]> => {
+  const captureTree = async (s: AbortSignal): Promise<CapturedPart[]> => {
     const tree = await readTree(call, udid, s);
-    return tree === undefined ? [] : [AUTO_DESCRIBE_HEADER, tree];
+    return tree === undefined ? [] : [{ text: AUTO_DESCRIBE_HEADER }, { text: tree }];
   };
 
-  const lines = await captureSettledScreen({
+  const parts = await captureSettledScreen({
     call,
     udid,
     toolName,
@@ -81,7 +79,10 @@ export async function captureAfterAction(
     screenshot: wantScreenshot ? captureScreenshot : undefined,
     tree: wantTree ? captureTree : undefined,
   });
-  return { lines, screenshot };
+  return {
+    lines: parts.map((part) => part.text),
+    screenshot: parts.find((part) => part.image)?.image,
+  };
 }
 
 async function takeScreenshot(

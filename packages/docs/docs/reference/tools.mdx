@@ -259,7 +259,7 @@ On iOS and Chromium, movement that JavaScript does usually changes the element t
 
 On a screen that keeps changing, each wait adds up to 1 second. Set the top-level `settle: false` parameter of `run-sequence` to send the steps without this wait.
 
-Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
+Through the MCP server and `argent run` without `--json`, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
 
 - Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
 - Argent does not send a capture call again after a timeout.

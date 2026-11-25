@@ -108,6 +108,8 @@ describe("argent run after an interaction tool", () => {
     });
 
     expect(fs.existsSync(out)).toBe(false);
+    expect(logs).toEqual([JSON.stringify({ tapped: true }, null, 2)]);
+    expect(errs[0]).toContain("Auto-screenshot and element tree skipped");
     expect(errs.at(-1)).toBe(`No screen was captured, so ${out} was not written.`);
   });
 });
