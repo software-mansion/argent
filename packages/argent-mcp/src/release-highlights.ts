@@ -5,11 +5,11 @@
  */
 export const RELEASE_HIGHLIGHTS: Readonly<Record<string, readonly string[]>> = {
   "0.35.0": [
-    "`argent doctor` checks your local Argent setup.",
-    "Run a directory of e2e tests as a suite with suite.config.yaml.",
+    "UI sessions use less agent context: Argent skips unchanged automatic screenshots and sends just the changed lines for small element tree updates.",
     "Capture native network requests from iOS and Mac apps and inspect their headers and bodies.",
-    "Throttle an Android emulator's network connection without slowing down Metro.",
+    "Run a directory of e2e tests as a suite with suite.config.yaml.",
     "Record the screen of a Mac app or a cabled iPhone.",
+    "`argent doctor` checks your local Argent setup.",
   ],
   "0.34.0": [
     "Profile Mac apps with the native profiler, and react-native-macos apps with the React profiler.",
