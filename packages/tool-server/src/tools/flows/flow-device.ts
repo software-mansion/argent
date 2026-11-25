@@ -403,8 +403,9 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  * Three of the classifications are worth stating outright:
  *
  * - `when` needs a device whatever its body contains, because the guard itself
- *   reads one — the device's platform, or its view tree. That classifies the
- *   header alone; the body is left to {@link flowRequiresDevice}'s walk.
+ *   reads one — the device's platform, or its view tree — unless the guard
+ *   checks a script's output. That classifies the header alone; the body is
+ *   left to {@link flowRequiresDevice}'s walk.
  * - `idle` needs one despite carrying no selector: it reads the device twice
  *   over, the UI tree and a screenshot of it.
  * - `run` needs one without the fragment being read here: it is resolved at run
@@ -415,10 +416,12 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "echo":
     case "wait":
     case "script":
+    case "output-check":
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);
     case "when":
+      return step.condition.kind !== "output";
     case "run":
     case "launch":
     case "tap":

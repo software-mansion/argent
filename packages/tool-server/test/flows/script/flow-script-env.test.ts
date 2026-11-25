@@ -343,7 +343,7 @@ describe("env in a test file", () => {
     ["a non-string value", "env: { PORT: 8080 }", /quote it/],
     ["an invalid name", 'env: { "1X": a }', /invalid variable name/],
     ["a list", "env: [A]", /must be a map/],
-    ["an output reference", 'env: { A: "{{output:x}}" }', /unsupported template/],
+    ["a malformed output reference", 'env: { A: "{{output:x[0]}}" }', /A has an invalid reference/],
     ["a NUL in a value", 'env: { A: "x\\0" }', /NUL character/],
     // Parsed to a Map and a Set, whose entries Object.entries never sees.
     ["an ordered map", "env: !!omap [{ MODE: fast }]", /must be a map/],

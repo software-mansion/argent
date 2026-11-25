@@ -1,287 +1,273 @@
-import * as fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  FlowScriptExecutor,
-  type FlowScriptResult,
-} from "../../../src/tools/flows/script/flow-script-executor";
-import {
-  SCRIPT_MAX_FAILURE_MESSAGE_CHARS,
-  SCRIPT_MAX_OUTPUT_BYTES,
-} from "../../../src/tools/flows/script/flow-script-protocol";
-import { createScriptWorkspace, type ScriptWorkspace } from "../../helpers/flow-script-workspace";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Registry } from "@argent/registry";
+import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/flow-run";
+import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
+import { flowAddScriptTool } from "../../../src/tools/flows/flow-add-script";
+import { __resetRecordingsForTesting, parseFlow } from "../../../src/tools/flows/flow-utils";
 
-const workspaces: ScriptWorkspace[] = [];
+/**
+ * `{{output:...}}` references through a real run: what a script leaves in
+ * `output` reaches the steps after it, as a tool argument, an env value, text
+ * and a check.
+ */
 
-function workspace(): ScriptWorkspace {
-  const ws = createScriptWorkspace("out");
-  workspaces.push(ws);
-  return ws;
+vi.setConfig({ testTimeout: 30_000 });
+
+let root: string;
+
+const invokeTool = vi.fn(async (id: string) =>
+  id === "list-devices"
+    ? {
+        devices: [
+          { platform: "ios", udid: "00000000-0000-0000-0000-0000000000ab", state: "Booted" },
+        ],
+      }
+    : { ok: true }
+);
+const registry = {
+  invokeTool,
+  getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+  resolveService: vi.fn(async () => ({
+    isConnected: () => true,
+    listConnectedBundleIds: () => [],
+  })),
+} as unknown as Registry;
+
+async function write(relative: string, contents: string): Promise<void> {
+  const file = path.join(root, relative);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, contents, "utf8");
 }
 
-afterEach(() => {
-  while (workspaces.length) workspaces.pop()!.cleanup();
+async function run(name: string, steps: string[]): Promise<FlowRunResult> {
+  await write(`.argent/e2e/${name}.yaml`, `steps:\n${steps.map((s) => `  - ${s}`).join("\n")}\n`);
+  const result = await createRunFlowTool(registry).execute({}, {
+    project_root: root,
+    name,
+  } as never);
+  if (!("steps" in result)) throw new Error(`expected a run result, got: ${result.notice}`);
+  return result;
+}
+
+/** A script step whose body is `source`. */
+async function script(name: string, source: string): Promise<string> {
+  await write(`scripts/${name}.mjs`, source);
+  return `script: { path: ../../scripts/${name}.mjs }`;
+}
+
+/** A `tool:` step that hands `value` to the probe tool, to read back what it resolved to. */
+const probe = (value: string) => `tool: probe-tool\n    args: { v: ${JSON.stringify(value)} }`;
+
+function probed(): unknown[] {
+  return toolCalls("probe-tool").map((args) => (args as { v: unknown }).v);
+}
+
+function toolCalls(id: string): unknown[] {
+  return (invokeTool.mock.calls as unknown as [string, unknown][])
+    .filter(([called]) => called === id)
+    .map(([, args]) => args);
+}
+
+beforeEach(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "flow-script-output-"));
+  invokeTool.mockClear();
+  __resetRecordingsForTesting();
+});
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
-async function run(source: string): Promise<FlowScriptResult> {
-  const ws = workspace();
-  const script = ws.write("script.mjs", source);
-  return new FlowScriptExecutor({ concurrency: 4, maxTimeoutMs: 60_000 }).execute({
-    scriptPath: script,
-    projectRoot: ws.dir,
-  });
-}
+describe("a script's output in later steps", () => {
+  it("fills a tool argument with its type, text, an env value and a fallback", async () => {
+    const seed = await script("seed", `output.user = { id: 7, name: "Ann", tags: ["a"] };`);
+    await write("scripts/print.mjs", "console.log(process.env.UID);");
+    const result = await run("fill", [
+      seed,
+      `script: { path: ../../scripts/print.mjs, env: { UID: "u-{{output:user.id}}" } }`,
+      `tool: probe-tool\n    args: { n: "{{output:user.id}}", s: "{{output:user.name}} #{{output:user.id}}", tags: "{{output:user.tags}}", f: "{{output:user.age ?? 0.5}}", q: '{{output:user.age ?? "3"}}' }`,
+    ]);
 
-describe("flow script executor — output validation", () => {
-  it("accepts objects, arrays, strings, finite numbers, booleans and null", async () => {
-    const result = await run(
-      `output.doc = { list: [1, "two", true, null, { nested: 1.5 }], empty: {} };`
+    expect(result.ok).toBe(true);
+    expect(result.steps[1]!.scriptLog!.trim()).toBe("u-7");
+    expect(toolCalls("probe-tool")).toEqual([
+      expect.objectContaining({ n: 7, s: "Ann #7", tags: ["a"], f: 0.5, q: "3" }),
+    ]);
+  });
+
+  it("hands each script the document, and keeps what the script leaves", async () => {
+    const first = await script("first", "output.a = 1; output.b = 2;");
+    const second = await script("second", "delete output.a; output.c = output.b + 1;");
+    const print = await script("print", "console.log(JSON.stringify(output));");
+    const result = await run("chain", [first, second, print]);
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(result.steps[2]!.scriptLog!)).toEqual({ b: 2, c: 3 });
+  });
+
+  it("shares the document with a run: fragment, both ways", async () => {
+    await write("scripts/inner.mjs", "output.inner = output.outer + 1;");
+    await write(
+      ".argent/e2e/fragment.yaml",
+      "steps:\n  - script: { path: ../../scripts/inner.mjs }\n"
     );
-    expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({
-      doc: { list: [1, "two", true, null, { nested: 1.5 }], empty: {} },
-    });
+    const outer = await script("outer", "output.outer = 1;");
+    const result = await run("composed", [outer, "run: fragment.yaml", probe("{{output:inner}}")]);
+
+    expect(result.ok).toBe(true);
+    expect(probed()).toEqual([2]);
   });
 
-  it("takes a replaced binding, not only a mutated one", async () => {
-    const result = await run(`output.seeded = 1; output = { replaced: true };`);
-    expect(result.output).toEqual({ replaced: true });
+  it("uses the fallback for a missing key, an index past the end and null", async () => {
+    const seed = await script("seed", "output.v = null; output.list = [];");
+    const result = await run("fallbacks", [
+      seed,
+      probe("{{output:v ?? none}}|{{output:list.0 ?? empty}}|{{output:w.x ?? }}|"),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(probed()).toEqual(["none|empty||"]);
   });
 
-  it.each([
-    ["NaN", `output.user = { age: NaN };`, "output.user.age is NaN; output numbers must be finite"],
-    [
-      "Infinity",
-      `output.ratio = Infinity;`,
-      "output.ratio is Infinity; output numbers must be finite",
-    ],
-    [
-      "-Infinity",
-      `output.floor = -Infinity;`,
-      "output.floor is -Infinity; output numbers must be finite",
-    ],
-    [
-      "a function",
-      `output.items = [1, 2, { handler: () => {} }];`,
-      "output.items[2].handler is a function; output must be JSON-compatible data",
-    ],
-    [
-      "undefined",
-      `output.missing = undefined;`,
-      "output.missing is undefined; output must be JSON-compatible data",
-    ],
-    ["a BigInt", `output.big = 1n;`, "output.big is a BigInt; output must be JSON-compatible data"],
-    [
-      "a symbol",
-      `output.tag = Symbol("x");`,
-      "output.tag is a symbol; output must be JSON-compatible data",
-    ],
-    [
-      "a Date",
-      `output.createdAt = new Date();`,
-      "output.createdAt is a Date; output must be JSON-compatible data (use an ISO string)",
-    ],
-    [
-      "a Map",
-      `output.index = new Map();`,
-      "output.index is a Map; output must be JSON-compatible data",
-    ],
-    [
-      "a Set",
-      `output.seen = new Set();`,
-      "output.seen is a Set; output must be JSON-compatible data",
-    ],
-    [
-      "a class instance",
-      `class Order {}; output.order = new Order();`,
-      "output.order is a Order; output must be JSON-compatible data",
-    ],
-  ])("rejects %s, naming its exact path", async (_label, source, expected) => {
-    const result = await run(source);
+  it("errors the step that holds a missing reference and stops the run", async () => {
+    const seed = await script("seed", 'output.user = { name: "Ann" };');
+    const result = await run("missing", [seed, probe("{{output:user.id}}"), "echo: after"]);
+
     expect(result.ok).toBe(false);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toBe(expected);
-  });
-
-  it("rejects a cycle rather than crashing on it", async () => {
-    const result = await run(`const node = { name: "a" }; node.parent = node; output.node = node;`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toBe(
-      "output.node.parent is a cyclic reference; output must be a tree"
+    expect(result.steps[1]).toMatchObject({ status: "error" });
+    expect(result.steps[1]!.reason).toBe(
+      '{{output:user.id}} has no value: output.user has no key "id" (keys: name)'
     );
+    expect(result.steps[2]).toMatchObject({ status: "skip" });
+    expect(probed()).toEqual([]);
   });
 
-  it("rejects a cycle reached through toJSON", async () => {
-    const result = await run(`const a = { toJSON() { return a; } }; output.a = a;`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toBe("output.a is a cyclic reference; output must be a tree");
+  it("errors a reference to an object inside text", async () => {
+    const seed = await script("seed", "output.user = { id: 1 };");
+    const result = await run("object", [seed, probe("user {{output:user}}")]);
+
+    expect(result.steps[1]!.reason).toContain("is an object, which cannot be part of text");
   });
 
-  it("accepts the same object twice in different branches", async () => {
-    const result = await run(`const shared = { id: 1 }; output.a = shared; output.b = shared;`);
-    expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ a: { id: 1 }, b: { id: 1 } });
+  it("errors a selector that resolves to nothing rather than matching everything", async () => {
+    const seed = await script("seed", 'output.row = "";');
+    const result = await run("empty", [seed, `tap: { text: "{{output:row}}" }`]);
+
+    expect(result.steps[1]).toMatchObject({ status: "error" });
+    expect(result.steps[1]!.reason).toContain("resolved to an empty value");
   });
 
-  it("quotes a key that is not an identifier", async () => {
-    const result = await run(`output["a key"] = { "b.c": NaN };`);
-    expect(result.failure?.message).toBe(
-      'output["a key"]["b.c"] is NaN; output numbers must be finite'
-    );
+  it("gives an env reference its own error before the script starts", async () => {
+    await write("scripts/mark.mjs", `import fs from "node:fs"; fs.writeFileSync("MARK", "ran");`);
+    const result = await run("envmiss", [
+      `script: { path: ../../scripts/mark.mjs, env: { UID: "{{output:user.id}}" } }`,
+    ]);
+
+    expect(result.steps[0]).toMatchObject({ status: "error" });
+    expect(result.steps[0]!.reason).toContain("The value of UID: {{output:user.id}} has no value");
+    await expect(fs.access(path.join(root, "MARK"))).rejects.toThrow();
+  });
+});
+
+describe("secrets and output", () => {
+  it("never turns an output into a secret, held or formed", async () => {
+    await write(".argent/secrets.env", "TOKEN=hunter2-secret-value\n");
+    const named = await script("named", 'output.name = "TOKEN"; output.held = "{{secret:TOKEN}}";');
+    await write("scripts/print.mjs", "console.log(process.env.X);");
+    const formed = await run("formed", [
+      named,
+      `script: { path: ../../scripts/print.mjs, env: { X: "{{secret:{{output:name}}}}" } }`,
+    ]);
+    expect(formed.steps[1]).toMatchObject({ status: "error" });
+    expect(formed.steps[1]!.reason).toContain("never resolves a secret");
+
+    const held = await run("held", [
+      named,
+      `tool: keyboard\n    args: { text: "{{output:held}}" }`,
+    ]);
+    expect(held.steps[1]).toMatchObject({ status: "error" });
+    expect(toolCalls("keyboard")).toEqual([]);
   });
 
-  it("rejects an output replaced with something that is not a document", async () => {
-    const result = await run(`output = "done";`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toBe("output is a string; output must be a plain object");
+  it("refuses a secret a script copied into its output", async () => {
+    await write(".argent/secrets.env", "TOKEN=hunter2-secret-value\n");
+    await write("scripts/copy.mjs", "output.copy = process.env.T;");
+    const result = await run("copied", [
+      `script: { path: ../../scripts/copy.mjs, env: { T: "{{secret:TOKEN}}" } }`,
+      probe("{{output:copy}}"),
+    ]);
+
+    expect(result.steps[1]).toMatchObject({ status: "error" });
+    expect(JSON.stringify(result)).not.toContain("hunter2-secret-value");
+  });
+});
+
+describe("output checks", () => {
+  it("passes, fails with the value, and needs no device", async () => {
+    const seed = await script("seed", 'output.user = { role: "Admin", count: 3 };');
+    const passing = await run("checks", [
+      seed,
+      "assert: { output: user.role, equals: Admin }",
+      "assert: { output: user.count, equals: 3 }",
+      "assert: { output: user.email, exists: false }",
+      "assert: { output: user.role, matches: '^Ad' }",
+    ]);
+    expect(passing.ok).toBe(true);
+
+    const failing = await run("failing", [seed, "assert: { output: user.role, equals: admin }"]);
+    expect(failing.steps[1]).toMatchObject({
+      status: "fail",
+      reason: 'output.user.role is "Admin"',
+    });
+    expect(toolCalls("list-devices")).toEqual([]);
   });
 
-  it.each(["5", "0", "-3", "1.5"])(
-    "names a finite number replacing output as a number (%s)",
-    async (n) => {
-      const result = await run(`output = ${n};`);
-      expect(result.failure?.message).toBe("output is a number; output must be a plain object");
-    }
-  );
+  it("guards a when block on a value without a device", async () => {
+    const seed = await script("seed", "output.beta = false;");
+    const result = await run("guarded", [
+      seed,
+      "when: { output: beta, equals: 'true' }\n    steps:\n      - echo: in beta",
+      "when: { output: beta, equals: 'false' }\n    steps:\n      - echo: not in beta",
+    ]);
 
-  it("rejects output above the 1 MiB encoded limit", async () => {
-    const result = await run(`output.blob = "x".repeat(1024 * 1024 + 10);`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toMatch(/^output is 1\.0 MiB encoded; the limit is 1\.0 MiB$/);
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => [s.kind, s.status])).toEqual([
+      ["script", "pass"],
+      ["when", "skip"],
+      ["echo", "skip"],
+      ["when", "pass"],
+      ["echo", "pass"],
+    ]);
+    expect(result.steps[1]!.reason).toContain('output.beta is "false"');
+    expect(toolCalls("list-devices")).toEqual([]);
   });
 
-  it("accepts output just under the limit", async () => {
-    const result = await run(`output.blob = "x".repeat(1024 * 1000);`);
-    expect(result.failure).toBeUndefined();
-    expect((result.output?.blob as string).length).toBe(1024 * 1000);
+  it("compares with another output", async () => {
+    const seed = await script("seed", 'output.a = "x"; output.b = "x";');
+    const result = await run("pair", [seed, `assert: { output: a, equals: "{{output:b}}" }`]);
+    expect(result.ok).toBe(true);
   });
+});
 
-  it("accepts output of exactly the limit", async () => {
-    // `{"blob":"…"}` is 11 characters around the payload, all single-byte, so
-    // this document encodes to the limit itself — the one size at which the
-    // bound and the document agree, and the one neither the runner's copy of
-    // the check nor the executor's is exercised at.
-    const payload = SCRIPT_MAX_OUTPUT_BYTES - `{"blob":""}`.length;
-    const result = await run(`output.blob = "x".repeat(${payload});`);
+describe("recording with output", () => {
+  it("hands a recorded script what the earlier ones returned, and keeps the reference", async () => {
+    await write("scripts/seed.mjs", "output.user = { id: 7 };");
+    await write("scripts/use.mjs", "console.log(output.user.id, process.env.UID);");
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    const add = (scriptPath: string, env?: Record<string, string>) =>
+      flowAddScriptTool.execute(
+        {},
+        { name: "rec", project_root: root, path: scriptPath, ...(env ? { env } : {}) }
+      );
 
-    expect(result.failure).toBeUndefined();
-    expect(Buffer.byteLength(JSON.stringify(result.output), "utf8")).toBe(SCRIPT_MAX_OUTPUT_BYTES);
+    await add("../../scripts/seed.mjs");
+    const used = await add("../../scripts/use.mjs", { UID: "u{{output:user.id}}" });
+
+    expect(used.status).toBe("pass");
+    expect(used.log?.trim()).toBe("7 u7");
+    const recorded = parseFlow(await fs.readFile(path.join(root, ".argent/e2e/rec.yaml"), "utf8"));
+    expect(recorded.steps[1]).toMatchObject({ env: { UID: "u{{output:user.id}}" } });
   });
-
-  it("encodes a sparse array the way JSON.stringify does", async () => {
-    const result = await run(`const a = []; a[2] = "third"; output.a = a;`);
-    expect(result.failure).toBeUndefined();
-    expect(result.output).toEqual({ a: [null, null, "third"] });
-  });
-
-  it("validates what toJSON will actually encode", async () => {
-    const withToJson = await run(`output.point = { x: 1, toJSON() { return { x: 1, y: 2 }; } };`);
-    expect(withToJson.failure).toBeUndefined();
-    expect(withToJson.output).toEqual({ point: { x: 1, y: 2 } });
-
-    const smuggled = await run(`output.toJSON = () => ({ fn: () => {} });`);
-    expect(smuggled.failure?.kind).toBe("output");
-  });
-
-  it("commits the value it validated, not the one a second read returns", async () => {
-    const getter = await run(
-      `let n = 0;
-       output.data = { get id() { n++; return n === 1 ? 1 : NaN; } };`
-    );
-    expect(getter.failure).toBeUndefined();
-    expect(getter.output).toEqual({ data: { id: 1 } });
-
-    const toJson = await run(
-      `let n = 0;
-       output.wrapped = { toJSON() { n++; return n === 1 ? { fine: true } : { swapped: true }; } };`
-    );
-    expect(toJson.failure).toBeUndefined();
-    expect(toJson.output).toEqual({ wrapped: { fine: true } });
-  });
-
-  it("still rejects a Date, which has a toJSON of its own", async () => {
-    const result = await run(`output.at = new Date();`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("use an ISO string");
-  });
-
-  it("rejects an own __proto__ key rather than passing it into flow state", async () => {
-    const result = await run(`output.settings = JSON.parse('{"__proto__": {"admin": true}}');`);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("__proto__");
-  });
-
-  it("encodes with the JSON.stringify that existed before the script ran", async () => {
-    const swapped = await run(
-      `JSON.stringify = () => '{"fake":true}';
-       output.real = "what the script actually wrote";`
-    );
-    expect(swapped.failure).toBeUndefined();
-    expect(swapped.output).toEqual({ real: "what the script actually wrote" });
-
-    const smuggled = await run(
-      `JSON.stringify = () => '{"__proto__":{"polluted":1},"ok":1}';
-       output.real = true;`
-    );
-    expect(smuggled.failure).toBeUndefined();
-    expect(Object.keys(smuggled.output ?? {})).toEqual(["real"]);
-  });
-
-  it("reports an output it could not even read", async () => {
-    const result = await run(
-      `output.account = { get id() { throw new Error("lazy field exploded"); } };`
-    );
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("could not be read");
-    expect(result.failure?.message).toContain("lazy field exploded");
-  });
-
-  it("bounds a failure message and stack, the last unbounded fields on the channel", async () => {
-    const result = await run(
-      `throw new Error("Unexpected response: " + "y".repeat(8 * 1024 * 1024));`
-    );
-
-    expect(result.failure?.kind).toBe("runtime");
-    expect(result.failure?.message.length).toBeLessThan(9 * 1024);
-    expect(result.failure?.message).toContain("more characters omitted");
-    expect(result.failure?.stack?.length).toBeLessThan(17 * 1024);
-  }, 30_000);
-
-  it("refuses a caller output document that cannot be encoded, without spawning", async () => {
-    const ws = workspace();
-    const marker = ws.resolve("ran.txt");
-    const script = ws.write(
-      "noop.mjs",
-      `import fs from "node:fs";
-       fs.writeFileSync(${JSON.stringify(marker)}, "ran");`
-    );
-    const cyclic: Record<string, unknown> = { flow: "seed" };
-    cyclic.itself = cyclic;
-
-    const fromCyclic = await new FlowScriptExecutor({
-      concurrency: 4,
-      maxTimeoutMs: 60_000,
-    }).execute({ scriptPath: script, projectRoot: ws.dir, output: cyclic });
-    expect(fromCyclic.failure?.kind).toBe("invalid");
-    expect(fromCyclic.failure?.message).toContain("could not be encoded for the script");
-
-    const fromBigInt = await new FlowScriptExecutor({
-      concurrency: 4,
-      maxTimeoutMs: 60_000,
-    }).execute({ scriptPath: script, projectRoot: ws.dir, output: { total: 42n } });
-    expect(fromBigInt.failure?.kind).toBe("invalid");
-
-    expect(fs.existsSync(marker)).toBe(false);
-  });
-
-  it("says how much of a clamped message was really dropped", async () => {
-    const body = "y".repeat(1_000_000);
-    const thrown = `Unexpected response: ${body}`;
-    const result = await run(`throw new Error("Unexpected response: " + "y".repeat(1000000));`);
-
-    const message = result.failure?.message ?? "";
-    const omitted = /… \[(\d+) more characters omitted]$/.exec(message);
-    expect(result.failure?.kind).toBe("runtime");
-    expect(message.length).toBe(SCRIPT_MAX_FAILURE_MESSAGE_CHARS);
-    expect(Number(omitted?.[1])).toBe(thrown.length - (message.length - omitted![0].length));
-  }, 30_000);
 });

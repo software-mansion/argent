@@ -21,7 +21,9 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
+  assertStepOutputReferences,
   holdsOutputReference,
+  resolveStepOutputs,
   appIdForPlatform,
   authoringPlatform,
   parseFlow,
@@ -74,6 +76,8 @@ import {
 } from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
+import { OutputReferenceError } from "./flow-output";
+import { InvalidToolInputError } from "../../utils/capability";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
 import {
@@ -1616,6 +1620,25 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         await rewriteSiblingFlowPath(session, args, project, linked);
       }
 
+      // The call runs with each output reference resolved against what this
+      // recording's scripts returned, and the step keeps the references. It is
+      // recorded as the raw tool step: a directive the call would convert to
+      // (a captured tap selector, a `launch`) is built from resolved values.
+      const authored: FlowStep = { kind: "tool", name: command, args };
+      const referencedArgs = holdsOutputReference(authored) ? args : undefined;
+      if (referencedArgs) {
+        try {
+          assertStepOutputReferences(authored);
+          args = resolveStepOutputs(authored, session.output ?? {}).args;
+        } catch (err) {
+          if (!(err instanceof OutputReferenceError) && getFailureSignal(err) === undefined) {
+            throw err;
+          }
+          const reason = (err as Error).message.replace(/^Step 1 \(`tool`\): /, "");
+          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${reason}`);
+        }
+      }
+
       // Refused before the tap capture and the invoke, so nothing runs.
       if (linked) {
         const issue = toolStepUploadIssue(
@@ -1839,7 +1862,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let step: FlowStep;
       let warning: string | undefined;
-      if (captured?.selector) {
+      if (referencedArgs) {
+        step = {
+          kind: "tool",
+          name: command,
+          args: stripDeviceKeys(referencedArgs),
+          delayMs: params.delayMs,
+        };
+      } else if (captured?.selector) {
         step = {
           kind: "tap",
           selector: captured.selector,
@@ -1894,11 +1924,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       } catch (err) {
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
-        // A host-mode append re-parses the file, so the scan that refuses an
-        // output reference sees the steps ALREADY there as well — and a
-        // mid-recording hand edit is a supported way for one of those to carry
-        // one. Blaming the just-run call for that step's field would send the
-        // author back over a call whose args were clean.
+        // A host-mode append re-parses the file, so the scan that checks
+        // output references sees the steps ALREADY there as well — and a
+        // mid-recording hand edit is a supported way for one of those to break
+        // one. The call's own references were checked before it ran.
         throw wrapFailure(
           err,
           {
@@ -1907,11 +1936,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             failure_area: "tool_server",
             error_kind: "validation",
           },
-          holdsOutputReference(step)
-            ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
-                `recorded. Check the call's changes before you retry. ${refused}`
-            : `The \`${params.command}\` call ran, but an existing e2e test step failed validation. ` +
-                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+          `The \`${params.command}\` call ran, but an existing e2e test step failed validation. ` +
+            `Fix the step named below. Check the call's changes before you retry. ${refused}`
         );
       }
 

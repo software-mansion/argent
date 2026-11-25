@@ -240,6 +240,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       step,
       projectRoot: params.project_root,
       env,
+      output: session.output ?? {},
       ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
@@ -319,6 +320,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
+    if (result?.output) session.output = result.output;
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
