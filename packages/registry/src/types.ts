@@ -41,6 +41,11 @@ export const CLIENT_SECRETS_HEADER = "x-argent-client-secrets";
  */
 export const SESSION_HEADER = "x-argent-session";
 
+/** A usable session id: 1 to 128 printable ASCII characters without spaces. */
+export function isValidSession(session: string): boolean {
+  return /^[\x21-\x7e]{1,128}$/.test(session);
+}
+
 /**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the

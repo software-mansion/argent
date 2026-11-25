@@ -1,4 +1,4 @@
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, isValidSession } from "@argent/registry";
 import { InvalidToolInputError } from "./capability";
 import { canonicalDeviceId } from "./debugger/device-alias";
 import { externalNativeId } from "./external-devices";
@@ -8,7 +8,7 @@ const CLAIM_IDLE_TIMEOUT_MS = CLAIM_IDLE_MINUTES * 60_000;
 
 export const RELEASE_DEVICE_TOOL_ID = "release-device";
 
-const MAX_SESSION_LENGTH = 128;
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ClaimOwner = "this session" | "another session";
 
@@ -99,7 +99,8 @@ export const deviceClaims = new DeviceClaims();
 /** One key per device, whichever of its names the caller used. */
 export function claimKey(deviceId: string): string {
   const nativeId = externalNativeId(deviceId);
-  return canonicalDeviceId(nativeId) ?? nativeId;
+  const id = canonicalDeviceId(nativeId) ?? nativeId;
+  return UUID_SHAPE.test(id) ? id.toUpperCase() : id;
 }
 
 /** The devices a call acts on: `udid`, `device_id`, `devices` or e2e-execute's `device`. */
@@ -116,8 +117,7 @@ export function claimTargets(args: unknown): string[] {
 export function parseSession(header: string | undefined): string | null | undefined {
   if (header === undefined) return undefined;
   const session = header.trim();
-  if (session.length === 0 || session.length > MAX_SESSION_LENGTH) return null;
-  return /^[\x21-\x7e]+$/.test(session) ? session : null;
+  return isValidSession(session) ? session : null;
 }
 
 export function deviceInUseMessage(device: string): string {

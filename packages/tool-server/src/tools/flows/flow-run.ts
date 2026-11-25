@@ -1865,6 +1865,10 @@ Without a link, every step kind runs.`,
       // The device the run STARTS on — `state.device` moves when a chromium
       // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
+      const endClaim =
+        device && !params.device && !resolved.booted
+          ? claimPickedDevice(ctx?.session, device.id)
+          : undefined;
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
@@ -1936,10 +1940,6 @@ Without a link, every step kind runs.`,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
-      const endClaim =
-        device && !params.device && !resolved.booted
-          ? claimPickedDevice(ctx?.session, device.id)
-          : undefined;
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {

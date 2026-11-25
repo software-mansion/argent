@@ -72,6 +72,7 @@ export {
 export {
   prepareFileInputs,
   applyClientFileDirectives,
+  raiseSignalAgain,
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
   type FileInputSpec,

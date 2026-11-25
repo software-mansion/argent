@@ -16,6 +16,7 @@ import {
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
   SESSION_HEADER,
+  isValidSession,
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
@@ -542,15 +543,16 @@ function failedRun(result: unknown): unknown {
   return result;
 }
 
-function sessionFromEnv(): Record<string, string> {
+function withSessionFromEnv(headers: Record<string, string>): Record<string, string> {
+  if (SESSION_HEADER in headers) return headers;
   const session = process.env.ARGENT_SESSION?.trim();
-  if (!session) return {};
-  if (!/^[\x21-\x7e]{1,128}$/.test(session)) {
+  if (!session) return headers;
+  if (!isValidSession(session)) {
     throw new ToolInvocationError(
       "ARGENT_SESSION must be 1 to 128 printable ASCII characters without spaces."
     );
   }
-  return { [SESSION_HEADER]: session };
+  return { [SESSION_HEADER]: session, ...headers };
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -714,8 +716,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
-      ...sessionFromEnv(),
-      ...options.headers?.(),
+      ...withSessionFromEnv(options.headers?.() ?? {}),
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to
       // 127.0.0.1 included, which nothing else in the request shows.

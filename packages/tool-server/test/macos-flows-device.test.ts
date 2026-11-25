@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry, type ToolContext } from "@argent/registry";
+import { claimKey, deviceClaims } from "../src/utils/device-claims";
 import { unsetFlag } from "@argent/configuration-core";
 
 // The build argent recorded last for the bundle id; host state, faked here.
@@ -498,6 +499,29 @@ describe("raw tool steps on a Mac app", () => {
     const result = await run(registry, "tap", { device: MAC_DEVICE });
     expect(result.steps[0]?.status).toBe("pass");
     expect(calls.find((c) => c.tool === "gesture-tap")?.args.udid).toBe(MAC_DEVICE);
+  });
+
+  it("claims the device it selects for the session, and refuses a device another session holds", async () => {
+    const running = { platform: "macos", id: MAC_DEVICE, state: "running" };
+    const { registry, calls } = makeRegistry({ devices: [running], capabilityOf });
+    await writeFlow("tap", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tool", name: "gesture-tap", args: { x: 0.5, y: 0.5 } }],
+    });
+    const runAs = (session: string) =>
+      createRunFlowTool(registry).execute(
+        {},
+        { name: "tap", project_root: tmpDir, platform: "macos" },
+        { session } as ToolContext
+      );
+    try {
+      await runAs("a");
+      expect(deviceClaims.ownerOf(claimKey(MAC_DEVICE), "a")).toBe("this session");
+      await expect(runAs("b")).rejects.toThrow(/in use by another Argent session/);
+      expect(calls.filter((c) => c.tool === "gesture-tap")).toHaveLength(1);
+    } finally {
+      deviceClaims.release("a");
+    }
   });
 
   // native-find-views refuses a Mac Catalyst app; every other tool takes both kinds.

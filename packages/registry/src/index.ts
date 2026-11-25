@@ -4,6 +4,7 @@ export {
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   SESSION_HEADER,
+  isValidSession,
   ServiceState,
   isLiveServiceState,
 } from "./types";

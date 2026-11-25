@@ -9,6 +9,7 @@ import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   SESSION_HEADER,
   canonicalToolId,
+  raiseSignalAgain,
   ensureToolsServer,
   getResolvedToolsUrl,
   getDeviceIdFromArgs,
@@ -562,24 +563,26 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   function releaseSessionDevices(): Promise<unknown> {
     release ??= fetch(`${TOOLS_URL}/tools/release-device`, {
       method: "POST",
-      headers: { ...authHeader(), "Content-Type": "application/json", [SESSION_HEADER]: sessionId },
+      headers: { ...authHeader(), ...callerHeaders(), "Content-Type": "application/json" },
       body: "{}",
       signal: AbortSignal.timeout(2_000),
     }).catch(() => {});
     return release;
   }
 
+  const EXIT_SIGNALS = ["SIGTERM", "SIGINT"] as const;
   function releaseThenRaise(signal: NodeJS.Signals): void {
-    void releaseSessionDevices().finally(() => process.kill(process.pid, signal));
+    void releaseSessionDevices().finally(() => {
+      for (const s of EXIT_SIGNALS) process.removeListener(s, releaseThenRaise);
+      raiseSignalAgain(signal);
+    });
   }
 
   server.onclose = () => void releaseSessionDevices();
   if (!options.transport) {
     // The stdio transport does not close when the editor ends stdin.
     process.stdin.on("close", () => void releaseSessionDevices());
-    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
-      process.once(signal, () => releaseThenRaise(signal));
-    }
+    for (const signal of EXIT_SIGNALS) process.on(signal, releaseThenRaise);
   }
 
   if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
