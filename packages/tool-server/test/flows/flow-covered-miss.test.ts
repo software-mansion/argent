@@ -19,6 +19,7 @@ vi.mock("../../src/tools/flows/flow-ios-tree", async (importOriginal) => {
 vi.setConfig({ clearMocks: false });
 
 const APP = "com.example.app";
+const DLG = "com.argent.dlglist";
 const IN_APP =
   "it is covered by an alert, sheet or popover. Dismiss it first, or add an await step for it to close.";
 const SYSTEM =
@@ -121,6 +122,8 @@ interface Sim {
 function device(opts: {
   ax?: AXTreeResponse;
   android?: { xml: string; captureMode?: string };
+  /** The Android screen in pixels; 1080x1920 when absent. */
+  screen?: { width: number; height: number };
   /** Called on each tool the run dispatches, e.g. to close a dialog on a tap. */
   onTool?: (id: string) => void;
 }): Sim {
@@ -128,7 +131,7 @@ function device(opts: {
   const ax = { degraded: false, tree: async () => opts.ax };
   const android = {
     getHierarchy: async () => opts.android,
-    getScreenSize: async () => ({ width: 1080, height: 1920 }),
+    getScreenSize: async () => opts.screen ?? { width: 1080, height: 1920 },
   };
   sim.registry = {
     resolveService: async (urn: string) => (urn.startsWith("AndroidDevtools") ? android : ax),
@@ -367,6 +370,150 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
         "is on top of the app, and Android leaves the elements below it out of the tree. Add a " +
         "step before this one that taps a button of it, or grant the permission before the e2e " +
         "test with the `settings-permissions` tool."
+    );
+  });
+
+  describe("on a 1080x2400 API 35 emulator", () => {
+    const SCREEN = { width: 1080, height: 2400 };
+    const BAR = `<node class="android.widget.FrameLayout" package="com.android.systemui" window-type="3" bounds="[0,0][1080,136]" />`;
+    // A window of `pkg` holding a list that scrolls, with its first rows.
+    const listWindow = (pkg: string, bounds: string, list: string, rows: string[]) =>
+      `<node class="android.widget.FrameLayout" package="${pkg}" window-type="1" bounds="${bounds}">` +
+      `<node class="android.widget.ListView" scrollable="true" package="${pkg}" bounds="${list}">` +
+      rows
+        .map(
+          (r, i) =>
+            `<node class="android.widget.TextView" text="${r}" clickable="true" package="${pkg}" ` +
+            `bounds="[70,${560 + i * 126}][1010,${686 + i * 126}]" />`
+        )
+        .join("") +
+      "</node></node>";
+    // A centred dialog whose 560dp list of 30 colors scrolls (a test app).
+    const COLORS = listWindow(DLG, "[28,400][1052,2072]", "[70,560][1010,2030]", [
+      "Color 1",
+      "Color 2",
+    ]);
+    const IN_DIALOG =
+      "a dialog is on top of the app, and Android leaves the elements below it out of the tree. " +
+      "If the element is in the dialog,";
+    const ELSE = "Else dismiss the dialog first, or add an await step for it to close.";
+
+    it("gives the scroll remedy with the dialog text for a dialog whose list scrolls", async ({
+      expect,
+    }) => {
+      const sim = device({ android: androidXml([BAR, COLORS]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5571", tap({ text: "Color 25" }));
+
+      expect(reason).toBe(
+        `no visible element matched selector text="Color 25": ${IN_DIALOG} add a scroll-to ` +
+          `step before this one. ${ELSE}`
+      );
+    }, 20_000);
+
+    it("names within: on a scroll-to step in a dialog whose list scrolls", async ({ expect }) => {
+      const sim = device({ android: androidXml([BAR, COLORS]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5572", {
+        kind: "scroll-to",
+        target: { text: "Color 25" },
+        direction: "down",
+      });
+
+      expect(reason).toBe(
+        `reached the end of the scroll without finding text="Color 25": ${IN_DIALOG} add ` +
+          `within: with the dialog's scroll container to this step. ${ELSE}`
+      );
+    }, 30_000);
+
+    it("gives no scroll remedy for a dialog whose ScrollViews do not scroll", async ({
+      expect,
+    }) => {
+      // Settings, About, "Device name": the title and the field sit in ScrollViews.
+      const scrollView = (bounds: string) =>
+        `<node class="android.widget.ScrollView" scrollable="false" package="com.android.settings" bounds="${bounds}" />`;
+      const sim = device({
+        android: androidXml([
+          BAR,
+          `<node class="android.widget.FrameLayout" package="com.android.settings" window-type="1" bounds="[28,990][1052,1482]">` +
+            scrollView("[70,1150][1010,1276]") +
+            scrollView("[70,1276][1010,1440]") +
+            "</node>",
+        ]),
+        screen: SCREEN,
+      });
+      const reason = await reasonOf(sim, "emulator-5578", tap({ text: "Model" }));
+
+      expect(reason).toBe(DIALOG);
+    }, 20_000);
+
+    it("gives no scroll remedy for a scroller of the dialog off the screen", async ({ expect }) => {
+      const sim = device({
+        android: androidXml([
+          BAR,
+          listWindow(DLG, "[28,400][1052,2072]", "[70,2400][1010,2900]", ["Color 1"]),
+        ]),
+        screen: SCREEN,
+      });
+      const reason = await reasonOf(sim, "emulator-5573", tap({ text: "Model" }));
+
+      expect(reason).toBe(DIALOG);
+    }, 20_000);
+
+    // The share sheet: `scroll-to` swipes at the centre of the screen, above the
+    // sheet, and closes it, so the system text stays as it is.
+    it("gives a system sheet whose list scrolls the system text alone", async ({ expect }) => {
+      const sheet = listWindow("android", "[0,0][1080,2400]", "[0,0][1080,2400]", ["Copy"]);
+      const sim = device({ android: androidXml([BAR, sheet]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5574", tap({ text: "Quick Share" }));
+
+      expect(reason).toBe(
+        'no visible element matched selector text="Quick Share": a system dialog or sheet of ' +
+          "android is on top of the app, and Android leaves the elements below it out of the " +
+          "tree. Add a step before this one that taps a button of it, or grant the permission " +
+          "before the e2e test with the `settings-permissions` tool."
+      );
+    }, 20_000);
+
+    const DIVIDER = `<node class="android.widget.FrameLayout" package="com.android.systemui" window-type="5" bounds="[0,1131][1080,1257]" />`;
+    const SETTINGS = listWindow(
+      "com.android.settings",
+      "[0,1207][1080,2400]",
+      "[0,1400][1080,2400]",
+      ["Network"]
+    );
+    it.for<[string, string, string[]]>([
+      // Contacts on top, Settings (focused) below it.
+      [
+        "a split screen",
+        "5575",
+        [
+          BAR,
+          DIVIDER,
+          SETTINGS,
+          appWindow("com.google.android.contacts", "[0,0][1080,1181]", "Add"),
+        ],
+      ],
+      // The first read of a split: the other app's window is not listed yet.
+      ["a split screen as it starts", "5576", [BAR, DIVIDER, SETTINGS]],
+      [
+        "a freeform window",
+        "5577",
+        [
+          BAR,
+          listWindow("com.android.settings", "[276,696][853,1776]", "[276,800][853,1776]", [
+            "Network",
+          ]),
+          appWindow("com.google.android.contacts", "[0,0][1080,2400]", "Add"),
+        ],
+      ],
+    ])(
+      "keeps the scroll hint in %s",
+      { timeout: 20_000 },
+      async ([, serial, windows], { expect }) => {
+        const sim = device({ android: androidXml(windows), screen: SCREEN });
+        const reason = await reasonOf(sim, `emulator-${serial}`, tap({ text: "Nowhere" }));
+
+        expect(reason).toBe(plain('text="Nowhere"'));
+      }
     );
   });
 

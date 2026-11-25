@@ -172,11 +172,14 @@ export interface DescribeTreeData {
  * `window` (Android): Android leaves the app's window out of the tree while
  * one of these windows is on top. The topmost application window, when it is
  * a system dialog or sheet (`system`, the test `alertVisible` uses) or a
- * window that starts below the top. Absent otherwise.
+ * window that starts below the top. `scrolls`: that window of the app holds a
+ * view that scrolls on the screen, so the target may be further down its list.
+ * Absent otherwise, and while apps show side by side.
  */
 export type FlowCover =
   | { kind: "covered"; leaves: DescribeNode[]; systemAlert: boolean }
-  | { kind: "window"; system: boolean; package: string };
+  | { kind: "window"; system: true; package: string }
+  | { kind: "window"; system: false; package: string; scrolls: boolean };
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */
 export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";

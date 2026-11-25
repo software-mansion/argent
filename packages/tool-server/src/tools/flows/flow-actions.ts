@@ -918,7 +918,7 @@ async function scrollToVisible(
         ...warnedBy(warning),
       };
     }
-    const stale = await staleSelectorReason(env, target, reason, true);
+    const stale = await staleSelectorReason(env, target, reason, true, true);
     if (stale === "aborted") return { aborted: true };
     return { reason: stale ?? reason, ...warnedBy(warning) };
   };
@@ -1145,19 +1145,39 @@ function systemAlertReason(missed: string): string {
  *
  * Android: the elements below a dialog are not in the tree at all, so any
  * miss while one is on top gets the text. A full-screen in-app sheet looks
- * like a screen, and gets none.
+ * like a screen, and gets none. A dialog of the app that scrolls may hold the
+ * target further down, so the text gives the scroll remedy too: a `scroll-to`
+ * step before this one, or on a `scroll-to` step (`scrolling`), its `within:`,
+ * since a swipe of half the screen passes a short list. A system sheet gets no
+ * scroll remedy: `scroll-to` swipes at the centre of the screen, above the
+ * share sheet, and closes it.
  */
-function coverReason(env: ActionEnv, sel: FlowSelector, missed: string): string | undefined {
+function coverReason(
+  env: ActionEnv,
+  sel: FlowSelector,
+  missed: string,
+  scrolling: boolean
+): string | undefined {
   const tree = env.lastRead?.tree;
   const cover = env.lastRead?.cover;
   if (!tree || !cover) return undefined;
   if (flowFindAll(tree, sel).some(isVisible)) return undefined;
   if (cover.kind === "window") {
     const below = "is on top of the app, and Android leaves the elements below it out of the tree";
-    return cover.system
-      ? `${missed}: a system dialog or sheet of ${cover.package} ${below}. Add a step before ` +
-          `this one that taps a button of it, ${PERMISSION_REMEDY}`
-      : `${missed}: a dialog ${below}. ${COVERED_REMEDY}`;
+    if (cover.system) {
+      return (
+        `${missed}: a system dialog or sheet of ${cover.package} ${below}. Add a step before ` +
+        `this one that taps a button of it, ${PERMISSION_REMEDY}`
+      );
+    }
+    if (!cover.scrolls) return `${missed}: a dialog ${below}. ${COVERED_REMEDY}`;
+    const scroll = scrolling
+      ? "add within: with the dialog's scroll container to this step"
+      : "add a scroll-to step before this one";
+    return (
+      `${missed}: a dialog ${below}. If the element is in the dialog, ${scroll}. Else dismiss ` +
+      `the dialog first, or add an await step for it to close.`
+    );
   }
   const withCovered = { ...tree, children: [...tree.children, ...cover.leaves] };
   if (!flowFindAll(withCovered, sel).some(isVisible)) return undefined;
@@ -1187,9 +1207,10 @@ async function staleSelectorReason(
   env: ActionEnv,
   sel: FlowSelector,
   missed = `no visible element matched selector ${describeSelector(sel)}`,
-  ignoresKeys = false
+  ignoresKeys = false,
+  scrolling = false
 ): Promise<string | "aborted" | undefined> {
-  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, missed);
+  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, missed, scrolling);
   const role = unknownRoleReason(env, sel, missed);
   if (role !== undefined) return role;
   const field = fieldTextReason(env, sel, missed);
@@ -1198,7 +1219,7 @@ async function staleSelectorReason(
   // the read below does not look for.
   const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
   if (!ids.every((id): id is string => id !== undefined)) {
-    return coverReason(env, sel, missed) ?? switchRoleReason(sel, missed);
+    return coverReason(env, sel, missed, scrolling) ?? switchRoleReason(sel, missed);
   }
   const read = await settleWithin(
     readIosSimulatorUiTree(env.registry, env.device),

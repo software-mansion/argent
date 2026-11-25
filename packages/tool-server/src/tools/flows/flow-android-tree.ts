@@ -214,27 +214,37 @@ function adaptParsedHierarchy(
   });
 }
 
+// AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER.
+const TYPE_SPLIT_SCREEN_DIVIDER = 5;
+
 /**
  * The topmost application window of a dump, when it is one Android hides the
  * app's window below (see `FlowCover`): a system dialog or sheet, or a window
  * that starts below the top (`startsAtTop`: an app window a cutout or a side
  * navigation bar insets in landscape is not a dialog). Undefined when the dump
  * has no window list (the `active-window` capture, an older helper: no root
- * has a `window-type`) or the topmost application window is the app's screen.
+ * has a `window-type`), the topmost application window is the app's screen, or
+ * the screen shows apps side by side: split screen and freeform windows list a
+ * window for each app, and split screen a divider (that alone while a split
+ * starts). A dialog of one app in a split screen is missed this way, and its
+ * step keeps the scroll hint.
  */
 function topWindowCover(
   root: ParsedXmlNode | null,
   screenW: number,
   screenH: number
 ): Extract<FlowCover, { kind: "window" }> | undefined {
+  const roots = root ? childNodes(root) : [];
+  if (roots.some((c) => Number(c.attrs["window-type"]) === TYPE_SPLIT_SCREEN_DIVIDER)) {
+    return undefined;
+  }
   // Roots are in z-order, topmost first. As `ui-tree`, a root with no package is passed over.
-  const top =
-    root &&
-    childNodes(root).find(
-      (c) => Number(c.attrs["window-type"]) === TYPE_APPLICATION && Boolean(c.attrs.package)
-    );
+  const apps = roots.filter(
+    (c) => Number(c.attrs["window-type"]) === TYPE_APPLICATION && Boolean(c.attrs.package)
+  );
+  const top = apps[0];
   const pkg = top?.attrs.package;
-  if (!top || !pkg) return undefined;
+  if (!top || !pkg || apps.length > 1) return undefined;
   const rect = parseUiAutomatorBounds(top.attrs.bounds ?? "");
   // Unclipped, as `ui-tree` frames a window root.
   const frame = rect
@@ -246,7 +256,30 @@ function topWindowCover(
       }
     : undefined;
   if (isSystemDialogWindow(pkg, frame)) return { kind: "window", system: true, package: pkg };
-  return startsAtTop(frame) ? undefined : { kind: "window", system: false, package: pkg };
+  if (startsAtTop(frame)) return undefined;
+  return {
+    kind: "window",
+    system: false,
+    package: pkg,
+    scrolls: holdsScroller(top, screenW, screenH),
+  };
+}
+
+/**
+ * Whether a view under `node` scrolls and shows on the screen. Only the
+ * `scrollable` flag counts, not the class `isUiAutomatorScrollable` also
+ * reads: the Settings "Device name" dialog holds two `ScrollView`s that do not
+ * scroll.
+ */
+function holdsScroller(node: ParsedXmlNode, screenW: number, screenH: number): boolean {
+  return childNodes(node).some((c) => {
+    const rect = c.attrs.scrollable === "true" && parseUiAutomatorBounds(c.attrs.bounds ?? "");
+    const shows =
+      rect &&
+      Math.min(rect.x + rect.w, screenW) > Math.max(rect.x, 0) &&
+      Math.min(rect.y + rect.h, screenH) > Math.max(rect.y, 0);
+    return shows || holdsScroller(c, screenW, screenH);
+  });
 }
 
 /**
