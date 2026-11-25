@@ -603,7 +603,7 @@ Each `env` map has these rules:
 
 - A name has letters, digits and `_`, and does not start with a digit.
 - A value is a string. Parsing rejects an unquoted number, `true` or `false`, because YAML changes the value. For example, YAML reads `0800` as the number 800. Write `PORT: "8080"`.
-- A value can hold an `{{output:...}}` reference. See [Script output](#script-output).
+- A value in the `env` of a `script` step can hold an `{{output:...}}` reference. See [Script output](#script-output). The other layers reject a reference, because their values reach each script, also the first one, which runs before a script returns a value.
 - Some names control the process of the runner. A `script` step that sets one of them is errored when it runs. The names are `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `ELECTRON_RUN_AS_NODE` and `ARGENT_FLOW_SCRIPT_RUNNER`. The names `npm_config_node_options`, `npm_config_userconfig` and `npm_config_globalconfig` are also reserved, in each letter case and with `-` or `_`.
 
 Three recording tools write the `env` maps. Each tool checks the names and the values as parsing does. Each tool also checks that each `{{secret:NAME}}` placeholder resolves. When a check fails, the tool changes nothing.
@@ -706,7 +706,7 @@ Argent resolves the references of a step when the step starts. The report of the
 | A selector, its scopes included                                                   | Text                         |
 | The `text` of a `type` step                                                       | Text                         |
 | The `contains` or `equals` text of an `await`, `assert` or `when` condition       | Text                         |
-| An `env` value of each layer                                                      | Text                         |
+| A value in the `env` of a `script` step                                           | Text                         |
 
 A number stays a number in a `tool:` argument that is one reference. A tool that needs text for that argument rejects the number, for example the `text` of `keyboard`. Make the script return a string for such an argument.
 
@@ -726,6 +726,7 @@ Parsing rejects a reference in these fields. Write a literal value in them:
 - The `cropOn` selector of a `snapshot`, because Argent keys the baseline by the selector
 - A `matches` regular expression
 - Each argument of a `tool: e2e-execute` step, except `env`
+- The top-level `env` of an e2e test or a fragment, the `env` of a run, and the values of `e2e-start-recording` and `e2e-set-env`
 
 #### Check an output
 

@@ -212,7 +212,8 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
         ...(params.env !== undefined ? { env: params.env } : {}),
       },
     };
-    const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
+    const envProblem =
+      params.env === undefined ? undefined : flowEnvProblem(params.env, { references: true });
     if (envProblem) throw new InvalidToolInputError(`env ${envProblem}`);
     const step: Extract<FlowStep, { kind: "script" }> = {
       kind: "script",

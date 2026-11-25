@@ -7,6 +7,7 @@ import { createRunFlowTool, type FlowRunResult } from "../../../src/tools/flows/
 import { flowStartRecordingTool } from "../../../src/tools/flows/flow-start-recording";
 import { flowAddScriptTool } from "../../../src/tools/flows/flow-add-script";
 import { createFlowAddStepTool } from "../../../src/tools/flows/flow-add-step";
+import { flowSetEnvTool } from "../../../src/tools/flows/flow-set-env";
 import { __resetRecordingsForTesting, parseFlow } from "../../../src/tools/flows/flow-utils";
 
 /**
@@ -209,6 +210,69 @@ describe("a script's output in later steps", () => {
   });
 });
 
+describe("env layers other than a script step's", () => {
+  // Their values reach every script, the first one included, which runs
+  // before any script returned a value: a reference there would error it.
+  const refused = "has an {{output:...}} reference in the value of USER_ID";
+
+  it("refuses a reference in the test file's env", async () => {
+    await write(
+      ".argent/e2e/t.yaml",
+      'env:\n  USER_ID: "{{output:user.id}}"\nsteps:\n  - echo: hi\n'
+    );
+    await expect(
+      createRunFlowTool(registry).execute({}, { project_root: root, name: "t" } as never)
+    ).rejects.toThrow(refused);
+  });
+
+  it("refuses a reference in a fragment's env", async () => {
+    await write(
+      ".argent/e2e/frag.yaml",
+      'env:\n  USER_ID: "{{output:user.id ?? 0}}"\nsteps:\n  - echo: hi\n'
+    );
+    const result = await run("t", ["run: frag.yaml"]);
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result.steps)).toContain(refused);
+  });
+
+  it("refuses a reference in the run's env", async () => {
+    await write(".argent/e2e/t.yaml", "steps:\n  - echo: hi\n");
+    const parsed = createRunFlowTool(registry).zodSchema.safeParse({
+      project_root: root,
+      name: "t",
+      env: { USER_ID: "{{output:user.id}}" },
+    });
+    expect(parsed.success).toBe(false);
+    expect(JSON.stringify(parsed.error?.issues)).toContain(refused);
+  });
+
+  it("refuses a reference in a recording's env", async () => {
+    await expect(
+      flowStartRecordingTool.execute(
+        {},
+        { name: "rec", project_root: root, env: { USER_ID: "{{output:user.id}}" } }
+      )
+    ).rejects.toThrow(refused);
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    await expect(
+      flowSetEnvTool.execute(
+        {},
+        { name: "rec", project_root: root, env: { USER_ID: "{{output:user.id}}" } }
+      )
+    ).rejects.toThrow(refused);
+  });
+
+  it("still runs the script that sets the value, with the reference in a later step's env", async () => {
+    const seed = await script("seed", "output.user = { id: 42 };");
+    await write("scripts/print.mjs", "console.log(process.env.USER_ID);");
+    const result = await run("t", [
+      seed,
+      'script: { path: ../../scripts/print.mjs, env: { USER_ID: "{{output:user.id}}" } }',
+    ]);
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe("secrets and output", () => {
   it("never turns an output into a secret, held or formed", async () => {
     await write(".argent/secrets.env", "TOKEN=hunter2-secret-value\n");
@@ -382,6 +446,35 @@ describe("recording with output", () => {
     } finally {
       await fs.rm(other, { recursive: true, force: true });
     }
+  });
+
+  it("warns in the reply about a wait that never held, as without a reference", async () => {
+    const waits = {
+      ...registry,
+      invokeTool: vi.fn(async () => ({ success: false, elapsed: 1500, cause: "unmet" })),
+    } as unknown as Registry;
+    await write("scripts/seed.mjs", "output.name = 'Ann';");
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    await flowAddScriptTool.execute(
+      {},
+      { name: "rec", project_root: root, path: "../../scripts/seed.mjs" }
+    );
+    const add = (text: string) =>
+      createFlowAddStepTool(waits).execute(
+        {},
+        {
+          name: "rec",
+          project_root: root,
+          command: "await-ui-element",
+          args: JSON.stringify({ condition: "visible", selector: { text } }),
+        }
+      );
+
+    const literal = await add("Ann");
+    const referenced = await add("{{output:name}}");
+
+    expect(literal.message).toContain(" — ");
+    expect(referenced.message).toBe(literal.message);
   });
 
   it("records a file-panel stub's panel kind with a reference too", async () => {

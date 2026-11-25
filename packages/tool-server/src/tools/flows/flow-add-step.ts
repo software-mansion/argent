@@ -1875,6 +1875,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           args: withRecordedPanelKind(command, stripDeviceKeys(referencedArgs), toolResult),
           delayMs: params.delayMs,
         };
+        warning = waitWarning?.warning;
       } else if (captured?.selector) {
         step = {
           kind: "tap",

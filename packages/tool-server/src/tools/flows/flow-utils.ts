@@ -3280,7 +3280,7 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
   };
   if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
   if (b.env !== undefined) {
-    const problem = flowEnvProblem(b.env);
+    const problem = flowEnvProblem(b.env, { references: true });
     if (problem) badEntry(raw, `script.env ${problem}`);
     step.env = b.env as FlowEnv;
   }
@@ -3295,8 +3295,16 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * refuses the same inputs. Values must be strings: YAML would turn an unquoted
  * `0800` into the number 800 and `yes` into true, and a script would receive
  * something other than what the file shows.
+ *
+ * Only a script step's own `env:` takes `{{output:...}}` references
+ * (`references: true`). The file's, a fragment's and the run's values reach
+ * every script, the first included, which runs before any script returned a
+ * value, so a reference there would fail it.
  */
-export function flowEnvProblem(value: unknown): string | undefined {
+export function flowEnvProblem(
+  value: unknown,
+  { references = false }: { references?: boolean } = {}
+): string | undefined {
   // A plain record only: a YAML `!!omap` or `!!set` parses to a Map or a Set,
   // whose entries Object.entries would silently drop.
   if (
@@ -3317,6 +3325,12 @@ export function flowEnvProblem(value: unknown): string | undefined {
     if (typeof entry !== "string") return `has a non-string value for ${name}`;
     // The operating system ends an environment value at a NUL.
     if (entry.includes("\0")) return `has a NUL character in the value of ${name}`;
+    if (!references && holdsOutputMarker(entry)) {
+      return (
+        `has an {{output:...}} reference in the value of ${name}: only the env: of the script ` +
+        "step that reads it takes one"
+      );
+    }
     const problem = outputReferenceProblem(entry);
     if (problem) return `${name} ${problem}`;
   }
