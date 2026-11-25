@@ -17,6 +17,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { awaitIosAppInFront } from "../../../utils/ios-front-app";
 import { settleWithin } from "../../../utils/timing";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
@@ -108,6 +109,7 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
+      await awaitIosAppInFront(registry, device, params.bundleId, options?.signal);
       // A cancelled call stops waiting for the new process to be armed.
       const capture = nativeDevtools
         ? await settleWithin(

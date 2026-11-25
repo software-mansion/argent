@@ -302,11 +302,11 @@ Call `screenshot` or `describe` to read the screen again.
 | ------------- | ----------------------------------------------------------------------------------------- |
 | `audio-input` | Choose what apps in an iOS simulator hear as microphone input: a file, a tone, or the mic |
 
-The audio tool needs an iOS simulator on the same Mac as the tool-server. These rules apply:
+The audio tool needs an iOS simulator on the same Mac as the tool-server or on Argent Cloud. These rules apply:
 
 - Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
 - The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first `audio-input` call. See [feature flags](/docs/reference/configuration#available-flags).
-- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- A tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
 - The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
 - Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
 
@@ -664,6 +664,8 @@ All coordinates use the UI as the user sees it, also when the UI is landscape or
 - The coordinates of the gesture tools
 
 Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+On a local iOS simulator, `launch-app` and `restart-app` wait up to 5 seconds after launch for the accessibility service to report the app in front. If the wait times out, the next orientation reading or element tree can still describe the previous app.
 
 If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 

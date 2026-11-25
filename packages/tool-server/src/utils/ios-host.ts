@@ -511,7 +511,7 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
  * iOS 18.6 a `UIKitApplication` row is removed outright when the app exits.
  * Callers treat a null pid as no evidence.
  */
-function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
+export function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
   const jobs = new Map<string, number | null>();
   for (const line of stdout.split("\n")) {
     const match = line.match(/UIKitApplication:([^[]+)/);
