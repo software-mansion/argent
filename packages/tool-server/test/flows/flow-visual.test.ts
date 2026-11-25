@@ -994,7 +994,7 @@ describe("warmSnapshotCapture", () => {
   it("also starts the accessibility service on an iOS simulator, without reading the orientation", async () => {
     vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
     __resetUiOrientationForTests();
-    const resolveService = vi.fn(async () => ({}));
+    const resolveService = vi.fn(async (_urn: string) => ({}));
     const orientation = vi.fn(async () => ({ interfaceOrientation: "portrait" as const }));
     setUiOrientationSourceProvider(async () => ({ orientation }));
 
