@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
+import { ARCHIVE_FORMATS } from "@argent/archive";
 import {
   FAILURE_CODES,
   CLIENT_SECRETS_HEADER,
@@ -44,6 +45,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -71,6 +73,7 @@ import {
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -103,7 +106,7 @@ function isToolExposed(
   def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
 ): boolean {
   if (!def) return false;
-  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
 }
@@ -507,12 +510,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // Snapshotted at startup; the launcher generates it and passes it in via env
-  // (see ensureToolsServer). Empty string ⇒ auth disabled, supported only for
-  // local dev (`npm run dev`), which is why stderr gets a one-shot warning.
+  // (see ensureToolsServer). Empty or absent ⇒ auth disabled (`--no-auth`,
+  // `bun run dev`), hence the one-shot stderr warning.
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(
-      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is empty or not set; running with authentication disabled. ` +
         `Any local process can drive the tool-server. This is only safe for development.\n`
     );
   }
@@ -600,7 +603,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // The client tars a file or dir and streams it here before the tool call.
-  // express.json() ignores the body (application/gzip), so we pipe it to disk.
+  // express.json() ignores the body (a compressed tar), so we pipe it to disk.
   app.post("/upload", (req: Request, res: Response) => {
     idleTimer.touch();
     if (pendingUploadBytes() >= maxPendingUploadBytes) {
@@ -696,18 +699,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           aliasOf?: string;
         } = {
           name: def.id,
-          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          description: renderFlagGated(def.description ?? "", isFlagOffered),
           inputSchema: renderFlagGated(
             def.inputSchema ?? { type: "object", properties: {} },
-            isFlagEnabled
+            isFlagOffered
           ),
         };
-        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagOffered);
         if (def.fileInputs && def.fileInputs.length > 0) {
           entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
         }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagOffered);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
         if (def.readOnly) entry.readOnly = true;
@@ -721,7 +724,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }));
         return [entry, ...aliases];
       });
-    res.json({ tools });
+    // Formats `POST /upload` reads; a client sends zstd only when listed.
+    res.json({ tools, uploadFormats: ARCHIVE_FORMATS });
   });
 
   app.post(
@@ -1073,13 +1077,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
         const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
-          // A persistence failure must not fail the user's tool call; worst case the
-          // note appears again on the next request.
-          try {
-            suppressUpdateNote(AUTO_SUPPRESS_MS);
-          } catch {
-            // ignore
-          }
+          suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
         const notes: string[] = shouldNotify
           ? [buildUpdateNote(currentVersion, installableVersion ?? "unknown")]
@@ -1115,11 +1113,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
             ? { profiling: true }
             : {};
+        // A failure the tool returned rather than threw, so a client that only
+        // checks for an error (`argent run`'s exit status) still sees it.
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
+          writeLine({
+            event: "result",
+            data,
+            ...notePayload,
+            ...profilingPayload,
+            ...failurePayload,
+          });
           res.end();
         } else {
-          res.json({ data, ...notePayload, ...profilingPayload });
+          res.json({ data, ...notePayload, ...profilingPayload, ...failurePayload });
         }
       } catch (err: unknown) {
         /**

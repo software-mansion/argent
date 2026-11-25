@@ -16,7 +16,8 @@
  */
 
 /** Scopes the key, so two kinds on one device can't collide. */
-type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
+type ReapedSessionKind =
+  "screen-recording" | "native-profiler" | "js-runtime-debugger" | `js-runtime-debugger:${number}`;
 
 interface ReapedSession {
   kind: ReapedSessionKind;
@@ -103,7 +104,7 @@ export function describeReapedSession(entry: ReapedSession, what: string): strin
   return (
     `The ${what} for device ${entry.deviceId} was torn down ${secondsAgo}s ago — by a ` +
     `stop-all-simulator-servers, which reaps every service a device owns, or by another ` +
-    `teardown that reaches the same services (a stop-simulator-server on Chromium, or a ` +
+    `teardown that reaches the same services (a stop-simulator-server on Chromium or a Mac app, or a ` +
     `react-profiler-start reclaiming the session with force). One tool-server serves every ` +
     `agent using this argent install, so this may have been another agent rather than your own ` +
     `call. It was not a session that never started.${salvage}`

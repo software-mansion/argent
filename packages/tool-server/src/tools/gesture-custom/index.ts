@@ -17,48 +17,9 @@ import { InvalidToolInputError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
 import { interpolateEvents } from "../../utils/gesture-utils";
 
+import { screenEdges } from "../../utils/ui-orientation";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const eventSchema = z.object({
-  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().min(0).max(1).describe("Normalized x 0.0–1.0 (not pixels; same as tap/swipe)"),
-  y: z.number().min(0).max(1).describe("Normalized y 0.0–1.0 (not pixels; same as tap/swipe)"),
-  x2: z
-    .number()
-    .min(0)
-    .max(1)
-    .optional()
-    .describe("Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
-  y2: z
-    .number()
-    .min(0)
-    .max(1)
-    .optional()
-    .describe("Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
-  delayMs: z
-    .number()
-    .optional()
-    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
-});
-
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  events: z
-    .array(eventSchema)
-    .describe(
-      "Sequence of touch events; x/y (and optional second touch) are normalized 0.0–1.0, not pixels"
-    ),
-  interpolate: z
-    .number()
-    .optional()
-    .describe(
-      "Number of intermediate Move events to auto-insert between each pair of consecutive events. " +
-        "Smooths out gestures by linearly interpolating both primary (x,y) and secondary (x2,y2) coordinates. " +
-        "The delay is split evenly across interpolated frames. Default: no interpolation."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   events: number;
@@ -188,21 +149,65 @@ async function runOnIosDevice(
   return { events: events.length, ...(reactivated ? { reactivated: true as const } : {}) };
 }
 
+const eventSchema = z.object({
+  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
+  x: z.number().min(0).max(1).describe("Touch x."),
+  y: z.number().min(0).max(1).describe("Touch y."),
+  x2: z.number().min(0).max(1).optional().describe("Second finger x, for two-finger gestures."),
+  y2: z.number().min(0).max(1).optional().describe("Second finger y, for two-finger gestures."),
+  delayMs: z
+    .number()
+    .optional()
+    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
+});
+
+const zodSchema = z.object({
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  edge: z
+    .enum(screenEdges)
+    .optional()
+    .describe(
+      "Starting edge in upright screen coordinates for a single-finger system gesture on a local iOS simulator."
+    ),
+  events: z.array(eventSchema).describe("Touch events, dispatched in order."),
+  interpolate: z
+    .number()
+    .optional()
+    .describe(
+      "Number of Move events to insert between each pair of consecutive events, linearly interpolating " +
+        "both x,y and x2,y2 and splitting the delay evenly, for a smooth gesture. Default: no interpolation."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
+function validateEdge(params: Params, device: ReturnType<typeof resolveDevice>) {
+  if (params.edge === undefined) return;
+  if (device.platform !== "ios" || device.kind !== "simulator") {
+    throw new InvalidToolInputError("System-edge gestures require a local iOS simulator.");
+  }
+  const events = params.events;
+  if (
+    events[0]?.type !== "Down" ||
+    events.at(-1)?.type !== "Up" ||
+    events.slice(1, -1).some((e) => e.type !== "Move") ||
+    events.some((e) => e.x2 !== undefined || e.y2 !== undefined)
+  ) {
+    throw new InvalidToolInputError(
+      "A system-edge gesture takes one finger: Down, any Moves, then Up."
+    );
+  }
+}
+
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
-  interaction: {
-    startedMsg: () => "Performing custom gesture",
-    completedMsg: () => "Performed custom gesture",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to perform custom gesture: ${failureSignal.error_code}`,
-  },
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
-For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
+For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.<flag:macos-apps> Not supported on a Mac app: use gesture-tap, gesture-drag and gesture-scroll there.</flag:macos-apps>
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
-All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
-Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-Physical iOS: a Down, any Moves, then an Up, with an optional second finger as x2/y2. Paths need the app drawn in portrait. A plain Down then Up keeps its hold semantics: same point = press-hold, other point = drag (Up delayMs = rest before the move), and one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Anything else (more Moves, a second finger) plays as timed paths, each event waiting its delayMs after the one before. The second finger touches down at the first event with x2/y2 and lifts after the last.
+On a local iOS simulator, set edge to the starting side for a system gesture. To move a full-screen app into Split View on an open Duo, set edge:"bottom". In one continuous contact move from bottom center to center, pause there, drag to the requested side, and release. See the device-interact foldables reference for coordinates and timing.
+All x/y values are fractions of the screen width/height (not pixels).
+Physical iOS: a Down, any Moves, then an Up; x2/y2 adds a second finger. A plain Down then Up: same point = press-hold, other point = drag (Up delayMs = rest before the move); one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Any other train plays as timed paths, each event waiting its delayMs, and needs the app drawn in portrait.
 Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
@@ -221,6 +226,12 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
            {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
   interpolate: 10`,
   zodSchema,
+  interaction: {
+    startedMsg: () => "Performing custom gesture",
+    completedMsg: () => "Performed custom gesture",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to perform custom gesture: ${failureSignal.error_code}`,
+  },
   capability,
   // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
   // whose abort replays the call: the gesture would land once per replay.
@@ -228,6 +239,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   // Declare the runner only for a train execute can play. A rejected train must not pay a runner cold start.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
+    validateEdge(params, device);
     if (isIosPhysicalDevice(device)) {
       return planIosDeviceGesture(params.events).kind !== "unsupported"
         ? { iosDeviceRunner: iosDeviceRunnerRef(device) }
@@ -237,6 +249,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
+    validateEdge(params, device);
     if (isIosPhysicalDevice(device)) {
       return runOnIosDevice(
         services.iosDeviceRunner as IosDeviceRunnerApi,
@@ -252,17 +265,33 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
         : params.events;
 
     let warning: string | undefined;
-    for (const event of events) {
-      await sleep(event.delayMs ?? 16);
-      const sent = await sendCommand(api, {
-        cmd: "touch",
-        type: event.type,
-        x: event.x,
-        y: event.y,
-        second_x: event.x2 ?? null,
-        second_y: event.y2 ?? null,
-      });
-      warning ??= sent.warning;
+    let edgeContact: GestureEvent | undefined;
+    try {
+      for (const event of events) {
+        await sleep(event.delayMs ?? 16);
+        const sent = await sendCommand(api, {
+          ...(params.edge
+            ? { cmd: "edgeTouch", edge: params.edge }
+            : { cmd: "touch", second_x: event.x2 ?? null, second_y: event.y2 ?? null }),
+          type: event.type,
+          x: event.x,
+          y: event.y,
+        });
+        if (params.edge) edgeContact = event.type === "Up" ? undefined : event;
+        warning ??= sent.warning;
+      }
+    } catch (error) {
+      if (edgeContact) {
+        // Release a contact that the simulator acknowledged before a later waypoint failed.
+        await sendCommand(api, {
+          cmd: "edgeTouch",
+          edge: params.edge,
+          type: "Up",
+          x: edgeContact.x,
+          y: edgeContact.y,
+        }).catch(() => {});
+      }
+      throw error;
     }
     return { events: events.length, ...(warning !== undefined ? { warning } : {}) };
   },

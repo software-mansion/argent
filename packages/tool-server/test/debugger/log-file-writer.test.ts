@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,6 +33,15 @@ describe("LogFileWriter", () => {
     const filePath = writer.getFilePath();
     expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+-p\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("gives writers created in the same millisecond on one port separate files", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1710000000000);
+    const writers = [new LogFileWriter(9999), new LogFileWriter(9999), new LogFileWriter(9999)];
+    now.mockRestore();
+    const paths = new Set([writer, ...writers].map((w) => w.getFilePath()));
+    for (const w of writers) w.close();
+    expect(paths.size).toBe(4);
   });
 
   it("writes entries as flat text lines", () => {
@@ -115,6 +124,50 @@ describe("LogFileWriter", () => {
     const content = fs.readFileSync(writer.getFilePath(), "utf-8");
     expect(content).not.toContain(clusters[0].message);
     expect(content).toContain("first line second line");
+  });
+
+  it("clusters are sorted by count descending", () => {
+    for (let i = 0; i < 20; i++) writer.write(makeEntry(i, { message: "frequent" }));
+    for (let i = 20; i < 25; i++) writer.write(makeEntry(i, { message: "medium" }));
+    writer.write(makeEntry(25, { message: "rare" }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe("frequent");
+    expect(clusters[0].count).toBe(20);
+    expect(clusters[1].message).toBe("medium");
+    expect(clusters[1].count).toBe(5);
+    expect(clusters[2].message).toBe("rare");
+    expect(clusters[2].count).toBe(1);
+  });
+
+  it("handles empty log state", () => {
+    const stats = writer.getStats();
+    expect(stats.totalEntries).toBe(0);
+    expect(stats.byLevel).toEqual({});
+    expect(stats.fileSizeBytes).toBe(0);
+
+    const clusters = writer.getClusters();
+    expect(clusters).toEqual([]);
+  });
+
+  it("handles high volume without crashing", () => {
+    for (let i = 0; i < 5000; i++) {
+      writer.write(
+        makeEntry(i, {
+          level: i % 3 === 0 ? "error" : "log",
+          message: `msg-${i % 100}`,
+        })
+      );
+    }
+
+    const stats = writer.getStats();
+    expect(stats.totalEntries).toBe(5000);
+    expect(stats.byLevel.error).toBeGreaterThan(0);
+
+    const clusters = writer.getClusters(20);
+    expect(clusters).toHaveLength(20);
+    // All 100 unique messages, top 20 by count
+    expect(clusters[0].count).toBe(50);
   });
 
   it("limits clusters to requested count", () => {
@@ -380,7 +433,7 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
     unwritableWriter.close();
   });
 
-  it("keeps no copy of a line it could not write", () => {
+  it("keeps only the bounded in-memory copy of a line it could not write", () => {
     unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
 
     expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
@@ -391,8 +444,38 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
       .flat();
     expect(retainedLines).toEqual([]);
 
-    // The entry itself is still accounted for, through the counts and clusters.
     expect(unwritableWriter.getStats().totalEntries).toBe(1);
     expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
+    expect(unwritableWriter.getRecent(1)[0].message).toBe("unreadable line");
+  });
+});
+
+describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter under an unwritable ~/.argent", () => {
+  let argentDir: string;
+
+  beforeEach(() => {
+    argentDir = path.join(os.homedir(), ".argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.chmodSync(argentDir, 0o500);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(argentDir, 0o700);
+  });
+
+  it("counts entries without a file instead of throwing when the log directory cannot be created", () => {
+    let unwritable: LogFileWriter | undefined;
+    expect(() => {
+      unwritable = new LogFileWriter(9998);
+    }).not.toThrow();
+    const w = unwritable as LogFileWriter;
+
+    expect(fs.existsSync(path.dirname(w.getFilePath()))).toBe(false);
+    expect(w.hasFile()).toBe(false);
+    expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
+    expect(w.getStats().totalEntries).toBe(1);
+    expect(w.getStats().fileSizeBytes).toBe(0);
+    expect(w.readAll()).toEqual([]);
+    w.close();
   });
 });

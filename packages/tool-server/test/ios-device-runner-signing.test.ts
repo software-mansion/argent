@@ -100,6 +100,24 @@ describe("resolveSigningHint", () => {
     ).toContain("Xcode > Settings > Accounts");
   });
 
+  it("ignores the Provisioning Profile lines every signed build log prints", () => {
+    expect(
+      resolveSigningHint(
+        '    Provisioning Profile: "iOS Team Provisioning Profile: com.argent.runner"\n' +
+          "CodeSign /path/ArgentRunner.app\nCommand failed for another reason"
+      )
+    ).toBeNull();
+  });
+
+  it("maps a real provisioning error line to the sign-in hint", () => {
+    expect(
+      resolveSigningHint('error: Provisioning profile "X" doesn\'t include signing certificate')
+    ).toContain("Xcode > Settings > Accounts");
+    expect(resolveSigningHint("error: App requires a provisioning profile.")).toContain(
+      "Xcode > Settings > Accounts"
+    );
+  });
+
   it("maps errSecInternalComponent to the exact partition-list fix, case-insensitively", () => {
     const hint = resolveSigningHint(
       "/usr/bin/codesign --force --sign 4E815... ArgentRunner.app\n" +
@@ -124,6 +142,24 @@ describe("resolveSigningHint", () => {
     );
     expect(hint).toContain("set-key-partition-list");
     expect(hint).not.toContain("Xcode > Settings > Accounts");
+  });
+
+  // The detection note rides completed calls only, so a failed build never gets it.
+  it.each([
+    [
+      "no-devices",
+      "error: Your team has no devices from which to generate a provisioning profile.",
+    ],
+    ["bundle id", "error: Failed Registering Bundle Identifier (in target 'ArgentRunner')"],
+    ["provisioning", 'No profiles for "com.argent.runner.tabcde12345" were found'],
+  ])("names the team override on a %s failure", (_name, output) => {
+    expect(resolveSigningHint(output)).toContain(
+      "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
+    );
+  });
+
+  it("leaves the team override out of a keychain failure another team would not fix", () => {
+    expect(resolveSigningHint("errSecInternalComponent")).not.toContain("ARGENT_IOS_TEAM_ID");
   });
 });
 

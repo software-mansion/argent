@@ -15,6 +15,9 @@ import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../..
 import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
 import type { StartRecordingResult } from "./session-guards";
+import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
+import { startMacosCapture } from "./capture-macos";
+import { resolveMacosApp } from "../../utils/macos-input";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
@@ -23,10 +26,22 @@ const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 
+const capability = {
+  // A cabled iPhone records through a host-side CoreMediaIO helper, not
+  // simulator-server (see ios-device-stream/).
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  // argent's library records the app's window from inside the app.
+  macos: { app: true, catalyst: true },
+} as const;
+
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+    .describe(
+      "Target ID from `list-devices`.<flag:macos-apps> For a Mac app, use its device ID, such as `macos-app-com.example.notes`.</flag:macos-apps>"
+    ),
   timeLimitSeconds: z
     .number()
     .int()
@@ -34,7 +49,7 @@ const zodSchema = z.object({
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
     .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}). ` +
+      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}). ` +
         `Set it to slightly more than the interaction you plan to capture.`
     ),
   trimStatic: z
@@ -43,34 +58,29 @@ const zodSchema = z.object({
     .describe(
       "Default true. Collapse stretches where the screen does not change: the first second of " +
         "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
-        "so a long recording with brief activity comes back short instead of full of dead air " +
-        "(on a remote simulator the still stretches are removed whole). " +
-        "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
+        "so a long recording with brief activity comes back short instead of full of dead air. " +
         "Set false to keep a faithful real-time recording."
     ),
   showTouches: z
     .boolean()
     .optional()
     .describe(
-      "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
-        "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
-        "the video makes clear where every interaction landed. On remote (`remote:`) simulators the overlay " +
-        "is drawn on the runner and is also visible in the live stream until the recording stops. " +
-        "Set false to record the raw screen with no overlay."
+      "Draw touch markers in the video (default true). Recordings of physical iPhones have no touch markers." +
+        "<flag:macos-apps> For Mac apps, this shows the agent's pointer, a click ring, and a dot while a mouse button is held.</flag:macos-apps>"
     ),
 });
-
-const capability = {
-  apple: { simulator: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-} as const;
 
 export function createScreenRecordingStartTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
+    description: `Start an MP4 recording of the device screen<flag:macos-apps> or Mac app window</flag:macos-apps>. Use when the user wants a video of an interaction or animation. Use \`screenshot\` for a still image.
+Recording continues across tool calls until stopped or until the time limit. Set a reminder as soon as recording starts. The start result returns \`outputFile\` on the tool-server host. Retrieve the video with \`screen-recording-stop\`, even after the time limit.
+Start fails if the target is unavailable or already has a recording waiting to be stopped or retrieved. Local simulators, Android emulators and devices, and cabled iPhones require ffmpeg. On a physical iPhone, check for \`transportType: "wired"\` in \`list-devices\` and have the user allow camera access for \`ios-screen-stream\` if prompted on the first recording. tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega are unsupported.<flag:macos-apps>
+For a Mac app started by Argent, restore its window and move it fully onto one display. Capture protection blocks recording. Mac app recording needs neither Screen Recording permission nor ffmpeg and continues while the Mac is locked. If start returns \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>`,
+    zodSchema,
+    searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
       startedMsg: () => "Starting screen recording",
       completedMsg: () => "Started screen recording",
@@ -81,16 +91,6 @@ export function createScreenRecordingStartTool(
     // A remote start first ends a leftover runner-side recording, which can
     // take minutes, past the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
-By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
-The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
-Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
-Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-On a remote (\`remote:\`) simulator the recording is made on the runner and downloaded by \`screen-recording-stop\`; trimming and the watermark are applied locally afterwards, and are skipped with a warning if ffmpeg is not installed rather than failing the recording.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
-    searchHint: "record video screen capture movie mp4 start filming screencast",
-    zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
     // iOS by shape, so an eager service would spawn simulator-server for a
     // device it cannot drive and hang on its ready timeout (as in `screenshot`).
@@ -107,7 +107,9 @@ Fails if a recording is already running on the device, the device is not booted,
       const isTvOs =
         device.platform === "ios-remote"
           ? await isRemoteTvOsSimulator(params.udid)
-          : device.platform === "ios" && (await isTvOsSimulator(params.udid));
+          : device.platform === "ios" &&
+            device.kind !== "device" &&
+            (await isTvOsSimulator(params.udid));
       if (isTvOs) {
         throw new FailureError(
           `Screen recording is not supported on tvOS simulators (device ${params.udid}).`,
@@ -136,6 +138,25 @@ Fails if a recording is already running on the device, the device is not booted,
           watermark,
           trimStatic: params.trimStatic ?? true,
           showTouches,
+        });
+      }
+
+      if (device.platform === "macos") {
+        const app = await resolveMacosApp(registry, device, "screen-recording-start");
+        return startMacosCapture(api, app, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches,
+        });
+      }
+
+      if (device.platform === "ios" && device.kind === "device") {
+        return startIosDeviceCapture(api, device.id, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches: params.showTouches,
         });
       }
 

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import semver from "semver";
 import { argentHomeDir } from "@argent/configuration-core";
 import {
-  argentBinSubpath,
+  cliPathOf,
   getGloballyInstalledPackageRoot,
   getLocalArgentBinRelPath,
 } from "./topology.js";
@@ -71,11 +71,7 @@ function resolveCliEntry(mode: InstallMode, projectRoot: string): string | null 
   }
 
   const packageRoot = getGloballyInstalledPackageRoot();
-  if (!packageRoot) return null;
-  const binSub = argentBinSubpath(packageRoot);
-  if (!binSub) return null;
-  const entry = path.join(packageRoot, binSub);
-  return fs.existsSync(entry) ? entry : null;
+  return packageRoot ? cliPathOf(packageRoot) : null;
 }
 
 /**

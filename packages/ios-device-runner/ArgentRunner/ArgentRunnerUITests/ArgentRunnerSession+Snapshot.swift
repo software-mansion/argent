@@ -26,6 +26,16 @@ extension ArgentRunnerSession {
     /// Ceiling on emitted node depth.
     private static let emittedDepthLimit = 60
 
+    /// View services that present UI over the registered app from their own
+    /// process. On iOS 26 the host app's tree no longer bridges into them, so
+    /// an ASWebAuthenticationSession or SFSafariViewController sheet is missing
+    /// from the app's snapshot even though it covers the screen.
+    private static let hostedViewServiceBundleIds = ["com.apple.SafariViewService"]
+
+    /// Share of the node budget a hosted service may use. A heavy web page
+    /// must not crowd out the app's own nodes and the keyboard.
+    private static let hostedNodeBudget = 1000
+
     /// Captures the app's accessibility tree and flattens it into a snapshot
     /// payload. The capture is retried once after a short pause: this is the
     /// one runner-side retry, kept here because the capture can read its own
@@ -70,7 +80,7 @@ extension ArgentRunnerSession {
             )
         }
 
-        let nodes = Self.flatten(root)
+        let nodes = Self.flatten(root, hosted: hostedServiceRoots(over: root))
         let capped = nodes.count >= Self.snapshotNodeBudget
 
         return .success(
@@ -88,28 +98,122 @@ extension ArgentRunnerSession {
         )
     }
 
+    /// Trees of the hosted view services presenting over `root` right now.
+    /// The service is read through a proxy and never activated: activating it
+    /// would front it as a standalone app and black out the screen.
+    ///
+    /// Only a foreground service is read. A suspended one, where the service
+    /// stays after its sheet closes, blocks `snapshot()` past the command
+    /// watchdog and leaves the runner busy. A background one returns stale
+    /// pieces of the closed sheet. A tree whose size differs from the app's
+    /// belongs to a sheet still animating in or out, and its frames would
+    /// mislead taps, so it is dropped too. A failure here never fails the
+    /// app's own snapshot.
+    private func hostedServiceRoots(over root: XCUIElementSnapshot)
+        -> [XCUIElementSnapshot]
+    {
+        // Before iOS 26 the app's tree already carries the hosted browser.
+        if Self.containsHostedBrowser(root) { return [] }
+
+        var roots: [XCUIElementSnapshot] = []
+
+        for bundleId in Self.hostedViewServiceBundleIds {
+            let service = XCUIApplication(bundleIdentifier: bundleId)
+            guard service.state == .runningForeground else { continue }
+
+            var hosted: XCUIElementSnapshot?
+            var failure: String?
+            let started = Date()
+            let exceptionDescription = ArgentExceptionGuard.runCatching {
+                do {
+                    hosted = try service.snapshot()
+                } catch {
+                    failure = String(describing: error)
+                }
+            }
+            let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+
+            guard let hosted, service.state == .runningForeground,
+                Self.sameSize(hosted.frame, root.frame)
+            else {
+                NSLog(
+                    "ARGENT_HOSTED_SKIPPED bundle=%@ ms=%d reason=%@",
+                    bundleId, elapsedMs,
+                    exceptionDescription ?? failure ?? "not settled on screen"
+                )
+                continue
+            }
+
+            NSLog("ARGENT_HOSTED bundle=%@ ms=%d", bundleId, elapsedMs)
+            roots.append(hosted)
+        }
+
+        return roots
+    }
+
+    /// Whether the tree holds SafariViewService's browser container, whose
+    /// identifier starts with "BrowserView". An app's own web view does not
+    /// count. Bounded by the raw depth limit.
+    private static func containsHostedBrowser(_ root: XCUIElementSnapshot)
+        -> Bool
+    {
+        var stack: [(XCUIElementSnapshot, Int)] = [(root, 0)]
+
+        while let (snapshot, depth) = stack.popLast() {
+            if snapshot.identifier.hasPrefix("BrowserView") { return true }
+            if depth >= rawDepthLimit { continue }
+            stack.append(contentsOf: snapshot.children.map { ($0, depth + 1) })
+        }
+
+        return false
+    }
+
+    /// Whether two frames have the same size within a point.
+    private static func sameSize(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+    }
+
     /// Flattens the snapshot tree into an ordered node list. Keeps elements an
     /// agent can name or act on, assigns indices and parent links in emission
-    /// order, and dedupes mirror elements.
-    static func flatten(_ root: XCUIElementSnapshot) -> [SnapshotNodePayload] {
+    /// order, and dedupes mirror elements. `hosted` trees of view services
+    /// presenting over the app are emitted first under the root, within
+    /// their own share of the node budget.
+    static func flatten(
+        _ root: XCUIElementSnapshot,
+        hosted: [XCUIElementSnapshot] = []
+    ) -> [SnapshotNodePayload] {
         struct WorkItem {
             let snapshot: XCUIElementSnapshot
             let rawDepth: Int
             let emittedDepth: Int
             let parentIndex: Int
+            var hosted = false
         }
 
         let viewport = root.frame
         var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil)]
         var seen: Set<String> = [identity(root)]
+        var hostedEmitted = 0
 
         var stack = root.children.reversed().map {
             WorkItem(snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0)
         }
 
+        // Pushed last so they are walked first: they cover the screen, and the
+        // app's keyboard keys must not use up the budget before them.
+        stack.append(
+            contentsOf: hosted.reversed().map {
+                WorkItem(
+                    snapshot: $0, rawDepth: 1, emittedDepth: 1, parentIndex: 0,
+                    hosted: true
+                )
+            }
+        )
+
         while let item = stack.popLast() {
             if nodes.count >= snapshotNodeBudget { break }
             if item.rawDepth > rawDepthLimit { continue }
+            if item.hosted && hostedEmitted >= hostedNodeBudget { continue }
 
             let snapshot = item.snapshot
             let frame = snapshot.frame
@@ -141,6 +245,7 @@ extension ArgentRunnerSession {
 
                 childParentIndex = index
                 childEmittedDepth += 1
+                if item.hosted { hostedEmitted += 1 }
             }
 
             for child in snapshot.children.reversed() {
@@ -149,7 +254,8 @@ extension ArgentRunnerSession {
                         snapshot: child,
                         rawDepth: item.rawDepth + 1,
                         emittedDepth: childEmittedDepth,
-                        parentIndex: childParentIndex
+                        parentIndex: childParentIndex,
+                        hosted: item.hosted
                     )
                 )
             }

@@ -1,10 +1,13 @@
 ---
 sidebar_position: 4
 sidebar_label: Supported platforms
-title: Supported platforms
+title: iOS simulators, Android emulators, TVs and Mac apps
+description: Argent drives iOS simulators and iPhones, Android emulators and devices, Apple TV, Android TV, Fire TV, Electron and Chromium apps, Mac apps and HarmonyOS.
 sidebar_custom_props:
   icon: layers
 ---
+
+# Supported platforms
 
 Argent drives a growing set of targets through a single toolkit, each with the right interaction model.
 
@@ -14,6 +17,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+| **Mac apps**      | Your own Mac apps (AppKit, SwiftUI, react-native-macos, Mac Catalyst)   | Mouse / keyboard |
 | **HarmonyOS**     | Phones over `hdc`, and DevEco Studio emulator instances                 | Touch / gesture  |
 
 <Video
@@ -25,7 +29,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 
 ## Touch targets
 
-iOS simulators and Android emulators or devices are driven with taps, swipes, pinches, rotations, hardware buttons and typed text. Coordinates always come from a discovery pass over the accessibility or component tree, never from a screenshot.
+iOS simulators and Android emulators or devices are driven with taps, swipes, pinches, rotations, hardware buttons and typed text. Coordinates always come from a discovery pass over the accessibility tree, never from a screenshot.
 
 <Video
   src="/video/physical-android.mp4"
@@ -33,6 +37,10 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   height={900}
   caption="The same interaction model on a physical Pixel connected over adb"
 />
+
+### Shared Android emulators
+
+Several agents can boot the same AVD at the same time. Each agent boots a read-only emulator on its own console port. A read-only emulator keeps the AVD and its snapshot unchanged. The emulator does not run a read-only instance next to a writable one, so start your own emulator of that AVD read-only too. See the [tools reference](/docs/reference/tools#devices-and-apps).
 
 ### Foldable simulators and emulators
 
@@ -45,7 +53,7 @@ The agent folds and unfolds the device with the `fold` tool. `list-devices` mark
 
 ### Physical iPhones
 
-Argent also drives a physical iPhone over a USB cable, including pinches, rotations and multi-finger paths in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
+Argent drives physical iPhones through USB or a connected CoreDevice network tunnel. Pinches, rotations and multi-finger paths work in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
 
 ### HarmonyOS
 
@@ -83,6 +91,10 @@ Electron apps and Chromium browsers exposing the Chrome DevTools Protocol are dr
   height={900}
   caption="Testing an issue-creation flow in an Electron app over CDP"
 />
+
+### Mac apps
+
+Argent controls Mac apps on macOS 14.4 or later. The agent works in the background without moving your pointer. No Accessibility or Screen Recording permission is required. See [Mac apps](/docs/features/mac-apps) for setup and limitations.
 
 ## React Native
 
