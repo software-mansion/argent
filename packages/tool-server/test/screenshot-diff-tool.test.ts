@@ -3,6 +3,12 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { ArtifactStore } from "@argent/registry";
 import type { LivePanel } from "../src/utils/foldable";
 
@@ -13,8 +19,13 @@ vi.mock("../src/utils/foldable", async (importOriginal) => ({
 }));
 
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
+import { captureHarmonyScreenshotPng } from "../src/utils/harmony-screen";
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
+import {
+  __resetUiOrientationForTests,
+  setUiOrientationSourceProvider,
+} from "../src/utils/ios-ui-orientation";
 
 const tempDirs: string[] = [];
 
@@ -27,6 +38,9 @@ async function makeTempDir(prefix: string): Promise<string> {
   tempDirs.push(dir);
   return dir;
 }
+
+vi.mock("../src/utils/harmony-screen", () => ({ captureHarmonyScreenshotPng: vi.fn() }));
+vi.mock("../src/utils/check-deps", () => ({ ensureDep: vi.fn(async () => {}) }));
 
 describe("screenshotDiffTool", () => {
   it("rejects public tuning options so defaults stay internal", () => {
@@ -42,6 +56,17 @@ describe("screenshotDiffTool", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it.each(["captureBaseline", "captureCurrent"])("rejects a string %s", (flag) => {
+    const result = screenshotDiffTool.zodSchema!.safeParse({
+      baselinePath: "/tmp/baseline.png",
+      currentPath: "/tmp/current.png",
+      udid: "ABC",
+      [flag]: "false",
+    });
+
+    expect(result.error?.issues).toMatchObject([{ code: "invalid_type", path: [flag] }]);
   });
 
   it("requires udid and only declares the simulator-server service for live captures", () => {
@@ -87,12 +112,29 @@ describe("screenshotDiffTool", () => {
     });
   });
 
-  it("returns only the summary and diff artifact paths", async () => {
+  it("returns only the summary when nothing differs", async () => {
     const dir = await makeTempDir("argent-screenshot-diff-tool-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
     await writePng(currentPath, 2, 2, { r: 10, g: 20, b: 30 });
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir: dir },
+      { artifacts: new ArtifactStore() }
+    );
+
+    expect(result.summary).toContain("- status: unchanged");
+    expect(Object.keys(result)).toEqual(["summary"]);
+  });
+
+  it("returns only the summary and diff artifact paths", async () => {
+    const dir = await makeTempDir("argent-screenshot-diff-tool-");
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 255, g: 255, b: 255 });
 
     const result = await executeScreenshotDiffTool(
       {},
@@ -128,7 +170,7 @@ describe("screenshotDiffTool", () => {
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 2, 2, { r: 255, g: 255, b: 255 });
     const signal = AbortSignal.timeout(1000);
     const captureScreenshot = vi.fn(async () => ({
       url: "http://localhost/current.png",
@@ -167,50 +209,13 @@ describe("screenshotDiffTool", () => {
     });
   });
 
-  it("falls back to the default scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
-    const dir = await makeTempDir("argent-screenshot-diff-fallback-");
-    const baselinePath = path.join(dir, "baseline.png");
-    const capturedPath = path.join(dir, "captured.png");
-    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
-    // Full-res (scale 1.0) fails the way the Android simulator-server does;
-    // the default-scale retry (no scale arg) succeeds.
-    const captureScreenshot = vi.fn(
-      async (_api: unknown, _rotation: unknown, _signal: unknown, scale?: number) => {
-        if (scale === 1.0) {
-          throw new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.");
-        }
-        return { url: "http://localhost/current.png", path: capturedPath };
-      }
-    );
-
-    const result = await executeScreenshotDiffTool(
-      { simulatorServer: { apiUrl: "http://localhost:4949" } },
-      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
-      captureScreenshot as never
-    );
-
-    // Full-res attempted first, then a default-scale retry without an explicit scale.
-    expect(captureScreenshot).toHaveBeenCalledTimes(2);
-    expect(captureScreenshot.mock.calls[0]![3]).toBe(1.0);
-    expect(captureScreenshot.mock.calls[1]![3]).toBeUndefined();
-    const liveCaptures = (await fs.readdir(dir)).filter((name) =>
-      /^current-[a-f0-9]{8}\.live\.png$/.test(name)
-    );
-    expect(liveCaptures).toHaveLength(1);
-    expect(result.diffPath).toBeTruthy();
-  });
-
-  it("propagates the error when both the full-res capture and the fallback fail", async () => {
-    const dir = await makeTempDir("argent-screenshot-diff-bothfail-");
+  it("surfaces a failed full-resolution capture instead of retrying at another scale", async () => {
+    const dir = await makeTempDir("argent-screenshot-diff-capturefail-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    const captureScreenshot = vi.fn(
-      async (_api: unknown, _rotation: unknown, _signal: unknown, scale?: number) => {
-        throw new Error(scale === 1.0 ? "full-res failed" : "device offline");
-      }
-    );
+    const captureScreenshot = vi.fn(async () => {
+      throw new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.");
+    });
 
     await expect(
       executeScreenshotDiffTool(
@@ -219,8 +224,17 @@ describe("screenshotDiffTool", () => {
         {},
         captureScreenshot as never
       )
-    ).rejects.toThrow("device offline");
-    expect(captureScreenshot).toHaveBeenCalledTimes(2);
+    ).rejects.toThrow("wrong data size");
+    expect(captureScreenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("states the identical-dimensions requirement", () => {
+    const { captureBaseline, captureCurrent } = screenshotDiffTool.zodSchema!.shape;
+    expect(captureBaseline.description).toContain("live from the device, at full resolution");
+    expect(captureCurrent.description).toContain("live from the device, at full resolution");
+    expect(screenshotDiffTool.description).toContain(
+      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model."
+    );
   });
 
   it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {
@@ -267,6 +281,95 @@ describe("screenshotDiffTool", () => {
         }
       )
     ).rejects.toThrow("Provide either currentPath or captureCurrent, not both.");
+  });
+
+  it("captures a live HarmonyOS side over hdc instead of the simulator-server", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-harmony-"));
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "argent-harmony-capture-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const capturedPath = path.join(scratch, "captured.png");
+    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 2, 2, { r: 255, g: 255, b: 255 });
+    vi.mocked(captureHarmonyScreenshotPng).mockResolvedValue(capturedPath);
+    const captureScreenshot = vi.fn();
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, captureCurrent: true, udid: "harmony-025DEK236V035771", outputDir: dir },
+      { artifacts: new ArtifactStore() },
+      captureScreenshot as never
+    );
+
+    expect(captureScreenshot).not.toHaveBeenCalled();
+    expect(captureHarmonyScreenshotPng).toHaveBeenCalledWith({
+      connectKey: "025DEK236V035771",
+      scale: 1.0,
+    });
+    const liveCaptures = (await fs.readdir(dir)).filter((name) =>
+      /^current-[a-f0-9]{8}\.live\.png$/.test(name)
+    );
+    expect(liveCaptures).toHaveLength(1);
+    expect(result.diffPath).toBeTruthy();
+    expect(await fs.readdir(scratch)).toEqual([]);
+  });
+
+  it("rejects a rotation override on a live HarmonyOS capture", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-harmony-rot-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
+    vi.mocked(captureHarmonyScreenshotPng).mockClear().mockResolvedValue(baselinePath);
+
+    // `uitest screenCap` has no orientation argument.
+    await expect(
+      executeScreenshotDiffTool(
+        {},
+        {
+          baselinePath,
+          captureCurrent: true,
+          udid: "harmony-025DEK236V035771",
+          rotation: "LandscapeLeft",
+          outputDir: dir,
+        },
+        { artifacts: new ArtifactStore() }
+      )
+    ).rejects.toThrow(/rotation is not supported/);
+    expect(captureHarmonyScreenshotPng).not.toHaveBeenCalled();
+  });
+
+  it("still diffs two saved PNGs on HarmonyOS when a rotation is passed", async () => {
+    // `rotation` is inert for a two-path diff on every platform.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-harmony-static-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 1, g: 2, b: 3 });
+    await writePng(currentPath, 2, 2, { r: 1, g: 2, b: 3 });
+    vi.mocked(captureHarmonyScreenshotPng).mockClear();
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      {
+        baselinePath,
+        currentPath,
+        udid: "harmony-025DEK236V035771",
+        rotation: "LandscapeLeft",
+        outputDir: dir,
+      },
+      { artifacts: new ArtifactStore() }
+    );
+
+    expect(result.summary).toContain("Screenshot diff summary");
+    expect(captureHarmonyScreenshotPng).not.toHaveBeenCalled();
+  });
+
+  it("declares no simulator-server service for a HarmonyOS live capture", () => {
+    expect(
+      screenshotDiffTool.services({
+        baselinePath: "/tmp/baseline.png",
+        captureCurrent: true,
+        udid: "harmony-025DEK236V035771",
+        outputDir: "/tmp",
+      })
+    ).toEqual({});
   });
 
   // The boundary probe reports `presentOnHost: false` for ANY path that does not
@@ -485,7 +588,7 @@ describe("a live capture of a foldable", () => {
     resolveLivePanelMock.mockResolvedValue({ screen: 3, source: "ax-service" });
     const { result, captureScreenshot } = await diffLive(foldable);
     expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 3);
-    expect(result.summary).not.toContain("- panel:");
+    expect(result.summary).not.toContain("- capture:");
   });
 
   it("says in the summary when nothing resolved the panel, so it is of the cover panel", async () => {
@@ -497,19 +600,35 @@ describe("a live capture of a foldable", () => {
     const { result, captureScreenshot } = await diffLive(foldable);
     expect(captureScreenshot).toHaveBeenCalledWith(foldable, undefined, undefined, 1.0, 1);
     expect(result.summary).toContain(
-      "- panel: The panel this foldable simulator renders to could not be resolved"
+      "- capture: The panel this foldable simulator renders to could not be resolved"
     );
     expect(result.summary).toContain("this capture is of screen 1 (cover panel, 1398x2034)");
     // Once, even though the diff reads the summary line per warning.
-    expect(result.summary.split("- panel:")).toHaveLength(2);
+    expect(result.summary.split("- capture:")).toHaveLength(2);
   });
 
   it("asks nothing and adds nothing for a device that is not foldable", async () => {
     const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
     const { result, captureScreenshot } = await diffLive(plain);
     expect(captureScreenshot).toHaveBeenCalledWith(plain, undefined, undefined, 1.0);
-    expect(result.summary).not.toContain("- panel:");
+    expect(result.summary).not.toContain("- capture:");
     expect(resolveLivePanelMock).not.toHaveBeenCalled();
+  });
+
+  it("says in the summary when the interface orientation could not be read", async () => {
+    __resetUiOrientationForTests();
+    setUiOrientationSourceProvider(async () => ({
+      orientation: async () => {
+        throw new Error("down");
+      },
+    }));
+    try {
+      const plain = { apiUrl: "http://localhost:4949", deviceId: DUO };
+      const { result } = await diffLive(plain);
+      expect(result.summary).toContain("- capture: The interface orientation could not be read");
+    } finally {
+      setUiOrientationSourceProvider(undefined);
+    }
   });
 });
 

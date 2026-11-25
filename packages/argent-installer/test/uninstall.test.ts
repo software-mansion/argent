@@ -2,12 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  ALL_ADAPTERS,
-  getMcpEntry,
-  addClaudePermission,
-  removeClaudePermission,
-} from "../src/mcp-configs.js";
+import { getMcpEntry } from "../src/mcp-configs.js";
+import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -28,6 +24,7 @@ const telemetryMock = vi.hoisted(() => ({
 
 const childProcessMock = vi.hoisted(() => ({
   which: vi.fn((..._args: unknown[]) => "/usr/local/bin/argent\n"),
+  versionProbe: vi.fn(),
   execFileSync: vi.fn(),
 }));
 
@@ -38,15 +35,45 @@ const toolsClientMock = vi.hoisted(() => ({
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 // The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
-// execFileSync assertions below only see package-manager runs.
-vi.mock("node:child_process", () => ({
-  ...childProcessMock,
-  execFileSync: (bin: string, ...rest: unknown[]) =>
-    bin === "which" || bin === "where"
-      ? childProcessMock.which(bin, ...rest)
-      : childProcessMock.execFileSync(bin, ...rest),
-}));
+// execFileSync assertions below only see package-manager runs. Like `which -a`,
+// it lists only the paths that exist.
+vi.mock("node:child_process", async () => {
+  const { existsSync } = await import("node:fs");
+  return {
+    ...childProcessMock,
+    execFileSync: (bin: string, ...rest: unknown[]) =>
+      bin === "which" || bin === "where"
+        ? String(childProcessMock.which(bin, ...rest))
+            .split("\n")
+            .filter((line) => line && existsSync(line))
+            .map((line) => line + "\n")
+            .join("")
+        : (rest[0] as string[])[0] === "--version"
+          ? childProcessMock.versionProbe(bin, ...rest)
+          : childProcessMock.execFileSync(bin, ...rest),
+  };
+});
 vi.mock("@argent/tools-client", () => toolsClientMock);
+// Lets a test stand in for a release whose agents bundle dropped a file, with
+// a retired list whose hashes match the test's own copies.
+const bundleOverride = vi.hoisted(() => ({
+  agentsDir: undefined as string | undefined,
+  retired: undefined as import("../src/utils.js").RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get AGENTS_DIR() {
+      return bundleOverride.agentsDir ?? actual.AGENTS_DIR;
+    },
+    get RETIRED_BUNDLED_PATHS() {
+      return bundleOverride.retired
+        ? { agents: bundleOverride.retired, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
+  };
+});
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   outro: vi.fn(),
@@ -75,7 +102,7 @@ function writeFile(filePath: string, contents = "test"): void {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
   originalCwd = process.cwd();
-  // detectPackageManager() reads npm_config_user_agent, so the uninstall
+  // detectGlobalPackageManager() reads npm_config_user_agent, so the uninstall
   // command these tests assert on is whichever package manager runs the suite.
   // Unset it to pin the npm shape — otherwise the execFileSync mock below,
   // which throws only for "npm", never fires and the failure-path tests
@@ -83,12 +110,24 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
-  childProcessMock.which.mockImplementation(() => "/usr/local/bin/argent\n");
-  childProcessMock.execFileSync.mockImplementation(() => undefined);
+  childProcessMock.versionProbe.mockReset();
+  // A global bin that `npm uninstall -g` removes, so no case depends on the host's argent.
+  const globalBin = path.join(tmpDir, "global-bin", "argent");
+  writeFile(globalBin);
+  childProcessMock.which.mockImplementation(() => globalBin + "\n");
+  childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+    if (bin === "npm" && args[0] === "uninstall" && args.includes("-g")) {
+      fs.rmSync(globalBin, { force: true });
+    }
+    return undefined;
+  });
 });
 
 afterEach(() => {
+  bundleOverride.agentsDir = undefined;
+  bundleOverride.retired = undefined;
   process.chdir(originalCwd);
+  process.exitCode = undefined;
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -145,6 +184,594 @@ describe("uninstall — telemetry consent preservation", () => {
       expect.any(Object)
     );
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
+  });
+
+  it("counts nothing removed when a live global with no package root stays on PATH", async () => {
+    // A version manager's binary shim: it runs, but resolves to no package.
+    const shim = path.join(tmpDir, "volta", "bin", "argent");
+    writeFile(shim, "MZ");
+    childProcessMock.which.mockImplementation(() => `${shim}\n`);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(process.exitCode).toBe(1);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_uninstalled_package: false,
+      })
+    );
+  });
+
+  it("uninstalls the global package with npm when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      ["uninstall", "-g", "@swmansion/argent"],
+      expect.not.objectContaining({ cwd: expect.anything() })
+    );
+  });
+
+  describe("a global install the launcher's package manager does not own", () => {
+    let globalPkg: string;
+    beforeEach(() => {
+      process.env.npm_config_user_agent = "npm/11.6.2 node/v24.14.1 darwin arm64";
+      globalPkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      writeFile(
+        path.join(globalPkg, "package.json"),
+        JSON.stringify({ name: "@swmansion/argent" })
+      );
+      writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+      childProcessMock.which.mockImplementation(() => path.join(globalPkg, "bin", "argent") + "\n");
+      process.chdir(tmpDir);
+    });
+
+    it.each([
+      ["an npm", "npm/11.6.2 node/v24.14.1 darwin arm64"],
+      ["a Yarn 2+", "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64"],
+    ])("removes it with yarn, not npm, under %s launcher", async (_launcher, agent) => {
+      process.env.npm_config_user_agent = agent;
+
+      await uninstall(["--yes"]);
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "remove", "@swmansion/argent"],
+        expect.objectContaining({ cwd: os.homedir() })
+      );
+      expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+        "npm",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it("says a failed yarn global remove needs Yarn classic under Yarn 2+", async () => {
+      const clack = await import("@clack/prompts");
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "yarn")
+          throw new Error("Usage Error: The 'yarn global' commands have been removed");
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      const esc = String.fromCharCode(27);
+      const info = vi.mocked(clack.log.info).mock.calls.map((c) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(info).toContain(
+        "Run yarn global remove @swmansion/argent (with Yarn classic, outside this Yarn 2+ project)."
+      );
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("gives a failed yarn global remove no Yarn classic note under an npm launcher", async () => {
+      const clack = await import("@clack/prompts");
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "yarn") throw new Error("yarn: command not found");
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      const esc = String.fromCharCode(27);
+      const info = vi.mocked(clack.log.info).mock.calls.map((c) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(vi.mocked(clack.log.error)).toHaveBeenCalled();
+      expect(info.filter((line) => line.includes("Yarn classic"))).toEqual([]);
+    });
+
+    it("drops the prefix npm exec exports from yarn's env", async () => {
+      const saved = process.env.npm_config_prefix;
+      process.env.npm_config_prefix = "/opt/homebrew";
+      try {
+        await uninstall(["--yes"]);
+      } finally {
+        if (saved === undefined) delete process.env.npm_config_prefix;
+        else process.env.npm_config_prefix = saved;
+      }
+
+      expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+        "yarn",
+        ["global", "remove", "@swmansion/argent"],
+        expect.objectContaining({
+          env: expect.not.objectContaining({ npm_config_prefix: expect.anything() }),
+        })
+      );
+    });
+
+    it("keeps the CLI record of a global the uninstall left in place", async () => {
+      childProcessMock.versionProbe.mockImplementation(() => {
+        throw Object.assign(new Error("exit 1"), { status: 1 });
+      });
+      const record = path.join(tmpDir, ".argent", "cli.json");
+      writeFile(
+        record,
+        JSON.stringify({
+          cli: path.join(fs.realpathSync(globalPkg), "bin", "argent"),
+          node: process.execPath,
+        })
+      );
+
+      await uninstall(["--yes"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(fs.existsSync(record)).toBe(true);
+    });
+
+    it("reports a failure when the uninstall exits 0 and leaves the package", async () => {
+      const clack = await import("@clack/prompts");
+      // Resolving to the package is enough: a probe that fails does not clear it.
+      childProcessMock.versionProbe.mockImplementation(() => {
+        throw Object.assign(new Error("exit 1"), { status: 1 });
+      });
+
+      await uninstall(["--yes"]);
+
+      expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+        `global uninstall failed: Error: ${path.join(globalPkg, "bin", "argent")} is still on PATH. ` +
+          "Remove it with the package manager that installed it."
+      );
+      expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_uninstall_complete",
+        expect.objectContaining({
+          error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+          has_uninstalled_package: false,
+        })
+      );
+      expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+    });
+
+    it("reports success when the uninstall removes the package", async () => {
+      const clack = await import("@clack/prompts");
+      childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+        if (bin === "yarn" && args[0] === "global") {
+          fs.rmSync(globalPkg, { recursive: true, force: true });
+        }
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it("reports success for a linked install whose source checkout stays", async () => {
+      const clack = await import("@clack/prompts");
+      const link = path.join(tmpDir, "prefix", "bin", "argent");
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(path.join(globalPkg, "bin", "argent"), link);
+      const linked = path.join(tmpDir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.dirname(linked), { recursive: true });
+      fs.symlinkSync(globalPkg, linked);
+      childProcessMock.which.mockImplementation(() => link + "\n");
+      childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+        if (bin === "npm" && args[0] === "uninstall") fs.rmSync(link);
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      expect(fs.existsSync(path.join(globalPkg, "package.json"))).toBe(true);
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).toHaveBeenCalled();
+    });
+  });
+
+  it("reports a failure when a pnpm global shim stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const shim = path.join(tmpDir, "pnpm-home", "argent");
+    writeFile(
+      shim,
+      '#!/bin/sh\nexec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"\n'
+    );
+    childProcessMock.which.mockImplementation(() => shim + "\n");
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${shim} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+  });
+
+  it("stops a pnpm global's tool-server and drops its CLI record", async () => {
+    const clack = await import("@clack/prompts");
+    const pkg = path.join(
+      tmpDir,
+      "pnpm-home",
+      "global",
+      "v11",
+      "h",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    writeFile(path.join(pkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(pkg, "dist", "cli.js"));
+    const shim = path.join(tmpDir, "pnpm-home", "bin", "argent");
+    writeFile(
+      shim,
+      `#!/bin/sh\nexec node "$basedir_abs"/'../x' "$@"\n# cmd-shim-target=${path.join(pkg, "dist", "cli.js")}\n`
+    );
+    childProcessMock.which.mockImplementation(() => shim + "\n");
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin === "pnpm" && args[0] === "remove") fs.rmSync(shim);
+      return undefined;
+    });
+    const record = path.join(tmpDir, ".argent", "cli.json");
+    writeFile(
+      record,
+      JSON.stringify({
+        cli: path.join(fs.realpathSync(pkg), "dist", "cli.js"),
+        node: process.execPath,
+      })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["remove", "-g", "@swmansion/argent"],
+      expect.any(Object)
+    );
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(fs.realpathSync(pkg));
+    expect(fs.existsSync(record)).toBe(false);
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+  });
+
+  it("stops the tool-server of the global behind a stale version-manager shim", async () => {
+    const shim = path.join(tmpDir, "nodenv", "shims", "argent");
+    writeFile(shim, "#!/usr/bin/env bash\n");
+    const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+    writeFile(path.join(pkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(pkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    childProcessMock.which.mockImplementation(
+      () => `${shim}\n${path.join(pkg, "bin", "argent")}\n`
+    );
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(fs.realpathSync(pkg));
+  });
+
+  it.each([
+    ["nodenv", 127],
+    ["mise", 1],
+  ])(
+    "removes the global and then the local install past a stale %s shim",
+    async (manager, status) => {
+      const clack = await import("@clack/prompts");
+      const shim = path.join(tmpDir, manager, "shims", "argent");
+      writeFile(shim, "#!/usr/bin/env bash\n");
+      childProcessMock.which.mockImplementation(() => shim + "\n");
+      // The shim runs the global until npm removes it, then fails.
+      let removed = false;
+      childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+        if (bin === "npm" && args[0] === "uninstall" && args.includes("-g")) removed = true;
+        return undefined;
+      });
+      childProcessMock.versionProbe.mockImplementation(() => {
+        if (removed) throw Object.assign(new Error(`exit ${status}`), { status });
+      });
+      const projectDir = path.join(tmpDir, "project");
+      writeFile(
+        path.join(projectDir, "package.json"),
+        JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } })
+      );
+      writeFile(
+        path.join(projectDir, "node_modules", "@swmansion", "argent", "package.json"),
+        JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+      );
+      process.chdir(projectDir);
+
+      await uninstall(["--yes", "--global", "--local"]);
+
+      expect(childProcessMock.versionProbe).toHaveBeenCalledWith(
+        shim,
+        ["--version"],
+        expect.anything()
+      );
+      expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+      // The stale shim stays on PATH, but the global it ran is gone.
+      expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
+    }
+  );
+
+  it("reports a failure when a second global install stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(npmBin);
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${yarnBin}\n`);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") fs.rmSync(npmBin);
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure when a second global install stays on PATH behind a stale shim", async () => {
+    const clack = await import("@clack/prompts");
+    const shim = path.join(tmpDir, "nodenv", "shims", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(shim, "#!/usr/bin/env bash\n");
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${shim}\n${yarnBin}\n`);
+    childProcessMock.versionProbe.mockImplementation((bin: string) => {
+      if (bin === shim) throw Object.assign(new Error("exit 127"), { status: 127 });
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("still removes the local install when a second global stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(npmBin);
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${yarnBin}\n`);
+    const projectDir = path.join(tmpDir, "project");
+    writeFile(
+      path.join(projectDir, "package.json"),
+      JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } })
+    );
+    const localPkg = path.join(projectDir, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin === "npm" && args.includes("-g")) fs.rmSync(npmBin);
+      else if (bin === "npm") fs.rmSync(localPkg, { recursive: true });
+      return undefined;
+    });
+    process.chdir(projectDir);
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+    expect(fs.existsSync(localPkg)).toBe(false);
+    expect(vi.mocked(clack.outro)).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("drops the CLI record of a removed global when a second global stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmPkg = path.join(tmpDir, "npm-prefix", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(path.join(npmPkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(npmPkg, "dist", "cli.js"));
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    fs.mkdirSync(path.dirname(npmBin), { recursive: true });
+    fs.symlinkSync(path.join(npmPkg, "dist", "cli.js"), npmBin);
+    const otherBin = path.join(tmpDir, "other-node", "bin", "argent");
+    writeFile(otherBin);
+    const record = path.join(tmpDir, ".argent", "cli.json");
+    writeFile(
+      record,
+      JSON.stringify({
+        cli: path.join(fs.realpathSync(npmPkg), "dist", "cli.js"),
+        node: process.execPath,
+      })
+    );
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${otherBin}\n`);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") {
+        fs.rmSync(npmBin);
+        fs.rmSync(npmPkg, { recursive: true });
+      }
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${otherBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(fs.existsSync(record)).toBe(false);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+  });
+
+  it("counts a global that does not resolve to the package as left on Windows", async () => {
+    const clack = await import("@clack/prompts");
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    // `where` lists npm-style shims that neither resolve to the package nor run
+    // through execFileSync (a .cmd fails with EINVAL).
+    const yarnShim = path.join(tmpDir, "Yarn", "bin", "argent.cmd");
+    writeFile(yarnShim);
+    childProcessMock.which.mockImplementation(() => yarnShim + "\n");
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync EINVAL"), { code: "EINVAL" });
+    });
+    process.chdir(tmpDir);
+
+    try {
+      await uninstall(["--yes", "--global"]);
+    } finally {
+      platform.mockRestore();
+    }
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnShim} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("removes both installs when run through npx from a project that has a local devDependency", async () => {
+    const clack = await import("@clack/prompts");
+    const project = fs.realpathSync(tmpDir);
+    fs.writeFileSync(
+      path.join(project, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    const localPkg = path.join(project, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    writeFile(path.join(localPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    const localBin = path.join(project, "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "bin", "argent"), localBin);
+    const globalPkg = path.join(project, "prefix", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    const globalBin = path.join(project, "prefix", "bin", "argent");
+    fs.mkdirSync(path.dirname(globalBin), { recursive: true });
+    fs.symlinkSync(path.join(globalPkg, "bin", "argent"), globalBin);
+    // npm exec puts the project's node_modules/.bin ahead of the global prefix.
+    childProcessMock.which.mockImplementation(
+      () => [localBin, globalBin].filter((bin) => fs.existsSync(bin)).join("\n") + "\n"
+    );
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin !== "npm") return undefined;
+      if (args.includes("-g")) {
+        fs.rmSync(globalBin);
+        fs.rmSync(globalPkg, { recursive: true, force: true });
+      } else {
+        fs.rmSync(localBin);
+        fs.rmSync(localPkg, { recursive: true, force: true });
+      }
+      return undefined;
+    });
+    process.chdir(project);
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+    expect(fs.existsSync(localPkg)).toBe(false);
+  });
+
+  it("removes a local devDependency with the project's yarn when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "yarn",
+      ["remove", "@swmansion/argent"],
+      expect.any(Object)
+    );
+  });
+
+  it("gives a failed local yarn remove under Yarn 2+ no Yarn classic note", async () => {
+    const clack = await import("@clack/prompts");
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    process.chdir(tmpDir);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "yarn") throw new Error("YN0001: network error");
+      return undefined;
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    const info = vi.mocked(clack.log.info).mock.calls.map((c) => String(c[0]));
+    expect(info.filter((line) => line.includes("Yarn classic"))).toEqual([]);
+    expect(process.exitCode).toBe(1);
   });
 
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
@@ -236,51 +863,6 @@ describe("uninstall — telemetry consent preservation", () => {
   });
 });
 
-// ── MCP entry removal across all adapters ─────────────────────────────────────
-
-describe("uninstall — MCP entry removal", () => {
-  for (const adapter of ALL_ADAPTERS) {
-    it(`removes argent from ${adapter.name} config`, () => {
-      const configPath = adapter.projectPath(tmpDir);
-      if (!configPath) return; // skip adapters without project path
-
-      adapter.write(configPath, getMcpEntry());
-      expect(adapter.remove(configPath)).toBe(true);
-      expect(fs.existsSync(configPath)).toBe(false);
-    });
-  }
-
-  it("handles removal from non-existent files gracefully", () => {
-    for (const adapter of ALL_ADAPTERS) {
-      expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(false);
-    }
-  });
-});
-
-// ── Permissions cleanup ───────────────────────────────────────────────────────
-
-describe("uninstall — permissions cleanup", () => {
-  it("removes mcp__argent permission when present", () => {
-    addClaudePermission(tmpDir, "local");
-    removeClaudePermission(tmpDir, "local");
-
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    expect(fs.existsSync(settingsPath)).toBe(false);
-  });
-
-  it("does not throw when .claude/settings.json does not exist", () => {
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
-  });
-
-  it("does not throw when permissions.allow is missing", () => {
-    const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify({}));
-
-    expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
-  });
-});
-
 // ── Skills cleanup helpers ────────────────────────────────────────────────────
 
 describe("uninstall — skills cleanup helpers", () => {
@@ -288,8 +870,8 @@ describe("uninstall — skills cleanup helpers", () => {
     const skillsDir = path.join(tmpDir, "skills");
 
     writeFile(
-      path.join(skillsDir, "argent-create-flow", "SKILL.md"),
-      ["---", "name: argent-create-flow", "description: test", "---", "", "body"].join("\n")
+      path.join(skillsDir, "argent-create-e2e", "SKILL.md"),
+      ["---", "name: argent-create-e2e", "description: test", "---", "", "body"].join("\n")
     );
     writeFile(
       path.join(skillsDir, "argent-react-native-optimization", "SKILL.md"),
@@ -305,7 +887,7 @@ describe("uninstall — skills cleanup helpers", () => {
     writeFile(path.join(skillsDir, "references", "guide.md"));
 
     expect(getBundledSkillNames(skillsDir)).toEqual([
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
   });
@@ -331,28 +913,28 @@ describe("uninstall — skills cleanup helpers", () => {
 
   it("removes installed skill entries by current skill names only", () => {
     const targetDir = path.join(tmpDir, ".claude", "skills");
-    const storeDir = path.join(tmpDir, ".agents", "skills", "argent-create-flow");
+    const storeDir = path.join(tmpDir, ".agents", "skills", "argent-create-e2e");
 
     writeFile(path.join(storeDir, "SKILL.md"), "skill");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.symlinkSync(
-      path.relative(targetDir, path.join(tmpDir, ".agents", "skills", "argent-create-flow")),
-      path.join(targetDir, "argent-create-flow")
+      path.relative(targetDir, path.join(tmpDir, ".agents", "skills", "argent-create-e2e")),
+      path.join(targetDir, "argent-create-e2e")
     );
     writeFile(path.join(targetDir, "argent-react-native-optimization", "SKILL.md"), "argent");
     writeFile(path.join(targetDir, "react-native-optimization", "SKILL.md"), "unrelated");
     writeFile(path.join(targetDir, "vendor-skill", "SKILL.md"), "vendor");
 
     const result = removeBundledSkillInstalls(
-      ["argent-create-flow", "argent-react-native-optimization"],
+      ["argent-create-e2e", "argent-react-native-optimization"],
       targetDir
     );
 
     expect(result.removedPaths.sort()).toEqual([
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
-    expect(fs.existsSync(path.join(targetDir, "argent-create-flow"))).toBe(false);
+    expect(fs.existsSync(path.join(targetDir, "argent-create-e2e"))).toBe(false);
     expect(fs.existsSync(path.join(targetDir, "argent-react-native-optimization"))).toBe(false);
     expect(fs.existsSync(path.join(targetDir, "react-native-optimization"))).toBe(true);
     expect(fs.existsSync(path.join(targetDir, "vendor-skill"))).toBe(true);
@@ -365,7 +947,7 @@ describe("uninstall — skills cleanup helpers", () => {
     // time it reaches .claude/skills every Argent link is dangling.
     const targetDir = path.join(tmpDir, ".claude", "skills");
     const storeDir = path.join(tmpDir, ".agents", "skills");
-    const skillNames = ["argent-create-flow", "argent-react-native-optimization"];
+    const skillNames = ["argent-create-e2e", "argent-react-native-optimization"];
 
     fs.mkdirSync(targetDir, { recursive: true });
     for (const skillName of skillNames) {
@@ -399,13 +981,13 @@ describe("uninstall — skills cleanup helpers", () => {
     const targetDir = path.join(tmpDir, ".claude", "skills");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.symlinkSync(
-      path.join("..", "..", ".agents", "skills", "argent-create-flow"),
-      path.join(targetDir, "argent-create-flow")
+      path.join("..", "..", ".agents", "skills", "argent-create-e2e"),
+      path.join(targetDir, "argent-create-e2e")
     );
 
-    const result = removeBundledSkillInstalls(["argent-create-flow"], targetDir);
+    const result = removeBundledSkillInstalls(["argent-create-e2e"], targetDir);
 
-    expect(result).toEqual({ removedPaths: ["argent-create-flow"], removedRoot: true });
+    expect(result).toEqual({ removedPaths: ["argent-create-e2e"], removedRoot: true });
     expect(fs.existsSync(targetDir)).toBe(false);
   });
 
@@ -417,7 +999,7 @@ describe("uninstall — skills cleanup helpers", () => {
         {
           version: 1,
           skills: {
-            "argent-create-flow": { source: "argent" },
+            "argent-create-e2e": { source: "argent" },
             "argent-react-native-optimization": { source: "argent" },
             "react-native-optimization": { source: "vendor" },
             "vendor-skill": { source: "vendor" },
@@ -429,12 +1011,12 @@ describe("uninstall — skills cleanup helpers", () => {
     );
 
     const result = cleanupSkillsLockFile(lockPath, [
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
 
     expect(result).toEqual({
-      removedSkills: ["argent-create-flow", "argent-react-native-optimization"],
+      removedSkills: ["argent-create-e2e", "argent-react-native-optimization"],
       removedFile: false,
     });
 
@@ -453,7 +1035,7 @@ describe("uninstall — skills cleanup helpers", () => {
         {
           version: 1,
           skills: {
-            "argent-create-flow": { source: "argent" },
+            "argent-create-e2e": { source: "argent" },
           },
         },
         null,
@@ -461,10 +1043,10 @@ describe("uninstall — skills cleanup helpers", () => {
       )
     );
 
-    const result = cleanupSkillsLockFile(lockPath, ["argent-create-flow"]);
+    const result = cleanupSkillsLockFile(lockPath, ["argent-create-e2e"]);
 
     expect(result).toEqual({
-      removedSkills: ["argent-create-flow"],
+      removedSkills: ["argent-create-e2e"],
       removedFile: true,
     });
     expect(fs.existsSync(lockPath)).toBe(false);
@@ -522,6 +1104,47 @@ describe("uninstall — prune bundled content", () => {
     );
     expect(result.removedRoot).toBe(true);
     expect(fs.existsSync(targetDir)).toBe(false);
+  });
+
+  it("removes a link to a directory that sits at a bundled file's path", () => {
+    const bundledDir = path.join(tmpDir, "bundled");
+    const targetDir = path.join(tmpDir, ".cursor", "rules");
+    const linkedDir = path.join(tmpDir, "elsewhere");
+
+    writeFile(path.join(bundledDir, "argent.md"));
+    writeFile(path.join(linkedDir, "notes.md"), "user");
+    writeFile(path.join(targetDir, "vendor.md"), "vendor");
+    fs.symlinkSync(linkedDir, path.join(targetDir, "argent.md"));
+
+    expect(removeBundledContent(bundledDir, targetDir).removedPaths).toEqual(["argent.md"]);
+    expect(fs.readdirSync(targetDir)).toEqual(["vendor.md"]);
+    expect(fs.readdirSync(linkedDir)).toEqual(["notes.md"]);
+  });
+
+  it("removes a bundled file link left dangling by an earlier target's cleanup", () => {
+    // .opencode/agents/<file> links to the Claude copy, which uninstall removes
+    // first, so by the time opencode is cleaned the link is dangling.
+    const bundledDir = path.join(tmpDir, "bundled");
+    const claudeDir = path.join(tmpDir, ".claude", "agents");
+    const opencodeDir = path.join(tmpDir, ".opencode", "agents");
+
+    writeFile(path.join(bundledDir, "argent-agent.md"));
+    writeFile(path.join(claudeDir, "argent-agent.md"), "argent");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.symlinkSync(
+      path.join("..", "..", ".claude", "agents", "argent-agent.md"),
+      path.join(opencodeDir, "argent-agent.md")
+    );
+
+    expect(removeBundledContent(bundledDir, claudeDir).removedPaths).toEqual(["argent-agent.md"]);
+    // Dangling now: gone for existsSync, present for lstat.
+    expect(fs.existsSync(path.join(opencodeDir, "argent-agent.md"))).toBe(false);
+
+    const result = removeBundledContent(bundledDir, opencodeDir);
+
+    expect(result).toEqual({ removedPaths: ["argent-agent.md"], removedRoot: true });
+    expect(fs.existsSync(opencodeDir)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".opencode"))).toBe(false);
   });
 
   it("handles missing source or target directories gracefully", () => {
@@ -617,6 +1240,23 @@ describe("uninstall — local (committable) mode package removal", () => {
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
+  it("keeps the local telemetry state when the global's version-manager shim fails here", async () => {
+    stageLocalProject();
+    process.chdir(tmpDir);
+    // A project pinned to a Node without argent: the global runs elsewhere.
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
   it("resets the local telemetry state when the removed local install was the last one", async () => {
     stageLocalProject();
     process.chdir(tmpDir);
@@ -633,6 +1273,31 @@ describe("uninstall — local (committable) mode package removal", () => {
       expect.objectContaining({ has_uninstalled_package: true })
     );
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
+  });
+
+  it("prunes legacy skill dirs that are no longer bundled", async () => {
+    stageLocalProject();
+    const store = path.join(tmpDir, ".agents", "skills");
+    writeFile(path.join(store, "argent-create-flow", "SKILL.md"));
+    writeFile(path.join(store, "my-skill", "SKILL.md"));
+    const editor = path.join(tmpDir, ".claude", "skills");
+    fs.mkdirSync(editor, { recursive: true });
+    fs.symlinkSync(path.join(store, "argent-qa-flows"), path.join(editor, "argent-qa-flows"));
+    writeFile(
+      path.join(tmpDir, "skills-lock.json"),
+      JSON.stringify({ version: 1, skills: { "argent-qa-flows": {}, "my-skill": {} } })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(store, "argent-create-flow"))).toBe(false);
+    expect(fs.lstatSync(path.join(editor, "argent-qa-flows"), { throwIfNoEntry: false })).toBe(
+      undefined
+    );
+    expect(fs.existsSync(path.join(store, "my-skill"))).toBe(true);
+    const lock = JSON.parse(fs.readFileSync(path.join(tmpDir, "skills-lock.json"), "utf8"));
+    expect(lock.skills).toEqual({ "my-skill": {} });
   });
 
   it("--local skips the package removal when the project never opted into argent", async () => {
@@ -735,6 +1400,237 @@ describe("uninstall — scoped config cleanup", () => {
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
     expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+  });
+
+  it("--local keeps the global configs when the global's version-manager shim fails here", async () => {
+    stageProject({ materialized: true });
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+    // A project pinned to a Node without argent: the global runs elsewhere.
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(hasArgentEntry(projectMcp)).toBe(false);
+    expect(hasArgentEntry(globalCursor)).toBe(true);
+  });
+
+  it("--local in a global-mode project keeps its entries when the global's shim fails here", async () => {
+    const { projectMcp, globalCursor } = stageConfigs();
+    process.chdir(projDir);
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(hasArgentEntry(projectMcp)).toBe(true);
+    expect(hasArgentEntry(globalCursor)).toBe(true);
+  });
+
+  // `npx skills add` links .kiro/skills/<name> -> ../../.agents/skills/<name>
+  // for every Argent skill when it detects Kiro.
+  function stageKiroSkillLinks(base: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(path.join(base, ".kiro", "skills"), { recursive: true });
+    for (const name of names) {
+      writeFile(path.join(base, ".agents", "skills", name, "SKILL.md"), "x");
+      fs.symlinkSync(
+        path.join("..", "..", ".agents", "skills", name),
+        path.join(base, ".kiro", "skills", name)
+      );
+    }
+    return names;
+  }
+
+  it("--yes removes the Argent skill links from .kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+  });
+
+  // An upgrade to a release that dropped the inspector, then an uninstall.
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
+  const CHECKLIST = "## Quality control checklist\n";
+
+  function stageRetiredAgents(base = projDir): string {
+    const bundle = path.join(tmpDir, "bundle-agents");
+    writeFile(path.join(bundle, "argent-current.md"), "current");
+    bundleOverride.agentsDir = bundle;
+    bundleOverride.retired = [
+      {
+        path: "argent-environment-inspector.md",
+        shipped: [hashBundledContent(INSPECTOR)],
+      },
+      {
+        path: "references/quality-control-checklist.md",
+        shipped: [hashBundledContent(CHECKLIST)],
+      },
+    ];
+
+    const agents = path.join(base, ".claude", "agents");
+    writeFile(path.join(agents, "argent-current.md"), "current");
+    writeFile(path.join(agents, "argent-environment-inspector.md"), INSPECTOR);
+    writeFile(path.join(agents, "references", "quality-control-checklist.md"), CHECKLIST);
+    fs.mkdirSync(path.join(base, ".git"));
+    return agents;
+  }
+
+  it("--yes removes retired agents the bundle no longer ships, and keeps the user's", async () => {
+    const agents = stageRetiredAgents();
+    writeFile(path.join(agents, "my-agent.md"), "mine");
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(agents)).toEqual(["my-agent.md"]);
+  });
+
+  it.each(["--yes", "-y"])(
+    "%s leaves a retired agent the user edited alone, unasked and unmentioned",
+    async (flag) => {
+      const agents = stageRetiredAgents();
+      const edited = path.join(agents, "references", "quality-control-checklist.md");
+      writeFile(edited, `${CHECKLIST}My own field.\n`);
+      process.chdir(projDir);
+
+      await uninstall([flag]);
+
+      const clack = await import("@clack/prompts");
+      expect(clack.confirm).not.toHaveBeenCalled();
+      expect(fs.readFileSync(edited, "utf8")).toBe(`${CHECKLIST}My own field.\n`);
+      expect(fs.existsSync(path.join(agents, "argent-environment-inspector.md"))).toBe(false);
+      const notes = vi.mocked(clack.note).mock.calls.map(([body]) => String(body));
+      expect(notes.join("\n")).not.toContain("quality-control-checklist.md");
+    }
+  );
+
+  // There the local and global .claude/agents are one dir.
+  it("--yes from the home dir removes each retired agent once", async () => {
+    const agents = stageRetiredAgents(tmpDir);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+    const clack = await import("@clack/prompts");
+    const notes = vi
+      .mocked(clack.note)
+      .mock.calls.map(([body]) => String(body))
+      .join("\n");
+    expect(notes.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(notes).not.toContain("Could not remove");
+  });
+
+  it("--yes removes the agents dir once retired and bundled agents are gone", async () => {
+    const agents = stageRetiredAgents();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+  });
+
+  it("--yes removes .kiro/ only when it is left empty", async () => {
+    stageKiroSkillLinks(projDir);
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.existsSync(path.join(projDir, ".kiro"))).toBe(false);
+  });
+
+  it("--yes keeps .kiro/ when it still holds other Kiro files", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "steering", "product.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.readdirSync(path.join(projDir, ".kiro"))).toEqual(["steering"]);
+    expect(fs.existsSync(path.join(projDir, ".kiro", "steering", "product.md"))).toBe(true);
+  });
+
+  it("--global removes the Argent skill links from ~/.kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(tmpDir);
+    writeFile(path.join(tmpDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(path.join(tmpDir, ".kiro", "steering", "user.md"), "keep");
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(tmpDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+    expect(fs.existsSync(path.join(tmpDir, ".kiro", "steering", "user.md"))).toBe(true);
+  });
+
+  // `npx skills add` detects Devin by its config dir, which the Devin Desktop
+  // allowlist step creates, then links <skillsDir>/<name> -> .agents/skills/<name>
+  // for every Argent skill (in a project, only when it already has a .devin dir).
+  function stageDevinSkillLinks(base: string, skillsDir: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(skillsDir, { recursive: true });
+    for (const name of names) {
+      const skillDir = path.join(base, ".agents", "skills", name);
+      writeFile(path.join(skillDir, "SKILL.md"), "x");
+      fs.symlinkSync(path.relative(skillsDir, skillDir), path.join(skillsDir, name));
+    }
+    return names;
+  }
+
+  it("--global removes the Argent skill links from ~/.config/devin/skills and the emptied dir", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(devinDir)).toBe(false);
+  });
+
+  it("--global keeps Devin's own config and skills in ~/.config/devin", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(path.join(devinDir, "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ theme: "dark", permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(devinDir, "skills"))).toEqual(["vendor-skill"]);
+    expect(JSON.parse(fs.readFileSync(path.join(devinDir, "config.json"), "utf8"))).toEqual({
+      theme: "dark",
+    });
+  });
+
+  it("--yes removes the Argent skill links from .devin/skills and keeps the rest of .devin", async () => {
+    stageDevinSkillLinks(projDir, path.join(projDir, ".devin", "skills"));
+    writeFile(path.join(projDir, ".devin", "notes.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".devin"))).toEqual(["notes.md"]);
   });
 
   it("--global keeps the committed project entries and the local-mode record", async () => {

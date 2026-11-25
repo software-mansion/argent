@@ -7,6 +7,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isAndroidTv } from "../../utils/adb";
 import { isIosPhysicalDevice } from "../../utils/device-info";
+import { macosScreenshotPng, resolveMacosApp } from "../../utils/macos-input";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
@@ -15,7 +16,7 @@ import {
   httpScreenshot,
   resolveCapturePanel,
 } from "../../utils/simulator-client";
-import { settleWithin } from "../../utils/timing";
+import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { downscalePngInPlace, tvScreenshot } from "../screenshot";
 import type { ActionEnv } from "./flow-actions";
 
@@ -49,6 +50,11 @@ type PixelChange = "still" | "localized" | "moving";
 // set to, on the shared tool-server's event loop.
 const CAPTURE_SCALE = 0.25;
 
+// A Mac capture's scale is in pixels per POINT. A Retina window is 2 px/pt, so
+// twice CAPTURE_SCALE is the same quarter of the backing pixels the Chromium
+// route captures at dpr 2; on a 1x display it is half the linear size.
+const MACOS_CAPTURE_SCALE = CAPTURE_SCALE * 2;
+
 // Per-pixel RGB tolerance, owned by this comparison and deliberately NOT
 // screenshot-diff's 0.1: the two have different noise floors. That one holds a
 // baseline PNG stored across sessions, machines and OS versions against a live
@@ -64,7 +70,7 @@ const CAPTURE_SCALE = 0.25;
 // it moves less than that per 200ms sample. For a full-contrast cross-fade that
 // is ~6.7s here, but only ~2s at the borrowed tolerance, which would call any
 // slower cross-fade settled mid-animation.
-export const PIXEL_THRESHOLD = 0.03;
+const PIXEL_THRESHOLD = 0.03;
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
 const PIXEL_THRESHOLD_SQUARED = PIXEL_THRESHOLD * PIXEL_THRESHOLD * MAX_RGB_DISTANCE_SQUARED;
 
@@ -212,7 +218,9 @@ export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture:
   if (device.platform === "ios-remote" && !firstCapture) {
     return REMOTE_PIXEL_CAPTURE_TIMEOUT_MS;
   }
-  const warmFromTheStart = device.platform === "chromium" || device.platform === "vega";
+  // A Mac app captures on request, so it has no stream to warm up either.
+  const warmFromTheStart =
+    device.platform === "chromium" || device.platform === "vega" || device.platform === "macos";
   return firstCapture && !warmFromTheStart
     ? FIRST_PIXEL_CAPTURE_TIMEOUT_MS
     : PIXEL_CAPTURE_TIMEOUT_MS;
@@ -300,8 +308,10 @@ async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y
  * Capture one downscaled screenshot to a temp file, routed exactly as the
  * `screenshot` tool routes it: tvOS and Vega through their own shells (neither
  * has a simulator-server backend), everything else through the simulator-server
- * both iOS and Android share. Chromium does not appear here — it answers with
- * bytes, never a file (see captureChromiumPng).
+ * both iOS and Android share. Chromium and macOS do not appear here - they
+ * answer with bytes, never a file (see captureChromiumPng, capturePng). Nor
+ * does HarmonyOS, which a `snapshot` step captures through the `screenshot` tool
+ * (flow-visual.ts).
  *
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.
@@ -364,15 +374,23 @@ async function captureIosDeviceFile(env: ActionEnv, budgetMs: number): Promise<s
 }
 
 /**
- * One capture as PNG bytes. Every route but Chromium's writes a temp file, which
- * is scratch and never an artifact — it is removed as soon as it has been read,
- * whether or not the read worked.
+ * One capture as PNG bytes. Every route but Chromium's and macOS's writes a temp
+ * file, which is scratch and never an artifact — it is removed as soon as it has
+ * been read, whether or not the read worked.
  */
 async function capturePng(
   env: ActionEnv,
   budgetMs: number
 ): Promise<{ png: Buffer; warning?: string }> {
   if (env.device.platform === "chromium") return { png: await captureChromiumPng(env) };
+  if (env.device.platform === "macos") {
+    // The app window, which has no status bar to mask. A refusal (the flag is
+    // off) throws, which the soft capture turns into "no pixels".
+    const app = await resolveMacosApp(env.registry, env.device, "flow-execute");
+    return {
+      png: await macosScreenshotPng(app, { scale: MACOS_CAPTURE_SCALE, timeoutMs: budgetMs }),
+    };
+  }
   const { path: file, warning } = await captureFile(env, budgetMs);
   try {
     return { png: await fs.readFile(file), ...(warning !== undefined ? { warning } : {}) };
@@ -451,12 +469,21 @@ function captureAbortSignal(env: ActionEnv, budgetMs: number): AbortSignal {
  * effectively unreachable — the clip is built from the cached viewport, so a
  * resize does not change the captured dimensions until something refreshes it.
  */
-export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0): PixelChange {
+export function comparePixels(
+  a: PixelFrame,
+  b: PixelFrame,
+  maskTopFraction = 0,
+  maskBottomFraction = 0
+): PixelChange {
   if (a.width !== b.width || a.height !== b.height) return "moving";
   const maskedRows = Math.min(a.height, Math.floor(a.height * maskTopFraction));
-  const total = a.width * (a.height - maskedRows);
+  const maskedBottomRows = Math.min(
+    a.height - maskedRows,
+    Math.floor(a.height * maskBottomFraction)
+  );
+  const total = a.width * (a.height - maskedRows - maskedBottomRows);
   if (total <= 0) return "still";
-  const limit = Math.min(a.data.length, b.data.length);
+  const limit = Math.min(a.data.length, b.data.length, (a.height - maskedBottomRows) * a.width * 4);
   let changed = 0;
   for (let o = maskedRows * a.width * 4; o + 2 < limit; o += 4) {
     const dr = a.data[o] - b.data[o];
@@ -470,4 +497,71 @@ export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0)
   );
   if (changed > motionThreshold) return "moving";
   return changed >= LOCALIZED_MOTION_MIN_PIXELS ? "localized" : "still";
+}
+
+const SNAPSHOT_SETTLE_POLL_MS = 100;
+const SNAPSHOT_SETTLE_TIMEOUT_MS = 3_000;
+
+// An app can take a few hundred milliseconds to start reacting to a step that
+// can change the screen (a tap, a launch), and longer on an Android emulator,
+// so two identical frames inside this window after one prove nothing.
+const SNAPSHOT_QUIET_AFTER_ACTION_MS = 300;
+const ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS = 400;
+
+// A caret- or spinner-sized change ends the settle once it has lasted this many
+// polls: a small control animating (a switch, a checkmark) finishes first, and a
+// caret or a spinner that never stops still lets the snapshot go ahead.
+const SNAPSHOT_LOCALIZED_POLLS = 3;
+
+// The home indicator (iOS) or gesture bar (Android) at the bottom of a phone
+// capture, which the system fades after an app comes to the front.
+const HOME_INDICATOR_MASK_FRACTION = 0.02;
+
+/**
+ * Whether a snapshot settles on captures rather than on the UI tree: on a local
+ * iOS simulator or an Android emulator, where a capture comes from the
+ * simulator-server stream and costs a few milliseconds. Everything else keeps
+ * the tree settle, physical phones included: a slow phone can deliver a touch
+ * to the app after the quiet window has ended.
+ */
+export async function settlesOnPixels(device: ActionEnv["device"]): Promise<boolean> {
+  if (device.platform === "android") return device.kind === "emulator";
+  if (device.platform !== "ios" || isIosPhysicalDevice(device)) return false;
+  return !(await isTvOsSimulator(device.id));
+}
+
+/**
+ * Wait until two captures one poll apart show the same screen, and a quiet
+ * window ({@link SNAPSHOT_QUIET_AFTER_ACTION_MS}) has passed since the run's
+ * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. `blind` means no
+ * two captures could be compared.
+ */
+export async function settleOnPixels(
+  env: ActionEnv
+): Promise<"still" | "moving" | "aborted" | "blind"> {
+  const deadline = Date.now() + SNAPSHOT_SETTLE_TIMEOUT_MS;
+  const quietAfter =
+    (env.lastActionAt ?? 0) +
+    (env.device.platform === "android"
+      ? ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS
+      : SNAPSHOT_QUIET_AFTER_ACTION_MS);
+  const maskTopFraction = await statusBarMaskFraction(env.device);
+  const maskBottomFraction = maskTopFraction > 0 ? HOME_INDICATOR_MASK_FRACTION : 0;
+  let previous = await capturePixelsWithin(env, deadline, true);
+  let compared = false;
+  let localizedPolls = 0;
+  while (Date.now() < deadline) {
+    if (!(await sleepOrAbort(SNAPSHOT_SETTLE_POLL_MS, env.signal))) return "aborted";
+    const frame = await capturePixelsWithin(env, deadline, false);
+    if (env.signal?.aborted) return "aborted";
+    if (previous && frame) {
+      compared = true;
+      const change = comparePixels(previous, frame, maskTopFraction, maskBottomFraction);
+      localizedPolls = change === "localized" ? localizedPolls + 1 : 0;
+      const settled = change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS;
+      if (settled && Date.now() >= quietAfter) return "still";
+    }
+    previous = frame;
+  }
+  return compared ? "moving" : "blind";
 }

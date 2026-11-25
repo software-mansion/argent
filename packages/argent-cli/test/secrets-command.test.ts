@@ -13,8 +13,10 @@ import { SECRET_ENV_PREFIX } from "@argent/configuration-core";
 
 // A linked remote tool-server would add a caveat line; the routing lookup reads
 // real state on the machine running the tests, so pin it to "not linked".
-vi.mock("@argent/tools-client", () => ({
-  getResolvedToolsUrl: async () => ({ url: null, token: null }),
+const linked = vi.hoisted(() => ({ url: null as string | null }));
+vi.mock("@argent/tools-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/tools-client")>()),
+  getResolvedToolsUrl: async () => ({ url: linked.url, token: null }),
 }));
 
 let homeDir: string;
@@ -67,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  linked.url = null;
   process.chdir(originalCwd);
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
@@ -131,12 +134,67 @@ describe("argent secrets", () => {
     expect(JSON.stringify(parsed)).not.toContain("hunter2");
   });
 
+  it("accepts `list` after a leading --json", async () => {
+    await secrets(["--json", "list"]);
+    expect(JSON.parse(output())).toHaveProperty("secrets", []);
+  });
+
   it("documents where to add a secret in --help", async () => {
     await secrets(["--help"]);
     const out = output();
     expect(out).toContain("~/.argent/secrets.env");
     expect(out).toContain("ARGENT_SECRET_");
     expect(out).toContain("gitignore this file");
+  });
+
+  it.each([[["list", "--help"]], [["list", "-h"]]])("prints the help for %j", async (argv) => {
+    await secrets(argv);
+    expect(output()).toContain("Usage: argent secrets [list] [--json]");
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["--json", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'Unexpected argument "extra"'],
+  ])("rejects %j with exit 2 instead of listing", async (argv, message) => {
+    await expect(secrets(argv)).rejects.toThrow(ExitError);
+    expect(process.exit).toHaveBeenCalledWith(2);
+    expect(errSpy.mock.calls.join(" ")).toContain(message);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [false, "http://192.0.2.10:3001", "Run `argent enable forward-secrets`"],
+    [true, "https://192.0.2.10:3001", "A call sends it the value `argent secrets` lists"],
+    [true, "http://127.0.0.1:3001", "A call sends it the value `argent secrets` lists"],
+    [
+      true,
+      "http://192.0.2.10:3001",
+      "refuses a call that names a secret of this machine: http://192.0.2.10:3001 is reached neither over https://",
+    ],
+    [true, "127.0.0.1:3001", "of this machine: 127.0.0.1:3001 is not a URL."],
+  ])("with forward-secrets %s and a link to %s, says what a call sends", async (on, url, note) => {
+    if (on)
+      write(path.join(projectDir, ".argent", "flags.json"), '{"flags":{"forward-secrets":true}}');
+    linked.url = url;
+    await secrets([]);
+    expect(output()).toContain(`Note: a remote tool-server is linked (${url}). `);
+    expect(output()).toContain(note);
+  });
+
+  it("says forward-secrets refuses an https link whose certificate is not checked", async () => {
+    write(path.join(projectDir, ".argent", "flags.json"), '{"flags":{"forward-secrets":true}}');
+    linked.url = "https://192.0.2.10:3001";
+    vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+    try {
+      await secrets([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(output()).toContain(
+      "of this machine: NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of https://192.0.2.10:3001. Unset it"
+    );
   });
 
   it("rejects an unknown subcommand", async () => {

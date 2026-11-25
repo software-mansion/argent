@@ -1,6 +1,7 @@
 // Coarse identity of the AI coding tool driving the MCP server: a canonical slug
 // only. The signal is the MCP `initialize` handshake `clientInfo.name`, read via
-// `Server.getClientVersion()`; the raw name is never recorded, so a client that
+// `Server.getClientVersion()`, plus one host env var where the name alone is too
+// generic (Devin Desktop); the raw name is never recorded, so a client that
 // names itself after the machine or user can't leak that string. Names we can't
 // map become the coarse `other` bucket.
 
@@ -52,13 +53,21 @@ export function aiTelemetryFromMeta(meta: AiTelemetryProps): AiTelemetryProps {
 /**
  * Normalize a runtime MCP `clientInfo.name` to an {@link AiClient}. Unrecognized
  * names return `undefined`; falling back to `other` is the caller's decision.
+ * `env` is the MCP server's own environment, inherited from the spawning client.
  */
-export function canonicalizeAiClient(value: string | undefined | null): AiClient | undefined {
+export function canonicalizeAiClient(
+  value: string | undefined | null,
+  env: Readonly<Record<string, string | undefined>> = {}
+): AiClient | undefined {
   if (typeof value !== "string") return undefined;
   const lower = value.trim().toLowerCase();
   if (!lower) return undefined;
   for (const [pattern, slug] of RUNTIME_CLIENT_PATTERNS) {
     if (pattern.test(lower)) return slug;
   }
+  // Devin Desktop (Windsurf, renamed) runs MCP servers through its bundled Devin
+  // agent, which sends the rmcp library's default name. Only the WINDSURF_IDE_TYPE
+  // its extension host sets tells it apart from the standalone Devin CLI.
+  if (lower === "rmcp" && env.WINDSURF_IDE_TYPE) return "windsurf";
   return undefined;
 }

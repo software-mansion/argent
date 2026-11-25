@@ -1,3 +1,4 @@
+import { canonicalToolId } from "@argent/registry";
 import type { StepStatus } from "./flow-run";
 
 /**
@@ -12,7 +13,7 @@ import type { StepStatus } from "./flow-run";
  * "`ok: false` fails the step" rule: the generic `tool` step dispatches results
  * typed `unknown`, several carrying app-derived payloads, and a blanket rule
  * would bind all of them — and every tool added later — to "a key called `ok`
- * decides my flow's verdict". `isUnmetUiWaitResult` set the precedent for
+ * decides my flow's verdict". `isUnmetWaitResult` set the precedent for
  * naming the tool instead.
  *
  * Results cross the registry boundary as `unknown`: a shape not recognised
@@ -20,16 +21,21 @@ import type { StepStatus } from "./flow-run";
  * verdict.
  */
 
-const FLOW_EXECUTE_TOOL_ID = "flow-execute";
+const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
 interface NestedOutcome {
-  status: StepStatus;
+  status: Exclude<StepStatus, "pass">;
   reason: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function reasonText(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || "no reason given";
 }
 
 function firstFailingStep(steps: unknown): string | undefined {
@@ -45,8 +51,7 @@ function firstFailingStep(steps: unknown): string | undefined {
         : typeof entry.kind === "string"
           ? entry.kind
           : "step";
-    const why = typeof entry.reason === "string" ? entry.reason : "no reason given";
-    return `${what}: ${why}`;
+    return `${what}: ${reasonText(entry.reason)}`;
   }
   return undefined;
 }
@@ -57,7 +62,8 @@ function count(value: unknown): number {
 
 /** A nested `flow-execute` result: a run report, or a prerequisite notice. */
 function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
-  const flow = typeof result.flow === "string" ? result.flow : "the composed flow";
+  const name = result.e2eTest ?? result.flow;
+  const flow = typeof name === "string" ? name : "the composed e2e test";
 
   // A notice means the sub-flow ran NOTHING: nothing was asserted, so this is
   // the runner's error class — never runnable as written, like an unreadable
@@ -70,15 +76,15 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
     return {
       status: "error",
       reason:
-        `flow "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
-        `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
+        `e2e test "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
+        `Set prerequisiteAcknowledged to true once it holds; an e2e test can compose it with run: instead.`,
     };
   }
 
   // Cancellation is a skip, never a failure — the rule the runner applies to
   // its own steps.
   if (result.aborted === true) {
-    return { status: "skip", reason: `flow "${flow}" was aborted` };
+    return { status: "skip", reason: `e2e test "${flow}" was aborted` };
   }
 
   if (result.ok === false) {
@@ -86,7 +92,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
     return {
       status: "fail",
       reason:
-        `flow "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
+        `e2e test "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
         `${count(result.errored)} errored${detail ? ` (${detail})` : ""}`,
     };
   }
@@ -112,7 +118,7 @@ function runSequenceOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "fail",
       reason:
         `run-sequence stopped at ${tool} after ${count(result.completed)} of ` +
-        `${count(result.total)} steps: ${String(failed.error)}`,
+        `${count(result.total)} steps: ${reasonText(failed.error)}`,
     };
   }
 
@@ -144,7 +150,7 @@ const NESTED_ORCHESTRATORS = new Map<
 
 /** Whether a `tool:` step runs other tools through a run of its own. */
 export function isNestedOrchestratorTool(tool: string): boolean {
-  return NESTED_ORCHESTRATORS.has(tool);
+  return NESTED_ORCHESTRATORS.has(canonicalToolId(tool));
 }
 
 /**
@@ -157,5 +163,5 @@ export function nestedOrchestratorOutcome(
   result: unknown
 ): NestedOutcome | undefined {
   if (!isRecord(result)) return undefined;
-  return NESTED_ORCHESTRATORS.get(tool)?.(result);
+  return NESTED_ORCHESTRATORS.get(canonicalToolId(tool))?.(result);
 }

@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -43,6 +43,27 @@ jobs:
             echo "::error::Focused test(s) found (.only) — remove before merging."
             exit 1
           fi
+
+      - name: No no-break spaces
+        # U+00A0 breaks copy-pasted commands. Bytes, not `grep -P`: git may lack PCRE.
+        run: |
+          if git grep -nIF "$(printf '\302\240')" -- '*.md' '*.mdx'; then
+            echo "::error::No-break space (U+00A0) found in Markdown - use a plain space."
+            exit 1
+          fi
+
+      - name: Shell scripts parse
+        # A sourced script that fails to parse runs only up to the error, so the
+        # functions below it are never defined and nothing else fails loudly.
+        run: |
+          status=0
+          while IFS= read -r -d '' script; do
+            bash -n "$script" || status=1
+          done < <(git ls-files -z '*.sh')
+          if [ "$status" -ne 0 ]; then
+            echo "::error::A tracked shell script does not parse (bash -n)."
+          fi
+          exit "$status"
 
       - name: Workspace versions in sync
         run: node scripts/check-workspace-versions.mjs

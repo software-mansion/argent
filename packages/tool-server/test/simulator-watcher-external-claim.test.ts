@@ -37,6 +37,22 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// The watcher reaches simctl through execSimctl (a detached spawn); route it
+// through the same mock so tests script its output alongside execFile's.
+vi.mock("../src/utils/simctl-exec", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/simctl-exec")>(
+    "../src/utils/simctl-exec"
+  );
+  return {
+    ...actual,
+    execSimctl: async (args: readonly string[]) => {
+      const result = await execFileMock("xcrun", args);
+      if (result instanceof Error) throw result;
+      return (result ?? { stdout: "" }).stdout;
+    },
+  };
+});
+
 import type { Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
@@ -111,9 +127,16 @@ function makeApi(): NativeDevtoolsApi {
     isAppRunning: async () => false,
     listConnectedBundleIds: () => [],
     appConnectionState: async () => "stale_process",
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
+    takeCaptureGap: () => false,
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
+    setNetworkConditions: async () => {},
     getAppState: async () => {
       throw new Error("not implemented");
     },

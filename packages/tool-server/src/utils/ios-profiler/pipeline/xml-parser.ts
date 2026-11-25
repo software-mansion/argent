@@ -1,6 +1,10 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
+import {
+  DEVICE_SUPPORT_PATH_SEGMENT,
+  SYSTEM_LIBRARY_PATH_PREFIXES,
+  TOOLING_LIBRARIES,
+} from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -28,12 +32,16 @@ function extractRows(xml: string): string[] {
 }
 
 function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(DEVICE_SUPPORT_PATH_SEGMENT)
+  );
 }
 
 /**
- * The xctrace export uses an id/ref system: `<frame id="N">`, `<backtrace id="N">` and
- * `<binary id="N">` define and register an element; `<... ref="N"/>` reuses a prior one.
+ * The xctrace export uses an id/ref system: `<frame id="N">`, `<backtrace id="N">`,
+ * `<tagged-backtrace id="N">` and `<binary id="N">` define and register an element;
+ * `<... ref="N"/>` reuses a prior one.
  */
 export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSample[] {
   const frameRegistry = new Map<string, StackFrame>();
@@ -75,7 +83,9 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     if (sampleTimeMatch) {
       timestampNs = parseInt(sampleTimeMatch[1], 10);
     } else if (sampleTimeRef) {
-      // No sample-time ref registry; the second pass skips these rows too.
+      // No sample-time ref registry; the second pass skips these rows too. Their
+      // stack still registers its ids, which later rows refer back to.
+      resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
       continue;
     }
 
@@ -164,6 +174,28 @@ function resolveBacktrace(
   backtraceRegistry: Map<string, StackFrame[]>,
   binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
+  // Xcode 26 and later wrap the stack in a <tagged-backtrace>: 26.x nests a
+  // <backtrace> in it, 27 lists the frames in it directly. Ids are unique across
+  // element types, so the one registry holds both kinds.
+  const tagged = rowXml.match(/<tagged-backtrace\b([^>]*?)(\/?)>/);
+  if (tagged) {
+    const taggedRef = tagged[1].match(/\bref="(\d+)"/);
+    if (taggedRef) return backtraceRegistry.get(taggedRef[1]) ?? [];
+
+    let content = "";
+    if (!tagged[2]) {
+      const start = tagged.index! + tagged[0].length;
+      const end = rowXml.indexOf("</tagged-backtrace>", start);
+      content = rowXml.substring(start, end === -1 ? rowXml.length : end);
+    }
+    const frames = /<backtrace[\s>]/.test(content)
+      ? resolveBacktrace(content, frameRegistry, backtraceRegistry, binaryRegistry)
+      : resolveFrames(content, frameRegistry, binaryRegistry);
+    const taggedId = tagged[1].match(/\bid="(\d+)"/);
+    if (taggedId) backtraceRegistry.set(taggedId[1], frames);
+    return frames;
+  }
+
   const btRefMatch = rowXml.match(/<backtrace\s+ref="(\d+)"\s*\/>/);
   if (btRefMatch) {
     return backtraceRegistry.get(btRefMatch[1]) ?? [];
@@ -204,23 +236,32 @@ function resolveFrames(
     const frameName = nameMatch ? decodeXml(nameMatch[1]) : "???";
 
     let isSystem = false;
-    // Window for the frame's <binary> child: simulator paths can exceed 300 chars.
-    const frameFullMatch = backtraceContent.substring(fm.index!, fm.index! + fm[0].length + 2000);
-    const binaryIdMatch = frameFullMatch.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
-    const binaryRefMatch = frameFullMatch.match(/<binary\s+ref="(\d+)"\s*\/>/);
+    let binaryName: string | undefined;
+    // The frame's own <binary> child, never that of a later frame in the
+    // backtrace: a self-closing frame has none, and frames do not nest.
+    let ownContent = "";
+    if (!fm[0].endsWith("/>")) {
+      const end = backtraceContent.indexOf("</frame>", frameRe.lastIndex);
+      if (end !== -1) ownContent = backtraceContent.substring(frameRe.lastIndex, end);
+    }
+    const binaryIdMatch = ownContent.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
+    const binaryRefMatch = ownContent.match(/<binary\s+ref="(\d+)"\s*\/>/);
 
     if (binaryIdMatch) {
       isSystem = isSystemLibraryPath(binaryIdMatch[2]);
-      binaryRegistry.set(binaryIdMatch[1], {
-        name: attr(binaryIdMatch[0], "name") ?? "",
-        path: binaryIdMatch[2],
-      });
+      binaryName = attr(binaryIdMatch[0], "name") ?? "";
+      binaryRegistry.set(binaryIdMatch[1], { name: binaryName, path: binaryIdMatch[2] });
     } else if (binaryRefMatch) {
       const bin = binaryRegistry.get(binaryRefMatch[1]);
-      if (bin) isSystem = isSystemLibraryPath(bin.path);
+      if (bin) {
+        isSystem = isSystemLibraryPath(bin.path);
+        binaryName = bin.name;
+      }
     }
 
     const frame: StackFrame = { name: frameName, isSystemLibrary: isSystem };
+    const tooling = binaryName === undefined ? undefined : TOOLING_LIBRARIES.get(binaryName);
+    if (tooling) frame.tooling = tooling;
     if (idMatch) frameRegistry.set(idMatch[1], frame);
     frames.push(frame);
   }
@@ -330,13 +371,15 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
-  if (!filePath) return [];
+/** Null means no readable table. An empty array means the table contains no hangs. */
+export async function parseHangsFile(filePath: string | null): Promise<RawHang[] | null> {
+  if (!filePath) return null;
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseHangsXml(xml);
+    // xctrace can return a query result with no matching table node.
+    return /<node(?=[\s/>])/.test(xml) ? parseHangsXml(xml) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 

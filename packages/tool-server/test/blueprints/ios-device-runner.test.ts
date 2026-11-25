@@ -1,9 +1,12 @@
+import { ensureDeviceReady } from "../../src/utils/ios-device/devicectl";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { iosDeviceRunnerBlueprint } from "../../src/blueprints/ios-device-runner";
+import { reserveLaunchMeasurement } from "../../src/utils/ios-device/runner-reservation";
 import { IosDeviceTransportError } from "../../src/utils/ios-device/usbmux-protocol";
+import { TunnelConnectError } from "../../src/utils/ios-device/runner-route";
 import {
   createRunnerClient,
   waitForRunnerReady,
@@ -15,12 +18,13 @@ import {
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
+  resolveRunnerSigningConfig,
   waitForRunnerListeningPort,
 } from "../../src/utils/ios-device/runner-build";
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
 
 vi.mock("../../src/utils/ios-device/devicectl", () => ({
-  ensureDeviceReady: vi.fn(async () => {}),
+  ensureDeviceReady: vi.fn(async () => null),
 }));
 vi.mock("../../src/utils/ios-device/runner-build", () => ({
   ensureRunnerArtifact: vi.fn(async () => ({
@@ -101,6 +105,18 @@ const recoverable = (error: unknown) => iosDeviceRunnerBlueprint.recoverable?.(e
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+it("reserves the phone from runner startup until its child exits", async () => {
+  const device: DeviceInfo = { id: "launch-reservation-test", platform: "ios", kind: "device" };
+  const { child } = stubLaunch();
+  const starting = iosDeviceRunnerBlueprint.factory({}, device, { device });
+  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  await starting;
+  expect(() => reserveLaunchMeasurement(device.id)).toThrow(/device runner is active/);
+  child.emit("exit", 0);
+  const release = reserveLaunchMeasurement(device.id);
+  release();
 });
 
 describe("ios-device-runner blueprint: mid-command runner death", () => {
@@ -410,6 +426,11 @@ describe("ios-device-runner blueprint: dispose", () => {
   it("sends shutdown as the mutating command it is, so the send layer cannot resend it", async () => {
     const { child, clientRun } = stubLaunch();
     const instance = await callFactory();
+    // The runner ends its test after the shutdown reply, and xcodebuild exits.
+    clientRun.mockImplementationOnce(async () => {
+      setImmediate(() => child.emit("exit", 0));
+      return {};
+    });
 
     await instance.dispose();
 
@@ -417,7 +438,25 @@ describe("ios-device-runner blueprint: dispose", () => {
     // marking a mutating shutdown read-only both breaks the send-once contract
     // and turns the 3s into three attempts plus backoff.
     expect(clientRun).toHaveBeenCalledWith({ command: "shutdown" }, { timeoutMs: 3_000 });
-    expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    // A clean exit lets the test pass, so XCTest deletes its on-device
+    // attachments; a kill would leave them on the phone.
+    expect(killRunnerProcess).not.toHaveBeenCalled();
+  });
+
+  it("kills the child when it accepts shutdown but does not exit in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child } = stubLaunch();
+      const instance = await callFactory();
+
+      const disposed = instance.dispose();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await disposed;
+
+      expect(killRunnerProcess).toHaveBeenCalledWith(child);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("kills the child anyway when the graceful shutdown fails", async () => {
@@ -464,6 +503,10 @@ describe("ios-device-runner blueprint: recoverable classification", () => {
     ).toBe(false);
     expect(recoverable(new Error("connect ECONNREFUSED 127.0.0.1:8080"))).toBe(false);
     expect(recoverable(new Error("the tunnel did not accept connection"))).toBe(false);
+    // The typed tunnel connect failure is: the runner may sit on a stale address.
+    expect(
+      recoverable(new TunnelConnectError("runner-not-listening", "refused", { retryable: true }))
+    ).toBe(true);
     // A RunnerCommandError means the runner answered, so it is alive, with
     // one exception: RUNNER_WEDGED is the runner's own verdict that its main
     // thread is stuck past recovery, and only a fresh runner clears that.
@@ -537,6 +580,28 @@ describe("ios-device-runner blueprint: failure signals", () => {
     expect(terminated[0]?.message).toBe(`iOS device runner exited (code 7). Log: ${LOG_PATH}`);
     expect(getFailureSignal(terminated[0])?.error_code).toBe(
       FAILURE_CODES.IOS_DEVICE_RUNNER_TERMINATED
+    );
+  });
+});
+
+describe("ios-device-runner blueprint: signing", () => {
+  it("resolves the signing team for the phone it starts on", async () => {
+    await createInstance();
+
+    expect(resolveRunnerSigningConfig).toHaveBeenCalledWith(DEVICE_UDID);
+  });
+});
+
+describe("CoreDevice runner bootstrap", () => {
+  it("passes the tunnel address and uses the runner-selected port", async () => {
+    vi.mocked(ensureDeviceReady).mockResolvedValueOnce("fd12::1");
+    const { api } = await createInstance();
+    expect(api.udid).toBe(DEVICE_UDID);
+    expect(launchRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ tunnelAddress: "fd12::1" })
+    );
+    expect(createRunnerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ udid: DEVICE_UDID, port: RUNNER_PORT })
     );
   });
 });

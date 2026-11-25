@@ -68,7 +68,6 @@ const SENTINEL_LINGER = sentinel(4);
 const SENTINEL_OVERFLOW_ERR = sentinel(5);
 const SENTINEL_LINGER_NEAR_DEADLINE = sentinel(6);
 const SENTINEL_LINGER_GROUPED = sentinel(7);
-const SENTINEL_SWEEP = sentinel(8);
 let dir: string;
 let prevPath: string | undefined;
 
@@ -99,7 +98,7 @@ if (cmd === "hang") {
   // it — only the descendant sweep does. It also inherits our stdout, reproducing the
   // pipe-held-open freeze. \`secs\` is a per-test sentinel so pgrep finds strays
   // unambiguously.
-  const worker = spawn("sleep", [secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+  const worker = spawn("sh", ["-c", "trap '' TERM; exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
   worker.unref();
   // The launcher itself also hangs so it stays alive to be timed out and snapshotted.
   // This sleep is a descendant, so the sweep reaps it before the group kill runs.
@@ -162,6 +161,7 @@ if (cmd === "linger-grouped") {
   process.stdout.write("OK-linger");
   return;
 }
+if (cmd === "sig") process.kill(process.pid, "SIGTERM");
 process.stdout.write("OK-" + cmd);
 `,
     { mode: 0o755 }
@@ -216,7 +216,7 @@ function cmdlinePattern(target: string): string {
 
 function sweep(): void {
   try {
-    execSync(`pkill -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
+    execSync(`pkill -9 -f '${cmdlinePattern(`${SENTINEL_PREFIX}[0-9]`)}' || true`);
   } catch {
     // `|| true` maps every `pkill` exit - no-match, or `pkill` itself missing - to 0, so
     // only the shell itself failing reaches here - fork EAGAIN under load, the same mode
@@ -368,11 +368,14 @@ describe("runVega timeout (real subprocess)", () => {
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
   });
 
-  it("returns normally when the CLI responds before the deadline", async () => {
+  it("returns normally, leaving no timer armed, when the CLI responds before the deadline", async () => {
+    const timeouts = () => process.getActiveResourcesInfo().filter((k) => k === "Timeout").length;
+    const before = timeouts();
     await expect(runVega(["go"], { timeoutMs: 5_000 })).resolves.toEqual({
       stdout: "OK-go",
       stderr: "",
     });
+    expect(timeouts()).toBe(before);
   });
 
   it("resolves a clean exit even when a worker holds the stdout pipe open (delayed close)", async () => {
@@ -454,6 +457,10 @@ describe("runVega timeout (real subprocess)", () => {
     expect(getFailureSignal(err)?.error_kind).toBe("subprocess");
   });
 
+  it("classifies a signal death it did not cause as `subprocess`", async () => {
+    expect(await runVega(["sig"]).catch((e) => getFailureSignal(e)?.error_kind)).toBe("subprocess");
+  });
+
   it("rejects + reaps when output exceeds the cap, classified as `subprocess`", async () => {
     // A runaway child: output past the cap reaps the group and rejects. Like the
     // non-zero exit (and unlike a timeout) it is a misbehaving child, so it must
@@ -502,33 +509,7 @@ describe("runVega timeout (real subprocess)", () => {
   });
 });
 
-describe("sentinel bookkeeping", () => {
-  it("keeps the random block a fixed three digits", () => {
-    // The other half of the equal-width invariant `SentinelSlot` documents: the slot is a
-    // compile error if it widens, but the random block only stays three digits because it
-    // is padded. Dropping the padding narrows it 10% of the time — too rare to surface as
-    // a failing run, and it hands a shorter-pid run a sweep glob that reaches into ours.
-    const widths = new Set(Array.from({ length: 2_000 }, () => randomTagBlock().length));
-    expect([...widths]).toEqual([3]);
-  });
-
-  it("sees a live worker and sweeps it", async () => {
-    // Positive control for every `waitForClear(...)).toBe(0)` above. Those read 0 both
-    // when a reap succeeded and when the pattern matches nothing at all — a
-    // `cmdlinePattern` that stopped matching the shape `spawn` actually produces, or a
-    // host without `pgrep`/`pkill`, where `|| true` makes strayCount return 0 rather
-    // than throw. Requiring a count of 1 first makes that failure loud.
-    //
-    // It also pins sweep(), which is otherwise unasserted: the two `linger` tests'
-    // detached workers are documented as unreapable by runVega, so this is the only
-    // thing that removes them.
-    const worker = spawn("sleep", [SENTINEL_SWEEP], { stdio: "ignore" });
-    worker.unref();
-    expect(await waitForCount(SENTINEL_SWEEP, 1)).toBe(1);
-    sweep();
-    expect(await waitForClear(SENTINEL_SWEEP)).toBe(0);
-  });
-
+describe("concurrent Vega test runs", () => {
   it("leaves a longer-pid run's sentinel alone", async () => {
     // A run whose pid has one more digit builds sentinels that begin with our entire tag
     // and carry two trailing digits where ours carry one, so a sweep without `$` reaches

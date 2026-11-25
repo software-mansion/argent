@@ -4,14 +4,22 @@
 // scrollback and, when an agent runs the command, in its context.
 
 import pc from "picocolors";
-import { getResolvedToolsUrl } from "@argent/tools-client";
-import { secretSources, secretNames, SECRET_ENV_PREFIX } from "@argent/configuration-core";
+import { getResolvedToolsUrl, secretsTransportRefusal } from "@argent/tools-client";
+import {
+  isFeatureEnabled,
+  secretSources,
+  secretNames,
+  SECRET_ENV_PREFIX,
+} from "@argent/configuration-core";
+import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+
+const LIST_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
 
 export async function secrets(argv: string[]): Promise<void> {
   const [sub, ...rest] = argv;
   if (sub === undefined || sub === "list") return cmdList(rest);
   if (sub === "--help" || sub === "-h") return printUsage();
-  if (sub === "--json") return cmdList([sub, ...rest]);
+  if (sub === "--json") return cmdList(rest[0] === "list" ? [sub, ...rest.slice(1)] : argv);
   console.error(`Error: unknown subcommand "secrets ${sub}". Try \`argent secrets --help\`.`);
   process.exit(2);
 }
@@ -33,6 +41,9 @@ source that defines it:
 A secrets file applies to the next tool call — no restart. An environment
 variable only reaches a tool-server started after it was exported.
 
+Over a link, \`argent enable forward-secrets\` makes each call send the value
+this machine has for each placeholder in the call, ahead of the tool-server's.
+
 Examples:
   echo 'APP_PASSWORD=…' >> ~/.argent/secrets.env   # available in every project
   argent secrets                                   # check it is picked up`);
@@ -40,7 +51,16 @@ Examples:
 
 async function cmdList(argv: string[]): Promise<void> {
   if (argv.includes("--help") || argv.includes("-h")) return printUsage();
-  const json = argv.includes("--json");
+  let json: boolean;
+  try {
+    const { positionals, options } = parseCommandArgs(argv, LIST_OPTIONS);
+    if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    json = options.json === true;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}. Try \`argent secrets --help\`.`);
+    process.exit(2);
+  }
   const sources = secretSources();
   const all = secretNames(sources);
 
@@ -95,14 +115,28 @@ async function cmdList(argv: string[]): Promise<void> {
   );
 
   // Resolution happens wherever the tool-server runs, so a link to another machine
-  // makes this listing describe the wrong host.
+  // makes this listing describe the wrong host unless calls forward these secrets.
+  const note = await linkedSecretsNote();
+  if (note !== undefined) console.log(pc.yellow(`\n${note}`));
+}
+
+/** What a linked tool-server does with this machine's secrets; undefined with no link. */
+export async function linkedSecretsNote(): Promise<string | undefined> {
   const routed = await getResolvedToolsUrl().catch(() => ({ url: null }));
-  if (routed.url) {
-    console.log(
-      pc.yellow(
-        `\nNote: a remote tool-server is linked (${routed.url}). Placeholders resolve there, ` +
-          `against that machine's environment and secrets files — not the ones listed above.`
-      )
-    );
+  if (!routed.url) return undefined;
+  let note: string;
+  const refusal = secretsTransportRefusal(routed.url);
+  if (!isFeatureEnabled("forward-secrets")) {
+    note =
+      `Placeholders resolve there, against that machine's environment and secrets files — ` +
+      `not the ones listed by \`argent secrets\`. Run \`argent enable forward-secrets\` to have ` +
+      `each call send the value listed there for each placeholder it names.`;
+  } else if (refusal === undefined) {
+    note =
+      `A call sends it the value \`argent secrets\` lists for each placeholder the call names; ` +
+      `that machine's own sources resolve the rest.`;
+  } else {
+    note = `forward-secrets refuses a call that names a secret of this machine: ${refusal}.`;
   }
+  return `Note: a remote tool-server is linked (${routed.url}). ${note}`;
 }

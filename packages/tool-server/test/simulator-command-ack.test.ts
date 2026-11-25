@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { sendCommand } from "../src/utils/simulator-client";
+import { KEY_ACK_TIMEOUT_MS, sendCommand } from "../src/utils/simulator-client";
 import type { SimulatorServerApi } from "../src/blueprints/simulator-server";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
@@ -17,15 +17,18 @@ type Reply = "ok" | "error" | "silent" | "withhold";
 async function startServer(): Promise<{
   api: SimulatorServerApi;
   received: Record<string, unknown>[];
-  setReply: (r: Reply) => void;
+  /** One reply for every command, or one picked per command name. */
+  setReply: (r: Reply | ((cmd: unknown) => Reply)) => void;
   /** Release every reply the server withheld, late and out of step. */
   flushWithheld: () => void;
   dropConnections: () => void;
+  connectionCount: () => number;
   close: () => Promise<void>;
 }> {
   const received: Record<string, unknown>[] = [];
   const sockets = new Set<WsSocket>();
-  let reply: Reply = "ok";
+  let pickReply: (cmd: unknown) => Reply = () => "ok";
+  let connectionCount = 0;
 
   const wss = await new Promise<WebSocketServer>((resolve) => {
     const s: WebSocketServer = new WebSocketServer({ port: 0, host: "127.0.0.1" }, () =>
@@ -34,14 +37,21 @@ async function startServer(): Promise<{
   });
   const withheld: (() => void)[] = [];
   wss.on("connection", (sock) => {
+    connectionCount++;
     sockets.add(sock);
     sock.on("close", () => sockets.delete(sock));
     sock.on("message", (raw) => {
       const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
       received.push(msg);
+      const reply = pickReply(msg.cmd);
       if (reply === "ok") sock.send(JSON.stringify({ id: msg.id, status: "ok" }));
       else if (reply === "error")
-        sock.send(JSON.stringify({ status: "error", message: "parse error: unknown variant" }));
+        sock.send(
+          JSON.stringify({
+            status: "error",
+            message: `parse error: unknown variant \`${String(msg.cmd)}\`, expected one of \`touch\`, \`rotate\``,
+          })
+        );
       else if (reply === "withhold")
         withheld.push(() => sock.send(JSON.stringify({ id: msg.id, status: "ok" })));
     });
@@ -57,7 +67,7 @@ async function startServer(): Promise<{
     },
     received,
     setReply: (r) => {
-      reply = r;
+      pickReply = typeof r === "function" ? r : () => r;
     },
     flushWithheld: () => {
       for (const send of withheld.splice(0)) send();
@@ -65,6 +75,7 @@ async function startServer(): Promise<{
     dropConnections: () => {
       for (const s of sockets) s.terminate();
     },
+    connectionCount: () => connectionCount,
     // `sendCommand` caches one socket per apiUrl for the life of the process,
     // so the server has to hang up before `close()` can resolve; terminating
     // also evicts the cache entry, keeping each test on its own connection.
@@ -107,6 +118,32 @@ describe("sendCommand — command acknowledgement", () => {
     await server.close();
   });
 
+  it("rejects capture_on_demand at once on an older server, and keeps the connection", async () => {
+    const server = await startServer();
+    server.setReply("error");
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("rejects the command an older server names, not a slower one sent before it", async () => {
+    const server = await startServer();
+    server.setReply((cmd) => (cmd === "rotate" ? "withhold" : "error"));
+    const rotate = sendCommand(server.api, { cmd: "rotate", direction: "LandscapeLeft" });
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(String(err)).toContain("rejected the 'capture_on_demand' command");
+    server.flushWithheld();
+    await expect(rotate).resolves.toEqual({});
+    await server.close();
+  });
+
   it("rejects in flight when the socket dies — the shut-the-simulator-down case", async () => {
     const server = await startServer();
     // Warm the connection so the next send goes out on an already-open socket.
@@ -133,6 +170,92 @@ describe("sendCommand — command acknowledgement", () => {
     expect(signal?.error_kind).toBe("timeout");
     vi.useRealTimers();
     await server.close();
+  });
+
+  it("waits the longer key budget when asked, then times out (#2030)", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { ...TOUCH });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    let settled = false;
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 4, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    )
+      .catch((e: unknown) => e)
+      .finally(() => (settled = true));
+    // A stall past the default budget does not fail a key.
+    await vi.advanceTimersByTimeAsync(6_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
+    vi.useRealTimers();
+    await server.close();
+  });
+
+  // A stalled server still applies the Down it never answered once it
+  // resumes; an Up on a new socket could not open while it stalls (#2030).
+  it("releases the keys still down on the same socket when a key times out", async () => {
+    const server = await startServer();
+    const SHIFT = 225;
+    await sendCommand(server.api, { cmd: "key", code: SHIFT, direction: "Down" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(
+      server.api,
+      { cmd: "key", code: 5, direction: "Down" },
+      { ackTimeoutMs: KEY_ACK_TIMEOUT_MS }
+    ).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(KEY_ACK_TIMEOUT_MS);
+    expect(getFailureSignal(await inFlight)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT
+    );
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(server.received).toHaveLength(4));
+    // Last pressed, first released, behind the Down it releases.
+    expect(server.received.slice(2)).toMatchObject([
+      { cmd: "key", code: 5, direction: "Up" },
+      { cmd: "key", code: SHIFT, direction: "Up" },
+    ]);
+    expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("releases nothing when no key is down at the timeout", async () => {
+    const server = await startServer();
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Down" });
+    await sendCommand(server.api, { cmd: "key", code: 4, direction: "Up" });
+    server.setReply("silent");
+    vi.useFakeTimers();
+    const inFlight = sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await inFlight;
+    vi.useRealTimers();
+    // The next command reconnects, so anything the drop wrote has arrived.
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.received.map((m) => m.cmd)).toEqual(["key", "key", "touch", "touch"]);
+    await server.close();
+  });
+
+  it("waits for a cold edge Down while other commands on the socket complete", async () => {
+    const server = await startServer();
+    try {
+      await sendCommand(server.api, { ...TOUCH });
+      server.setReply((cmd) => (cmd === "edgeTouch" ? "withhold" : "ok"));
+      vi.useFakeTimers();
+      const down = sendCommand(server.api, { ...TOUCH, cmd: "edgeTouch", edge: "bottom" });
+      await sendCommand(server.api, { cmd: "button", button: "home", direction: "Up" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      server.flushWithheld();
+      await expect(down).resolves.toEqual({});
+    } finally {
+      vi.useRealTimers();
+      await server.close();
+    }
   });
 
   it("never resolves a command that was refused — no phantom success", async () => {

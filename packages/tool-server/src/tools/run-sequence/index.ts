@@ -1,11 +1,27 @@
 import { z } from "zod";
 
-import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
-import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { sleepOrAbort, settleWithin, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { treeFingerprint } from "../../utils/ui-tree-match";
+import type { DescribeNode, DescribeTreeData } from "../describe/contract";
+import { describeIos } from "../describe/platforms/ios";
+import { queryAndroidFullHierarchy } from "../flows/flow-android-tree";
+import { queryChromiumTree } from "../flows/flow-chromium-tree";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetWaitResult,
+} from "../../utils/wait-result";
+import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
 // sequence to the single capture the MCP layer appends after the last step.
@@ -33,38 +49,15 @@ export const ALLOWED_TOOLS = new Set([
   "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
+  // Returns its match or near misses, never an image: after network-capture-start, an
+  // action and its wait run as one sequence, and an unmet wait stops it.
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
 ]);
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id), shared across all steps."
-    ),
-  steps: z
-    .array(
-      z.object({
-        tool: z
-          .string()
-          .describe(
-            "Tool name, one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, paste, rotate, shake, fold, tv-remote, await-ui-element. On a TV target (Apple TV / Android TV / Vega) use tv-remote (remote presses) and keyboard (text)."
-          ),
-        args: z
-          .record(z.string(), z.unknown())
-          .describe("Tool arguments (excluding udid, which is injected automatically)"),
-        delayMs: z
-          .number()
-          .optional()
-          .describe(
-            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
-          ),
-      })
-    )
-    .min(1)
-    .describe("Ordered list of interaction steps to execute sequentially"),
-});
-
-type Params = z.infer<typeof zodSchema>;
+const SETTLE_TIMEOUT_MS = 1000;
+const SETTLE_POLL_MS = 50;
+const TOOLS_THAT_SETTLE = new Set(["gesture-tap", "button", AWAIT_UI_ELEMENT_TOOL_ID]);
+const KEYS_THAT_SETTLE = new Set(["enter", "return", "escape", "esc"]);
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
 
@@ -86,83 +79,130 @@ const capability: ToolCapability = {
   // supported. Without this key the HTTP layer's `assertSupported` would reject
   // a Vega udid before any step runs.
   vega: { vvd: true },
+  // Same for HarmonyOS.
+  harmony: { device: true },
+  // A Mac app takes the mouse and keyboard steps; touch-only steps fail at their own gate.
+  macos: { app: true, catalyst: true },
 };
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id), shared across all steps."
+    ),
+  steps: z
+    .array(
+      z.object({
+        tool: z.string().describe("Tool name: one of the allowed tools listed in the description."),
+        args: z
+          .record(z.string(), z.unknown())
+          .describe("Tool arguments (excluding udid, which is injected automatically)"),
+        delayMs: z
+          .number()
+          .optional()
+          .describe(
+            `Wait time in ms after this step (and after the settle wait) before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
+          ),
+      })
+    )
+    .min(1)
+    .describe("Ordered list of interaction steps to execute sequentially"),
+  settle: z
+    .boolean()
+    .optional()
+    .describe(
+      `Wait up to ${SETTLE_TIMEOUT_MS}ms after a screen-changing step for the element tree to settle before the next step. Default true; set false on a screen that never stops changing.`
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+type Step = Params["steps"][number];
+type ReadTree = () => Promise<DescribeTreeData>;
+
+function mayStartTransition(step: Step): boolean {
+  if (TOOLS_THAT_SETTLE.has(step.tool)) return true;
+  if (step.tool !== "keyboard") return false;
+  const { key, text } = step.args;
+  if (typeof key === "string") return KEYS_THAT_SETTLE.has(key.toLowerCase());
+  return typeof text === "string" && /[\r\n]/.test(text);
+}
+
+function repeatsTap(step: Step, next: Step): boolean {
+  return (
+    step.tool === "gesture-tap" &&
+    next.tool === "gesture-tap" &&
+    step.args.x === next.args.x &&
+    step.args.y === next.args.y
+  );
+}
+
+function settleTreeReader(registry: Registry, device: DeviceInfo): ReadTree | undefined {
+  if (device.platform === "ios" && device.kind === "simulator") {
+    return () => describeIos(registry, device, {});
+  }
+  if (device.platform === "android") {
+    return () => queryAndroidFullHierarchy(registry, device, { waitForIdleMs: 0 });
+  }
+  if (device.platform === "chromium") return () => queryChromiumTree(registry, device);
+  return undefined;
+}
+
+function settleFingerprint(root: DescribeNode): string {
+  return `${treeFingerprint(root)}\nfocus:${treeFingerprint(root, (node) => node.focused === true)}`;
+}
+
+async function waitForStillTree(readTree: ReadTree, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+  let previous: string | undefined;
+  while (Date.now() < deadline) {
+    const read = await settleWithin(readTree(), deadline - Date.now(), signal);
+    if (read.type !== "value") return;
+    const fingerprint = settleFingerprint(read.value.tree);
+    if (fingerprint === previous) return;
+    previous = fingerprint;
+    if (!(await sleepOrAbort(SETTLE_POLL_MS, signal))) return;
+  }
+}
 
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
+    description: `Run several device interaction steps in one call.
+Use when every step is known in advance (e.g. several scrolls, or typing then enter). If a step depends on what an earlier one shows, make separate calls.
+Steps run in order. After a step that can change the screen, the next one waits up to 1000ms for the element tree to settle (see \`settle\`); keep an await-ui-element before a step that needs the new screen.
+If a step fails (an error, a tool not allowed or not supported on the target, or a wait step that returns success=false), the sequence stops there. Returns { completed, total, steps } with a result or error for each step that ran.
+One screenshot and element tree are captured after the last step, not per step. A \`{{secret:...}}\` in any step skips that capture, so type and submit a secret in one sequence.
+
+Allowed tools, args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles in degrees, durations in ms.
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right", modifiers? ["control"|"option"|"shift"|"command"] (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-scroll: x, y, deltaX?, deltaY? (positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?  [ios/android]
+  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
+  button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
+  keyboard: text? or key? (one per step, e.g. key "enter"), delayMs?; text may hold {{secret:<NAME>}} placeholders, resolved server-side  [all; Apple TV/Android TV: text only]
+  paste: text (only where a user would paste, e.g. an OTP)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
+  rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
+  shake: count?  [ios sim/android emu]
+  fold: posture? "closed"|"half-open"|"open" or angle? 0–180 (later steps land on the new panel)  [foldable ios sim/android emu]
+  tv-remote: button (one, or an array run as a path), repeat?  [apple tv/android tv/vega]
+  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?  [all]
+  await-network-request: bundleId, url, plus the standalone tool's optional args. Call network-capture-start before the sequence.  [ios sim/android/chromium<flag:macos-apps>/macos</flag:macos-apps>]`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint: "batch sequence multiple gesture steps sequentially",
     interaction: {
       startedMsg: ({ params }) => `Running ${params.steps.length}-step interaction sequence`,
       completedMsg: ({ params }) => `Ran ${params.steps.length}-step interaction sequence`,
       failedMsg: ({ failureSignal }) =>
         `Failed to run interaction sequence: ${failureSignal.error_code}`,
     },
-    description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, or Chromium app).
-On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard, and await-ui-element steps run; others fail at their own gate.
-Use when you need sequential actions and do NOT need to observe the screen between them
-(e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
-Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-One screenshot is captured automatically after the whole sequence (not per step). Call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
-That single capture is also why a secret belongs in this call rather than in two bare ones: the skip is decided from the whole request, so a \`{{secret:...}}\` in any step suppresses the capture that would otherwise follow the submit.
-
-ONLY use this when every step is known in advance. If any step depends on the
-result of a previous one (e.g. tapping a menu item that only appears after
-a prior tap), use individual tool calls instead.
-
-Allowed tools and their args (udid is auto-injected, do NOT include it in args):
-
-  gesture-tap:    { x: number, y: number, clickCount?: number }                                                        [ios/android/chromium]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android]
-  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium only]
-  gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
-  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android]
-  gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
-  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only)  [ios/android/chromium/vega/tv]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file; credentials never enter agent context
-  paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)   [ios sim/android emu]
-  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
-  shake:          { count?: number }                                                                                    [ios sim/android emu]
-  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim]
-  tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
-                  buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute work on Android TV and Vega; rejected on the Apple TV simulator)
-  await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium]
-
-Example: scroll down three times (use gesture-scroll with positive deltaY on Chromium):
-  { "udid": "<UDID>", "steps": [
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
-  ]}
-
-Example: type text and submit (two keyboard steps; one call cannot carry both):
-  { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world" } },
-    { "tool": "keyboard", "args": { "key": "enter" } }
-  ]}
-
-Example (TV): move focus right twice then activate (one tv-remote step with a path is cheaper):
-  { "udid": "<TV-TARGET-ID>", "steps": [
-    { "tool": "tv-remote", "args": { "button": ["right", "right", "select"] } }
-  ]}
-
-Example: tap, wait for the next screen's element, then tap it:
-  { "udid": "<UDID>", "steps": [
-    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.9 } },
-    { "tool": "await-ui-element", "args": { "condition": "visible", "selector": { "text": "Continue" } } },
-    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.5 } }
-  ]}
-If the await-ui-element condition is not met before its timeout, the sequence stops there and the
-following steps do NOT run, so the tap above only fires once "Continue" is actually on screen.
-
-Stops on the first error (or unmet await-ui-element condition) and returns partial results.`,
-    alwaysLoad: true,
     longRunning: true,
-    searchHint: "batch sequence multiple gesture steps sequentially",
-    zodSchema,
     capability,
     // Each step resolves its own services. An eager resolver can't be used
     // because a tvOS udid shape-classifies as `ios` (there is no `tvos`
@@ -172,6 +212,8 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
+      const readSettleTree =
+        params.settle === false ? undefined : settleTreeReader(registry, device);
       const results: StepResult[] = [];
       // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
       // drops the MCP adapter's own fetch timeout — so honour the signal between
@@ -179,7 +221,7 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
       // sequence at the device.
       const signal = ctx?.signal;
 
-      for (const step of steps) {
+      for (const [index, step] of steps.entries()) {
         if (signal?.aborted) break;
 
         if (!ALLOWED_TOOLS.has(step.tool)) {
@@ -211,12 +253,8 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
-          if (isUnmetUiWaitResult(step.tool, result)) {
-            const note = (result as { note?: string }).note;
-            results.push({
-              tool: step.tool,
-              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-            });
+          if (isUnmetWaitResult(step.tool, result)) {
+            results.push({ tool: step.tool, error: unmetWaitReason(step.tool, result) });
             break;
           }
           results.push({ tool: step.tool, result });
@@ -233,6 +271,17 @@ Stops on the first error (or unmet await-ui-element condition) and returns parti
             error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
+        }
+
+        const next = steps[index + 1];
+        if (
+          readSettleTree &&
+          next &&
+          next.tool !== AWAIT_UI_ELEMENT_TOOL_ID &&
+          !repeatsTap(step, next) &&
+          mayStartTransition(step)
+        ) {
+          await waitForStillTree(readSettleTree, signal);
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;

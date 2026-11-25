@@ -1,6 +1,6 @@
 /**
  * A cloud transport dies under an open session whenever the machine is
- * released. The SDK only refuses work on a session someone explicitly closed,
+ * released. The SDK only refuses a screenshot on a session someone explicitly closed,
  * so the first screenshot after that subscribed a track on a dead
  * WebTransport - and `@moq/net` runs a subscribe detached, so the
  * `InvalidStateError` it threw was an unhandled rejection with no handler to
@@ -19,20 +19,23 @@ interface FakeSessionShape {
   closed: Promise<void>;
   disposed: boolean;
   subscribed: number;
+  sent: number;
   killTransport(): void;
   failTransport(): void;
   close(): void;
   screenshot(): Promise<Uint8Array>;
-  sendControl(): Promise<void>;
+  sendInput(): Promise<void>;
 }
 
 vi.mock("@swmansion/argent-cloud-sdk", () => {
-  /** Mirrors the real `MoqDeviceSession` on the two points that matter. */
+  /** Mirrors the real `MoqDeviceSession` on the points that matter. */
   class FakeSession implements FakeSessionShape {
     closed: Promise<void>;
     disposed = false;
     /** How many times a track was subscribed on the server's broadcast. */
     subscribed = 0;
+    /** How many sends reached the SDK. */
+    sent = 0;
     private killed!: () => void;
     private failed!: (reason: Error) => void;
 
@@ -68,7 +71,8 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
       return new Promise<Uint8Array>(() => {});
     }
 
-    sendControl(): Promise<void> {
+    sendInput(): Promise<void> {
+      this.sent += 1;
       return Promise.resolve();
     }
   }
@@ -152,11 +156,36 @@ describe("a MoQ session whose transport died", () => {
     expect(unhandled).toEqual([]);
   });
 
+  const KEY_DOWN = { type: "key", action: "Down", code: 0x19 } as const;
+
+  // The fake's `sendInput` resolves on a disposed session, as the SDK's does.
+  it.each([
+    ["ended", () => session().killTransport()],
+    ["failed", () => session().failTransport()],
+  ])("refuses a send once its transport %s", async (_, kill) => {
+    const client = await openMoqClient("remote:AAAA");
+    kill();
+    await session().closed.catch(() => {});
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await expect(client.sendInput(KEY_DOWN)).rejects.toThrow(/session is closed/i);
+    expect(session().sent).toBe(0);
+  });
+
+  it("refuses a send after close()", async () => {
+    const client = await openMoqClient("remote:AAAA");
+    await client.close();
+
+    expect(session().disposed).toBe(true);
+    await expect(client.sendInput(KEY_DOWN)).rejects.toThrow(/session is closed/i);
+    expect(session().sent).toBe(0);
+  });
+
   it("leaves a live session alone", async () => {
     const client = await openMoqClient("remote:AAAA");
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(session().disposed).toBe(false);
-    await expect(client.sendControl(new Uint8Array([1]))).resolves.toBeUndefined();
+    await expect(client.sendInput(KEY_DOWN)).resolves.toBeUndefined();
   });
 });

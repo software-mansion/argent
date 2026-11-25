@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const describeFrameSchema = z.object({
+const describeFrameSchema = z.object({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().min(0).max(1),
@@ -9,21 +9,42 @@ export const describeFrameSchema = z.object({
 
 export type DescribeFrame = z.infer<typeof describeFrameSchema>;
 
+const describePointSchema = z.object({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+});
+
+type DescribePoint = z.infer<typeof describePointSchema>;
+
 export interface DescribeNode {
   role: string;
   frame: DescribeFrame;
   children: DescribeNode[];
   label?: string;
+  // The element's VoiceOver hint (iOS simulator). Not the same thing as the
+  // result-level `hint` on DescribeTreeData, which is a note about the read.
+  hint?: string;
   identifier?: string;
   value?: string;
   // Descendant text hoisted onto container leaves by the flow adapters'
   // flatten (`flow-tree-flatten`): the flat shape drops the child that renders
   // the text, so a flow `text` condition reads this for a testID container.
-  // The describe path leaves it unset.
+  // The describe tool leaves it unset; the tree the await tools judge on a Mac
+  // app carries the flow tree's value.
   subtreeText?: string;
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
+  // A scroll container's content window: `frame` less borders and scrollbars,
+  // where the source measures it (Chromium). Its content is clipped to this.
+  clipFrame?: DescribeFrame;
+  // Where scroll containers cut the element by more than a pixel (Chromium): the
+  // part of their window the clips above them leave showing, along each axis they
+  // cut it, and the whole screen along the other.
+  clipBounds?: DescribeFrame;
+  // Per axis a scroll container cuts the element along, where a wheel scrolls it
+  // against that scroller: a point hit-tested on screen, else the window's centre.
+  clipAnchors?: { x?: DescribePoint; y?: DescribePoint };
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
@@ -34,6 +55,10 @@ export interface DescribeNode {
   // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
+  // A Mac app's stacking: 1 in a sheet, alert or popover, one more in each one
+  // attached over it, highest in an open menu, absent in a window. Of a
+  // selector's matches, the frontmost layer wins.
+  layer?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -43,12 +68,18 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       frame: describeFrameSchema,
       children: z.array(describeNodeSchema),
       label: z.string().optional(),
+      hint: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
+      clipFrame: describeFrameSchema.optional(),
+      clipBounds: describeFrameSchema.optional(),
+      clipAnchors: z
+        .object({ x: describePointSchema.optional(), y: describePointSchema.optional() })
+        .optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),
@@ -56,26 +87,36 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
+      layer: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );
 
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
-// "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
+// "uiautomator" / "android-devtools": Android; with "+cdp", a Chrome tab's page
+// came from the DOM walk over Chrome DevTools. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
-// automation toolkit. "tv-focus": the focus-driven view for a TV target (Apple
-// TV / Android TV), which reports focused / focusable elements rather than a
+// automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
+// dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
+// Android TV), which reports focused / focusable elements rather than a
 // tap-oriented tree.
 export type DescribeSource =
   | "ax-service"
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
+  | "uiautomator+cdp"
+  | "android-devtools+cdp"
   | "cdp-dom"
   | "vega-automation"
+  | "harmony-uitest"
   | "tv-focus"
   // Physical iOS: the XCUITest runner accessibility snapshot.
-  | "xcuitest-runner";
+  | "xcuitest-runner"
+  // A native Mac app: the in-app library's tree, and the one it reads while the
+  // Mac is locked.
+  | "macos-devtools"
+  | "macos-fallback";
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.
@@ -86,19 +127,21 @@ export interface DescribeTreeData {
   // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
   // Each path writes this hint once.
   hint?: string;
+  // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
+  stale?: boolean;
+  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // so an element's absence proves nothing; `hint` says why.
+  partial?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
   // only by the flow tree adapters that know it.
   screen?: { width: number; height: number };
-  // How the UI lies on the space the frames are in, when the two differ: the
-  // iOS simulator adapter frames in the screen's fixed (portrait-native)
-  // space, the space touches are taken in, and a landscape UI — a rotated
-  // device, an unfolded foldable — is rotated on it. The flow directions
-  // (`swipe: down`, `scroll-to` `direction`) are the UI's, and are mapped
-  // into the frame space with this. Absent when the source does not report
-  // it, which is when its frames are in the UI's own space.
-  uiOrientation?: UiOrientation;
+  // `tree` as a result may quote it, node for node, from the iOS simulator
+  // adapter once a secret was typed on the device: the text of each text input
+  // withheld, each typed value in a label named by its placeholder (see
+  // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
+  quotableTree?: DescribeNode;
 }
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */

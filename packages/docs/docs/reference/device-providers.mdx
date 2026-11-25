@@ -2,6 +2,7 @@
 sidebar_position: 7
 sidebar_label: Device providers
 title: Device providers
+description: Argent attaches to a simulator or an emulator that a different application already runs, for example an IDE extension. This page describes the provider contract.
 sidebar_custom_props:
   icon: plug
 ---
@@ -77,11 +78,15 @@ Each token grants one mechanism. Argent refuses a tool that needs a mechanism th
 | `ax-service`       | start the accessibility service in the simulator                    |
 | `native-profiler`  | profile the app with Instruments or Perfetto                        |
 | `js-debugger`      | attach a debugger client to the JavaScript runtime                  |
-| `native-devtools`  | inject the native inspection agent (iOS only)                       |
+| `native-devtools`  | inject the native inspection agent into iOS apps                    |
 
 Argent ignores an unknown token. Thus a provider can declare a capability of a newer Argent version.
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
+
+JavaScript capture needs the `js-debugger` grant. On Android, [native network capture](/docs/reference/tools#native-network-capture-on-android) needs the `adb` token and a debuggable app.
+
+If Argent uses the provider's native devtools connection on iOS, the provider controls [native network capture](/docs/reference/tools#native-network-capture-on-ios-and-mac-apps).
 
 ### One grant, both names of the device
 

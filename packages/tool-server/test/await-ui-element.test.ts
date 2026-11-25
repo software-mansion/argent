@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import { axDaemonExitError } from "../src/blueprints/ax-service";
 import type { AndroidDevtoolsApi } from "../src/blueprints/android-devtools";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import {
@@ -8,8 +9,12 @@ import {
   unmetUiWaitCause,
 } from "../src/tools/await-ui-element";
 import { findAll } from "../src/utils/ui-tree-match";
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import type { DescribeNode } from "../src/tools/describe/contract";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // execute() resolves the target's form factor before polling: isTvOsSimulator()
 // shells out to `xcrun simctl list` (the fake UDID is never listed, so it never
@@ -49,6 +54,7 @@ function makeSequencedAXService(
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
     livePanel: async () => null,
+    orientation: async () => ({}),
     foregroundApp: async () => ({ alertVisible: false }),
     fill: async () => ({ focused: false, verified: false }),
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -67,6 +73,7 @@ function makeFailingAXService(): AXServiceApi {
     },
     alertCheck: async () => false,
     livePanel: async () => null,
+    orientation: async () => ({}),
     foregroundApp: async () => ({ alertVisible: false }),
     fill: async () => ({ focused: false, verified: false }),
     tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -109,10 +116,6 @@ describe("await-ui-element tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
-  });
-
-  it("exposes the await-ui-element id", () => {
-    expect(createAwaitUiElementTool(iosRegistry({} as AXServiceApi)).id).toBe("await-ui-element");
   });
 
   // ── iOS happy paths ──────────────────────────────────────────────────────
@@ -346,6 +349,44 @@ describe("await-ui-element tool", () => {
 
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/Loading/);
+  });
+
+  it("names the placeholder in the timeout note, not a secret typed on the device", async () => {
+    __resetTypedSecretsForTesting();
+    noteTypedSecrets(CHROMIUM_ID, [{ name: "TOKEN", value: "tok-REVIEW-4242" }]);
+    const tree = {
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "textbox",
+          identifier: "token",
+          label: "Token",
+          value: "tok-REVIEW-4242",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          children: [],
+        },
+      ],
+    };
+    const tool = createAwaitUiElementTool(makeMockRegistry({}));
+
+    const unmet = await tool.execute(
+      { chromium: makeChromiumApi(tree) },
+      {
+        udid: CHROMIUM_ID,
+        condition: "text",
+        selector: { identifier: "token" },
+        expectedText: "Saved token",
+        timeoutMs: 60,
+        pollIntervalMs: 10,
+      }
+    );
+
+    // The text off the screen only: the expected text stays as the caller wrote it.
+    expect(unmet.note).toBe(
+      'element matched but its text was "Token {{secret:TOKEN}}" (wanted to contain "Saved token")'
+    );
+    __resetTypedSecretsForTesting();
   });
 
   it("`text` check and timeout note both read the visible match, not a zero-area shadow", async () => {
@@ -738,6 +779,32 @@ describe("await-ui-element tool", () => {
     expect(result.note).toMatch(/boot-device/i);
   });
 
+  it.each(["visible", "exists"] as const)(
+    "a `%s` success on a degraded simulator carries no note",
+    async (condition) => {
+      // A degraded tree is live; its boot hint does not qualify a success.
+      const { api } = makeSequencedAXService(
+        [axResponse([{ label: "General", frame: FRAME, traits: ["button"] }])],
+        { degraded: true }
+      );
+      const tool = createAwaitUiElementTool(iosRegistry(api));
+
+      const result = await tool.execute(
+        {},
+        {
+          udid: IOS_UDID,
+          condition,
+          selector: { text: "General" },
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.note).toBeUndefined();
+    }
+  );
+
   // ── The cause an unmet wait reports ──────────────────────────────────────
   //
   // Only `unmet` judges the condition. `flow-add-step` quotes it to tell an
@@ -763,6 +830,38 @@ describe("await-ui-element tool", () => {
 
     expect(result.note).toMatch(/could not confirm the element is hidden/i);
     expect(result.note).toMatch(/boot-device/i); // decorated, so `===` cannot fire
+    expect(unmetUiWaitCause(result)).toBe("unreadable");
+  });
+
+  it("reports a crashed ax-service as itself, not as a simulator to reboot (#800)", async () => {
+    // Every poll starts the daemon again and it crashes again, so the note is
+    // the only place the wait can say why. It used to carry the boot caveat,
+    // whose reboot starts the same binary into the same crash.
+    const ax: AXServiceApi = {
+      ...makeFailingAXService(),
+      describe: async () => {
+        throw axDaemonExitError({ code: 139, signal: "SIGSEGV" }, "connected");
+      },
+    };
+    const tool = createAwaitUiElementTool(iosRegistry(ax));
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS_UDID,
+        condition: "visible",
+        selector: { text: "Continue" },
+        timeoutMs: 40,
+        pollIntervalMs: 10,
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.note).toContain("crashed with SIGSEGV");
+    expect(result.note).toContain("will not fix it");
+    expect(result.note).not.toContain("not booted through argent");
+    expect(result.note).not.toMatch(/call (boot-device|restart-app)/);
+    // No read happened, so the condition was not judged.
     expect(unmetUiWaitCause(result)).toBe("unreadable");
   });
 
@@ -843,8 +942,7 @@ describe("await-ui-element tool", () => {
     // read as "nothing was ever compared", for a step that hard-fails at
     // replay. The trusted read is one clamped sleep back, inside the tolerance.
     // `pollIntervalMs` is above `timeoutMs` on purpose: the sleep clamps to the
-    // deadline, and the 2000ms ceiling absorbs scheduler slip. At 500 a ~400ms
-    // slip flipped the cause under load.
+    // deadline.
     const tool = createAwaitUiElementTool(makeMockRegistry({}));
 
     const result = await tool.execute(
@@ -918,6 +1016,7 @@ describe("await-ui-element tool", () => {
           : new Promise(() => {}),
       alertCheck: async () => false,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -997,8 +1096,6 @@ describe("await-ui-element tool", () => {
   // The tolerance, bracketed. Each case has one trusted read at t≈0, so the
   // dark tail is `timeoutMs` and only its span in poll intervals varies. 1.3
   // intervals must stay a blip and 2.6 must not, which pins the multiple to 2.
-  // Scheduler slip only lengthens a tail, and the first case has 700ms of
-  // headroom.
   it.each([
     { intervals: "1.3", timeoutMs: 1300, cause: "unmet" },
     { intervals: "2.6", timeoutMs: 2600, cause: "unreadable" },
@@ -1133,6 +1230,7 @@ describe("await-ui-element tool", () => {
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -1172,6 +1270,7 @@ describe("await-ui-element tool", () => {
           : new Promise(() => {}),
       alertCheck: async () => false,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
@@ -1204,6 +1303,7 @@ describe("await-ui-element tool", () => {
       describe: () => new Promise(() => {}), // never resolves
       alertCheck: async () => false,
       livePanel: async () => null,
+      orientation: async () => ({}),
       foregroundApp: async () => ({ alertVisible: false }),
       fill: async () => ({ focused: false, verified: false }),
       tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),

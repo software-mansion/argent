@@ -124,7 +124,7 @@ async function runBothWays(name: string): Promise<{
         fileInputs: boundary.fileInputs,
       })
     );
-    const sent = Object.keys(boundary.fileInputs!.flow_file!.members!);
+    const sent = Object.keys(boundary.fileInputs!.e2e_test_file!.members!);
     return { resolved, sent, colocated, linked };
   } finally {
     await boundary.cleanup();
@@ -190,6 +190,11 @@ describe("the client's walk and the runner's parse name the same run: targets", 
       "steps:\n  - run: >-\n      login\n  - run: !!str sub/tagged\n" +
         "  - when: { platform: ios }\n    steps:\n      - run: |-\n          sub/literal\n",
     ],
+    [
+      "leading blank lines and an indented first line",
+      "\n\n  steps:\n  - run: login\nexecutionPrerequisite: logged out\n",
+    ],
+    ["a trailing line of a space YAML does not skip", "steps:\n  - run: login\n \n"],
   ])("%s", async (_form, text) => {
     // No target exists, so the client sends each one as missing and reads no further.
     const flowsDir = path.join(tmpDir, flows(""));
@@ -200,7 +205,7 @@ describe("the client's walk and the runner's parse name the same run: targets", 
 
     const expected = runnerTargets(text);
     expect(expected).not.toEqual([]);
-    const members = (wire.flow_file as FileInputWire).members as FileInputMember[];
+    const members = (wire.e2e_test_file as FileInputWire).members as FileInputMember[];
     expect(members.map((m) => m.key)).toEqual(expected.map((t) => flowMemberKey(flowsDir, t)));
   });
 });
@@ -282,7 +287,13 @@ describe("the client's run: closure covers every resolution the runner makes", (
     expect(sent).toHaveLength(expectedMembers);
     // A flow that composes resolves at least once, so the check below bites.
     expect(resolved.length > 0).toBe(expectedMembers > 0);
-    for (const key of resolved) expect(sent).toContain(key);
+    // The runner also looks for a missing target in .argent/e2e, which has
+    // nothing here: the client sends a fallback only when it finds the file.
+    const fallback = `${path.join(tmpDir, ".argent", "e2e")}\0`;
+    for (const key of resolved) {
+      if (key.startsWith(fallback)) expect(sent).not.toContain(key);
+      else expect(sent).toContain(key);
+    }
     expect(linked).toEqual(colocated);
   });
 
@@ -302,6 +313,8 @@ describe("the client's run: closure covers every resolution the runner makes", (
     const { linked } = await runBothWays("cyc01");
 
     // A fragment named like the root shows as ./cyc01, so the two read apart.
-    expect(linked.at(-1)).toMatch(/cyclic flow reference: cyc01 → cyc02 → .* → cyc20 → \.\/cyc01$/);
+    expect(linked.at(-1)).toMatch(
+      /cyclic e2e test reference: cyc01 → cyc02 → .* → cyc20 → \.\/cyc01$/
+    );
   });
 });

@@ -9,6 +9,7 @@ import {
   getFailureSignal,
   MAX_RUN_DEPTH,
   type Registry,
+  type ToolContext,
 } from "@argent/registry";
 import {
   createRunFlowTool,
@@ -16,6 +17,7 @@ import {
   LAUNCH_TO_VERDICT_MS,
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
+  type StepReport,
 } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
@@ -28,6 +30,7 @@ import { screenshotDiffTool } from "../../src/tools/screenshot-diff";
 vi.mock("../../src/tools/flows/flow-visual", () => ({
   DEFAULT_MAX_MISMATCH: 0.5,
   runSnapshot: vi.fn(async () => ({ status: "pass", reason: "snapshot stubbed" })),
+  warmSnapshotCapture: vi.fn(async () => {}),
 }));
 
 // Mock the Electron launcher: no test here may legitimately reach it — the
@@ -47,29 +50,8 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   killChromiumByPort: vi.fn(),
 }));
 
-// Five tests here drive the launch gate's real 1.5 s settle plus the whole
-// connect wait in fake time, pumping a real event-loop turn between advances so
-// the run's disk I/O can settle. Each pump is a real macrotask, so the cost is
-// the pump count, not the fake duration — under full-suite load it outruns
-// vitest's 5 s default. Widening the advance is NOT the fix: coarser steps
-// starve that I/O and take longer in real time (measured: 1 s steps took the
-// file from 46 s to 52 s). Budget the pumping, and prefer unit-testing the pure
-// message mapping over driving the whole runner once per case.
+// Runner tests here wait out real-time sleeps of several seconds.
 vi.setConfig({ testTimeout: 60_000 });
-
-/**
- * Ceiling on those pumps. The loop has to cover the settle plus the entire
- * connect wait in fake time — one 250 ms advance each — and still have turns
- * spare for the real-async steps interleaved between them, which multiply as
- * parallel workers contend for the disk.
- *
- * Derived from the connect budget rather than fixed, because running out is
- * silent and mimics nothing else: the run never settles, the loop abandons it
- * pending, and the test hangs on `await pending` until the timeout — so it reads
- * as slowness, and no timeout value fixes it. A settled run leaves the loop
- * immediately, so the headroom costs nothing.
- */
-const PUMP_LIMIT = Math.ceil(NATIVE_READY_TIMEOUT_MS / 250) * 10;
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
@@ -180,6 +162,42 @@ describe("flow composition (run:)", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("names the e2e test in e2eTest and in the deprecated flow, on the report and on every step", async () => {
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "logging in" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "login.yaml" },
+        { kind: "echo", message: "done" },
+      ],
+    });
+
+    const progress: StepReport[] = [];
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE },
+        // Copied on emit, as the HTTP stream serializes it then.
+        {
+          emitProgress: (event: unknown) => progress.push(structuredClone(event) as StepReport),
+        } as unknown as ToolContext
+      )
+    );
+
+    expect(result.e2eTest).toBe("main");
+    expect(result.flow).toBe("main");
+    const attribution = result.steps.map((s) => [s.e2eTest, s.flow]);
+    expect(attribution).toEqual([
+      ["login", "login"],
+      ["login", "login"],
+      ["main", "main"],
+    ]);
+    expect(progress.map((s) => [s.e2eTest, s.flow])).toEqual(attribution);
+  });
+
   it("composes a bare run: name from the containing flow's own directory", async () => {
     // The legacy layout: both flows saved flat in .argent/flows, main written
     // when a run: target was a saved-flow NAME resolved in that directory. A
@@ -276,7 +294,7 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-LOWERCASE-FILE");
   });
 
-  it("resolves run: fragments beside an explicit top-level flow_path", async () => {
+  it("resolves run: fragments beside an explicit top-level e2e_test_path", async () => {
     const externalDir = path.join(tmpDir, "external-flows");
     const mainPath = path.join(externalDir, "main.yaml");
     await fs.mkdir(externalDir, { recursive: true });
@@ -301,11 +319,11 @@ describe("flow composition (run:)", () => {
     const result = asRun(
       await runFlow.execute(
         {},
-        { project_root: tmpDir, flow_path: mainPath, device: DEVICE },
+        { project_root: tmpDir, e2e_test_path: mainPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_path: {
+            e2e_test_path: {
               clientPath: mainPath,
               presentOnHost: true,
               viaUpload: false,
@@ -324,7 +342,7 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ flow: "login", message: "sibling fragment" });
   });
 
-  it("names the lowercase requirement when only the flow_path extension's case is wrong", async () => {
+  it("names the lowercase requirement when only the e2e_test_path extension's case is wrong", async () => {
     const upperPath = path.join(tmpDir, "Main.YAML");
     await fs.writeFile(
       upperPath,
@@ -336,11 +354,11 @@ describe("flow composition (run:)", () => {
     await expect(
       runFlow.execute(
         {},
-        { project_root: tmpDir, flow_path: upperPath, device: DEVICE },
+        { project_root: tmpDir, e2e_test_path: upperPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_path: {
+            e2e_test_path: {
               clientPath: upperPath,
               presentOnHost: true,
               viaUpload: false,
@@ -349,7 +367,7 @@ describe("flow composition (run:)", () => {
           },
         }
       )
-    ).rejects.toThrow('flow files must use the lowercase .yaml extension, not ".YAML"');
+    ).rejects.toThrow('e2e test files must use the lowercase .yaml extension, not ".YAML"');
   });
 
   it("resolves a run: path against the containing flow's own directory, not the root's", async () => {
@@ -497,6 +515,96 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ flow: "login", message: "inside the shared fragment" });
   });
 
+  it("reports a run step's target on one line whether the fragment loads or not", async () => {
+    // Only a target's basename is pattern-checked, so its directory can carry a line break.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("checkout", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/frag.yaml" },
+        { kind: "run", flow: "sub\nmissing/frag.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "checkout", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.target}`)).toEqual([
+      "run:pass:sub\\nok/frag.yaml",
+      "echo:pass:undefined",
+      "run:error:sub\\nmissing/frag.yaml",
+    ]);
+    expect(result.steps[2]!.reason).toMatch(
+      /^could not load fragment "sub\\nmissing\/frag\.yaml": ENOENT[^\n]*sub\\nmissing\/frag\.yaml'$/
+    );
+  });
+
+  it("reports an echo message on one line whether it runs or is skipped", async () => {
+    await writeFlow("narrated", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "first\nsecond \u001b[31mred" },
+        { kind: "run", flow: "missing.yaml" },
+        { kind: "echo", message: "after\nthe failure" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "narrated", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.message}`)).toEqual([
+      "echo:pass:first\\nsecond \\u001b[31mred",
+      "run:error:undefined",
+      "echo:skip:after\\nthe failure",
+    ]);
+  });
+
+  it("attributes a same-stem fragment on one line whether it loads or not", async () => {
+    // Root login.yaml composing sub<LF>ok/login.yaml: on a stem collision the
+    // attribution keeps the directory, line break included.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "login.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/login.yaml" },
+        { kind: "run", flow: "sub\nmissing/login.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.flow}`)).toEqual([
+      "run:pass:sub\\nok/login",
+      "echo:pass:sub\\nok/login",
+      "run:error:sub\\nmissing/login",
+    ]);
+  });
+
   it("qualifies a nested fragment's bare same-stem spelling as ./<stem>", async () => {
     // Root login.yaml → helpers/steps.yaml → run: login.yaml. The bare
     // spelling resolves against the CONTAINING file's directory, so it names
@@ -618,7 +726,7 @@ describe("flow composition (run:)", () => {
     // does), so the collision disambiguation renders it as-written — which
     // names the exact edge that closes the loop, rather than the bare "a"
     // that reads like a self-reference from the root's own directory.
-    expect(errored?.reason).toMatch(/cyclic flow reference: a → b → \.\.\/a/);
+    expect(errored?.reason).toMatch(/cyclic e2e test reference: a → b → \.\.\/a/);
     // Where the as-written path differs from the stem it is the value that
     // locates the reference — `run ../a.yaml`, not a stem-derived fallback.
     expect(errored?.target).toBe("../a.yaml");
@@ -807,7 +915,7 @@ describe("flow composition (run:)", () => {
   it("runs a run: target that reaches above the project root", async () => {
     // There is no path fence on `run:`. A target is reachable when the tool
     // server can read it — the same reach the front door already grants,
-    // since flow_path can name any YAML on the host. The old fence made
+    // since e2e_test_path can name any YAML on the host. The old fence made
     // admission depend on project_root, which the CLI sets to the operator's
     // cwd, so the identical file passed from the repo root and failed from a
     // subdirectory. Project root is proj/, the target resolves above it, and
@@ -889,7 +997,7 @@ describe("flow composition (run:)", () => {
     // old fence's project-root zone admitted, and outside proj, which neither
     // that zone nor the containing file's directory (proj/.argent/flows)
     // covered — so the fence passed the first and refused the second. Same
-    // flow_path, same sideways `run:` target: the two must now reach the same
+    // e2e_test_path, same sideways `run:` target: the two must now reach the same
     // verdict and execute the fragment.
     const proj = path.join(tmpDir, "proj");
     const flowsDir = path.join(proj, ".argent", "flows");
@@ -914,17 +1022,17 @@ describe("flow composition (run:)", () => {
       "utf8"
     );
 
-    // The flow_path route with a boundary-resolved, stat-verified client path
+    // The e2e_test_path route with a boundary-resolved, stat-verified client path
     // is exactly what `argent flow run` sends (see packages/argent-cli/src/flow.ts).
     const runFrom = async (projectRoot: string): Promise<FlowRunResult> =>
       asRun(
         await createRunFlowTool(mockRegistry()).execute(
           {},
-          { project_root: projectRoot, flow_path: mainPath, device: DEVICE },
+          { project_root: projectRoot, e2e_test_path: mainPath, device: DEVICE },
           {
             artifacts: new ArtifactStore(),
             fileInputs: {
-              flow_path: {
+              e2e_test_path: {
                 clientPath: mainPath,
                 presentOnHost: true,
                 viaUpload: false,
@@ -1070,7 +1178,7 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.depth ?? 0}`)).toEqual([
       "run:error:0",
     ]);
-    expect(result.steps[0]?.reason).toBe("cyclic flow reference: a → alias");
+    expect(result.steps[0]?.reason).toBe("cyclic e2e test reference: a → alias");
   });
 
   it("names a cycle that closes exactly at the run-depth limit as a cycle", async () => {
@@ -1093,7 +1201,7 @@ describe("flow composition (run:)", () => {
     // spelling as `./<stem>`, so the chain's final entry renders as ./root.
     const chain = ["root", ...Array.from({ length: links }, (_, i) => `n${i + 1}`), "./root"];
     const errored = result.steps.find((s) => s.status === "error");
-    expect(errored?.reason).toBe(`cyclic flow reference: ${chain.join(" → ")}`);
+    expect(errored?.reason).toBe(`cyclic e2e test reference: ${chain.join(" → ")}`);
     expect(errored?.reason).not.toContain("max run depth");
   });
 
@@ -1187,6 +1295,80 @@ describe("flow composition (run:)", () => {
     });
     expect(result.steps[0]?.reason).toMatch(/^could not load fragment "broken\.yaml": /);
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
+  });
+
+  it("keeps a fragment's YAML error frame in the run step's reason", async () => {
+    const dir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "typo.yaml"), "steps:\n  - echo: a: b\n", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/typo.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "sub\\nx\/typo\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("\n  - echo: a: b\n");
+  });
+
+  it("keeps a run: step's file system error on one line", async () => {
+    // A file where the directory should be: reading through it fails with an
+    // error that quotes the path.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, ".argent", "flows", "sub\nx"), "", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.status).toBe("error");
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "sub\\nx\/frag\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("sub\\nx");
+    expect(result.steps[0]?.reason).not.toContain("\n");
+  });
+
+  it("reports a run: target with a newer version as a step error", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "newer.yaml" },
+        { kind: "echo", message: "after" },
+      ],
+    });
+    await fs.writeFile(
+      path.join(tmpDir, ".argent", "flows", "newer.yaml"),
+      "version: 3\nsteps:\n  - echo: hi\n",
+      "utf8"
+    );
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
+    expect(result.steps[0]).toMatchObject({
+      kind: "run",
+      status: "error",
+      reason:
+        'could not load fragment "newer.yaml": The e2e test file is version 3, but this Argent reads up to version 2. Update Argent to run it.',
+    });
   });
 
   it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
@@ -1386,6 +1568,31 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SUBDIR-FILE");
   });
 
+  it("quotes a mis-cased target and its fix on one line", async () => {
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/Frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "sub\\nx\/Frag\.yaml": /);
+    expect(reason).toContain(`reference it as "sub\\nx/frag.yaml"`);
+  });
+
   it("asks for a rename when the on-disk spelling no run: target could reach", async () => {
     // The on-disk name here is frag.YAML, which the run: extension gate
     // (parseRunTarget) refuses outright — quoting it back as a replacement
@@ -1453,11 +1660,11 @@ describe("flow composition (run:)", () => {
     await expect(
       createRunFlowTool(registry).execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1483,11 +1690,11 @@ describe("flow composition (run:)", () => {
     await expect(
       createRunFlowTool(mockRegistry()).execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1496,6 +1703,34 @@ describe("flow composition (run:)", () => {
         }
       )
     ).rejects.toThrow("step 1 of the when: block at step 1: run: login.yaml");
+  });
+
+  it("keeps each refused uploaded step on its own line", async () => {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      'steps:\n  - run: "sub\\nok/login.yaml"\n  - script: { path: "sub\\nok/seed.mjs" }\n',
+      "utf8"
+    );
+
+    await expect(
+      createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            e2e_test_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(
+      /step 1: run: sub\\nok\/login\.yaml\n.*step 2: script: \{ path: sub\\nok\/seed\.mjs \}/
+    );
   });
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
@@ -1524,11 +1759,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1549,10 +1784,10 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("rejects an uploaded chromium e2e flow's run: before booting the launch's Electron app", async () => {
+  it("rejects an uploaded chromium standalone flow's run: before booting the launch's Electron app", async () => {
     // The guard's docstring promises the rejection fires "before anything
     // executes" — a POSITIONAL contract its mere existence doesn't keep. For
-    // an uploaded chromium e2e flow that also carries a run:, the guard
+    // an uploaded chromium standalone flow that also carries a run:, the guard
     // sitting above resolveRunDevice is what decides whether an Electron
     // instance is booted (and orphaned by the throw, which lands before the
     // teardown finally) just to deliver a contract error. The absolute app
@@ -1571,11 +1806,11 @@ describe("flow composition (run:)", () => {
     await expect(
       createRunFlowTool(registry).execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1611,11 +1846,11 @@ describe("flow composition (run:)", () => {
     const outcome = await createRunFlowTool(mockRegistry())
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1660,11 +1895,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1684,8 +1919,8 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows run: composition for a flow_file resolved in place", async () => {
-    // The everyday unlinked client: the flow_file boundary resolves the exact
+  it("allows run: composition for an e2e_test_file resolved in place", async () => {
+    // The everyday unlinked client: the e2e_test_file boundary resolves the exact
     // ${project_root}/.argent/flows/${name}.yaml path in place (presentOnHost,
     // NOT an upload). This return is what carries the whole feature —
     // misclassifying it as an upload would reject every local run:
@@ -1703,11 +1938,11 @@ describe("flow composition (run:)", () => {
     const result = asRun(
       await createRunFlowTool(mockRegistry()).execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: flowFile, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: flowFile, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: flowFile,
               presentOnHost: true,
               viaUpload: false,
@@ -1748,11 +1983,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1787,11 +2022,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(mockRegistry())
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1831,11 +2066,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1889,11 +2124,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1924,11 +2159,11 @@ describe("flow composition (run:)", () => {
     return createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -1942,7 +2177,7 @@ describe("flow composition (run:)", () => {
       );
   }
 
-  it("rejects an uploaded flow whose nested tool: flow-execute names a flow_path", async () => {
+  it("rejects an uploaded flow whose nested tool: flow-execute names an e2e_test_path", async () => {
     const registry = mockRegistry();
     const err = await rejectUpload(
       [
@@ -1950,16 +2185,41 @@ describe("flow composition (run:)", () => {
         {
           kind: "tool",
           name: "flow-execute",
-          args: { flow_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
+          args: { e2e_test_path: "/client/.argent/flows/login.yaml", project_root: "/client" },
         },
       ],
       registry
     );
     expect((err as Error).message).toContain(
-      "  - step 2: tool: flow-execute (flow_path: /client/.argent/flows/login.yaml)"
+      "  - step 2: tool: flow-execute (e2e_test_path: /client/.argent/flows/login.yaml)"
     );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps each refused uploaded tool: step on its own line", async () => {
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "e2e-execute", args: { e2e_test_path: "/client/a\nb.yaml" } },
+        { kind: "tool", name: "e2e-execute", args: { name: "a\nb" } },
+        {
+          kind: "tool",
+          name: "screenshot-diff",
+          args: { baselinePath: "/client/a\nb.png", currentPath: "/client/now.png" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: e2e-execute (e2e_test_path: /client/a\\nb.yaml)\n" +
+        "  - step 2: tool: e2e-execute (name: a\\nb)\n" +
+        "  - step 3: tool: screenshot-diff (/client/a\\nb.png, /client/now.png)\n"
+    );
   });
 
   it("files an upload whose first offending step records a flow under the recording stage", async () => {
@@ -1972,7 +2232,7 @@ describe("flow composition (run:)", () => {
       { kind: "run", flow: "frag.yaml" },
     ]);
     expect((err as Error).message).toContain(
-      "  - step 1: tool: flow-start-recording (records a flow)\n  - step 2: run: frag.yaml"
+      "  - step 1: tool: flow-start-recording (records an e2e test)\n  - step 2: run: frag.yaml"
     );
     expect(getFailureSignal(err)).toMatchObject({
       failure_stage: "flow_upload_recording_tool",
@@ -2032,11 +2292,11 @@ describe("flow composition (run:)", () => {
     const err = await createRunFlowTool(registry)
       .execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: uploadedPath, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -2053,7 +2313,7 @@ describe("flow composition (run:)", () => {
     expect(message).toContain(
       "  - step 2: tool: screenshot-diff (/client/base.png, /client/now.png)\n" +
         "  - step 4: tool: reinstall-app (/client/app.apk)\n" +
-        "  - step 5: tool: flow-add-step (records a flow)\n"
+        "  - step 5: tool: flow-add-step (records an e2e test)\n"
     );
     expect(message).not.toContain("step 3");
     expect(getFailureSignal(err)).toMatchObject({
@@ -2063,7 +2323,7 @@ describe("flow composition (run:)", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("allows a snapshot step for a flow_file resolved in place", async () => {
+  it("allows a snapshot step for an e2e_test_file resolved in place", async () => {
     // The inverse pin for the snapshot upload rejection above: the everyday
     // unlinked client (presentOnHost, NOT an upload) keeps its durable
     // baseline directory beside the flow file, so the snapshot path still runs.
@@ -2076,11 +2336,11 @@ describe("flow composition (run:)", () => {
     const result = asRun(
       await createRunFlowTool(mockRegistry()).execute(
         {},
-        { name: "main", project_root: tmpDir, flow_file: flowFile, device: DEVICE },
+        { name: "main", project_root: tmpDir, e2e_test_file: flowFile, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: flowFile,
               presentOnHost: true,
               viaUpload: false,
@@ -2488,7 +2748,7 @@ describe("flow composition (run:)", () => {
     expect(result.steps[4].depth).toBeUndefined();
   });
 
-  it("expands a referenced e2e flow inline, launch step and all", async () => {
+  it("expands a referenced standalone flow inline, launch step and all", async () => {
     await writeFlow("other-e2e", {
       executionPrerequisite: "",
       steps: [
@@ -2919,19 +3179,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
         "launch:pass",
@@ -2964,19 +3220,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("pass");
       expect(appConnectionState).not.toHaveBeenCalled();
@@ -3206,7 +3458,7 @@ describe("flow composition (run:)", () => {
 
     const reason = result.steps[2].reason ?? "";
     expect(reason).toMatch(/argent server stop && argent server start --detach/);
-    expect(reason).toMatch(/Flows resolve selectors against the full view hierarchy/);
+    expect(reason).toMatch(/E2E tests resolve selectors against the full view hierarchy/);
   });
 
   // Replacing the whole diagnosis with a literal left every flow test green.
@@ -3229,22 +3481,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    // Leave setImmediate real: the run reads the flow off disk between sleeps,
-    // and that I/O needs actual event-loop turns. Pumping one between advances
-    // elapses the 1.5 s settle and 8 s connect wait in fake time.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("error");
       expect(result.steps[0].reason).toContain(
@@ -3256,12 +3501,61 @@ describe("flow composition (run:)", () => {
       // than LAUNCH_TO_VERDICT_MS reads identically to a genuinely unregistered
       // app, so "restarting cannot help" must not be the last word here.
       expect(result.steps[0].reason).toMatch(/cold start/i);
-      expect(result.steps[0].reason).toMatch(/re-run the flow/i);
+      expect(result.steps[0].reason).toMatch(/re-run the e2e test/i);
       // The figure sizing that judgement is the whole wait the step performed:
       // the poll reads the live map once before its first sleep, so the
       // post-launch settle counts and quoting the poll alone understates it.
       expect(result.steps[0].reason).toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
       expect(result.steps[0].reason).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // With native network capture on, restart-app itself waits for the new
+  // process to be armed before the settle and the connect wait start. The
+  // figure the reason quotes must count that time too.
+  it("quotes the time restart-app spent in the launch-to-verdict figure", async () => {
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: "com.acme.app" }],
+    });
+    const CAPTURE_WAIT_MS = 5_000;
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "list-devices") return { devices: [] };
+        if (id === "restart-app") {
+          await new Promise((resolve) => setTimeout(resolve, CAPTURE_WAIT_MS));
+          return {
+            restarted: true,
+            bundleId: "com.acme.app",
+            networkCapture:
+              "native network capture is on for com.acme.app, and its new process has not connected yet; native-network-logs shows when it is armed",
+          };
+        }
+        return { ok: true };
+      }),
+      getTool: vi.fn(() => undefined),
+      resolveService: vi.fn(async () => ({
+        isConnected: () => false,
+        listConnectedBundleIds: () => [],
+        appConnectionState: async () => "unregistered" as const,
+      })),
+    } as unknown as Registry;
+
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
+    try {
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
+      );
+
+      expect(result.steps[0].status).toBe("error");
+      expect(result.steps[0].reason).toContain(`${CAPTURE_WAIT_MS + LAUNCH_TO_VERDICT_MS} ms`);
+      expect(result.steps[0].reason).not.toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
     } finally {
       vi.useRealTimers();
     }
@@ -3273,14 +3567,13 @@ describe("flow composition (run:)", () => {
   // back the relaunch that just ran, which re-runs into the identical state.
   //
   // Exercised directly rather than through the runner: it is a pure function of
-  // (bundleId, state), and each runner pass costs ~9 s of pumped fake time. The
-  // end-to-end test above proves the gate reaches it at all.
+  // (bundleId, state). The end-to-end test above proves the gate reaches it at all.
   describe("flowLaunchGateReason", () => {
     it.each([
       // `not_running` is the sharpest: a relaunch is what produced the state
       // being reported, so the remedy must not be one.
       ["not_running", /exited after launch/i],
-      ["stale_process", /re-run the flow to launch again/i],
+      ["stale_process", /re-run the e2e test to launch again/i],
       ["indeterminate", /at most once more/i],
       ["connecting", /started after the step's own launch/i],
       ["unregistered", /cold start/i],
@@ -3299,16 +3592,7 @@ describe("flow composition (run:)", () => {
       // What it must say instead: the process is gone because it exited, and
       // re-running reproduces exactly that.
       expect(reason).toMatch(/exited after launch/);
-      expect(reason).toMatch(/Re-running the flow repeats the same launch/);
-    });
-
-    // The `not.toContain` guards below compare rendered substrings, so they only
-    // mean anything while neither figure is a suffix of the other: 500/1500 would
-    // make `"1500 ms".includes("500 ms")` true and fail them for the wrong
-    // reason. Pin what those guards need, not merely the ordering.
-    it("renders a launch-to-verdict spend the connect wait cannot be read into", () => {
-      expect(LAUNCH_TO_VERDICT_MS).toBeGreaterThan(NATIVE_READY_TIMEOUT_MS);
-      expect(`${LAUNCH_TO_VERDICT_MS} ms`).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
+      expect(reason).toMatch(/Re-running the e2e test repeats the same launch/);
     });
 
     // `stale_process` has two producers, and one carries THIS endpoint — it
@@ -3323,7 +3607,7 @@ describe("flow composition (run:)", () => {
       // message may name it only for a REPEAT, which rules that producer out —
       // so the blame must be conditional AND follow the re-run, both asserted.
       const blame = reason.indexOf("launchd environment");
-      const rerun = reason.indexOf("re-run the flow");
+      const rerun = reason.indexOf("re-run the e2e test");
       expect(rerun).toBeGreaterThanOrEqual(0);
       expect(blame === -1 || blame > rerun).toBe(true);
       // Unconditional on purpose: `if (blame !== -1)` let the whole
@@ -3341,6 +3625,20 @@ describe("flow composition (run:)", () => {
 
         expect(reason).toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
         expect(reason).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
+      }
+    );
+
+    // A launch step passes the time it measured from the start of its
+    // restart-app call, which also counts restart-app's wait for native
+    // network capture. Each remedy that quotes a time quotes that one.
+    it.each(["not_running", "connecting", "unregistered", "provider_attached"] as const)(
+      "quotes the time the step measured in the %s remedy",
+      (state) => {
+        const spentMs = LAUNCH_TO_VERDICT_MS + 5_000;
+        const reason = flowLaunchGateReason("com.acme.app", state, spentMs);
+
+        expect(reason).toContain(`${spentMs} ms`);
+        expect(reason).not.toContain(`${LAUNCH_TO_VERDICT_MS} ms`);
       }
     );
   });
@@ -3365,19 +3663,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps[0].status).toBe("pass");
       expect(result.ok).toBe(true);
@@ -3414,19 +3708,15 @@ describe("flow composition (run:)", () => {
       })),
     } as unknown as Registry;
 
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.useFakeTimers();
+    vi.setTimerTickMode("nextTimerAsync");
     try {
-      const pending = createRunFlowTool(registry).execute(
-        {},
-        { name: "main", project_root: tmpDir, device: DEVICE }
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "main", project_root: tmpDir, device: DEVICE }
+        )
       );
-      let settled = false;
-      void pending.then(() => (settled = true));
-      for (let i = 0; i < PUMP_LIMIT && !settled; i++) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await vi.advanceTimersByTimeAsync(250);
-      }
-      const result = asRun(await pending);
 
       expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
         "launch:error",
@@ -3591,7 +3881,7 @@ describe("device binding (portability)", () => {
 });
 
 describe("flow validation", () => {
-  it("rejects an e2e flow that declares executionPrerequisite", () => {
+  it("rejects a standalone flow that declares executionPrerequisite", () => {
     expect(() =>
       parseFlow("executionPrerequisite: nope\nsteps:\n  - launch: com.acme.app\n")
     ).toThrow(/must not declare executionPrerequisite/i);

@@ -1,15 +1,15 @@
 // In-process Perfetto trace-processor engine: the vendored `.wasm` under
 // `assets/trace-processor/` runs on every OS/arch, offline, with no subprocess
 // and no download. Google's prebuilt wasm is driven through its emscripten glue
-// plus the version-agnostic `EngineBase` RPC decoder, over a `MessageChannel`.
+// plus our own trace-processor RPC client (`trace-processor-rpc.ts`), over a
+// `MessageChannel`.
 // One warm engine is kept per trace path — the trace is parsed once and reused
 // across the whole analyze pipeline + drill-downs.
 //
-// The three vendored artifacts are *runtime data*, never statically imported, so
+// The two vendored artifacts are *runtime data*, never statically imported, so
 // the bundler ships them verbatim alongside `assets/queries`:
-//   • trace_processor.wasm        — read as bytes, handed to emscripten
+//   • trace_processor.wasm        — read as bytes, compiled, handed to the bridge
 //   • engine_bundle.node.js       — Google glue; read + patched + vm.runInThisContext
-//   • engine.mjs                  — EngineBase decoder; dynamic-import-by-path
 
 import { readFileSync, existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -17,17 +17,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { TraceProcessorUnavailableError } from "./errors.js";
-import type {
-  EngineBaseCtor,
-  PerfettoEngineModule,
-  QueryResult,
-  SqlValue,
-} from "./perfetto-engine.js";
+import { TraceProcessorRpc, type QueryResult, type SqlValue } from "./trace-processor-rpc.js";
 
-// Time the patched glue is given to finish `onRuntimeInitialized` (addFunction +
-// trace_processor_rpc_init) before the engine accepts queries. Override with
-// ARGENT_TRACE_PROCESSOR_INIT_MS on unusually slow hosts.
-const DEFAULT_INIT_MS = 1500;
 // Each warm engine holds its parsed trace plus the wasm heap, so the cap bounds
 // resident memory.
 const MAX_WARM_ENGINES = 3;
@@ -44,16 +35,18 @@ const TRACE_PARSE_CHUNK_BYTES = 32 * 1024 * 1024;
 interface AssetPaths {
   wasmPath: string;
   gluePath: string;
-  enginePath: string;
 }
+
+/** A compiled `WebAssembly.Module`, opaque here: the lib config has no wasm types. */
+type WasmModule = object;
 
 /** Worker-scope / handoff globals the prebuilt web/worker glue needs. */
 interface EngineGlobals {
+  WebAssembly: { compile(bytes: Uint8Array): Promise<WasmModule> };
   self?: typeof globalThis;
   WorkerGlobalScope?: unknown;
   location?: { href: string };
-  __TP_WASM_BYTES?: Uint8Array;
-  __TP_bridge?: { initialize(port: MessagePort): void };
+  __TP_bridge?: { initialize(port: MessagePort, module: WasmModule): Promise<void> };
 }
 
 function engineGlobals(): EngineGlobals {
@@ -61,7 +54,7 @@ function engineGlobals(): EngineGlobals {
 }
 
 /**
- * Resolve the three vendored trace-processor artifacts. Same `__dirname/..`
+ * Resolve the two vendored trace-processor artifacts. Same `__dirname/..`
  * resolution `traceProcessorQueriesDir()` uses, so it works in dev (src/),
  * the built package (dist/), and the bundled argent package — the bundler copies
  * `assets/trace-processor/` next to `assets/queries/`.
@@ -77,26 +70,23 @@ export function resolveTraceProcessorAssets(): AssetPaths {
   return {
     wasmPath: wasmOverride ?? path.join(dir, "trace_processor.wasm"),
     gluePath: path.join(dir, "engine_bundle.node.js"),
-    enginePath: path.join(dir, "engine.mjs"),
   };
 }
 
 /**
  * Re-target Google's web/worker emscripten glue for Node. The input
- * (`engine_bundle.node.js`) already has `ENVIRONMENT_IS_NODE` forced false; this
- * applies the remaining three edits, throwing if an anchor stops matching
+ * (`engine_bundle.node.js`) never takes emscripten's Node path; this applies the
+ * remaining two edits, throwing if an anchor stops matching
  * (glue-format drift on a Perfetto bump).
  */
 export function patchGlueForNode(src: string): string {
   const edits: ReadonlyArray<readonly [string, string]> = [
-    // Force memory32: skip the memory64 probe and its __syscall_mprotect path.
-    ["this.useMemory64 = hasMemory64Support();", "this.useMemory64 = false;"],
-    // Hand the wasm bytes straight to emscripten -> it never calls readBinary/XHR.
-    ["locateFile: (s) => s,", "locateFile: (s) => s, wasmBinary: globalThis.__TP_WASM_BYTES,"],
+    // Force memory32: skip the memory64 probe, since only the memory32 wasm ships.
+    ["this.useMemory64 = memory64Supported();", "this.useMemory64 = false;"],
     // Expose the constructed bridge so we can drive it without self.onmessage.
     [
-      "const wasmBridge = new wasm_bridge_1.WasmBridge();",
-      "const wasmBridge = new wasm_bridge_1.WasmBridge(); globalThis.__TP_bridge = wasmBridge;",
+      "var wasmBridge = new WasmBridge();",
+      "var wasmBridge = new WasmBridge(); globalThis.__TP_bridge = wasmBridge;",
     ],
   ];
   for (const [from, to] of edits) {
@@ -122,26 +112,10 @@ interface ReadyEngine {
   fatal: Promise<never>;
 }
 
-// The decoder module is loaded once per process; the bridge handoff, however, is
-// a shared global, so engine *creation* is serialized (createMutex) even though
-// queries run concurrently per engine.
-let engineModulePromise: Promise<PerfettoEngineModule> | null = null;
-let wasmEngineClass: (new (port: MessagePort) => ReadyEngine) | null = null;
+// The bridge handoff is a shared global, so engine *creation* is serialized
+// (createMutex) even though queries run concurrently per engine.
 let workerScopeReady = false;
-let decoderWarningSilenced = false;
 let createMutex: Promise<unknown> = Promise.resolve();
-
-// Must stay a literal dynamic `import()`: it's the only form vitest's vm sandbox
-// wires its dynamic-import callback to (a `new Function`/`eval` import throws
-// ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). The package compiles under
-// `module: nodenext`, so tsc preserves the native `import()` in its CJS emit
-// rather than downleveling it to `require()`, which can't load ESM by URL.
-function loadEngineModule(enginePath: string): Promise<PerfettoEngineModule> {
-  if (!engineModulePromise) {
-    engineModulePromise = import(pathToFileURL(enginePath).href) as Promise<PerfettoEngineModule>;
-  }
-  return engineModulePromise;
-}
 
 /**
  * Install the minimal worker scope the `ENVIRONMENT=web,worker` prebuilt bundle
@@ -171,68 +145,47 @@ function setupWorkerScope(assetsDir: string): void {
   workerScopeReady = true;
 }
 
-/**
- * The version-agnostic decoder logs a benign "Unexpected QueryResult field" for
- * fields it doesn't know; rows still decode. Drop just that line.
- */
-function silenceDecoderWarning(): void {
-  if (decoderWarningSilenced) return;
-  decoderWarningSilenced = true;
-  const orig = console.warn.bind(console);
-  console.warn = (...args: unknown[]): void => {
-    if (/Unexpected QueryResult field/.test(JSON.stringify(args[0] ?? ""))) return;
-    orig(...args);
-  };
-}
-
-function makeWasmEngineClass(Base: EngineBaseCtor): new (port: MessagePort) => ReadyEngine {
-  if (wasmEngineClass) return wasmEngineClass;
-  class WasmEngine extends Base {
-    mode = "WASM";
-    id = "v55.3";
-    private readonly port: MessagePort;
-    private disposed = false;
-    readonly fatal: Promise<never>;
-    private rejectFatal!: (err: Error) => void;
-    constructor(port: MessagePort) {
-      super();
-      this.port = port;
-      this.fatal = new Promise<never>((_resolve, reject) => {
-        this.rejectFatal = reject;
-      });
-      // A fault nobody happens to be awaiting (the warm engine sits idle between
-      // tool calls) would otherwise surface as an unhandledRejection and take the
-      // process down; callers racing `fatal` still observe the rejection.
-      this.fatal.catch(() => {});
-      this.port.onmessage = (m: MessageEvent): void => {
-        if (!(m.data instanceof Uint8Array)) return;
-        try {
-          this.onRpcResponseBytes(m.data);
-        } catch (err) {
-          // EngineBase.fail() throws synchronously (e.g. an RPC framing error),
-          // and this runs inside a MessagePort onmessage handler, so an escaping
-          // throw becomes a Node uncaughtException and kills the entire
-          // tool-server. Contain it to this engine: reject `fatal` so racing
-          // callers fail cleanly, and tear the port down so the warm-engine cache
-          // evicts and the next call rebuilds from scratch.
-          const e = err instanceof Error ? err : new Error(String(err));
-          this.rejectFatal(e);
-          this.dispose();
-        }
-      };
-    }
-    rpcSendRequestBytes(data: Uint8Array): void {
-      this.port.postMessage(data);
-    }
-    dispose(): void {
-      if (this.disposed) return;
-      this.disposed = true;
-      this.port.onmessage = null;
-      this.port.close();
-    }
+class WasmEngine extends TraceProcessorRpc implements ReadyEngine {
+  private readonly port: MessagePort;
+  private disposed = false;
+  readonly fatal: Promise<never>;
+  private rejectFatal!: (err: Error) => void;
+  constructor(port: MessagePort) {
+    super();
+    this.port = port;
+    this.fatal = new Promise<never>((_resolve, reject) => {
+      this.rejectFatal = reject;
+    });
+    // A fault nobody happens to be awaiting (the warm engine sits idle between
+    // tool calls) would otherwise surface as an unhandledRejection and take the
+    // process down; callers racing `fatal` still observe the rejection.
+    this.fatal.catch(() => {});
+    this.port.onmessage = (m: MessageEvent): void => {
+      if (!(m.data instanceof Uint8Array)) return;
+      try {
+        this.onRpcResponseBytes(m.data);
+      } catch (err) {
+        // onRpcResponseBytes() throws synchronously (e.g. an RPC framing error),
+        // and this runs inside a MessagePort onmessage handler, so an escaping
+        // throw becomes a Node uncaughtException and kills the entire
+        // tool-server. Contain it to this engine: reject `fatal` so racing
+        // callers fail cleanly, and tear the port down so the warm-engine cache
+        // evicts and the next call rebuilds from scratch.
+        const e = err instanceof Error ? err : new Error(String(err));
+        this.rejectFatal(e);
+        this.dispose();
+      }
+    };
   }
-  wasmEngineClass = WasmEngine as unknown as new (port: MessagePort) => ReadyEngine;
-  return wasmEngineClass;
+  protected rpcSendRequestBytes(data: Uint8Array): void {
+    this.port.postMessage(data);
+  }
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.port.onmessage = null;
+    this.port.close();
+  }
 }
 
 /**
@@ -247,36 +200,26 @@ async function createEngine(): Promise<ReadyEngine> {
   createMutex = new Promise<void>((r) => (release = r));
   await prev.catch(() => {});
   try {
-    const { wasmPath, gluePath, enginePath } = resolveTraceProcessorAssets();
+    const { wasmPath, gluePath } = resolveTraceProcessorAssets();
     const dir = path.dirname(wasmPath);
-    const initMs = Number(process.env.ARGENT_TRACE_PROCESSOR_INIT_MS) || DEFAULT_INIT_MS;
 
-    const { EngineBase } = await loadEngineModule(enginePath);
     setupWorkerScope(dir);
-    silenceDecoderWarning();
 
     const g = engineGlobals();
-    // Hand the bytes to the patched glue (it reads globalThis.__TP_WASM_BYTES).
-    g.__TP_WASM_BYTES = new Uint8Array(readFileSync(wasmPath));
+    const wasmModule = await g.WebAssembly.compile(await readFile(wasmPath));
     const src = patchGlueForNode(readFileSync(gluePath, "utf8"));
     vm.runInThisContext(src, { filename: "engine_bundle.node.patched.js" });
 
     const bridge = g.__TP_bridge;
     if (!bridge) throw new Error("patched glue did not expose globalThis.__TP_bridge");
 
-    const channel = new MessageChannel();
-    bridge.initialize(channel.port1);
-    const WasmEngine = makeWasmEngineClass(EngineBase);
-    const engine = new WasmEngine(channel.port2);
-
-    // Let onRuntimeInitialized -> addFunction + trace_processor_rpc_init finish.
-    await new Promise<void>((r) => setTimeout(r, initMs));
-
-    // Drop the one-shot handoff globals; the wasm has copied the bytes into its
-    // own heap by now, so we can release the 13 MB reference.
     g.__TP_bridge = undefined;
-    g.__TP_WASM_BYTES = undefined;
-    return engine;
+
+    const channel = new MessageChannel();
+    // Resolves once the runtime is up and trace_processor_rpc_init has run, so
+    // the engine accepts requests from here on.
+    await bridge.initialize(channel.port1, wasmModule);
+    return new WasmEngine(channel.port2);
   } catch (err) {
     if (err instanceof TraceProcessorUnavailableError) throw err;
     throw new TraceProcessorUnavailableError("wasm_load_failed", { cause: err });
@@ -381,15 +324,12 @@ function readCell(v: SqlValue): unknown {
   return v;
 }
 
-function decodeRows<Row>(result: QueryResult): Row[] {
-  const cols = result.columns();
-  const rows: Row[] = [];
-  for (const it = result.iter({}); it.valid(); it.next()) {
+function decodeRows<Row>({ columns, rows }: QueryResult): Row[] {
+  return rows.map((cells) => {
     const row: Record<string, unknown> = {};
-    for (const c of cols) row[c] = readCell(it.get(c));
-    rows.push(row as Row);
-  }
-  return rows;
+    columns.forEach((c, i) => (row[c] = readCell(cells[i])));
+    return row as Row;
+  });
 }
 
 /**
@@ -414,8 +354,6 @@ export async function queryWarm<Row = Record<string, unknown>>(
     await disposeWarmEngine(tracePath);
     throw err;
   }
-  const err = result.error();
-  if (err) throw new Error(err);
   return decodeRows<Row>(result);
 }
 
