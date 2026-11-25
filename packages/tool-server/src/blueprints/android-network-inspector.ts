@@ -140,11 +140,11 @@ const STOP_DISABLE_TIMEOUT_MS = 5_000;
 const SESSION_REMOVE_TIMEOUT_MS = 5_000;
 
 export const AGENT_BINARIES_MISSING_REASON = "agent binaries not present in this build";
-const AGENT_GONE_REASON =
+export const AGENT_GONE_REASON =
   "the agent that recorded the request is no longer in the app, as after an emulator snapshot load";
-const LOST_WHILE_DISCONNECTED =
+export const LOST_WHILE_DISCONNECTED =
   "the agent lost this request's final events while it was disconnected";
-const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
+export const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const DROPPED_NOTE = "the agent's connection dropped; it reconnects by itself while the app runs";
 const NOT_RECONNECTED_NOTE =
   "the agent's connection dropped, and it did not reconnect; network-capture-start connects it again";
@@ -227,7 +227,8 @@ export interface AndroidNetworkInspectorApi {
   /** Where the last start began: records numbered higher came after it. */
   captureMark(): { lastRecord: number; metroPort: number } | undefined;
   state(): AndroidNetworkInspectorState;
-  records(metroPort: number): NativeNetworkRecord[];
+  /** The listed records, oldest first; with `includeHidden`, also the records a `clear` hid. */
+  records(metroPort: number, options?: { includeHidden?: boolean }): NativeNetworkRecord[];
   record(id: string): NativeNetworkRecord | undefined;
   responseBody(id: string): Promise<NativeNetworkBody>;
   requestPostData(id: string): Promise<NativeNetworkBody>;
@@ -257,6 +258,11 @@ interface InspectorHandle {
  */
 const liveInspectors = new Map<string, Set<InspectorHandle>>();
 let nextRecordNumber = 1;
+
+/** The number of the last record issued: a record numbered higher came after this call. */
+export function lastAndroidRecordNumber(): number {
+  return nextRecordNumber - 1;
+}
 
 function allHandles(): InspectorHandle[] {
   return [...liveInspectors.values()].flatMap((set) => [...set]);
@@ -2217,10 +2223,11 @@ function createInspector(
         ...(!conn && note && !stopped ? { note: shownNote() } : {}),
       };
     },
-    records: (port) =>
+    records: (port, options) =>
       records.filter(
         (r) =>
-          !cleared.has(r) && !isMetroTraffic(r.request.url, port, { androidEmulatorHost: true })
+          (options?.includeHidden === true || !cleared.has(r)) &&
+          !isMetroTraffic(r.request.url, port, { androidEmulatorHost: true })
       ),
     record: (id) => byId.get(id)?.record,
     responseBody: (id) => fetchBody(id, "response"),

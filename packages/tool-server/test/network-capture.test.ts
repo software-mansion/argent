@@ -63,6 +63,10 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
+import { MACOS_APP_NAMESPACE, type MacosAppApi } from "../src/blueprints/macos-app";
+import { CHROMIUM_CDP_NAMESPACE } from "../src/blueprints/chromium-cdp";
+import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
 import { proxyStart } from "../src/utils/sim-remote";
 
@@ -1290,7 +1294,7 @@ describe("network-capture-start", () => {
       );
     });
 
-    it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
+    it("stores a started capture with no mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);
 
@@ -1304,7 +1308,6 @@ describe("network-capture-start", () => {
       expect(findJsCapture(IOS_UDID, APP)).toEqual({
         bundleId: APP,
         intent: "started",
-        mark: { install: null },
         installed: false,
         physicalDeviceId: IOS_UDID,
         port: PORT,
@@ -1372,7 +1375,8 @@ describe("network-capture-start", () => {
         const result = await start(IOS_UDID, APP);
 
         expect(layer(result, "js")).toEqual({ layer: "js", armed: false, reason: kept });
-        expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+        // The mark was the earlier start's: this start did not move it, so it drops it.
+        expect(findJsCapture(IOS_UDID, APP)).toEqual({ ...capture, mark: undefined });
 
         // The app's interceptor still records, so a stop that does not reach it is not confirmed.
         const stopped = await stop(IOS_UDID, APP);
@@ -3732,29 +3736,297 @@ describe("a start and a stop of one app", () => {
 
 describe("a device the capture tools do not cover", () => {
   // A call made inside the tool-server, as an e2e `tool:` step makes it, skips the HTTP gate.
-  it.each([
-    { platform: "Vega", udid: "amazon-0123456789" },
-    { platform: "Chromium", udid: "chromium-cdp-9222" },
-  ])(
-    "on $platform, refuses a start and a stop called inside the tool-server, and leaves the app's JS runtime as it is",
-    async ({ udid }) => {
-      const rt = new FakeRuntime(APP);
-      serve(PORT, udid, rt);
+  it("on Vega, refuses a start and a stop called inside the tool-server, and leaves the app's JS runtime as it is", async () => {
+    const udid = "amazon-0123456789";
+    const rt = new FakeRuntime(APP);
+    serve(PORT, udid, rt);
 
-      for (const call of [start, stop]) {
-        const err = await call(udid, APP).then(
-          () => undefined,
-          (e: unknown) => e
-        );
-        expect((err as Error | undefined)?.cause).toBeInstanceOf(UnsupportedOperationError);
-        expect(String(err)).toContain("network capture has no start or stop");
-      }
-
-      expect(rt.evaluated).toEqual([]);
-      expect(rt.paused).toBeUndefined();
-      expect(jsCapturesOn(udid)).toEqual([]);
+    for (const call of [start, stop]) {
+      const err = await call(udid, APP).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect((err as Error | undefined)?.cause).toBeInstanceOf(UnsupportedOperationError);
+      expect(String(err)).toContain("network capture has no start or stop");
     }
-  );
+
+    expect(rt.evaluated).toEqual([]);
+    expect(rt.paused).toBeUndefined();
+    expect(jsCapturesOn(udid)).toEqual([]);
+  });
+});
+
+describe("a Chromium app", () => {
+  const CHROMIUM = "chromium-cdp-9222";
+  const CHROMIUM_URN = `${CHROMIUM_CDP_NAMESPACE}:${CHROMIUM}`;
+  const KEEPS_LISTING =
+    "view-network-logs keeps listing the tab's requests while argent is attached; await-network-request reads only the requests up to this stop";
+  const NOT_STARTED_LAYER = { layer: "chromium", armed: false, total: 0, reason: NOT_STARTED };
+  type CdpEvents = { event: (method: string, params: Record<string, unknown>) => void };
+  /** The tab's CDP event bus and the real network store over it. */
+  let tab: { events: TypedEventEmitter<CdpEvents>; network: NetworkManager } | undefined;
+  /** How many times argent attached to the tab, and what the next attach throws. */
+  let attaches = 0;
+  let attachError: Error | undefined;
+
+  beforeEach(() => {
+    tab = undefined;
+    attaches = 0;
+    attachError = undefined;
+    const blueprint: ServiceBlueprint<unknown, string> = {
+      namespace: CHROMIUM_CDP_NAMESPACE,
+      getURN: (payload) => `${CHROMIUM_CDP_NAMESPACE}:${payload}`,
+      async factory() {
+        attaches++;
+        if (attachError) throw attachError;
+        const events = new TypedEventEmitter<CdpEvents>();
+        tab = { events, network: createNetworkManager({ cdp: { events } as never }) };
+        return {
+          api: { server: { network: tab.network } },
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    };
+    registry.registerBlueprint(blueprint);
+  });
+
+  /** The tab sends a request, which argent records from CDP. */
+  function tabSends(requestId: string): void {
+    tab!.events.emit("event", "Network.requestWillBeSent", {
+      requestId,
+      request: { method: "GET", url: `https://x.test/${requestId}` },
+      timestamp: 1,
+    });
+  }
+
+  it("marks where a start begins and where a stop ends, on the tab's one layer", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, CHROMIUM, rt);
+
+    expect(await start(CHROMIUM, APP)).toEqual({
+      status: "ok",
+      layers: [{ layer: "chromium", armed: true }],
+    });
+    expect(tab!.network.captureMark()).toEqual({ lastSeq: 0 });
+    tabSends("a");
+    tabSends("b");
+
+    expect(await stop(CHROMIUM, APP)).toEqual({
+      status: "ok",
+      layers: [{ layer: "chromium", armed: false, total: 2, reason: KEEPS_LISTING }],
+    });
+    expect(tab!.network.captureMark()).toEqual({ lastSeq: 0, stoppedSeq: 2 });
+    // No Metro and no JS interceptor: the tab's CDP log is the layer.
+    expect(rt.evaluated).toEqual([]);
+    expect(jsCapturesOn(CHROMIUM)).toEqual([]);
+  });
+
+  it("does not attach to the tab at a stop: without a CDP session, capture was not started", async () => {
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(0);
+
+    // A session that ended, as at stop-simulator-server, took the mark of its start with it.
+    await start(CHROMIUM, APP);
+    await registry.disposeService(CHROMIUM_URN);
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(1);
+  });
+
+  it("says capture was not started at a stop of an attached tab that no start marked", async () => {
+    // The first Chromium tool call attaches, and argent records the tab's requests from then on.
+    await read(CHROMIUM);
+    tabSends("a");
+
+    expect(await stop(CHROMIUM, APP)).toEqual({ status: "ok", layers: [NOT_STARTED_LAYER] });
+    expect(attaches).toBe(1);
+  });
+
+  it("fails a start that cannot reach the tab with NETWORK_CAPTURE_UNAVAILABLE and the CDP error", async () => {
+    attachError = new Error("connect ECONNREFUSED 127.0.0.1:9222");
+
+    const err = await start(CHROMIUM, APP).then(
+      () => undefined,
+      (e: unknown) => e as Error
+    );
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE,
+      error_kind: "unsupported",
+    });
+    expect(err?.message).toContain(
+      `Network capture cannot start for ${APP} on ${CHROMIUM}: chromium: argent cannot reach the app over CDP: `
+    );
+    expect(err?.message).toContain("connect ECONNREFUSED 127.0.0.1:9222");
+  });
+
+  it("keeps the mark at a second stop, and records the tab's requests after the stop", async () => {
+    await start(CHROMIUM, APP);
+    tabSends("a");
+    tabSends("b");
+
+    const first = await stop(CHROMIUM, APP);
+    expect(first).toEqual({
+      status: "ok",
+      layers: [{ layer: "chromium", armed: false, total: 2, reason: KEEPS_LISTING }],
+    });
+    expect(await stop(CHROMIUM, APP)).toEqual(first);
+
+    // The stop only marks where the window ends: view-network-logs lists a later request too.
+    tabSends("c");
+    const logs = await read(CHROMIUM);
+    expect(logs).toContain("3 total");
+    expect(logs).toContain('"GET /c"');
+  });
+});
+
+describe("a Mac app", () => {
+  useMacosAppsFlag();
+
+  const MAC_APP = "com.example.macapp";
+  const MAC_ID = `macos-app-${MAC_APP}`;
+  const MAC_PAYLOAD = jsCapturePayload(PORT, MAC_ID);
+
+  /** One Mac app's service, connected to argent, as the capture tools use it. */
+  class FakeMacosApp implements Pick<
+    MacosAppApi,
+    | "bundleId"
+    | "isConnected"
+    | "startNetworkCapture"
+    | "stopNetworkCapture"
+    | "forgetNetworkCaptureStart"
+    | "isNetworkCaptureStarted"
+    | "isNetworkCaptureStopped"
+    | "isNetworkCaptureStopUnconfirmed"
+    | "networkCaptureMark"
+    | "networkRecords"
+    | "takeCaptureGap"
+  > {
+    /** What the tools asked of the service, in order. */
+    readonly calls: string[] = [];
+    private started = false;
+    private stopped = false;
+    private mark: CaptureMark | undefined;
+    private held = 0;
+
+    constructor(readonly bundleId: string) {}
+
+    /** The app sends a request, which the service records while capture is started. */
+    record(): void {
+      if (!this.started) return;
+      lastRecord++;
+      this.held++;
+    }
+
+    isConnected(): boolean {
+      return true;
+    }
+    async startNetworkCapture(metroPort: number): Promise<{ armed: boolean; reason?: string }> {
+      this.calls.push(`start ${metroPort}`);
+      this.stopped = false;
+      this.started = true;
+      this.mark = { lastRecord, metroPort };
+      return { armed: true };
+    }
+    async stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }> {
+      this.calls.push("stop");
+      this.started = false;
+      this.stopped = true;
+      return { confirmed: true };
+    }
+    forgetNetworkCaptureStart(): void {}
+    isNetworkCaptureStarted(): boolean {
+      return this.started;
+    }
+    isNetworkCaptureStopped(): boolean {
+      return this.stopped;
+    }
+    isNetworkCaptureStopUnconfirmed(): boolean {
+      return false;
+    }
+    networkCaptureMark(): CaptureMark | undefined {
+      return this.mark;
+    }
+    takeCaptureGap(): boolean {
+      return false;
+    }
+    networkRecords(): IosNetworkRecords {
+      const count = this.held;
+      return {
+        state: () => ({ armed: this.started }),
+        records: () => Array.from({ length: count }, () => ({}) as NativeNetworkRecord),
+      } as unknown as IosNetworkRecords;
+    }
+  }
+
+  let mac: FakeMacosApp;
+
+  beforeEach(() => {
+    mac = new FakeMacosApp(MAC_APP);
+    const blueprint: ServiceBlueprint<unknown, string> = {
+      namespace: MACOS_APP_NAMESPACE,
+      getURN: (payload) => `${MACOS_APP_NAMESPACE}:${payload}`,
+      async factory(_deps, payload) {
+        // The service of a Mac app id serves the bundle id in it.
+        const app = payload === MAC_ID ? mac : new FakeMacosApp(payload.slice("macos-app-".length));
+        return {
+          api: app,
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+    };
+    registry.registerBlueprint(blueprint);
+  });
+
+  it("starts and stops the JS and Mac native layers, with the Mac app id as the JS device id", async () => {
+    const rt = new FakeRuntime(MAC_APP);
+    serve(PORT, MAC_ID, rt);
+    // A read no longer starts the JS capture of a Mac app.
+    expect(await read(MAC_ID)).toContain("network-capture-start");
+    expect(rt.evaluated).toEqual([]);
+
+    expect(await start(MAC_ID, MAC_APP)).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: true },
+        { layer: "macos-native", armed: true },
+      ],
+    });
+    expect(jsCapture(MAC_PAYLOAD)).toMatchObject({ bundleId: MAC_APP, intent: "started" });
+    rt.send("/a");
+    mac.record();
+    expect(await read(MAC_ID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+
+    expect(await stop(MAC_ID, MAC_APP)).toEqual({
+      status: "ok",
+      layers: [
+        { layer: "js", armed: false, total: 1 },
+        { layer: "macos-native", armed: false, total: 1 },
+      ],
+    });
+    expect(rt.paused).toBe(true);
+    expect(mac.calls).toEqual([`start ${PORT}`, "stop"]);
+    expect(jsCapture(MAC_PAYLOAD)).toMatchObject({ intent: "stopped", paused: true });
+  });
+
+  it("fails an Apple app's start with both layers unavailable and reaches no JS runtime", async () => {
+    const appleId = "macos-app-com.apple.TextEdit";
+    const rt = new FakeRuntime("com.apple.TextEdit");
+    serve(PORT, appleId, rt);
+
+    const err = await start(appleId, "com.apple.TextEdit").then(
+      () => undefined,
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+    expect(String(err)).toContain(
+      "js: com.apple.TextEdit is an Apple app, which runs no React Native JS; macos-native: com.apple.TextEdit is an Apple app"
+    );
+    expect(rt.evaluated).toEqual([]);
+    expect(jsCapturesOn(appleId)).toEqual([]);
+  });
 });
 
 describe("the layer option", () => {
@@ -4349,7 +4621,7 @@ describe("the tool definitions", () => {
   });
 
   it.each(tools)(
-    "network-capture-$verb.2 runs on iOS simulators, remote simulators, Android and Mac apps (Mac Catalyst too), and refuses the rest",
+    "network-capture-$verb.2 runs on iOS simulators, remote simulators, Android, Mac apps (Mac Catalyst too) and Chromium apps, and refuses the rest",
     ({ make }) => {
       const tool = make(new Registry());
 
@@ -4358,8 +4630,15 @@ describe("the tool definitions", () => {
         appleRemote: { simulator: true },
         android: { emulator: true, device: true },
         macos: { app: true, catalyst: true },
+        chromium: { app: true },
       });
-      for (const id of [IOS_UDID, `remote:${IOS_UDID}`, SERIAL, "R5CT1234567"]) {
+      for (const id of [
+        IOS_UDID,
+        `remote:${IOS_UDID}`,
+        SERIAL,
+        "R5CT1234567",
+        "chromium-cdp-9222",
+      ]) {
         expect(() => assertSupported(tool.id, tool.capability, resolveDevice(id))).not.toThrow();
       }
       // Argent drives Mac apps only on a macOS host, and CI runs this on Linux.
@@ -4376,7 +4655,7 @@ describe("the tool definitions", () => {
       } finally {
         Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
       }
-      for (const id of ["chromium-cdp-9222", "amazon-0123456789", "00008110-001A2B3C4D5E801E"]) {
+      for (const id of ["amazon-0123456789", "00008110-001A2B3C4D5E801E"]) {
         expect(() => assertSupported(tool.id, tool.capability, resolveDevice(id))).toThrow(
           UnsupportedOperationError
         );

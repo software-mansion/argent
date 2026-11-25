@@ -33,7 +33,7 @@ Obey these lifecycle rules:
 1. Choose a name unique to the task: another caller can take over the same `name` + `project_root` pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/e2e` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
 2. Treat `e2e-start-recording` as destructive. It truncates the named YAML even when it holds a finished or committed test. `restarted` reports only a displaced live take.
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. A call that returns normally while reporting an unmet condition **does** append the step; `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
+4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. The recorder still appends `await-ui-element` and `await-network-request` steps that return `success: false`. Check the warning before continuing. To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
 
 ## Start in the correct order
@@ -146,13 +146,16 @@ A warning does not reject the step. If `e2e-finish-recording` reports dropped wa
 
 ### Network capture
 
-On iOS and Android, `view-network-logs` and `native-network-logs` only read. On a Mac app, `native-network-logs` only reads. Before `network-capture-start`, they say that capture is not started. A `tool:` step passes whatever text it returns, so a read before a start replays green and proves nothing.
+On iOS simulators, Android, Mac apps, and Chromium, use `e2e-add-step` to record `network-capture-start`, the action, `await-network-request`, and `network-capture-stop` in that order. Put capture start after launch and the first-screen wait. A start before `launch:` makes the test a fragment. Use [Inspect network requests](../../argent-metro-debugger/SKILL.md#inspect-network-requests) for platform setup.
 
-1. Record `network-capture-start` through `e2e-add-step` after the launch and its first-screen wait, before the action whose requests the test reads. A launch ends the capture of the JS layer. A start before `launch:` makes the test a fragment.
-2. Before a recorded `network-capture-stop`, record a wait for the screen that shows the result of the request. Argent records no request that the app sends after the stop.
-3. If a read says that capture is not started, do not answer it with a direct `network-capture-start` call: the replay does not have that call. Record the start, then record the action and the read again.
-4. A `tool:` step keeps its recorded `bundleId` on every platform. Only `launch:` takes an id per platform. If the app id differs by platform, add a top-level `requires:` block with the recording platform (see [File shape and test type](e2e-yaml.md#file-shape-and-test-type)). Record a separate test for each other platform.
-5. A `tool: network-capture-start` or `tool: network-capture-stop` step passes whatever its `armed` says. A start that armed no layer passes, and so does a stop whose JS layer stays `armed: true`. After each replay, read `armed` and `reason` of each layer in the step's `result`. If the start did not arm the layer that the test reads, or the stop did not disarm it, the reads after it prove nothing.
+- Keep the wait as a raw `tool:` step. A log listing can pass with an empty log. Match a part of the URL that contains no secret. On Android, capture can slow the app: start just before the action and stop right after the wait. When collecting several related requests, stop after the last check.
+- If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the missing start, then repeat and record the action and the wait. Replay only uses recorded steps.
+- If the recorder saves a failed wait, inspect `toolResult.nearMisses` for an `unmet` wait. Restore capture and repeat the action for `unreadable`. Record a new wait if cancelled. Remove superseded steps after `e2e-finish-recording`.
+- On replay, verify the relevant layer's `armed` and `reason` in the start and stop results. On Chromium, stop can report `armed: false` even when there was no window. If a failed step skips the stop, stop capture before replaying.
+
+On Vega, call `view-network-logs` before the action to start JavaScript capture. Read the log again after the action to inspect the requests. `await-network-request` is unavailable on Vega.
+
+A recorded `tool:` step keeps its `bundleId` on every platform. If app IDs differ, restrict the test with [`requires:`](e2e-yaml.md#file-shape-and-test-type) and record a test for each platform.
 
 ### Wrong turns
 

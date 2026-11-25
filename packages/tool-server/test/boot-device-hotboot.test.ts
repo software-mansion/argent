@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import type { Registry } from "@argent/registry";
+import { getFailureSignal, type Registry } from "@argent/registry";
 
 // Parametrize platform-dependent assertions so a single CI runner exercises
 // both branches. Without this, macOS CI never tests the linux branch and
@@ -966,7 +966,6 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     vi.useFakeTimers();
     try {
       hasSnapshotMock.mockResolvedValue(false);
-      const start = Date.now();
       let spawnedAt = -1;
       spawnMock.mockImplementation(() => {
         spawnedAt = Date.now();
@@ -988,11 +987,20 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
         return { stdout: "Pixel_7_API_34\n", stderr: "" };
       });
 
-      await bootUnderFakeTimers({ bootTimeoutMs: 30_000 });
+      const { outcome, elapsedMs } = await bootUnderFakeTimers({ bootTimeoutMs: 30_000 });
 
-      // Spawned at the boot deadline, not 30 s after the wait started.
-      expect(spawnedAt - start).toBeGreaterThanOrEqual(30_000);
-      expect(spawnedAt - start).toBeLessThan(31_000);
+      // Gave up at the boot deadline, not 30 s after the wait started. The
+      // frozen emulator still holds the AVD, so a spawn could only exit with
+      // the AVD lock: the boot names the instance in the way instead.
+      expect(elapsedMs).toBeGreaterThanOrEqual(30_000);
+      expect(elapsedMs).toBeLessThan(31_000);
+      expect(getFailureSignal((outcome as { e: unknown }).e)?.error_code).toBe(
+        "BOOT_ANDROID_READ_ONLY_CONFLICT"
+      );
+      // The call had no `port` and could not reuse that emulator, so booting
+      // without `port` cannot help.
+      expect(String((outcome as { e: unknown }).e)).not.toContain("port");
+      expect(spawnedAt).toBe(-1);
     } finally {
       vi.useRealTimers();
     }

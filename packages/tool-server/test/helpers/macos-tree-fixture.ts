@@ -280,9 +280,11 @@ export function fakeMacosLibrary(
     watchSuspensions: async () => null,
     startNetworkCapture: async () => ({ armed: true }),
     stopNetworkCapture: async () => ({ confirmed: true }),
+    forgetNetworkCaptureStart: () => {},
     isNetworkCaptureStarted: () => false,
     isNetworkCaptureStopped: () => false,
     isNetworkCaptureStopUnconfirmed: () => false,
+    networkCaptureMark: () => undefined,
     takeCaptureGap: () => false,
     networkRecords: () => {
       throw new Error("fake library: networkRecords");

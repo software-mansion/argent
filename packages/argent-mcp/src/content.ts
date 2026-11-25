@@ -124,11 +124,209 @@ async function savedText(scratchPath: string, data: Buffer, args: unknown): Prom
 }
 
 /**
- * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
- * text block; coerce to "null".
+ * Inline length past which containers break their entries onto separate lines
+ * (without indentation), keeping lists and nested trees scannable without the
+ * whitespace tax of pretty-printed JSON.
+ */
+const LINE_BREAK_THRESHOLD = 160;
+
+function isJsonOmitted(value: unknown): boolean {
+  return value === undefined || typeof value === "function" || typeof value === "symbol";
+}
+
+function isObjectWithoutToJson(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { toJSON?: unknown }).toJSON !== "function"
+  );
+}
+
+function isMultilineText(value: unknown): value is string {
+  return typeof value === "string" && value.includes("\n") && value.trim().length > 0;
+}
+
+interface FormattedNode {
+  text: string;
+  multiline: boolean;
+}
+
+interface ArrayFormatFrame {
+  kind: "array";
+  source: unknown[];
+  nextIndex: number;
+  items: FormattedNode[];
+  hasStructured: boolean;
+}
+
+interface ObjectFormatFrame {
+  kind: "object";
+  source: Record<string, unknown>;
+  entries: [string, unknown][];
+  nextIndex: number;
+  parts: Array<{ key: string; val: FormattedNode; structured: boolean }>;
+  topLevel: boolean;
+  pendingKey: string;
+  pendingStructured: boolean;
+}
+
+type FormatFrame = ArrayFormatFrame | ObjectFormatFrame;
+
+/**
+ * Iterative single-pass compact JSON formatter that breaks long containers
+ * across lines without indentation:
+ * - Short values (<= LINE_BREAK_THRESHOLD) stay on one line.
+ * - Arrays of objects/arrays put one item per line; scalar arrays stay inline.
+ * - Leaf record objects (e.g. a network request row) stay on one line; top-level
+ *   objects and containers holding large nested values break one entry per line.
+ * Uses an explicit stack so deeply nested results (such as React fiber trees)
+ * never overflow the JS call stack. Output is always valid JSON equivalent to
+ * JSON.stringify(value ?? null).
+ */
+function formatJsonNode(rootValue: unknown, rootTopLevel: boolean): FormattedNode {
+  const stack: FormatFrame[] = [];
+  const ancestors = new Set<object>();
+
+  const enter = (value: unknown, topLevel: boolean): FormattedNode | undefined => {
+    if (isJsonOmitted(value)) return { text: "null", multiline: false };
+    if (Array.isArray(value)) {
+      if (value.length === 0) return { text: "[]", multiline: false };
+      if (ancestors.has(value)) throw new TypeError("Converting circular structure to JSON");
+      ancestors.add(value);
+      stack.push({
+        kind: "array",
+        source: value,
+        nextIndex: 0,
+        items: [],
+        hasStructured: false,
+      });
+      return undefined;
+    }
+    if (isObjectWithoutToJson(value)) {
+      const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
+      if (entries.length === 0) return { text: "{}", multiline: false };
+      if (ancestors.has(value)) throw new TypeError("Converting circular structure to JSON");
+      ancestors.add(value);
+      stack.push({
+        kind: "object",
+        source: value,
+        entries,
+        nextIndex: 0,
+        parts: [],
+        topLevel,
+        pendingKey: "",
+        pendingStructured: false,
+      });
+      return undefined;
+    }
+    return { text: JSON.stringify(value) ?? "null", multiline: false };
+  };
+
+  const rootLeaf = enter(rootValue, rootTopLevel);
+  if (rootLeaf !== undefined) return rootLeaf;
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    let completed: FormattedNode;
+
+    if (frame.kind === "array") {
+      if (frame.nextIndex < frame.source.length) {
+        const el = frame.source[frame.nextIndex++]!;
+        if (el !== null && typeof el === "object") frame.hasStructured = true;
+        const leaf = enter(el, false);
+        if (leaf !== undefined) frame.items.push(leaf);
+        continue;
+      }
+      stack.pop();
+      ancestors.delete(frame.source);
+      const anyMultiline = frame.items.some((item) => item.multiline);
+      let flatLen = 2 + frame.items.length - 1;
+      for (const item of frame.items) flatLen += item.text.length;
+      completed =
+        !anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || !frame.hasStructured)
+          ? { text: `[${frame.items.map((i) => i.text).join(",")}]`, multiline: false }
+          : { text: `[\n${frame.items.map((i) => i.text).join(",\n")}\n]`, multiline: true };
+    } else {
+      if (frame.nextIndex < frame.entries.length) {
+        const [k, v] = frame.entries[frame.nextIndex++]!;
+        const key = JSON.stringify(k);
+        const structured = v !== null && typeof v === "object";
+        const leaf = enter(v, false);
+        if (leaf !== undefined) {
+          frame.parts.push({ key, val: leaf, structured });
+        } else {
+          frame.pendingKey = key;
+          frame.pendingStructured = structured;
+        }
+        continue;
+      }
+      stack.pop();
+      ancestors.delete(frame.source);
+      const anyMultiline = frame.parts.some((p) => p.val.multiline);
+      const hasBigNested = frame.parts.some(
+        (p) => p.val.multiline || (p.structured && p.val.text.length > LINE_BREAK_THRESHOLD)
+      );
+      let flatLen = 2 + frame.parts.length - 1;
+      for (const p of frame.parts) flatLen += p.key.length + 1 + p.val.text.length;
+      completed =
+        !anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || (!frame.topLevel && !hasBigNested))
+          ? {
+              text: `{${frame.parts.map((p) => `${p.key}:${p.val.text}`).join(",")}}`,
+              multiline: false,
+            }
+          : {
+              text: `{\n${frame.parts.map((p) => `${p.key}:${p.val.text}`).join(",\n")}\n}`,
+              multiline: true,
+            };
+    }
+
+    const parent = stack[stack.length - 1];
+    if (!parent) return completed;
+    if (parent.kind === "array") {
+      parent.items.push(completed);
+    } else {
+      parent.parts.push({
+        key: parent.pendingKey,
+        val: completed,
+        structured: parent.pendingStructured,
+      });
+    }
+  }
+
+  return { text: "null", multiline: false };
+}
+
+/**
+ * Format a tool result for an MCP text block without wasting tokens on JSON
+ * escaping or indentation while keeping structured data easy for models to read:
+ * - Non-empty strings pass through raw (no quotes or `\n`/`\"` escaping).
+ * - Objects with top-level multi-line text fields (e.g. `describe`'s
+ *   `description`, profiler `report`) emit compact JSON metadata first — so
+ *   warnings/paths stay at the top — followed by each multi-line field raw.
+ * - Everything else uses compact line-broken JSON (`formatJsonNode`).
  */
 function stringifyForText(value: unknown): string {
-  return JSON.stringify(value ?? null, null, 2);
+  if (typeof value === "string") {
+    // Avoid emitting an empty MCP text block, which some model APIs reject.
+    return value.length > 0 ? value : '""';
+  }
+  if (isObjectWithoutToJson(value)) {
+    const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
+    const multiline = entries.filter(([, v]) => isMultilineText(v)) as [string, string][];
+    if (multiline.length > 0) {
+      const rest = Object.fromEntries(entries.filter(([, v]) => !isMultilineText(v)));
+      const sections: string[] = [];
+      if (Object.keys(rest).length > 0) {
+        sections.push(formatJsonNode(rest, true).text);
+      }
+      for (const [k, v] of multiline) {
+        sections.push(`${k}:\n${v}`);
+      }
+      return sections.join("\n\n");
+    }
+  }
+  return formatJsonNode(value, true).text;
 }
 
 /**
@@ -157,7 +355,7 @@ async function legacyImageContent(
       },
     ];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text", text: stringifyForText(result) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
