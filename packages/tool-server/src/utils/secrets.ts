@@ -92,7 +92,11 @@ export function resolveSecretPlaceholders(
   return { text: resolved, secrets };
 }
 
-/** Shorter fragments would match ordinary text too often to redact by. */
+/**
+ * Shorter fragments would match ordinary text too often to redact by. Longer
+ * ones still can (`postgres://` from a database URL) and are redacted anyway:
+ * a marker where no secret was printed costs less than a leaked fragment.
+ */
 const MIN_FRAGMENT = 6;
 
 /**
