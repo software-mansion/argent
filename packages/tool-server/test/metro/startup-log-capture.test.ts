@@ -188,7 +188,7 @@ describe("JsRuntimeDebugger startup log capture", () => {
     const crashed = api.logWriter.getFilePath();
     const urn = `JsRuntimeDebugger:${mockPort}:${DEVICE}`;
     for (const ws of wss.clients) ws.terminate();
-    await vi.waitFor(() => expect(registry.getServiceState(urn)).not.toBe("RUNNING"));
+    await vi.waitFor(() => expect(registry.getServiceState(urn)).toBe("ERROR"));
     dropOnSetup = true;
     await expect(registry.resolveService(urn)).rejects.toThrow();
     const reaped = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE);
@@ -238,13 +238,29 @@ describe("JsRuntimeDebugger startup log capture", () => {
       const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
       crashed.push(api.logWriter.getFilePath());
       for (const ws of wss.clients) ws.terminate();
-      await vi.waitFor(() => expect(registry.getServiceState(urn)).not.toBe("RUNNING"));
+      await vi.waitFor(() => expect(registry.getServiceState(urn)).toBe("ERROR"));
     }
     const salvage = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE)?.salvage ?? "";
     expect(salvage.split("Before that:")).toHaveLength(2);
     expect(salvage).toContain(`is kept at ${crashed[3]}`);
     expect(salvage).toContain(
       `Before that: The log file with its 1 captured console entry is kept at ${crashed[0]}`
+    );
+  });
+
+  it("keeps naming a crashed session's file after teardowns on both sides of it", async () => {
+    const urn = `JsRuntimeDebugger:${mockPort}:${DEVICE}`;
+    await connect();
+    await registry.disposeService(urn);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    const crashed = api.logWriter.getFilePath();
+    for (const ws of wss.clients) ws.terminate();
+    await vi.waitFor(() => expect(registry.getServiceState(urn)).toBe("ERROR"));
+    await registry.resolveService(urn);
+    await registry.disposeService(urn);
+    const salvage = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE)?.salvage ?? "";
+    expect(salvage).toContain(
+      `Before that: The log file with its 1 captured console entry is kept at ${crashed}`
     );
   });
 });

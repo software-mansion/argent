@@ -199,6 +199,7 @@ export interface JsRuntimeDebuggerApi {
 }
 
 const BEFORE_THAT = " Before that: ";
+const KEPT_AT = " is kept at ";
 
 function cdpDisconnectedError() {
   return new FailureError("CDP disconnected", {
@@ -439,18 +440,19 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           "This registry holds only what the runtime replayed or logged since, so earlier " +
           "entries may be missing.";
         const salvage = keepFile
-          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}. ` +
+          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries}${KEPT_AT}${logWriter.getFilePath()}. ` +
             "If the app kept running, the current registry may repeat these entries, replayed by the runtime."
           : stored
             ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
             : `The ${entries} went with it: no log file held them. ${since}`;
         const kind = `js-runtime-debugger:${port}` as const;
         const ids = [deviceId, logicalDeviceId];
-        const oldest = takeReapedSessionAnyId(kind, ids)?.salvage?.split(BEFORE_THAT).at(-1);
+        const earlier = takeReapedSessionAnyId(kind, ids)?.salvage?.split(BEFORE_THAT);
+        const before = earlier?.findLast((note) => note.includes(KEPT_AT)) ?? earlier?.at(-1);
         recordReapedSession(
           kind,
           ids,
-          oldest ? `${salvage}${BEFORE_THAT}${oldest}` : salvage,
+          before ? `${salvage}${BEFORE_THAT}${before}` : salvage,
           connectionLost
         );
       }
