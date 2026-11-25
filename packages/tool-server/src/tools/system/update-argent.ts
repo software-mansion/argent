@@ -249,8 +249,7 @@ export const updateArgentTool: ToolDefinition<{
 
     if (updateScheduled) {
       return {
-        message:
-          "An Argent update is already in progress. Please wait for the tool server to restart.",
+        message: "An Argent update is already in progress.",
       };
     }
 
