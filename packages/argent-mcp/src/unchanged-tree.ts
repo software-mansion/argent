@@ -38,9 +38,9 @@ export const UNCHANGED_MAX_AGE_MS = 5 * 60_000;
  * modals) fall back to the full tree so the agent never has to reconstruct a
  * mostly-replaced screen from a long diff.
  */
-export const MAX_DIFF_RATIO = 0.6;
+const MAX_DIFF_RATIO = 0.6;
 
-export type TreeRenderMode = "full" | "diff" | "unchanged";
+type TreeRenderMode = "full" | "diff" | "unchanged";
 
 interface SentTree {
   id: string;
