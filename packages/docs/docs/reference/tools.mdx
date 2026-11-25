@@ -225,6 +225,17 @@ On Chromium, Argent applies the conditions to the page of the active tab. Argent
 
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
+On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
+
+On Android, Chrome 158 and later does not give the page of a regular tab to the accessibility tree. In this case, `describe` reads the DOM of the visible tab through the DevTools socket of the browser:
+
+- This applies to Chrome, Chrome Beta, Dev and Canary, and Chromium. Custom Tabs and WebViews keep their accessibility tree.
+- This applies to Chrome 158 and later only. An earlier Chrome gives the page to the accessibility tree, and `describe` waits for that tree.
+- The page elements show under the `WebView` element of the tab. Their roles and labels come from the HTML, as on Chromium.
+- The frames are fractions of the screen, as for all other elements.
+- The `source` is `android-devtools+cdp` or `uiautomator+cdp`, and the `hint` tells that the page came from the DOM.
+- When the DevTools read fails, `describe` returns the accessibility tree without the page.
+
 On an iOS simulator, a line of `describe` can show:
 
 - `[disabled]` for a control that is not enabled.
