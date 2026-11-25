@@ -113,7 +113,7 @@ export function claimTargets(args: unknown): string[] {
   return [...new Set(named.map(claimKey))];
 }
 
-/** The session a header names, `undefined` when absent, or `null` when it is not a usable id. */
+/** The session a header names, `undefined` when absent, or `null` for an unusable one. */
 export function parseSession(header: string | undefined): string | null | undefined {
   if (header === undefined) return undefined;
   const session = header.trim();
