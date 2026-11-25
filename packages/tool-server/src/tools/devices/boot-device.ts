@@ -350,11 +350,12 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  * drawn.
  *
  * Polls rather than probing once, because a restore can read blank for a while
- * before the composite hydrates. On `budgetMs` expiry the emulator is killed so
- * the caller falls through to a cold boot.
+ * before the composite hydrates. Only stop an unusable emulator if the caller
+ * can replace it.
  */
 async function assertScreencapAlive(
   serial: string,
+  onFailure: "replace" | "preserve",
   budgetMs: number = STAGE_BUDGET.firstRealFrameHot
 ): Promise<void> {
   const deadline = Date.now() + budgetMs;
@@ -372,10 +373,13 @@ async function assertScreencapAlive(
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 1_500));
   }
-  await killEmulatorQuietly(serial);
+  if (onFailure === "replace") await killEmulatorQuietly(serial);
   throw new FailureError(
     `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
-      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`,
+      `${JSON.stringify(lastReading ?? "no probe response")}. ` +
+      (onFailure === "replace"
+        ? "Falling back to cold boot so screenshots are usable."
+        : `Left ${serial} running. Pass \`force: true\` to replace it.`),
     {
       error_code: FAILURE_CODES.BOOT_ANDROID_HOT_BOOT_FRAME_UNUSABLE,
       failure_stage: "boot_android_hot_boot_frame",
@@ -1264,6 +1268,7 @@ function inFlightBootKey(params: AndroidBootParams): string {
 
 /** What argent knows about the running instances of one AVD. */
 type AvdInstances = {
+  processes: EmulatorProcess[] | null;
   /** Serials of the read-only instances. */
   readOnly: Set<string>;
   /**
@@ -1314,7 +1319,7 @@ async function avdInstances(avdName: string, listed?: Set<string>): Promise<AvdI
     readOnly.add(serial);
     if (boot.pinned) pinned.add(serial);
   }
-  return { readOnly, pinned };
+  return { processes, readOnly, pinned };
 }
 
 /**
@@ -1645,6 +1650,7 @@ async function bootAndroidImpl(
   let alreadyRunning = params.readOnly
     ? candidates.find((d) => instances.readOnly.has(d.serial))
     : (candidates.find((d) => !instances.readOnly.has(d.serial)) ?? candidates[0]);
+  let preserveOnProbeFailure = false;
   if (params.readOnly && !alreadyRunning && candidates[0]) {
     // A running instance of this AVD that argent does not recognise as
     // read-only: launched without `-port` by someone else, on the requested
@@ -1653,10 +1659,11 @@ async function bootAndroidImpl(
     // process of the AVD found at all, the table does not show how it was
     // launched, so it cannot tell. A boot without `port` then goes on below:
     // refused next to a writable instance, else starting its own.
-    const processes = await readEmulatorProcessesForAvd(params.avdName);
+    const { processes } = instances;
     const known = processes !== null && processes.length > 0;
     if (known && processes.every((p) => p.readOnly)) {
       alreadyRunning = candidates[0];
+      preserveOnProbeFailure = portSerial === null;
     } else if (portSerial !== null && !params.force) {
       throw portInUseError(
         known
@@ -1684,11 +1691,13 @@ async function bootAndroidImpl(
     } else {
       // A long-running emulator can drift into the same sticky-blank
       // SurfaceFlinger state `assertScreencapAlive` guards against on hot boot:
-      // readiness probes pass but every screenshot is black, and the fast path
-      // would keep handing back that wedged serial. On failure the helper kills
-      // the emulator and we fall through to the boot pipeline below.
+      // readiness probes pass but every screenshot is black. Reusing an
+      // external unpinned emulator does not authorize replacing it.
       try {
-        await assertScreencapAlive(alreadyRunning.serial);
+        await assertScreencapAlive(
+          alreadyRunning.serial,
+          preserveOnProbeFailure ? "preserve" : "replace"
+        );
         const note = await runningGuestVulkanNote(alreadyRunning.serial, params.guestVulkan);
         return {
           platform: "android",
@@ -1697,7 +1706,8 @@ async function bootAndroidImpl(
           booted: true,
           ...(note ? { note } : {}),
         };
-      } catch (_err) {
+      } catch (err) {
+        if (preserveOnProbeFailure) throw err;
         // assertScreencapAlive already killed the emulator.
         await dropKilledEmulator(alreadyRunning.serial);
       }
@@ -1827,7 +1837,7 @@ async function bootAndroidImpl(
           expectedSerial,
           pinnedElsewhere,
         });
-        await assertScreencapAlive(result.serial);
+        await assertScreencapAlive(result.serial, "replace");
         rememberReadOnly(result.serial, result.pid);
         return {
           platform: "android",

@@ -107,6 +107,8 @@ let world: FakeEmulator[] = [];
 let nextPid = 1000;
 /** False: `ps` fails, as when it times out, or as on Windows where there is none. */
 let psAvailable = true;
+let failNextPs = false;
+let blankFrameSerial: string | undefined;
 /** How many `lsof` calls still time out, as under host load. */
 let lsofTimeouts = 0;
 
@@ -158,6 +160,10 @@ function installWorld() {
     if (cmd === "adb" && args[0] === "version")
       return { stdout: "Android Debug Bridge\n", stderr: "" };
     if (args.includes("pid=,command=")) {
+      if (failNextPs) {
+        failNextPs = false;
+        return new Error("ps: timed out");
+      }
       if (!psAvailable) return new Error("ps: timed out");
       return { stdout: world.map(psLine).join(""), stderr: "" };
     }
@@ -194,6 +200,8 @@ function installWorld() {
       if (args[2] === "wait-for-device") return { stdout: "", stderr: "" };
       if (args[2] === "shell") {
         if (!emu) return new Error("error: closed");
+        if (serial === blankFrameSerial && args[3]?.startsWith("screencap"))
+          return { stdout: "0\n", stderr: "" };
         return shell(args[3] ?? "", emu.avdName);
       }
     }
@@ -263,6 +271,8 @@ beforeEach(() => {
   probeMock.mockReset();
   world = [];
   psAvailable = true;
+  failNextPs = false;
+  blankFrameSerial = undefined;
   lsofTimeouts = 0;
   listeningPorts.clear();
   __resetInFlightBootsForTesting();
@@ -381,6 +391,34 @@ describe("boot-device Android — readOnly and port", () => {
 
       expect(result).toMatchObject({ serial: "emulator-5556" });
       expect(spawnMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("reports a blank frame without replacing an external unpinned emulator", async () => {
+    const external = emulator("emulator-5554", { readOnly: true });
+    world = [external];
+    blankFrameSerial = external.serial;
+    vi.useFakeTimers();
+    try {
+      const code = failureCode(boot({ readOnly: true }));
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await code).toBe("BOOT_ANDROID_HOT_BOOT_FRAME_UNUSABLE");
+      expect(world).toEqual([external]);
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])(
+    "leaves a pinned emulator alone after a transient ps failure (force: %s)",
+    async (force) => {
+      const pinned = emulator("emulator-5576", { readOnly: true, portArg: true });
+      world = [pinned];
+      failNextPs = true;
+      const result = await boot({ readOnly: true, force });
+      expect(result).toMatchObject({ serial: "emulator-5554" });
+      expect(world).toContain(pinned);
     }
   );
 
