@@ -89,7 +89,16 @@ async function initUdid(
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
   const service = await resolveNativeDevtools(registry, udid);
-  if (service) trackedServices.set(udid, service);
+  if (!service) return;
+  trackedServices.set(udid, service);
+  // A tool call can have started the service, and spent its attempt, before this poll.
+  if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
+    await service.ensureEnvReady().catch(() => {});
+  }
+}
+
+function nativeDevtoolsUrn(udid: string): string {
+  return nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
 }
 
 async function resolveNativeDevtools(
@@ -123,7 +132,7 @@ async function runningNativeDevtools(
   registry: Registry,
   udid: string
 ): Promise<NativeDevtoolsApi | null> {
-  const urn = `${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`;
+  const urn = nativeDevtoolsUrn(udid);
   try {
     if (registry.getServiceState(urn) !== ServiceState.RUNNING) return null;
   } catch {
@@ -202,7 +211,7 @@ export function startSimulatorWatcher(registry: Registry): {
   }
 
   /**
-   * Split the booted set into the simulators the watcher may drive and the ones
+   * Split the targeted booted set into the simulators the watcher may drive and the ones
    * a provider claims.
    *
    * `ours` drops the claimed simulators whose provider withheld
@@ -277,7 +286,7 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   async function handBackClaimed(claimed: Set<string>): Promise<void> {
     for (const udid of claimed) {
-      /** A tool call can have armed it before any poll took the service up. */
+      // A tool call can have armed it before any poll took the service up.
       const service = trackedServices.get(udid) ?? (await runningNativeDevtools(registry, udid));
       /*
        * `armsEnv` is false for a service that already attaches to a provider,
@@ -302,7 +311,7 @@ export function startSimulatorWatcher(registry: Registry): {
   async function disposeAsWatcher(udid: string): Promise<void> {
     watcherDisposals.add(udid);
     try {
-      await registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
+      await registry.disposeService(nativeDevtoolsUrn(udid));
     } catch {
       // Best-effort, like every other dispose here.
     } finally {
@@ -354,7 +363,10 @@ export function startSimulatorWatcher(registry: Registry): {
      */
     await handBackClaimed(claimed);
 
-    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
+    // Read again after the hand-back, which a stop-all can overlap.
+    const newUdids = [...booted].filter(
+      (udid) => targetedUdids.has(udid) && !trackedServices.has(udid)
+    );
     const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
       initUdid(registry, udid, trackedServices)
     );
@@ -388,13 +400,14 @@ export function startSimulatorWatcher(registry: Registry): {
 
   registry.events.on("serviceStateChange", noteTargeted);
   const armsInFlight = new Map<string, Promise<void>>();
-  armTarget = (udid) => {
+  const armThisWatcher = (udid: string): Promise<void> => {
     const existing = armsInFlight.get(udid);
     if (existing) return existing;
     const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(udid));
     armsInFlight.set(udid, arming);
     return arming;
   };
+  armTarget = armThisWatcher;
 
   // Settles once the first poll has read the booted simulators, once the
   // bounded simctl call fails, or at once while Xcode's install is pending.
@@ -419,7 +432,7 @@ export function startSimulatorWatcher(registry: Registry): {
   return {
     stop: () => {
       registry.events.off("serviceStateChange", noteTargeted);
-      armTarget = () => Promise.resolve();
+      if (armTarget === armThisWatcher) armTarget = () => Promise.resolve();
       clearInterval(interval);
       stopController.abort();
     },
