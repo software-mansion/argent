@@ -64,6 +64,13 @@ export function isChromiumDebuggerTarget(deviceId: string | undefined): boolean 
   return !!canonicalDeviceId(deviceId)?.startsWith(CHROMIUM_ID_PREFIX);
 }
 
+/** The kind a debugger blueprint files its reaped-session breadcrumb under, one per Metro port. */
+export function reapedDebuggerKind(params: { port?: number; device_id?: string }) {
+  return isChromiumDebuggerTarget(params.device_id)
+    ? "js-runtime-debugger"
+    : (`js-runtime-debugger:${metroPort(params)}` as const);
+}
+
 /**
  * Debugger service ref for a tool's `services()` callback. `port` is irrelevant
  * for Chromium — its CDP port lives inside the device id — so the 8081 default
