@@ -10,7 +10,7 @@ import { runInNewContext } from "node:vm";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
-import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "@argent/tools-client";
 import { unchangedTreeNote } from "../src/unchanged-tree.js";
 import {
   getWhatsNewSeenVersion,

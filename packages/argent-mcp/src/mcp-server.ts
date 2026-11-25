@@ -1,7 +1,6 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
-import { setTimeout as sleep } from "node:timers/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -11,6 +10,21 @@ import {
   ensureToolsServer,
   getResolvedToolsUrl,
   getDeviceIdFromArgs,
+  autoScreenshotEnabled,
+  containsSecretPlaceholder,
+  getUdidFromArgs,
+  shouldAutoScreenshot,
+  autoDescribeEnabled,
+  shouldAutoDescribe,
+  describedTree,
+  awaitScreenSettled,
+  captureSettledScreen,
+  AUTO_DESCRIBE_HEADER,
+  CAPTURE_TIMEOUT_MS,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
+  SECRET_CAPTURE_SKIPPED_NOTE,
+  type CaptureToolCall,
+  type ScreenSettledResult,
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import {
@@ -28,19 +42,7 @@ import {
   type ContentBlock,
   type FlowExecuteResult,
 } from "./content.js";
-import {
-  autoScreenshotEnabled,
-  containsSecretPlaceholder,
-  getUdidFromArgs,
-  shouldAutoScreenshot,
-  getAutoScreenshotDelayMs,
-  autoDescribeEnabled,
-  shouldAutoDescribe,
-  AUTO_DESCRIBE_HEADER,
-  CAPTURE_TIMEOUT_MS,
-  PROFILING_CAPTURE_SKIPPED_NOTE,
-} from "./auto-capture.js";
-import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
+import { createTreeMemory, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { listDevicesText } from "./list-devices-text.js";
 import { nativeNetworkLogsText } from "./native-network-logs-text.js";
@@ -67,29 +69,6 @@ export interface StartMcpServerOptions {
   transport?: Transport;
   /** Cap of the post-action capture. Defaults to CAPTURE_TIMEOUT_MS; a test passes a short one. */
   captureTimeoutMs?: number;
-}
-
-/**
- * Runs `work` with a signal that aborts at `signal` or after `ms`. Node 20 and
- * 22 can collect an `AbortSignal.timeout()` that only `AbortSignal.any()`
- * references, which then never fires; the timer here keeps its controller alive.
- */
-async function withDeadline<T>(
-  signal: AbortSignal,
-  ms: number,
-  work: (signal: AbortSignal) => Promise<T>
-): Promise<T> {
-  const deadline = new AbortController();
-  const timer = setTimeout(
-    () =>
-      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
-    ms
-  );
-  try {
-    return await work(AbortSignal.any([signal, deadline.signal]));
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -187,40 +166,17 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     extraHeaders: aiClientHeaders,
   });
 
-  /**
-   * Lets the screen settle before capturing, bounded by the per-tool budget:
-   * `await-screen-idle` polls the tree server-side and usually returns well
-   * under the cap. If the call fails (e.g. a tool-server without that tool),
-   * falls back to sleeping out the rest of the budget or until the call is
-   * cancelled. Resolves whether it settled.
-   */
-  async function awaitScreenSettled(
-    udid: string,
-    toolName: string,
-    signal: AbortSignal
-  ): Promise<boolean> {
-    const maxWaitMs = getAutoScreenshotDelayMs(toolName);
-    if (maxWaitMs === 0) return true;
-    const started = Date.now();
-    try {
-      // The tool bounds its poll to maxWaitMs; the rest covers its setup.
-      const idle = await withDeadline(signal, maxWaitMs + captureTimeoutMs, (s) =>
-        callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs }, { signal: s })
-      );
-      await spyLog({
-        ts: new Date().toISOString(),
-        event: "auto_screenshot_readiness",
-        name: toolName,
-        maxWaitMs,
-        ...(idle.result as Record<string, unknown>),
-      });
-      return (idle.result as { settled?: unknown } | null)?.settled === true;
-    } catch {
-      await sleep(Math.max(0, maxWaitMs - (Date.now() - started)), undefined, { signal }).catch(
-        () => {}
-      );
-      return false;
-    }
+  const callForCapture: CaptureToolCall = async (name, args, signal) =>
+    (await callTool(name, args, { signal })).result;
+
+  async function logReadiness(toolName: string, settled: ScreenSettledResult): Promise<void> {
+    if (!settled.readiness) return;
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "auto_screenshot_readiness",
+      name: toolName,
+      ...settled.readiness,
+    });
   }
 
   async function captureScreenshotBlocks(
@@ -403,19 +359,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as
-        // pixels, and the element tree would hand it back as text. Every
-        // instruction in the note must be safe to follow AFTER the typing,
-        // since this branch only fires on a call that already typed it: hence
-        // it forbids re-sending the typing step (a rebuilt `run-sequence`
-        // would type the secret a second time on top of the first) and states
-        // that only this call is skipped, the decision being per call's args.
-        content = [
-          ...content,
-          {
-            type: "text" as const,
-            text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
-          },
-        ];
+        // pixels, and the element tree would hand it back as text.
+        content = [...content, { type: "text" as const, text: SECRET_CAPTURE_SKIPPED_NOTE }];
       } else if (udid && (wantScreenshot || wantTree) && profiling) {
         // The screenshot and describe load the app a profiler is recording on
         // this device, distorting the profile. The idle wait stays: without it,
@@ -423,23 +368,23 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // it. `describe` has already answered with the tree, so it needs no
         // pointer to itself.
         if (params.name !== "describe") {
-          await awaitScreenSettled(udid, params.name, signal);
+          await logReadiness(
+            params.name,
+            await awaitScreenSettled(callForCapture, udid, params.name, signal, captureTimeoutMs)
+          );
           content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
         }
       } else if (udid && (wantScreenshot || wantTree)) {
-        const screenSettled = await awaitScreenSettled(udid, params.name, signal);
         if (wantTree) treeUdid = udid;
-        const captured = await withDeadline(signal, captureTimeoutMs, async (captureSignal) => {
-          const screenshot = wantScreenshot
-            ? captureScreenshotBlocks(udid, captureSignal)
-            : Promise.resolve([]);
-          // An unsettled screen can leave a tree read in flight, which a
-          // concurrent describe would reuse (physical iPhone).
-          if (!screenSettled) await screenshot;
-          const tree = wantTree
-            ? captureTreeBlocks(udid, params.name, captureSignal)
-            : Promise.resolve([]);
-          return [...(await screenshot), ...(await tree)];
+        const captured = await captureSettledScreen({
+          call: callForCapture,
+          udid,
+          toolName: params.name,
+          signal,
+          captureTimeoutMs,
+          screenshot: wantScreenshot ? (s) => captureScreenshotBlocks(udid, s) : undefined,
+          tree: wantTree ? (s) => captureTreeBlocks(udid, params.name, s) : undefined,
+          onSettled: (settled) => logReadiness(params.name, settled),
         });
         content = [...content, ...captured];
       }

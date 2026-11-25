@@ -81,3 +81,23 @@ export {
   type PrepareFileInputsOptions,
   type AppliedClientFiles,
 } from "./file-inputs.js";
+
+export {
+  AUTO_DESCRIBE_HEADER,
+  CAPTURE_TIMEOUT_MS,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
+  SECRET_CAPTURE_SKIPPED_NOTE,
+  autoScreenshotEnabled,
+  autoDescribeEnabled,
+  shouldAutoScreenshot,
+  shouldAutoDescribe,
+  containsSecretPlaceholder,
+  getUdidFromArgs,
+  normalizeToolName,
+  getAutoScreenshotDelayMs,
+  describedTree,
+  awaitScreenSettled,
+  captureSettledScreen,
+  type CaptureToolCall,
+  type ScreenSettledResult,
+} from "./auto-capture.js";

@@ -280,7 +280,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
   return {
     id: "screenshot",
     description: `Capture a PNG of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>the window of a Mac app, </flag:macos-apps>or Chromium app). Returns { image }, the PNG file.
-Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result.
+Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result (not with \`argent run --json\`).
 Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harmonyos> or \`hdc\`</flag:harmonyos>) cannot be reached for this device.`,
     zodSchema,
     alwaysLoad: true,

@@ -61,6 +61,10 @@ function stderr(): string {
     .join("\n");
 }
 
+function callsTo(toolName: string): unknown[][] {
+  return toolsClientMock.callTool.mock.calls.filter((c: unknown[]) => c[0] === toolName);
+}
+
 function stdout(): string {
   return (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls
     .map((c) => String(c[0]))
@@ -126,7 +130,7 @@ describe("argent run input validation", () => {
 
   it("accepts required fields split across --args and flags", async () => {
     await invoke(["gesture-tap", "--udid", "X", "--args", '{"x":0.5,"y":0.5}']);
-    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(callsTo("gesture-tap")).toHaveLength(1);
   });
 
   it("reports only the fields still missing after --args is merged", async () => {
@@ -145,7 +149,7 @@ describe("argent run input validation", () => {
     toolsClientMock.fetchTool.mockResolvedValue(runSequence);
 
     await invoke(["run-sequence", "--udid", "X", "--steps-json", '[{"tool":"button"}]']);
-    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(callsTo("run-sequence")).toHaveLength(1);
   });
 
   it("still prints help for --help without demanding flags", async () => {

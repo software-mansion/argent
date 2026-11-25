@@ -12,7 +12,7 @@
  */
 
 import { randomInt } from "node:crypto";
-import { normalizeToolName } from "./auto-capture.js";
+import { normalizeToolName } from "@argent/tools-client";
 
 /**
  * Notes sent in a row for one tree before the tree is sent again. It limits how
@@ -121,19 +121,4 @@ export function createTreeMemory(
       lastSent.delete(udid);
     },
   };
-}
-
-/**
- * The tree of a `describe` result as the agent reads it after an action: the
- * hint line, then the tree. Undefined when the result has no tree.
- */
-export function describedTree(result: unknown): string | undefined {
-  const { description, hint } =
-    (result as { description?: unknown; hint?: unknown } | null | undefined) ?? {};
-  if (typeof description !== "string" || description.length === 0) return undefined;
-  // The agent reads this tree in place of describe, so it needs describe's warnings too
-  // (the TV description already carries its hint).
-  const hintLine =
-    typeof hint === "string" && hint && !description.includes(hint) ? `Hint: ${hint}\n` : "";
-  return `${hintLine}${description}`;
 }
