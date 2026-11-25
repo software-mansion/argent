@@ -240,6 +240,8 @@ Subcommands:
                              makes before the first step, and check tool names,
                              tool arguments and script files, also in the run:
                              fragments and e2e-execute tests its steps reach.
+                             Reports every step that does not parse; a file
+                             with such a step gets no other check.
                              Prints each problem on stderr and exits 1 when it
                              finds one.
                              --json prints { "ok", "e2eTests": [...] } instead,
