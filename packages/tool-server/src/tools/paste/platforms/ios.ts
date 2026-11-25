@@ -106,7 +106,7 @@ export function makeIosImpl(
 
 /**
  * Remote sims paste through the MoQ transport's `paste`: `sim-remote simctl
- * pbcopy` fills the remote pasteboard, then ⌘V rides the MoQ control channel.
+ * pbcopy` fills the remote pasteboard, then ⌘V goes out as key events over MoQ.
  * The HTTP clipboard route does not exist for a remote sim.
  */
 export function makeIosRemoteImpl(

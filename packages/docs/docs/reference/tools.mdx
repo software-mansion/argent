@@ -225,6 +225,17 @@ On Chromium, Argent applies the conditions to the page of the active tab. Argent
 
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
+On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
+
+On Android, Chrome 158 and later does not give the page of a regular tab to the accessibility tree. In this case, `describe` reads the DOM of the visible tab through the DevTools socket of the browser:
+
+- This applies to Chrome, Chrome Beta, Dev and Canary, and Chromium. Custom Tabs and WebViews keep their accessibility tree.
+- This applies to Chrome 158 and later only. An earlier Chrome gives the page to the accessibility tree, and `describe` waits for that tree.
+- The page elements show under the `WebView` element of the tab. Their roles and labels come from the HTML, as on Chromium.
+- The frames are fractions of the screen, as for all other elements.
+- The `source` is `android-devtools+cdp` or `uiautomator+cdp`, and the `hint` tells that the page came from the DOM.
+- When the DevTools read fails, `describe` returns the accessibility tree without the page.
+
 On an iOS simulator, a line of `describe` can show:
 
 - `[disabled]` for a control that is not enabled.
@@ -253,6 +264,27 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 | `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+
+In `run-sequence`, Argent waits for the element tree to stop changing after some steps:
+
+- A tap or a `button` step.
+- An enter or escape key, or `keyboard` text that contains a newline.
+- An `await-ui-element` step with a met condition.
+
+Argent reads the element tree until two reads are equal, for at most 1 second. Then Argent applies the `delayMs` of the step and starts the next step. Argent does not wait when the next step is `await-ui-element`, because that step polls the tree itself. Argent also does not wait between two taps at the same position, so a double tap or a triple tap keeps its timing.
+
+Argent does this wait on a local iOS simulator, an Android device and Chromium. On Android, the wait reads the tree through the Argent helper app only.
+
+The element tree can stay the same while an element still moves:
+
+- A native iOS push or sheet.
+- A web page in Chrome on Android. Chrome can keep the old element frames while JavaScript moves an element.
+- An element below the screen edge. Its frame does not change until it enters the screen.
+- An animation that starts late.
+
+On iOS and Chromium, movement that JavaScript does usually changes the element tree. Before a step that needs the new screen, add an `await-ui-element` step.
+
+On a screen that keeps changing, each wait adds up to 1 second. Set the top-level `settle: false` parameter of `run-sequence` to send the steps without this wait.
 
 Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
 
