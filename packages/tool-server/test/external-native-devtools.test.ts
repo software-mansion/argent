@@ -169,15 +169,16 @@ async function startLentAgent({
   const server = net.createServer((socket) => {
     sockets.push(socket);
     connections++;
-    /**
-     * Argent can hang up with frames still unread, which Linux reports to this
-     * end as ECONNRESET. A provider outlives its clients, so the agent ignores
-     * it.
-     */
-    socket.on("error", () => {});
     if (!deferHandshake) sendHandshake(socket);
 
-    readline.createInterface({ input: socket }).on("line", (raw) => {
+    const lines = readline.createInterface({ input: socket });
+    /**
+     * Argent can hang up with frames still unread, which Linux reports to this
+     * end as ECONNRESET. `readline` re-emits it on the interface. A provider
+     * outlives its clients, so the agent ignores it.
+     */
+    lines.on("error", () => {});
+    lines.on("line", (raw) => {
       const message = JSON.parse(raw);
       received.push(message);
 
