@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import { FailureError, getFailureSignal } from "@argent/registry";
+import { FailureError, getFailureSignal, type DeviceInfo, type Registry } from "@argent/registry";
 import type { DescribeFrame, UiOrientation } from "../describe/contract";
 import { isIosSimulator } from "../../utils/device-info";
 import { readUiOrientation } from "../../utils/ios-ui-orientation";
@@ -22,7 +22,10 @@ import {
   type FlowSelector,
 } from "./flow-utils";
 import { supportsFlowTree } from "./flow-tree";
-import { diffPngFiles } from "../screenshot-diff/screenshot-diff";
+import { compareScreenshots, writeContextDiff } from "../screenshot-diff/screenshot-diff";
+import { settleOnPixels, settlesOnPixels } from "./flow-pixels";
+import { simulatorServerRef } from "../../blueprints/simulator-server";
+import { axServiceRef } from "../../blueprints/ax-service";
 import { foldablePostureHint } from "../../utils/foldable";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { clientBaselinePath, type ProjectAccess } from "./project-access";
@@ -167,6 +170,44 @@ async function cropPngFile(
 }
 
 /**
+ * Start the capture backend, and on an iOS simulator the accessibility service
+ * a capture reads the UI orientation from, while the run's first steps execute,
+ * so the first snapshot does not wait for them. Best-effort: a failure here resurfaces at the
+ * capture.
+ */
+export async function warmSnapshotCapture(registry: Registry, device: DeviceInfo): Promise<void> {
+  try {
+    if (!(await settlesOnPixels(device))) return;
+    const refs = isIosSimulator(device)
+      ? [simulatorServerRef(device), axServiceRef(device)]
+      : [simulatorServerRef(device)];
+    await Promise.all(refs.map((ref) => registry.resolveService(ref.urn, ref.options)));
+  } catch {
+    // the snapshot's own capture reports it
+  }
+}
+
+/**
+ * Settle so the capture is stable run-to-run rather than timed by a guess: on
+ * the captures themselves where they are cheap, since a fade or a layer
+ * animation moves no tree node, and on the tree everywhere else.
+ *
+ * Best-effort either way: the capture that follows surfaces a dead device. A
+ * tree-source outage is swallowed, not lost: `settleTree` records it on
+ * `ActionEnv.treeOutage` for a later gesture to spend. Skipped where neither
+ * source exists.
+ */
+async function settleScreen(env: ActionEnv): Promise<void> {
+  if ((await settlesOnPixels(env.device)) && (await settleOnPixels(env)) !== "blind") return;
+  if (!supportsFlowTree(env.device.platform)) return;
+  try {
+    await settleTree(env);
+  } catch {
+    // tree-source outage: capture anyway, see above
+  }
+}
+
+/**
  * Capture the current screen and compare it to a stored baseline keyed by
  * authoring platform + resolution. A missing baseline FAILS the step — adopting
  * one is always an explicit `updateBaselines` gesture. The key is derived from the
@@ -215,22 +256,7 @@ export async function runSnapshot(
     seenKeys: Map<string, string>;
   }
 ): Promise<VisualOutcome> {
-  // Settle so the capture is stable run-to-run rather than timed by a guess.
-  // `settleTree` returns undefined only on abort and throws only on a sustained
-  // tree-source outage; the capture reads pixels, not the describe tree, so
-  // proceed best-effort — a dead device still surfaces via the screenshot
-  // invoke below. The throw is swallowed, not lost: the settle records the
-  // outage on `ActionEnv.treeOutage` for a later gesture to spend. A gesture
-  // that swallows one warns; a capture has no `warning` channel, which makes
-  // this the one settle that passes silently.
-  // Skipped where no flow tree source exists: every read would fail.
-  if (opts.cropOn === undefined && supportsFlowTree(env.device.platform)) {
-    try {
-      await settleTree(env);
-    } catch {
-      // tree-source outage — capture anyway, see above
-    }
-  }
+  if (opts.cropOn === undefined) await settleScreen(env);
   if (env.signal?.aborted) {
     return { status: "skip", reason: "run aborted during snapshot settle" };
   }
@@ -466,19 +492,18 @@ export async function runSnapshot(
       };
     }
 
-    // Scratch dir for the differ's full-res diff and downscaled context diff.
-    // Nothing in it may outlive this call except a file registered as an
-    // artifact below (its host path is materialized later) — the finally sweeps
-    // the rest, or a long-lived tool-server running snapshot flows would
-    // accrete argent-e2e-diff-* directories forever.
+    // Scratch dir for the context diff of a failing compare. Nothing in it may
+    // outlive this call except a file registered as an artifact below (its
+    // host path is materialized later). The finally sweeps the rest, or a
+    // long-lived tool-server running snapshot flows would accrete
+    // argent-e2e-diff-* directories forever.
     const localBaseline = await hostBaseline(stored);
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-diff-"));
+    let outputDir: string | undefined;
     let keepInOutputDir: string | undefined;
     try {
-      const result = await diffPngFiles({
+      const result = await compareScreenshots({
         baselinePath: localBaseline,
         currentPath,
-        outputDir,
         // A crop compares EVERY pixel of the element's region, wherever it
         // sits. Masking a crop's overlap with the screen's top status-bar band
         // would degenerate into comparing nothing for an element inside the
@@ -537,19 +562,21 @@ export async function runSnapshot(
         current: await currentArtifact(),
       };
       // The annotated context diff — the image a client renders inline so the
-      // agent can see WHAT differed. Absent when the diff bailed early.
-      if (result.contextDiffPath) {
+      // agent can see WHAT differed.
+      outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-e2e-diff-"));
+      const contextDiffPath = path.join(outputDir, `${snapshotKey}-diff.png`);
+      if (await writeContextDiff(result, contextDiffPath)) {
         artifacts.diff = await store.register({
-          hostPath: result.contextDiffPath,
+          hostPath: contextDiffPath,
           kind: "screenshot-diff-context",
           mimeType: "image/png",
           filename: `${snapshotKey}-diff.png`,
         });
-        keepInOutputDir = result.contextDiffPath;
+        keepInOutputDir = contextDiffPath;
       }
       return { ...captureWarned, status: "fail", reason, snapshotKey, artifacts };
     } finally {
-      await cleanupDiffDir(outputDir, keepInOutputDir);
+      if (outputDir !== undefined) await cleanupDiffDir(outputDir, keepInOutputDir);
     }
   } finally {
     if (cropDir !== undefined) {
