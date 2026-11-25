@@ -53,7 +53,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
   };
 });
 
-import type { Registry } from "@argent/registry";
+import { ServiceState, type Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
 import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
@@ -284,12 +284,15 @@ describe("simulator-watcher against a provider's simulator", () => {
       const attaching = { ...makeApi(), armsEnv: false };
       let published = false;
 
-      const resolveService = vi.fn(async () => (published ? attaching : armed));
-      /** Like the real registry, a dispose reports the service back to idle. */
+      /** Like the real registry: the factory runs once until a dispose. */
+      let cached: NativeDevtoolsApi | undefined;
+      const resolveService = vi.fn(async () => (cached ??= published ? attaching : armed));
       const disposeService = vi.fn(async (urn: string) => {
+        cached = undefined;
         untargetSimulators(registry, urn.split(":")[1]);
       });
-      const registry = watcherRegistry({ resolveService, disposeService });
+      const getServiceState = () => ServiceState.RUNNING;
+      const registry = watcherRegistry({ resolveService, disposeService, getServiceState });
 
       return {
         armed,
@@ -381,6 +384,18 @@ describe("simulator-watcher against a provider's simulator", () => {
 
       expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("leaves a claimed simulator to its provider when a tool call targets it", async () => {
+    publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
+    const { registry, resolveService } = makeRegistry();
+
+    const { ready, stop } = startSimulatorWatcher(registry);
+    await ready;
+    await armSimulator(CLAIMED_UDID);
+    stop();
+
+    expect(resolvedUdids(resolveService)).not.toContain(CLAIMED_UDID);
   });
 
   /** The claim is only as live as the process behind it. */

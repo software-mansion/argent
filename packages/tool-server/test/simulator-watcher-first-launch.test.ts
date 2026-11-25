@@ -339,6 +339,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       await armSimulator(SIMULATOR.id);
       const beforeReboot = await resolveLikeATool();
       expectArmed(beforeReboot);
+      await vi.advanceTimersByTimeAsync(10_000);
 
       execSimctlMock.mockResolvedValue('{"devices":{}}');
       await vi.advanceTimersByTimeAsync(10_000);

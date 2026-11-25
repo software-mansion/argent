@@ -6,7 +6,6 @@ import {
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
 import { externalClaimForAnyId, externalClaimForNativeId } from "./external-devices";
-import { deviceKeyOf } from "./native-network-record";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -109,40 +108,38 @@ async function resolveNativeDevtools(
   }
 }
 
-/** A provider supplied this simulator without the grant, so its injection belongs to the provider. */
-function withholdsNativeDevtools(udid: string): boolean {
-  const claim = externalClaimForAnyId(udid);
-  return claim !== undefined && !claim.capabilities.has("native-devtools");
-}
-
 /**
- * Tracked like a simulator the poll found, so a claim published after this still
- * gets its environment handed back and a shutdown still drops the service.
+ * Skips a provider's simulator: the provider owns its injection, and a tool that
+ * needs native devtools there attaches through its own call.
  */
-async function armNow(
-  registry: Registry,
-  udid: string,
-  trackedServices: Map<string, NativeDevtoolsApi>
-): Promise<void> {
-  if (withholdsNativeDevtools(udid)) return;
+async function armNow(registry: Registry, udid: string): Promise<void> {
+  if (externalClaimForAnyId(udid)) return;
   const service = await resolveNativeDevtools(registry, udid);
-  if (!service) return;
-  trackedServices.set(deviceKeyOf(udid), service);
-  await service.ensureEnvReady().catch(() => {});
+  await service?.ensureEnvReady().catch(() => {});
 }
 
-async function armWithinCap(
+/** The simulator's native-devtools service if one is running, without starting one. */
+async function runningNativeDevtools(
   registry: Registry,
-  udid: string,
-  trackedServices: Map<string, NativeDevtoolsApi>
-): Promise<void> {
+  udid: string
+): Promise<NativeDevtoolsApi | null> {
+  const urn = `${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`;
+  try {
+    if (registry.getServiceState(urn) !== ServiceState.RUNNING) return null;
+  } catch {
+    return null;
+  }
+  return resolveNativeDevtools(registry, udid);
+}
+
+async function armWithinCap(registry: Registry, udid: string): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
   const cap = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, ARM_WAIT_MS);
     timer.unref();
   });
   try {
-    await Promise.race([armNow(registry, udid, trackedServices), cap]);
+    await Promise.race([armNow(registry, udid), cap]);
   } finally {
     clearTimeout(timer);
   }
@@ -163,12 +160,7 @@ export function startSimulatorWatcher(registry: Registry): {
   const targetedUdids = new Set<string>();
   /** Services the watcher itself disposes, whose simulators stay targeted. */
   const watcherDisposals = new Set<string>();
-  /**
-   * Every UDID a poll has listed as booted. Only these can be seen to shut
-   * down: a tool can arm a simulator the poll never lists, in a provider's own
-   * device set or under a lowercase spelling.
-   */
-  const seenBooted = new Set<string>();
+
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
@@ -267,8 +259,8 @@ export function startSimulatorWatcher(registry: Registry): {
    * Give a newly claimed simulator's devtools environment back to its provider.
    *
    * A provider that boots a simulator arms its own injection and then publishes
-   * the descriptor, so a tool call landing in between finds an unclaimed
-   * simulator and arms over it. Once the claim appears the environment is the provider's
+   * the descriptor, so an arm landing in between finds an unclaimed simulator
+   * and arms over it. Once the claim appears the environment is the provider's
    * business, whatever it granted/ `NATIVE_DEVTOOLS_IOS_CDP_SOCKET` names our
    * socket and launchd holds it for the rest of the boot, so the provider's own
    * agent would dial us rather than the provider.
@@ -285,7 +277,8 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   async function handBackClaimed(claimed: Set<string>): Promise<void> {
     for (const udid of claimed) {
-      const service = trackedServices.get(udid);
+      /** A tool call can have armed it before any poll took the service up. */
+      const service = trackedServices.get(udid) ?? (await runningNativeDevtools(registry, udid));
       /*
        * `armsEnv` is false for a service that already attaches to a provider,
        * which is every service resolved after the claim was published. Only one
@@ -336,9 +329,9 @@ export function startSimulatorWatcher(registry: Registry): {
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      const allBooted = await getBootedUdids(stopController.signal);
-      for (const udid of allBooted) seenBooted.add(udid);
-      ({ ours: booted, claimed } = withoutForeignSimulators(onlyTargeted(allBooted)));
+      ({ ours: booted, claimed } = withoutForeignSimulators(
+        onlyTargeted(await getBootedUdids(stopController.signal))
+      ));
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
         consecutiveTimeouts += 1;
@@ -387,7 +380,7 @@ export function startSimulatorWatcher(registry: Registry): {
      * `handBackClaimed` above, which withdraws first.
      */
     for (const udid of [...trackedServices.keys()]) {
-      if (booted.has(udid) || !seenBooted.has(udid)) continue;
+      if (booted.has(udid)) continue;
       trackedServices.delete(udid);
       void disposeAsWatcher(udid);
     }
@@ -398,9 +391,7 @@ export function startSimulatorWatcher(registry: Registry): {
   armTarget = (udid) => {
     const existing = armsInFlight.get(udid);
     if (existing) return existing;
-    const arming = armWithinCap(registry, udid, trackedServices).finally(() =>
-      armsInFlight.delete(udid)
-    );
+    const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(udid));
     armsInFlight.set(udid, arming);
     return arming;
   };

@@ -434,7 +434,7 @@ export function start(): void {
   // Not on the watcher's first poll: on a cold CoreSimulatorService its
   // `simctl list` runs to its 10s timeout, which with process startup can pass
   // the launcher's 15s ready timeout. What can start an iOS app arms injection
-  // on its simulator itself (launch-app, restart-app, armSimulator).
+  // on its simulator itself (launch-app, restart-app) or through `armSimulator`.
   identityWarm
     .then(() => {
       if (shuttingDown) return;
