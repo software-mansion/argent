@@ -24,6 +24,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  joinTextOnlyContent,
   type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
@@ -498,7 +499,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       if (treeUdid !== undefined && signal.aborted) trees.forget(treeUdid);
       if (screenshotUdid !== undefined && signal.aborted) screenshots.forget(screenshotUdid);
 
-      return { content };
+      return { content: joinTextOnlyContent(content) };
     } catch (err) {
       if (treeUdid !== undefined) trees.forget(treeUdid);
       if (screenshotUdid !== undefined) screenshots.forget(screenshotUdid);
