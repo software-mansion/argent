@@ -22,29 +22,29 @@ export const captureSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target ID from list-devices: an iOS simulator UDID, an Android serial<flag:macos-apps>, a Mac app ID (macos-app-<bundle id>)</flag:macos-apps> or a Chromium ID (chromium-cdp-<port>)."
+      "Device ID from list-devices<flag:macos-apps>. For Mac builds started outside Argent, use macos-app-<bundle id></flag:macos-apps>."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On Mac apps, use the bundle ID from udid</flag:macos-apps>. On Chromium, udid selects the app. Use a valid placeholder such as argent.capture."
+      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On Mac, omit the macos-app- prefix</flag:macos-apps>. On Chromium, use a valid placeholder such as argent.capture."
     ),
   port: metroPortField.describe(
-    "The app's Metro port. Omit it to use the device's port (8081 by default). Native layers exclude requests to this port on local addresses. Chromium uses the CDP port in udid."
+    "The app's Metro port for JS capture and native log filtering. Omit it only when the app uses the device's port (usually 8081); otherwise check the project's Metro start script. Chromium uses the CDP port in udid."
   ),
   layer: z
     .enum(["js", "native"])
     .optional()
     .describe(
-      "Use js for JavaScript runtime capture or native for native HTTP capture. Omit to control both layers. Chromium ignores this setting and uses its single chromium layer."
+      "Omit to control both layers. Selecting one leaves the other alone. Chromium ignores this setting."
     ),
   logicalDeviceId: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Only when several devices share the Metro port: this device's logicalDeviceId, which the JS layer's reason lists. The JS layer connects to that runtime, and view-network-logs then takes it as device_id. The native layer always uses udid."
+      "For iOS simulators and Android on shared Metro, use the logical ID for the intended device if requested. Reuse it for start and stop, and as device_id for JS reads.<flag:macos-apps> For Mac apps, omit logicalDeviceId and keep the Mac app id even on shared Metro.</flag:macos-apps>"
     ),
 });
 
