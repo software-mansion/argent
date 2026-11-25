@@ -38,12 +38,23 @@ export interface RemoteAudioSession {
   /** Control directory on the remote Mac. */
   readonly dir: string;
   link: FeederLink | null;
+  /** The feeder being started, shared so concurrent first calls start one feeder, not one each. */
+  connecting: Promise<FeederLink> | null;
+  /** Released (dispose): a feeder still connecting is closed as soon as it arrives. */
+  released: boolean;
   /** This process uploaded its own hook: one another Argent version left on the remote Mac may differ. */
   hookUploaded: boolean;
 }
 
 export function createRemoteAudioSession(udid: string): RemoteAudioSession {
-  return { udid, dir: audioDir(stripRemotePrefix(udid)), link: null, hookUploaded: false };
+  return {
+    udid,
+    dir: audioDir(stripRemotePrefix(udid)),
+    link: null,
+    connecting: null,
+    released: false,
+    hookUploaded: false,
+  };
 }
 
 function failure(
@@ -185,7 +196,8 @@ async function remoteGetenv(udid: string, name: string): Promise<string> {
 /**
  * Inserts the audio hook into the remote simulator's launchd environment and points it at the control directory.
  * Checked on every call: a reboot wipes both. The first call of this process uploads its hook even when one is
- * inserted, since an older Argent may have left its own. Apps launched from now on carry the hook.
+ * inserted, since an older Argent may have left its own. Starts the feeder, which creates the control directory.
+ * Apps launched from now on carry the hook.
  */
 export async function armRemoteAudio(session: RemoteAudioSession): Promise<void> {
   const { udid, dir } = session;
@@ -208,12 +220,29 @@ export async function armRemoteAudio(session: RemoteAudioSession): Promise<void>
       "audio_env_setup"
     );
   }
+  // The feeder creates the control directory, and a hooked app reports itself only into one that exists.
+  await ensureLink(session);
 }
 
 /** The feeder link, starting the feeder in the remote simulator when none is connected. */
-async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
-  if (session.link && !session.link.closed) return session.link;
+function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
+  if (session.link && !session.link.closed) return Promise.resolve(session.link);
+  if (session.released) {
+    return Promise.reject(
+      failure(`The audio session for ${session.udid} was released.`, "audio_remote_link")
+    );
+  }
+  session.connecting ??= startFeeder(session).finally(() => {
+    session.connecting = null;
+  });
+  return session.connecting;
+}
+
+async function startFeeder(session: RemoteAudioSession): Promise<FeederLink> {
+  // A dropped link still holds its listener and tunnel.
+  const stale = session.link;
   session.link = null;
+  await stale?.close();
   const token = randomBytes(12).toString("hex");
   const server = net.createServer();
   await new Promise<void>((resolve, reject) => {
@@ -259,8 +288,13 @@ async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
     });
     const socket = await connected;
     socket.setNoDelay(true);
-    session.link = new FeederLink(socket, server, session.udid, port);
-    return session.link;
+    const link = new FeederLink(socket, server, session.udid, port);
+    if (session.released) {
+      await link.close();
+      throw failure(`The audio session for ${session.udid} was released.`, "audio_remote_link");
+    }
+    session.link = link;
+    return link;
   } catch (err) {
     clearTimeout(timer);
     server.close();
@@ -311,9 +345,12 @@ export async function setRemoteAudioInput(
   return { source: "file", durationMs: Math.round((frames * 1000) / STREAM_RATE) };
 }
 
-/** Gives the microphone back. With no feeder connected there is nothing of ours to clear. */
+/**
+ * Gives the microphone back, whichever tool-server set the input: like a local simulator's explicit release, so this
+ * connects a feeder of its own when it has none.
+ */
 export async function clearRemoteAudioInput(session: RemoteAudioSession): Promise<void> {
-  if (session.link && !session.link.closed) await session.link.request("MIC");
+  await (await ensureLink(session)).request("MIC");
 }
 
 interface RemoteStatusRecord {
@@ -358,6 +395,8 @@ export async function readRemoteAppHook(
 
 /** Disconnecting makes the feeder give the microphone back and exit. */
 export async function releaseRemoteAudio(session: RemoteAudioSession): Promise<void> {
+  session.released = true;
+  await session.connecting?.catch(() => {});
   const link = session.link;
   session.link = null;
   await link?.close();

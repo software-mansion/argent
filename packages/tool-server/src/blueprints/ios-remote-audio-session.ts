@@ -7,7 +7,7 @@ import {
 
 // Session for the `audio-*` tools on one Argent Cloud simulator: the link to the feeder running in it. Disposing it
 // disconnects the feeder, which gives the apps their microphone back and exits.
-const IOS_REMOTE_AUDIO_SESSION_NAMESPACE = "IosRemoteAudioSession";
+export const IOS_REMOTE_AUDIO_SESSION_NAMESPACE = "IosRemoteAudioSession";
 
 export const iosRemoteAudioSessionBlueprint: ServiceBlueprint<RemoteAudioSession, string> = {
   namespace: IOS_REMOTE_AUDIO_SESSION_NAMESPACE,

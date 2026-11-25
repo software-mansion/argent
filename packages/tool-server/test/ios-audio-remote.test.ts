@@ -3,10 +3,16 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
+import {
+  IOS_REMOTE_AUDIO_SESSION_NAMESPACE,
+  iosRemoteAudioSessionBlueprint,
+} from "../src/blueprints/ios-remote-audio-session";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { proxyStop, simctlSpawn } from "../src/utils/sim-remote";
 import {
+  clearRemoteAudioInput,
   createRemoteAudioSession,
   listRemoteLiveApps,
   readRemoteAppHook,
@@ -24,7 +30,8 @@ vi.mock("@argent/native-devtools-ios", () => ({
 interface Feeder {
   commands: string[];
   payloads: Buffer[];
-  closed: Promise<void>;
+  socket: net.Socket;
+  isClosed: boolean;
 }
 let feeders: Feeder[] = [];
 let reply: (command: string) => string = () => "OK";
@@ -37,8 +44,10 @@ function startFeeder(port: number, token: string): void {
   const feeder: Feeder = {
     commands: [],
     payloads: [],
-    closed: new Promise((resolve) => socket.on("close", () => resolve())),
+    socket,
+    isClosed: false,
   };
+  socket.on("close", () => (feeder.isClosed = true));
   feeders.push(feeder);
   let buf = Buffer.alloc(0);
   let pending = -1;
@@ -84,7 +93,13 @@ vi.mock("../src/utils/sim-remote", () => ({
   }),
 }));
 
-const feederSpawns = () => vi.mocked(simctlSpawn).mock.calls.filter(([, o]) => o.binPath).length;
+const feederSpawns = () => vi.mocked(simctlSpawn).mock.calls.filter(([, o]) => o.binPath);
+const tunnelPort = (spawn: number) => Number(feederSpawns()[spawn]![1].args![1]);
+const feederClosed = (i: number) =>
+  vi.waitFor(() => expect(feeders[i]!.isClosed).toBe(true), { timeout: 1000 });
+const UDID = "remote:0000AAAA-0000-0000-0000-000000000001";
+const tone = (s: RemoteAudioSession, frequencyHz = 440) =>
+  setRemoteAudioInput(s, { kind: "tone", frequencyHz, amplitude: 0.5 });
 
 let session: RemoteAudioSession;
 let tmp: string;
@@ -93,7 +108,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   feeders = [];
   reply = () => "OK";
-  session = createRemoteAudioSession("remote:0000AAAA-0000-0000-0000-000000000001");
+  session = createRemoteAudioSession(UDID);
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-remote-audio-"));
 });
 
@@ -146,26 +161,65 @@ describe("remote audio feeder link", () => {
     expect(hook.state).toBe("dormant");
     expect(hook.status?.pid).toBe(1234);
     // Both STATUS calls went over the first connection.
-    expect(feederSpawns()).toBe(1);
+    expect(feederSpawns()).toHaveLength(1);
   });
 
   it("reuses the connection for later commands", async () => {
     await setRemoteAudioInput(session, { kind: "tone", frequencyHz: 440, amplitude: 0.5 });
     await setRemoteAudioInput(session, { kind: "tone", frequencyHz: 880, amplitude: 0.2 });
 
-    expect(feederSpawns()).toBe(1);
+    expect(feederSpawns()).toHaveLength(1);
     expect(feeders[0]!.commands).toEqual(["TONE 440 0.5", "TONE 880 0.2"]);
   });
 
   it("closes the socket and the tunnel on release", async () => {
     await setRemoteAudioInput(session, { kind: "tone", frequencyHz: 440, amplitude: 0.5 });
-    const port = Number(vi.mocked(simctlSpawn).mock.calls[0]![1].args![1]);
-
     await releaseRemoteAudio(session);
 
-    await feeders[0]!.closed;
-    expect(proxyStop).toHaveBeenCalledWith(session.udid, port);
+    await feederClosed(0);
+    expect(proxyStop).toHaveBeenCalledWith(session.udid, tunnelPort(0));
     expect(session.link).toBeNull();
+  });
+
+  it("starts one feeder for concurrent first calls", async () => {
+    await expect(Promise.all([tone(session, 440), tone(session, 880)])).resolves.toHaveLength(2);
+
+    expect(feederSpawns()).toHaveLength(1);
+    expect(feeders[0]!.commands.sort()).toEqual(["TONE 440 0.5", "TONE 880 0.5"]);
+  });
+
+  it("closes a dropped link's tunnel and starts a new feeder", async () => {
+    await tone(session);
+    feeders[0]!.socket.destroy();
+    await vi.waitFor(() => expect(session.link?.closed).toBe(true), { timeout: 1000 });
+
+    await tone(session, 880);
+
+    expect(feederSpawns()).toHaveLength(2);
+    expect(proxyStop).toHaveBeenCalledWith(session.udid, tunnelPort(0));
+    expect(feeders[1]!.commands).toEqual(["TONE 880 0.5"]);
+  });
+
+  it("connects to send MIC when no feeder is linked", async () => {
+    await clearRemoteAudioInput(session);
+
+    expect(feederSpawns()).toHaveLength(1);
+    expect(feeders[0]!.commands).toEqual(["MIC"]);
+  });
+
+  it("is disconnected by stop-all-simulator-servers scoped to its device", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(iosRemoteAudioSessionBlueprint);
+    const urn = `${IOS_REMOTE_AUDIO_SESSION_NAMESPACE}:${UDID}`;
+    await tone(await registry.resolveService<RemoteAudioSession>(urn));
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [UDID] }
+    );
+
+    expect(result).toEqual({ stopped: [urn] });
+    await feederClosed(0);
   });
 
   it("rejects a missing file before starting the feeder", async () => {
