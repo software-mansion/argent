@@ -84,6 +84,12 @@ async function getBootedUdids(signal: AbortSignal): Promise<Set<string>> {
   return new Set(perSet.flatMap((r) => (r.status === "fulfilled" ? [...r.value] : [])));
 }
 
+/** A tool can name a simulator in lowercase, which `simctl list` never prints. */
+function isOtherSpellingOfBooted(udid: string, booted: Set<string>): boolean {
+  if (booted.has(udid)) return false;
+  return [...booted].some((bootedUdid) => bootedUdid.toUpperCase() === udid.toUpperCase());
+}
+
 async function initUdid(
   registry: Registry,
   udid: string,
@@ -109,7 +115,7 @@ async function resolveNativeDevtools(
   }
 }
 
-/** A provider supplied this simulator without the grant, so its injection is not ours to arm. */
+/** A provider supplied this simulator without the grant, so its injection belongs to the provider. */
 function withholdsNativeDevtools(udid: string): boolean {
   const claim = externalClaimForAnyId(udid);
   return claim !== undefined && !claim.capabilities.has("native-devtools");
@@ -155,13 +161,14 @@ export function startSimulatorWatcher(registry: Registry): {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
   /**
    * Simulators a tool has targeted: every one whose native-devtools service
-   * started, until a tool such as stop-all-simulator-servers stops it. Only
-   * these are armed, and re-armed after a reboot, so a simulator another project
-   * or session drives keeps its own environment.
+   * started, until something other than the watcher disposes that service, such
+   * as stop-all-simulator-servers. Only these are armed, and re-armed after a
+   * reboot, so a simulator another project or session drives keeps its own
+   * environment.
    */
   const targetedUdids = new Set<string>();
-  /** Services the watcher disposes because their simulator shut down, which stay targeted. */
-  const disposingAfterShutdown = new Set<string>();
+  /** Services the watcher itself disposes, whose simulators stay targeted. */
+  const watcherDisposals = new Set<string>();
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
@@ -295,7 +302,18 @@ export function startSimulatorWatcher(registry: Registry): {
         );
       });
 
-      await registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
+      await disposeAsWatcher(udid);
+    }
+  }
+
+  async function disposeAsWatcher(udid: string): Promise<void> {
+    watcherDisposals.add(udid);
+    try {
+      await registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
+    } catch {
+      // Nothing cached under this id.
+    } finally {
+      watcherDisposals.delete(udid);
     }
   }
 
@@ -308,19 +326,19 @@ export function startSimulatorWatcher(registry: Registry): {
     const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length);
     if (to === ServiceState.RUNNING) {
       targetedUdids.add(udid);
-    } else if (to === ServiceState.IDLE && !disposingAfterShutdown.has(udid)) {
+    } else if (to === ServiceState.IDLE && !watcherDisposals.has(udid)) {
       targetedUdids.delete(udid);
       trackedServices.delete(udid);
     }
   }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
+    let allBooted: Set<string>;
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      ({ ours: booted, claimed } = withoutForeignSimulators(
-        onlyTargeted(await getBootedUdids(stopController.signal))
-      ));
+      allBooted = await getBootedUdids(stopController.signal);
+      ({ ours: booted, claimed } = withoutForeignSimulators(onlyTargeted(allBooted)));
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
         consecutiveTimeouts += 1;
@@ -343,9 +361,7 @@ export function startSimulatorWatcher(registry: Registry): {
      */
     await handBackClaimed(claimed);
 
-    const newUdids = [...booted].filter(
-      (udid) => targetedUdids.has(udid) && !trackedServices.has(udid)
-    );
+    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
     const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
       initUdid(registry, udid, trackedServices)
     );
@@ -371,13 +387,9 @@ export function startSimulatorWatcher(registry: Registry): {
      * `handBackClaimed` above, which withdraws first.
      */
     for (const udid of [...trackedServices.keys()]) {
-      if (booted.has(udid)) continue;
+      if (booted.has(udid) || isOtherSpellingOfBooted(udid, allBooted)) continue;
       trackedServices.delete(udid);
-      disposingAfterShutdown.add(udid);
-      registry
-        .disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`)
-        .catch(() => {})
-        .finally(() => disposingAfterShutdown.delete(udid));
+      void disposeAsWatcher(udid);
     }
   }
 

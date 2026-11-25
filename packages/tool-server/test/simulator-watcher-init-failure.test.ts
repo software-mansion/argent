@@ -46,12 +46,14 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { targetSimulators, untargetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 /** Booted alongside, but no tool has targeted it. */
 const OTHER_UDID = "22222222-2222-2222-2222-222222222222";
+/** Has letters, so its lowercase spelling differs from what `simctl list` prints. */
+const LETTERED_UDID = "ABCDEF01-2345-4678-9ABC-DEF012345678";
 
 function bootedListResponse(udids: string[]): { stdout: string; stderr: string } {
   return {
@@ -353,6 +355,30 @@ describe("simulator-watcher with api-owned init failure state", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(resolveService).toHaveBeenCalledTimes(1);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the service of a simulator a tool named in lowercase while it runs", async () => {
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse([LETTERED_UDID]);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, disposeService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(LETTERED_UDID.toLowerCase());
+      targetSimulators(registry, LETTERED_UDID.toLowerCase());
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(disposeService).not.toHaveBeenCalled();
       stop();
     } finally {
       vi.useRealTimers();

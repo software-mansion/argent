@@ -57,7 +57,7 @@ import type { Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
 import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
-import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
+import { targetSimulators, untargetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 /** The simulator a provider claims. */
 const CLAIMED_UDID = "11111111-1111-1111-1111-111111111111";
@@ -284,8 +284,12 @@ describe("simulator-watcher against a provider's simulator", () => {
       const attaching = { ...makeApi(), armsEnv: false };
       let published = false;
 
-      const disposeService = vi.fn(async () => {});
       const resolveService = vi.fn(async () => (published ? attaching : armed));
+      /** Like the real registry, a dispose reports the service back to idle. */
+      const disposeService = vi.fn(async (urn: string) => {
+        untargetSimulators(registry, urn.split(":")[1]);
+      });
+      const registry = watcherRegistry({ resolveService, disposeService });
 
       return {
         armed,
@@ -294,7 +298,7 @@ describe("simulator-watcher against a provider's simulator", () => {
           publishDescriptor({ capabilities });
           published = true;
         },
-        registry: watcherRegistry({ resolveService, disposeService }),
+        registry,
         resolveService,
       };
     }
