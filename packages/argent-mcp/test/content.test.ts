@@ -128,6 +128,47 @@ describe("toMcpContent", () => {
     expect(text.split("\n").length).toBeGreaterThan(5);
   });
 
+  it("formats deeply nested fiber trees without overflowing the call stack", async () => {
+    type Fiber = {
+      name: string;
+      tag: number;
+      actualDuration: number;
+      selfBaseDuration: number;
+      children: Fiber[];
+    };
+    const depth = 4_000;
+    let node: Fiber = {
+      name: "Leaf",
+      tag: 5,
+      actualDuration: 0.1,
+      selfBaseDuration: 0.1,
+      children: [],
+    };
+    for (let i = depth - 1; i >= 0; i--) {
+      node = {
+        name: `Fiber${i}`,
+        tag: 0,
+        actualDuration: 1,
+        selfBaseDuration: 0.2,
+        children: [node],
+      };
+    }
+    const result = await toMcpContent([node]);
+    const text = (result[0] as { text: string }).text;
+    expect(text).toContain('"name":"Fiber0"');
+    expect(text).toContain('"name":"Leaf"');
+  });
+
+  it("allows shared non-circular references and rejects circular ones", async () => {
+    const shared = { id: 1 };
+    const dag = await toMcpContent([shared, shared]);
+    expect(dag).toEqual([{ type: "text", text: '[{"id":1},{"id":1}]' }]);
+
+    const cycle: Record<string, unknown> = { id: 1 };
+    cycle.self = cycle;
+    await expect(toMcpContent(cycle)).rejects.toThrow(TypeError);
+  });
+
   it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
     const warning = "No source files found under project_root";
     const result = await toMcpContent({ report: "x".repeat(50_000), warning });

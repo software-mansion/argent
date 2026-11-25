@@ -118,55 +118,149 @@ interface FormattedNode {
   multiline: boolean;
 }
 
+interface ArrayFormatFrame {
+  kind: "array";
+  source: unknown[];
+  nextIndex: number;
+  items: FormattedNode[];
+  hasStructured: boolean;
+}
+
+interface ObjectFormatFrame {
+  kind: "object";
+  source: Record<string, unknown>;
+  entries: [string, unknown][];
+  nextIndex: number;
+  parts: Array<{ key: string; val: FormattedNode; structured: boolean }>;
+  topLevel: boolean;
+  pendingKey: string;
+  pendingStructured: boolean;
+}
+
+type FormatFrame = ArrayFormatFrame | ObjectFormatFrame;
+
 /**
- * Single-pass compact JSON formatter that breaks long containers across lines
- * without indentation:
+ * Iterative single-pass compact JSON formatter that breaks long containers
+ * across lines without indentation:
  * - Short values (<= LINE_BREAK_THRESHOLD) stay on one line.
  * - Arrays of objects/arrays put one item per line; scalar arrays stay inline.
  * - Leaf record objects (e.g. a network request row) stay on one line; top-level
  *   objects and containers holding large nested values break one entry per line.
- * Output is always valid JSON equivalent to JSON.stringify(value ?? null).
+ * Uses an explicit stack so deeply nested results (such as React fiber trees)
+ * never overflow the JS call stack. Output is always valid JSON equivalent to
+ * JSON.stringify(value ?? null).
  */
-function formatJsonNode(value: unknown, topLevel: boolean): FormattedNode {
-  if (isJsonOmitted(value)) return { text: "null", multiline: false };
-  if (Array.isArray(value)) {
-    if (value.length === 0) return { text: "[]", multiline: false };
-    const items = value.map((el) => formatJsonNode(el, false));
-    const anyMultiline = items.some((item) => item.multiline);
-    const hasStructured = value.some((el) => el !== null && typeof el === "object");
-    let flatLen = 2 + items.length - 1;
-    for (const item of items) flatLen += item.text.length;
-    if (!anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || !hasStructured)) {
-      return { text: `[${items.map((i) => i.text).join(",")}]`, multiline: false };
+function formatJsonNode(rootValue: unknown, rootTopLevel: boolean): FormattedNode {
+  const stack: FormatFrame[] = [];
+  const ancestors = new Set<object>();
+
+  const enter = (value: unknown, topLevel: boolean): FormattedNode | undefined => {
+    if (isJsonOmitted(value)) return { text: "null", multiline: false };
+    if (Array.isArray(value)) {
+      if (value.length === 0) return { text: "[]", multiline: false };
+      if (ancestors.has(value)) throw new TypeError("Converting circular structure to JSON");
+      ancestors.add(value);
+      stack.push({
+        kind: "array",
+        source: value,
+        nextIndex: 0,
+        items: [],
+        hasStructured: false,
+      });
+      return undefined;
     }
-    return { text: `[\n${items.map((i) => i.text).join(",\n")}\n]`, multiline: true };
-  }
-  if (isObjectWithoutToJson(value)) {
-    const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
-    if (entries.length === 0) return { text: "{}", multiline: false };
-    const parts = entries.map(([k, v]) => ({
-      key: JSON.stringify(k),
-      val: formatJsonNode(v, false),
-      structured: v !== null && typeof v === "object",
-    }));
-    const anyMultiline = parts.some((p) => p.val.multiline);
-    const hasBigNested = parts.some(
-      (p) => p.val.multiline || (p.structured && p.val.text.length > LINE_BREAK_THRESHOLD)
-    );
-    let flatLen = 2 + parts.length - 1;
-    for (const p of parts) flatLen += p.key.length + 1 + p.val.text.length;
-    if (!anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || (!topLevel && !hasBigNested))) {
-      return {
-        text: `{${parts.map((p) => `${p.key}:${p.val.text}`).join(",")}}`,
-        multiline: false,
-      };
+    if (isObjectWithoutToJson(value)) {
+      const entries = Object.entries(value).filter(([, v]) => !isJsonOmitted(v));
+      if (entries.length === 0) return { text: "{}", multiline: false };
+      if (ancestors.has(value)) throw new TypeError("Converting circular structure to JSON");
+      ancestors.add(value);
+      stack.push({
+        kind: "object",
+        source: value,
+        entries,
+        nextIndex: 0,
+        parts: [],
+        topLevel,
+        pendingKey: "",
+        pendingStructured: false,
+      });
+      return undefined;
     }
-    return {
-      text: `{\n${parts.map((p) => `${p.key}:${p.val.text}`).join(",\n")}\n}`,
-      multiline: true,
-    };
+    return { text: JSON.stringify(value) ?? "null", multiline: false };
+  };
+
+  const rootLeaf = enter(rootValue, rootTopLevel);
+  if (rootLeaf !== undefined) return rootLeaf;
+
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    let completed: FormattedNode;
+
+    if (frame.kind === "array") {
+      if (frame.nextIndex < frame.source.length) {
+        const el = frame.source[frame.nextIndex++]!;
+        if (el !== null && typeof el === "object") frame.hasStructured = true;
+        const leaf = enter(el, false);
+        if (leaf !== undefined) frame.items.push(leaf);
+        continue;
+      }
+      stack.pop();
+      ancestors.delete(frame.source);
+      const anyMultiline = frame.items.some((item) => item.multiline);
+      let flatLen = 2 + frame.items.length - 1;
+      for (const item of frame.items) flatLen += item.text.length;
+      completed =
+        !anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || !frame.hasStructured)
+          ? { text: `[${frame.items.map((i) => i.text).join(",")}]`, multiline: false }
+          : { text: `[\n${frame.items.map((i) => i.text).join(",\n")}\n]`, multiline: true };
+    } else {
+      if (frame.nextIndex < frame.entries.length) {
+        const [k, v] = frame.entries[frame.nextIndex++]!;
+        const key = JSON.stringify(k);
+        const structured = v !== null && typeof v === "object";
+        const leaf = enter(v, false);
+        if (leaf !== undefined) {
+          frame.parts.push({ key, val: leaf, structured });
+        } else {
+          frame.pendingKey = key;
+          frame.pendingStructured = structured;
+        }
+        continue;
+      }
+      stack.pop();
+      ancestors.delete(frame.source);
+      const anyMultiline = frame.parts.some((p) => p.val.multiline);
+      const hasBigNested = frame.parts.some(
+        (p) => p.val.multiline || (p.structured && p.val.text.length > LINE_BREAK_THRESHOLD)
+      );
+      let flatLen = 2 + frame.parts.length - 1;
+      for (const p of frame.parts) flatLen += p.key.length + 1 + p.val.text.length;
+      completed =
+        !anyMultiline && (flatLen <= LINE_BREAK_THRESHOLD || (!frame.topLevel && !hasBigNested))
+          ? {
+              text: `{${frame.parts.map((p) => `${p.key}:${p.val.text}`).join(",")}}`,
+              multiline: false,
+            }
+          : {
+              text: `{\n${frame.parts.map((p) => `${p.key}:${p.val.text}`).join(",\n")}\n}`,
+              multiline: true,
+            };
+    }
+
+    const parent = stack[stack.length - 1];
+    if (!parent) return completed;
+    if (parent.kind === "array") {
+      parent.items.push(completed);
+    } else {
+      parent.parts.push({
+        key: parent.pendingKey,
+        val: completed,
+        structured: parent.pendingStructured,
+      });
+    }
   }
-  return { text: JSON.stringify(value) ?? "null", multiline: false };
+
+  return { text: "null", multiline: false };
 }
 
 /**
