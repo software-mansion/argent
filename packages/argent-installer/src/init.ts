@@ -29,7 +29,7 @@ import {
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { writeCliRecord } from "./cli-record.js";
-import { resolveTelemetryConsent } from "./first-run-notice.js";
+import { resolveTelemetryConsent, seedWhatsNewVersion } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
@@ -255,14 +255,19 @@ export async function init(args: string[]): Promise<void> {
     // Record where this install's CLI lives so a device provider can spawn it
     // without PATH (see `cli-record.ts`).
     writeCliRecord({ mode: tel.installMode, projectRoot, version });
+    seedWhatsNewVersion(version);
 
     const allowlist = await configureAllowlist({
       adapters: writtenAdapters,
       effectiveRoot,
       scope: normalizedScope,
       nonInteractive: parsed.nonInteractive,
+      noAllowlist: parsed.noAllowlist,
     });
-    track("installation:allowlist_decision", { is_enabled: allowlist.enabled });
+    track("installation:allowlist_decision", {
+      is_enabled: allowlist.enabled,
+      decided_by: allowlist.decidedBy,
+    });
     if (allowlist.enabled && allowlist.lines.length > 0) {
       p.note(allowlist.lines.join("\n"), "Tool Auto-Approval");
     }
@@ -309,7 +314,8 @@ export async function init(args: string[]): Promise<void> {
       scope,
       allowlistEnabled: allowlist.enabled,
       skills,
-      copiedRules: copyResults.length > 0,
+      // A global install writes no rule, only removes old ones.
+      copiedRules: normalizedScope === "local" && copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
 

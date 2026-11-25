@@ -9,6 +9,13 @@ const describeFrameSchema = z.object({
 
 export type DescribeFrame = z.infer<typeof describeFrameSchema>;
 
+const describePointSchema = z.object({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+});
+
+type DescribePoint = z.infer<typeof describePointSchema>;
+
 export interface DescribeNode {
   role: string;
   frame: DescribeFrame;
@@ -28,6 +35,16 @@ export interface DescribeNode {
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
+  // A scroll container's content window: `frame` less borders and scrollbars,
+  // where the source measures it (Chromium). Its content is clipped to this.
+  clipFrame?: DescribeFrame;
+  // Where scroll containers cut the element by more than a pixel (Chromium): the
+  // part of their window the clips above them leave showing, along each axis they
+  // cut it, and the whole screen along the other.
+  clipBounds?: DescribeFrame;
+  // Per axis a scroll container cuts the element along, where a wheel scrolls it
+  // against that scroller: a point hit-tested on screen, else the window's centre.
+  clipAnchors?: { x?: DescribePoint; y?: DescribePoint };
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
@@ -58,6 +75,11 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
+      clipFrame: describeFrameSchema.optional(),
+      clipBounds: describeFrameSchema.optional(),
+      clipAnchors: z
+        .object({ x: describePointSchema.optional(), y: describePointSchema.optional() })
+        .optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),
@@ -71,7 +93,8 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 );
 
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
-// "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
+// "uiautomator" / "android-devtools": Android; with "+cdp", a Chrome tab's page
+// came from the DOM walk over Chrome DevTools. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
 // automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
 // dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
@@ -82,6 +105,8 @@ export type DescribeSource =
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
+  | "uiautomator+cdp"
+  | "android-devtools+cdp"
   | "cdp-dom"
   | "vega-automation"
   | "harmony-uitest"
@@ -112,14 +137,11 @@ export interface DescribeTreeData {
   // which is what the rotate directive's circle geometry reads it for. Set
   // only by the flow tree adapters that know it.
   screen?: { width: number; height: number };
-  // How the UI lies on the space the frames are in, when the two differ: the
-  // iOS simulator adapter frames in the screen's fixed (portrait-native)
-  // space, the space touches are taken in, and a landscape UI — a rotated
-  // device, an unfolded foldable — is rotated on it. The flow directions
-  // (`swipe: down`, `scroll-to` `direction`) are the UI's, and are mapped
-  // into the frame space with this. Absent when the source does not report
-  // it, which is when its frames are in the UI's own space.
-  uiOrientation?: UiOrientation;
+  // `tree` as a result may quote it, node for node, from the iOS simulator
+  // adapter once a secret was typed on the device: the text of each text input
+  // withheld, each typed value in a label named by its placeholder (see
+  // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
+  quotableTree?: DescribeNode;
 }
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */

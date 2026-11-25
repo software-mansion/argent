@@ -1,7 +1,7 @@
 {
   // Anti-dead-code gate: unused files, exports and types nothing imports, and
   // dependencies declared but never used (plus the inverse). Run it with
-  // `npm run knip`; .github/workflows/knip.yml enforces it.
+  // `bun run knip`; .github/workflows/knip.yml enforces it.
   //
   // Every issue type knip reports is an error by default, so this file sets no
   // `rules`. There is no parked backlog either: `--max-issues 0` means the run
@@ -41,7 +41,9 @@
   "ignoreBinaries": [
     "ffmpeg",
     "ffprobe",
+    "jq",
     "locale",
+    "mkfifo",
     "netstat",
     "pgrep",
     "pkill",
@@ -96,7 +98,6 @@
         "@opentelemetry/resources",
         "@opentelemetry/sdk-logs",
         "picocolors",
-        "semver",
         "smol-toml",
         "yaml",
       ],

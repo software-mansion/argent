@@ -15,7 +15,13 @@ import {
 } from "../../blueprints/native-devtools";
 import { InvalidToolInputError } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosSimulator, resolveDevice } from "../../utils/device-info";
+import { inNativeCoordinates, readUiOrientation } from "../../utils/ios-ui-orientation";
+import {
+  fixedPointFromUpright,
+  fixedSpaceOf,
+  uprightNativeResult,
+} from "../../utils/native-devtools-upright";
 import { macosAppServices, requireMacosApp } from "../../utils/macos-input";
 
 /** The `udid` and `bundleId` parameters every native-* app tool takes. */
@@ -48,17 +54,21 @@ export function requireMacosAppOfBundle(
   bundleId: string
 ): MacosAppApi {
   const app = requireMacosApp(services, toolId, device);
-  if (bundleId !== app.bundleId) {
-    throw new InvalidToolInputError(
-      `bundleId '${bundleId}' is not the app of this device: a Mac app id names one app. ` +
-        `Pass bundleId '${app.bundleId}', or use the device id macos-app-${bundleId}.`,
-      {
-        error_code: FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH,
-        failure_stage: "native_devtools_macos_bundle_id",
-      }
-    );
-  }
+  assertMacosAppBundle(app.bundleId, bundleId);
   return app;
+}
+
+/** Throws unless `bundleId` is `appBundleId`, the one app a Mac app id names. */
+export function assertMacosAppBundle(appBundleId: string, bundleId: string): void {
+  if (bundleId === appBundleId) return;
+  throw new InvalidToolInputError(
+    `bundleId '${bundleId}' is not the app of this device: a Mac app id names one app. ` +
+      `Pass bundleId '${appBundleId}', or use the device id macos-app-${bundleId}.`,
+    {
+      error_code: FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH,
+      failure_stage: "native_devtools_macos_bundle_id",
+    }
+  );
 }
 
 type ViewHierarchyMethod = Parameters<NativeDevtoolsApi["queryViewHierarchy"]>[1];
@@ -94,7 +104,24 @@ export async function queryViewHierarchyFor<T, R>(
     const api = services.nativeDevtools as NativeDevtoolsApi;
     const blocked = await precheckNativeDevtools(api, udid, bundleId);
     if (blocked) return blocked;
+    // On an iOS simulator the library's fixed (portrait-native) space is
+    // turned to the UI's upright one, in both directions
+    // (`utils/native-devtools-upright.ts`), except for a version 1 e2e test's
+    // step, which was recorded in the fixed space.
+    const read =
+      isIosSimulator(device) && !inNativeCoordinates()
+        ? await readUiOrientation(device.id)
+        : undefined;
+    const lookupSpace = read ? fixedSpaceOf(undefined, read) : undefined;
+    if (lookupSpace && typeof rpcParams.x === "number" && typeof rpcParams.y === "number") {
+      Object.assign(
+        rpcParams,
+        fixedPointFromUpright({ x: rpcParams.x, y: rpcParams.y }, lookupSpace)
+      );
+    }
     result = (await api.queryViewHierarchy(bundleId, method, rpcParams)) as typeof result;
+    const space = read ? fixedSpaceOf(result, read) : undefined;
+    if (space) result = uprightNativeResult(method, result, space);
   }
   if (errorCode && result.error) {
     throw new FailureError(result.error, {

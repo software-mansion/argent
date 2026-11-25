@@ -1,10 +1,13 @@
 ---
 sidebar_position: 2
 sidebar_label: Debugging
-title: Debugging
+title: Debug mobile, web and desktop apps with an AI agent
+description: Argent connects the AI coding agent to the running app. The agent reads console logs, runs JavaScript, and reads the React component tree and the native view tree.
 sidebar_custom_props:
   icon: bug
 ---
+
+# Debugging
 
 Argent connects the agent to the JavaScript runtime of the running app. The agent reads the console logs, runs JavaScript in the app, and reads the component tree of the current screen. With this data the agent finds the cause of a bug without your help at the keyboard.
 
@@ -17,19 +20,20 @@ Argent connects the agent to the JavaScript runtime of the running app. The agen
 
 ## Console logs
 
-Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it.
+Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it. The summary also contains the newest log lines. Thus the agent can read them without access to the log file.
 
 When the app crashes, Argent keeps the log file of the session for at least 24 hours. The agent reads the logs from before the crash.
 
 ## Code evaluation
 
-The agent runs JavaScript in the runtime of the app. On a device, the runtime is Hermes. In a Chromium or Electron app, the runtime is V8. The agent reads the state of a store, calls a function, or changes a value to test a theory. The app stays open during this work.
+The agent runs JavaScript in the app to read a store, call a function, or change a value while the app stays open.
+React Native apps, including supported [Mac apps](/docs/features/mac-apps#debug-a-react-native-app), use Hermes. Chromium and Electron apps use V8.
 
 ## Component trees
 
 The agent reads the current screen as a text tree of React components. The agent also inspects the component at one point of the screen. Thus the agent sees which component renders an element, and which props the component receives.
 
-On iOS and in a [Mac app](/docs/features/mac-apps), the agent also reads the native view tree: UIKit views on iOS, AppKit views on a Mac. The agent searches views by class or by accessibility identifier. The agent finds the view at one point of the screen, and the view that receives the tap or click at that point. With this data the agent explains why a tap does not reach a button.
+The agent can inspect the native view tree on iOS and in AppKit-based [Mac apps](/docs/features/mac-apps). It can search by class or accessibility identifier and identify which view receives a tap or click. For Mac Catalyst apps, the agent reads UIKit controls through the accessibility tree.
 
 ## Network traffic
 
@@ -53,8 +57,9 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 
 ## Limits
 
-- Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
-- The native view tree is available on iOS and in Mac apps only.
+- In React Native apps that use React Native DevTools, Hermes sends its most recent logs to Argent when the debugger connects. The agent sees the logs from the start of the app, for example the warnings at launch.
+- Hermes keeps 1000 logs at most. If the app writes more logs before the debugger connects, the agent does not see the oldest logs.
+- In other apps, for example Chromium, Electron and Vega apps, Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
 - The agent connects to one app at a time.
 
 Argent does this with the `debugger-*`, `native-*` and `chromium-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

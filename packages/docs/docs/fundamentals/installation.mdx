@@ -1,21 +1,24 @@
 ---
 sidebar_position: 2
 sidebar_label: Installation
-title: Installation
+title: Install the MCP server for Claude Code, Codex and Cursor
 description: Install Argent with npx @swmansion/argent init. The wizard installs the package. It registers the MCP server in your editor. It copies the agent skills into your workspace.
 sidebar_custom_props:
   icon: download
 ---
 
+# Installation
+
 ## Prerequisites
 
-- **Node.js 20.12** or later
+- **Node.js 22.18** or later, but not 23.0 to 23.7
 - **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
 - **Android / Android TV**: **Android SDK Platform Tools** (`adb`), plus the **Android Emulator** package to boot AVDs from Argent. Argent finds the SDK on `PATH`, in `$ANDROID_HOME`, or in the default SDK folder. The `android.sdkRoot` config key sets another location. Create AVDs via Android Studio or `avdmanager`.
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
 - **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
 - **Mac apps**: macOS 14.4 or later and a build of your app. See [Mac apps](/docs/features/mac-apps).
+- **TypeScript scripts in e2e tests**: a Node.js build that includes TypeScript support. The `nodejs` package of Debian and of Ubuntu does not include it. See [TypeScript scripts](/docs/reference/e2e-yaml#typescript-scripts).
 
 ## Run `init` in your project
 
@@ -41,7 +44,9 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills and rules into your workspace.
+- copies skills into your workspace.
+
+The MCP server gives the agent its usage guidance in the server instructions. When the wizard configures the MCP server globally, it writes no rule file. When the wizard configures the MCP server for one project, it also writes a short rule into that project. This rule tells the agent what to do when the project uses Argent but Argent is not installed.
 
 <Video
   src="/video/installation-wizard.mp4"
@@ -49,6 +54,25 @@ The installation wizard:
   height={1080}
   caption="The wizard detects your editors, then asks where the MCP server should live"
 />
+
+## Check the installation
+
+Run `argent doctor` when the agent cannot use Argent:
+
+```bash
+argent doctor
+```
+
+The command checks these items:
+
+- the `argent` command and the project install,
+- the Argent MCP entry of each editor,
+- the skills and rules,
+- Xcode and the Android SDK Platform Tools (`adb`).
+
+The command changes nothing. When all checks pass, it prints only the version line and one summary line. When a check fails, it prints a summary, then the failed checks with advice for each. Add `--verbose` to also list the passed checks.
+
+With a local install, run `npx argent doctor` in the project. With a global install, run `argent doctor` directly: under `npx`, the `PATH` check also finds the copy that `npx` started, which your editors may not find.
 
 ## Manual install
 
@@ -59,10 +83,10 @@ argent init
 
 ## Install from a GitHub release
 
-Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.33.0.tgz`. It is the same file npm serves. Download it and install it globally:
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.34.0.tgz`. It is the same file npm serves. Download it and install it globally:
 
 ```bash
-npm install -g ./swmansion-argent-0.33.0.tgz
+npm install -g ./swmansion-argent-0.34.0.tgz
 argent init
 ```
 
@@ -95,20 +119,20 @@ Argent reads Xcode's files to find if a `simctl` or `devicectl` call starts the 
 If a `simctl` call starts the install:
 
 - Argent does not look for booted simulators in the background.
-- `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
+- `list-devices` does not show local iOS simulators. Its `notes` field gives the reason to the agent.
 - The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
 
 Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, the tools that send input to a simulator or capture its screen also fail if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
 
 If a `devicectl` call starts the install:
 
-- `list-devices` does not show physical iPhones. Its `hint` field gives the reason to the agent.
+- `list-devices` does not show physical iPhones. Its `notes` field gives the reason to the agent.
 - The tools that need `devicectl` fail. Most of them return an error that gives the same reason to the agent.
 - A tool that only talks to the runner on the iPhone keeps working while the runner is up.
 
 Argent stops only its own calls. An `xcrun simctl` or `xcrun devicectl` command that the agent or you run still starts the install. Commands that call `simctl` or `devicectl`, for example `npx react-native run-ios`, also start it.
 
-The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
+The note and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
 
 To install the components, do one of these steps:
 

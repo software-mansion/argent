@@ -19,6 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { describeVega, vegaRequires } from "../describe/platforms/vega";
 import { describeTvFocus, hasTvCursor } from "../describe/platforms/tv-focus";
 import { resolveTvApi } from "../tv/tv-service";
 import type { TvControlApi } from "../../blueprints/tv-control-types";
@@ -47,7 +48,7 @@ const DARK_TAIL_MAX_MS = 2000;
 const TV_NO_CURSOR_NOTE = "no element holds focus on this screen, so a remote press may be lost";
 
 interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
+  /** Screen rendered content and held it for minStableMs (0: content alone) before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
@@ -63,19 +64,21 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
-// while still catching real motion (a slide/fade animation).
+// while still catching real motion (a slide/fade animation). Focus and
+// selection count too: a TV remote press may move only the cursor.
 function treeSignature(root: DescribeNode): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   const parts: string[] = [];
   const walk = (node: DescribeNode): void => {
     const f = node.frame;
     parts.push(
-      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`
+      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}|${node.focused ? "F" : ""}${node.selected ? "S" : ""}`
     );
     for (const child of node.children) walk(child);
   };
@@ -115,7 +118,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
       ),
     timeoutMs: z
       .number()
@@ -140,7 +143,7 @@ const zodSchema = z
       .max(10_000)
       .optional()
       .describe(
-        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}); 0 settles on the first non-empty read.`
       ),
   })
   .strict();
@@ -173,6 +176,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
+    if (device.platform === "vega") {
+      return describeVega(device.id);
+    }
     if (device.platform === "harmony") {
       return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
     }
@@ -184,9 +190,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
-    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
+    description: `Block until the screen has rendered content and held it for minStableMs, or the timeout elapses. It polls the same element tree as \`describe\`.
 Use when a launch or navigation must finish rendering before a screenshot or tap.
-Returns { settled, waitedMs, polls, note? }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
     zodSchema,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
@@ -213,6 +219,7 @@ Returns { settled, waitedMs, polls, note? }. If the screen never goes still befo
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "vega") await ensureDeps(vegaRequires);
       else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.

@@ -5,7 +5,12 @@ import {
   type Registry,
   type ToolDependency,
 } from "@argent/registry";
-import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
+import {
+  axDaemonCrashSignal,
+  axServiceRef,
+  axStartFailureDegraded,
+  AXServiceApi,
+} from "../../../../blueprints/ax-service";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -21,7 +26,18 @@ import {
   isExternalId,
 } from "../../../../utils/external-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
+import {
+  DescribeTreeData,
+  parseDescribeResult,
+  type DescribeNode,
+  type UiOrientation,
+} from "../../contract";
+import {
+  noteUiOrientation,
+  readUiOrientation,
+  unknownOrientationNote,
+} from "../../../../utils/ios-ui-orientation";
+import { isTurned, nativeTreeToUi } from "../../../../utils/ui-orientation";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
@@ -56,10 +72,11 @@ function externalCaveat(deviceId: string, body: string): string {
   return `${externalSupportHint(deviceId) ?? "This device is supplied by an external provider."} ${body}`;
 }
 
-const EXTERNAL_BLIND_BODY =
-  "The accessibility read returned no elements, and argent cannot reboot this device to apply the " +
-  "pre-boot accessibility settings. Restart it from that application, or take a screenshot to see " +
-  "the screen.";
+const EXTERNAL_BLIND_TAIL =
+  ", and argent cannot reboot this device to apply the pre-boot accessibility settings. Restart it " +
+  "from that application, or take a screenshot to see the screen.";
+
+const EXTERNAL_BLIND_BODY = `The accessibility read returned no elements${EXTERNAL_BLIND_TAIL}`;
 
 const EXTERNAL_STANDING_BODY =
   "System dialogs and native modals may not appear in this tree; everything else reads normally. " +
@@ -80,11 +97,80 @@ function isBlindCaveat(hint: string | undefined): boolean {
   return hint === DEGRADED_BLIND_HINT || Boolean(hint?.endsWith(EXTERNAL_BLIND_BODY));
 }
 
+function startFailure(err: unknown): string {
+  return `The accessibility service failed to start (${errMsg(err)})`;
+}
+
+// The blind caveat for a daemon that never came up, appended to the failure
+// above. No read took place, so it does not say that one returned no elements,
+// and it has no blank-screen exception, which is about a read. The reboot stays
+// worth one attempt: the boot is the one thing known to be wrong with this sim.
+// The last sentence is the exit for a start that fails before the boot state is
+// measured, where the caveat would otherwise come back after every reboot.
+const DEGRADED_START_FAILED_TAIL =
+  ", and this simulator was not booted through argent, so the pre-boot accessibility settings were " +
+  "never applied. Call boot-device with force=true to reboot it with those settings — this restarts " +
+  "the simulator. If it fails to start again after that reboot, do not reboot again: the boot was " +
+  "not the cause.";
+
+// A daemon that a fault signal killed says nothing about how the simulator was
+// booted, so it must not be reported as the boot caveat. On a host where it
+// crashes every time (#800: SIGSEGV on every attach on Intel Macs) the reboot
+// that caveat prescribes starts the same binary into the same crash, and an
+// agent that obeyed it rebooted a healthy simulator without end. Restarting the
+// tool-server does the same and cuts off every agent that shares it. The hint
+// rules both out by name, because both are what an agent tries next.
+//
+// One crash does not show that the next read crashes too, and every read starts
+// the daemon again, so the hint makes its repeat the test instead of claiming a
+// permanent fault from one observation.
+//
+// Never deduped, unlike DEGRADED_STANDING_HINT: it reports this read's own
+// failure, the agent has to be able to see it repeat, and the tree that comes
+// with it is empty or is the native fallback's, which can lack a system dialog
+// that covers the screen.
+function axCrashHint(signal: string): string {
+  return (
+    `The accessibility service (ax-service) crashed with ${signal}, so the accessibility tree could not be read. ` +
+    "Every describe starts the service again. If this hint repeats, the crash is in the service on " +
+    "this host: rebooting the simulator (boot-device with force=true) or restarting the tool-server " +
+    "will not fix it, because both start the same binary again. While it crashes, system dialogs and " +
+    "SpringBoard chrome cannot be read through describe. describe continues on the app's native view " +
+    "hierarchy where that is available, and `screenshot` shows the rest."
+  );
+}
+
+const NATIVE_FALLBACK_LEAD =
+  "The native fallback has no tree for this read, for a reason of its own, unrelated to the crash:";
+
 // Devices already told DEGRADED_STANDING_HINT. Not cleared on shutdown or
 // disposal — the externally-booted state outlives any one service instance —
 // but cleared per device when a read comes back off that state, so a later
 // external boot of the same udid is caveated again.
 const bootCaveatToldDevices = new Set<string>();
+
+/**
+ * What a read learned beside its result. Kept beside the result and not on it:
+ * the tree data is a contract every platform shares, and only the dedupe below
+ * asks.
+ */
+interface IosReadFacts {
+  /** How the sim was booted, as measured; undefined when nothing measured it. */
+  degraded?: boolean;
+  /** The daemon crashed or never started, so no read took place. */
+  daemonGone?: boolean;
+  /** An Apple TV, whose focus tree is not framed on a turned screen. */
+  tvOs?: boolean;
+  /** The interface orientation the accessibility read reported with its tree. */
+  uiOrientation?: UiOrientation;
+  /**
+   * The accessibility read answered. Without an orientation, the daemon could
+   * not name it or predates it, and asking it again would only repeat the walk.
+   */
+  axAnswered?: boolean;
+}
+
+const readFacts = new WeakMap<DescribeTreeData, IosReadFacts>();
 
 export function __resetBootCaveatStateForTests(): void {
   bootCaveatToldDevices.clear();
@@ -104,7 +190,13 @@ export function withBootCaveatOncePerDevice(
     // A read that is not degraded at all means the caveat no longer describes
     // this device, so a later external boot has to be able to say it again. The
     // blind caveat is the same degraded state read blind, so it does not reset.
-    if (!isBlindCaveat(data.hint)) bootCaveatToldDevices.delete(deviceId);
+    //
+    // A read whose daemon was gone has a hint that is neither caveat, on a sim
+    // booted either way, so there the answer is what the factory measured. Only
+    // a sim measured as booted through argent is off the degraded state.
+    const facts = readFacts.get(data);
+    const stillDegraded = facts?.daemonGone ? facts.degraded !== false : isBlindCaveat(data.hint);
+    if (!stillDegraded) bootCaveatToldDevices.delete(deviceId);
     return data;
   }
   if (!bootCaveatToldDevices.has(deviceId)) {
@@ -171,6 +263,10 @@ interface DescribeIosOptions {
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
+  // `native` leaves the frames in the screen's portrait-native space, for the
+  // preview page, which draws them over the native video stream. Everything
+  // else, and every agent, gets the UI's upright space (see `toUprightFrames`).
+  frameSpace?: "upright" | "native";
 }
 
 // The ax-service blueprint factory shells out to `xcrun simctl spawn`. Without
@@ -185,8 +281,61 @@ export async function describeIos(
   params: DescribeIosParams,
   options: DescribeIosOptions = {}
 ): Promise<DescribeTreeData> {
+  const facts: IosReadFacts = {};
+  const data = await readIos(registry, device, params, options, facts);
+  readFacts.set(data, facts);
+  if (options.frameSpace !== "native" && !facts.tvOs) {
+    await toUprightFrames(data, device, facts);
+  }
+  return data;
+}
+
+/**
+ * Turn the frames of an iOS simulator read from the screen's portrait-native
+ * space into the UI's upright one, the space screenshots come in and touches
+ * are taken in (`utils/ios-ui-orientation.ts`). Both sources frame on the
+ * native axes: the ax-service, and the native-devtools fallback.
+ *
+ * The orientation is the one the accessibility read reported with its tree,
+ * else a read of its own (the daemon may have been down for the tree). When
+ * neither names it the frames stay native, and the hint says so. In place, so
+ * the read facts keyed on `data` still find it.
+ */
+async function toUprightFrames(
+  data: DescribeTreeData,
+  device: DeviceInfo,
+  facts: IosReadFacts
+): Promise<void> {
+  let orientation = facts.uiOrientation;
+  if (orientation === undefined) {
+    if (facts.axAnswered || data.tree.children.length === 0) return;
+    // The daemon that would name it did not come up for this read; starting it
+    // again here would only repeat the failure the hint already reports.
+    const read = facts.daemonGone
+      ? { unknownReason: "the accessibility service is not running" }
+      : await readUiOrientation(device.id);
+    orientation = read.orientation;
+    if (orientation === undefined) {
+      if (read.unknownReason === undefined) return;
+      const note = unknownOrientationNote(read, "these frames are in");
+      data.hint = data.hint ? `${data.hint} ${note}` : note;
+      return;
+    }
+  }
+  if (!isTurned(orientation)) return;
+  data.tree = nativeTreeToUi(data.tree, orientation);
+}
+
+async function readIos(
+  registry: Registry,
+  device: DeviceInfo,
+  params: DescribeIosParams,
+  options: DescribeIosOptions,
+  facts: IosReadFacts
+): Promise<DescribeTreeData> {
   // The focus-engine tree is served by tv-control, not the iOS ax-service.
   const isTvOs = options.isTvOs ?? (await isTvOsSimulator(device.id));
+  facts.tvOs = isTvOs;
   if (isTvOs) {
     return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
   }
@@ -200,39 +349,80 @@ export async function describeIos(
   // reported as the boot caveat — which prescribes a reboot the developer pays
   // for and that would not have helped.
   let readFailureHint: string | undefined;
+  // The daemon did not come up, for a reason the two hints around this one do
+  // not cover. Always reported with its error: no read took place, and why is
+  // the one thing the agent can act on.
+  let startFailureHint: string | undefined;
+  // The daemon died on a fault signal, while it started or during the read.
+  // Reported in place of the boot caveat and the read failure it would
+  // otherwise come out as: see `axCrashHint`.
+  let crashSignal: string | undefined;
 
   let axApi: AXServiceApi | undefined;
   try {
     const axRef = axServiceRef(device);
     axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
+    facts.degraded = degraded;
   } catch (err) {
     // Not an empty screen, and the reboot the empty tree prescribes is refused too.
     if (isFirstLaunchRefusal(err)) throw err;
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
-    // one, so it must not read as degraded.
+    // one, so it must not read as degraded. Nor must a daemon that crashed.
     resolverHint = tcpArtifactHint(err);
-    degraded = resolverHint === undefined;
+    crashSignal = axDaemonCrashSignal(err);
+    // The factory measures the boot state before it starts the daemon, so a
+    // start that failed after that says which it was. Only a failure from
+    // before the measurement is still taken for a sim not booted through
+    // argent: taking every failed start for one prescribed the reboot again
+    // after each reboot, whatever had gone wrong.
+    facts.degraded = axStartFailureDegraded(err);
+    const explained = resolverHint !== undefined || crashSignal !== undefined;
+    degraded = !explained && facts.degraded !== false;
+    if (!explained) {
+      facts.daemonGone = true;
+      // On a provider's device the reboot is refused, so the remedy is theirs.
+      startFailureHint = !degraded
+        ? `${startFailure(err)}.`
+        : isExternalId(device.id)
+          ? externalCaveat(device.id, `${startFailure(err)}${EXTERNAL_BLIND_TAIL}`)
+          : `${startFailure(err)}${DEGRADED_START_FAILED_TAIL}`;
+    }
   }
 
   if (axApi) {
     try {
-      tree = adaptAXDescribeToDescribeResult(await axApi.describe());
+      const response = await axApi.describe();
+      facts.axAnswered = true;
+      facts.uiOrientation = response.interfaceOrientation;
+      noteUiOrientation(device.id, response.interfaceOrientation, response.screenFrame);
+      tree = adaptAXDescribeToDescribeResult(response);
     } catch (err) {
-      readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+      crashSignal = axDaemonCrashSignal(err);
+      if (crashSignal === undefined) {
+        readFailureHint = `The accessibility read failed (${errMsg(err)}).`;
+      }
     }
   }
+  const crashHint = crashSignal === undefined ? undefined : axCrashHint(crashSignal);
+  if (crashHint !== undefined) facts.daemonGone = true;
 
   // Keyed to what the ACCESSIBILITY read produced, not to the tree finally
   // returned: the native-devtools fallback fills it from the injected app's own
   // view hierarchy, which carries no SpringBoard chrome and no system dialogs,
   // so it is no evidence the AX subsystem works.
-  const degradedHint = !degraded
-    ? undefined
-    : tree.children.length === 0
-      ? DEGRADED_BLIND_HINT
-      : DEGRADED_STANDING_HINT;
+  //
+  // A crash leaves no degraded hint at all, also on a sim that was booted
+  // externally: the blind caveat would say the read returned no elements, when
+  // no read took place, and prescribe the reboot. A start that failed has its
+  // own wording of the caveat, for the same reason.
+  const degradedHint =
+    !degraded || crashHint !== undefined || startFailureHint !== undefined
+      ? undefined
+      : tree.children.length === 0
+        ? DEGRADED_BLIND_HINT
+        : DEGRADED_STANDING_HINT;
   // Both degraded hints end in "boot-device with force=true", which is refused
   // on a provider's device. Keep the blind/standing split, redirect the remedy.
   // Redirected before the composition below, so the comparison still sees a
@@ -247,6 +437,8 @@ export async function describeIos(
 
   const hint =
     resolverHint ??
+    crashHint ??
+    startFailureHint ??
     (readFailureHint
       ? deviceDegradedHint
         ? `${deviceDegradedHint}. ${readFailureHint}`
@@ -271,20 +463,37 @@ export async function describeIos(
   // reboot guidance instead: a proper boot may let the ax-service read this
   // system app's tree, at which point `describe`, not a screenshot, is the
   // right tool.
+  //
+  // A daemon that crashed, or failed to start on a sim booted through argent,
+  // is the other way round: no remedy brings its read of this app back, so the
+  // terminal hint follows that one. Alone, it leaves the empty tree unexplained,
+  // and the crash hint's "where that is available" unanswered.
+  const daemonGoneHint = crashHint ?? (degraded ? undefined : startFailureHint);
   if (params.bundleId && !isInjectableBundleId(params.bundleId)) {
-    return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
+    return {
+      tree,
+      source: "ax-service",
+      hint: daemonGoneHint
+        ? `${daemonGoneHint} ${NON_INJECTABLE_HINT}`
+        : (hint ?? NON_INJECTABLE_HINT),
+    };
   }
 
   // Without a lent socket the fallback would inject our own dylib, which is
   // refused here. Say so rather than let that error replace describe's real
-  // empty-tree result. An unexplained "no elements" reads as a bug.
+  // empty-tree result. An unexplained "no elements" reads as a bug. After a
+  // daemon that is gone the same is said without the claim about the read.
   if (isExternalId(device.id) && !lendsNativeDevtools(device.id)) {
+    const provider =
+      externalSupportHint(device.id) ?? "This device is supplied by an external provider.";
     return {
-      hint:
-        hint ??
-        `${externalSupportHint(device.id) ?? "This device is supplied by an external provider."} ` +
-          `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
-          `means the accessibility tree itself was empty. Take a screenshot to see the screen.`,
+      hint: daemonGoneHint
+        ? `${daemonGoneHint} ${provider} The native view-hierarchy fallback is unavailable on it. ` +
+          `Take a screenshot to see the screen.`
+        : (hint ??
+          `${provider} ` +
+            `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
+            `means the accessibility tree itself was empty. Take a screenshot to see the screen.`),
       source: "ax-service",
       tree,
     };
@@ -323,8 +532,16 @@ export async function describeIos(
       // `unregistered` already launched under the terms a restart recreates, and
       // `connecting` is the handshake exec begins, so flagging either would
       // rebuild the restart-app → describe loop.
+      //
+      // After a crash hint the diagnosis is set apart as the fallback's own: two
+      // states prescribe a tool-server restart, which that hint has just said
+      // does not fix the crash, and both statements are true of their subject.
       const diagnosis = buildAppStateMessage(target.bundleId, state);
-      const merged = hint ? `${hint} ${diagnosis}` : diagnosis;
+      const merged = crashHint
+        ? `${crashHint} ${NATIVE_FALLBACK_LEAD} ${diagnosis}`
+        : hint
+          ? `${hint} ${diagnosis}`
+          : diagnosis;
       return state === "unregistered" || state === "connecting"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };

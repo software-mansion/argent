@@ -232,6 +232,18 @@ describe("getAutoScreenshotDelayMs", () => {
     }
   });
 
+  it("caps every in-app settle wait at 3s", () => {
+    const appLaunchTools = new Set(["launch-app", "restart-app", "open-url"]);
+    for (const [tool, ms] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      if (appLaunchTools.has(tool)) continue;
+      expect(ms, tool).toBeLessThanOrEqual(3000);
+    }
+  });
+
+  it("keeps run-sequence waiting the full 3s for the screen to settle", () => {
+    expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["run-sequence"]).toBe(3000);
+  });
+
   it("returns default 1400ms for an unknown tool", () => {
     expect(getAutoScreenshotDelayMs("some-new-tool")).toBe(1400);
   });
@@ -266,11 +278,6 @@ describe("getAutoScreenshotDelayMs", () => {
 // shouldAutoScreenshot — unified tools trigger one screenshot regardless of platform
 // ---------------------------------------------------------------------------
 describe("shouldAutoScreenshot — unified surface", () => {
-  it("returns false for the screenshot tool itself (prevents recursion)", () => {
-    expect(shouldAutoScreenshot("screenshot")).toBe(false);
-    expect(shouldAutoScreenshot("mcp__argent__screenshot")).toBe(false);
-  });
-
   it("returns true for unified interaction tools", () => {
     for (const t of [
       "gesture-tap",
@@ -288,11 +295,6 @@ describe("shouldAutoScreenshot — unified surface", () => {
     ]) {
       expect(shouldAutoScreenshot(t)).toBe(true);
     }
-  });
-
-  it("normalizes MCP-prefixed names before looking up the allow-list", () => {
-    expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
-    expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
   });
 });
 

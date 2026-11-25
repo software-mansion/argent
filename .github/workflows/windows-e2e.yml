@@ -24,71 +24,91 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "packages/tool-server/src/utils/command-on-path.ts"
-      - "packages/tool-server/src/utils/android-binary.ts"
-      - "packages/tool-server/src/utils/adb.ts"
-      - "packages/tool-server/src/utils/check-deps.ts"
-      - "packages/tool-server/src/utils/vega-cli.ts"
-      - "packages/tool-server/src/utils/chromium-discovery.ts"
-      - "packages/tool-server/src/tools/simulator/stop-metro.ts"
-      - "packages/tool-server/src/tools/devices/boot-device.ts"
-      - "packages/tool-server/src/utils/device-shutdown.ts"
-      # The unit tests this job runs — editing one must re-run it here, and so
-      # must editing the config or a setup file every one of them loads.
-      - "packages/tool-server/vitest.config.ts"
-      - "packages/tool-server/test/setup/**"
-      - "packages/tool-server/test/command-on-path.test.ts"
-      - "packages/tool-server/test/android-binary-windows.test.ts"
-      - "packages/tool-server/test/adb-resolve-avd-path.test.ts"
-      - "packages/tool-server/test/check-deps.test.ts"
-      - "packages/tool-server/test/http-dep-gate.test.ts"
-      - "packages/tool-server/test/stop-metro-netstat.test.ts"
-      - "packages/tool-server/test/device-shutdown.test.ts"
-      - "packages/native-devtools-ios/src/index.ts"
-      - "packages/native-devtools-ios/test/index.test.ts"
-      - "packages/argent/scripts/bundle-tools.cjs"
-      - "packages/argent/scripts/argent-simulator-server.cjs"
-      - "scripts/dev.cjs"
-      - "scripts/download-simulator-server.sh"
-      - "scripts/ci/windows-chromium-e2e.mjs"
-      - "scripts/ci/e2e-chromium-page.html"
-      - ".github/workflows/windows-e2e.yml"
 
 jobs:
+  changes:
+    name: Select Windows E2E paths
+    uses: ./.github/workflows/pr-check-paths.yml
+    with:
+      # Include the Windows tests and their shared Vitest config and setup.
+      paths: |-
+        packages/tool-server/src/utils/command-on-path.ts
+        packages/tool-server/src/utils/android-binary.ts
+        packages/tool-server/src/utils/adb.ts
+        packages/tool-server/src/utils/check-deps.ts
+        packages/tool-server/src/utils/vega-cli.ts
+        packages/tool-server/src/utils/chromium-discovery.ts
+        packages/tool-server/src/tools/describe/platforms/chromium.ts
+        packages/tool-server/src/tools/simulator/stop-metro.ts
+        packages/tool-server/src/tools/devices/boot-device.ts
+        packages/tool-server/src/utils/device-shutdown.ts
+        packages/tool-server/vitest.config.ts
+        packages/tool-server/test/setup/**
+        packages/tool-server/test/command-on-path.test.ts
+        packages/tool-server/test/android-binary-windows.test.ts
+        packages/tool-server/test/adb-resolve-avd-path.test.ts
+        packages/tool-server/test/check-deps.test.ts
+        packages/tool-server/test/http-dep-gate.test.ts
+        packages/tool-server/test/stop-metro-netstat.test.ts
+        packages/tool-server/test/device-shutdown.test.ts
+        packages/native-devtools-ios/src/index.ts
+        packages/native-devtools-ios/test/index.test.ts
+        packages/argent/scripts/bundle-tools.cjs
+        packages/argent/scripts/argent-simulator-server.cjs
+        scripts/dev.cjs
+        scripts/download-simulator-server.sh
+        scripts/ci/windows-chromium-e2e.mjs
+        scripts/ci/e2e-chromium-page.html
+        .github/workflows/windows-e2e.yml
+
   windows-chromium:
     name: Chromium control plane + resolver unit tests (Windows)
-    runs-on: windows-latest
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.changes.outputs.relevant == 'true' && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: 20
 
     steps:
+      - name: Check path selection
+        if: needs.changes.result != 'success' || needs.changes.outputs.relevant != 'true'
+        shell: bash
+        run: |
+          test '${{ needs.changes.result }}:${{ needs.changes.outputs.relevant }}' = 'success:false'
+          echo "No matching files changed."
+
       - name: Checkout
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/checkout@v7
 
       - name: Set up Node.js
+        if: needs.changes.outputs.relevant == 'true'
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
+
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Fix rollup native bindings (win32)
-        # vitest 4 transforms via rollup, whose platform binary is an optional
-        # dep npm ci sometimes skips; install the win32 one explicitly.
-        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+        if: needs.changes.outputs.relevant == 'true'
+        run: bun install --frozen-lockfile
 
       - name: Build workspace
-        run: npm run build
+        if: needs.changes.outputs.relevant == 'true'
+        run: bun run build
 
       - name: Resolver unit tests on Windows (tool-server)
+        if: needs.changes.outputs.relevant == 'true'
         # The win32 branches added for Windows support, exercised on a real
         # Windows host (real `where.exe`, real `.exe` access semantics) rather
         # than a mocked platform. The broader suite has POSIX-only fixtures, so
         # this is the curated cross-platform subset.
         working-directory: packages/tool-server
         run: >
-          npx vitest run
+          bunx vitest run
           test/command-on-path.test.ts
           test/android-binary-windows.test.ts
           test/adb-resolve-avd-path.test.ts
@@ -98,10 +118,12 @@ jobs:
           test/device-shutdown.test.ts
 
       - name: Resolver unit tests on Windows (native-devtools-ios)
+        if: needs.changes.outputs.relevant == 'true'
         working-directory: packages/native-devtools-ios
-        run: npx vitest run
+        run: bunx vitest run
 
       - name: adb.exe resolves on Windows
+        if: needs.changes.outputs.relevant == 'true'
         # windows-latest ships the Android SDK with ANDROID_HOME/ANDROID_SDK_ROOT
         # set but does NOT put platform-tools on PATH — exactly the gap the
         # Windows resolver closes (`.exe` suffix + SDK-root fallback). Resolve
@@ -119,6 +141,7 @@ jobs:
           & $adb version
 
       - name: Locate Chrome
+        if: needs.changes.outputs.relevant == 'true'
         id: chrome
         run: |
           $candidates = @(
@@ -136,6 +159,7 @@ jobs:
       # a later step (unlike `nohup` on Linux), so both must stay in scope for
       # the duration of the E2E — hence a single step rather than three.
       - name: Launch Chrome + tool-server and run Chromium E2E
+        if: needs.changes.outputs.relevant == 'true'
         env:
           ARGENT_E2E_URL: http://127.0.0.1:3033
         run: |
@@ -179,7 +203,7 @@ jobs:
           node scripts/ci/windows-chromium-e2e.mjs
 
       - name: Upload artifacts
-        if: always()
+        if: always() && needs.changes.outputs.relevant == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: windows-chromium-e2e

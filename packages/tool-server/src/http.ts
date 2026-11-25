@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
+import { ARCHIVE_FORMATS } from "@argent/archive";
 import {
   FAILURE_CODES,
   CLIENT_SECRETS_HEADER,
@@ -509,12 +510,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // Snapshotted at startup; the launcher generates it and passes it in via env
-  // (see ensureToolsServer). Empty string ⇒ auth disabled, supported only for
-  // local dev (`npm run dev`), which is why stderr gets a one-shot warning.
+  // (see ensureToolsServer). Empty or absent ⇒ auth disabled (`--no-auth`,
+  // `bun run dev`), hence the one-shot stderr warning.
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(
-      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is empty or not set; running with authentication disabled. ` +
         `Any local process can drive the tool-server. This is only safe for development.\n`
     );
   }
@@ -602,7 +603,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // The client tars a file or dir and streams it here before the tool call.
-  // express.json() ignores the body (application/gzip), so we pipe it to disk.
+  // express.json() ignores the body (a compressed tar), so we pipe it to disk.
   app.post("/upload", (req: Request, res: Response) => {
     idleTimer.touch();
     if (pendingUploadBytes() >= maxPendingUploadBytes) {
@@ -723,7 +724,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }));
         return [entry, ...aliases];
       });
-    res.json({ tools });
+    // Formats `POST /upload` reads; a client sends zstd only when listed.
+    res.json({ tools, uploadFormats: ARCHIVE_FORMATS });
   });
 
   app.post(

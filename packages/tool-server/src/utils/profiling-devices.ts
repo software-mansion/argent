@@ -80,6 +80,11 @@ export function registerCaptureOnDemandSender(
   };
 }
 
+/** The ids of the devices with a simulator-server, which the agent drives them by. */
+export function simulatorServerDeviceIds(): string[] {
+  return [...servers.keys()];
+}
+
 /**
  * The connection to `endpoint` closed, so that server dropped the mode. The next
  * check sends it again, on a new connection. The late close of a server that

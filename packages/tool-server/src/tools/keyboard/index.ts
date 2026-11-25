@@ -8,6 +8,7 @@ import {
   redactSecretsFromError,
   resolveSecretPlaceholders,
 } from "../../utils/secrets";
+import { noteTypedSecrets } from "../../utils/typed-secrets";
 import type { KeyboardParams, KeyboardResult } from "./types";
 import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeIosDeviceImpl } from "./platforms/ios-device";
@@ -24,7 +25,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
-  macos: { app: true },
+  macos: { app: true, catalyst: true },
 };
 
 // `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
@@ -111,7 +112,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, <flag:macos-apps>Mac app, </flag:macos-apps>Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
 Tap the field first: with no focus the text is dropped and the call still succeeds.
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
+Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator, when the focused field was empty before typing, the field is read back: verified: true = it holds the typed text, though iOS may have capitalized the first letter of a word or curled a quote; no verified = the field was not checked: it held text before typing, the text has a Return or Tab, focus moved to another field while typing, or the field could not be read in time (the app busy, the accessibility service missing or slow); verified: false comes with a warning (keys dropped or repeated, or the app or iOS changed the text), so read the field before submitting. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
 A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
 React Native: after typing, the next tap outside the field may only close the keyboard. If only the keyboard closed, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
@@ -215,6 +216,8 @@ React Native: after typing, the next tap outside the field may only close the ke
         clientSecrets: options?.clientSecrets,
       });
       if (secrets.length === 0) return dispatch(services, params, options);
+      // Before the keys go out: a failure partway leaves part of a value typed.
+      noteTypedSecrets(params.udid, secrets);
       try {
         const result = await dispatch(services, { ...params, text }, options);
         // Echo the placeholder form, never the resolved value.

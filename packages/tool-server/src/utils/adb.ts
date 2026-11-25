@@ -326,18 +326,20 @@ export async function adbExecOutBinary(
 
 /**
  * With `hostPort` 0 adb picks a free host port and prints it, and that output
- * is what this returns; it is empty otherwise.
+ * is what this returns; it is empty otherwise. `devicePort` is a TCP port, or
+ * a `{ localabstract }` socket name.
  */
 export async function adbForward(
   serial: string,
   hostPort: number,
-  devicePort: number,
+  devicePort: number | { localabstract: string },
   options: { timeoutMs?: number } = {}
 ): Promise<string> {
-  const { stdout } = await runAdb(
-    ["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${devicePort}`],
-    options
-  );
+  const device =
+    typeof devicePort === "number"
+      ? `tcp:${devicePort}`
+      : `localabstract:${devicePort.localabstract}`;
+  const { stdout } = await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, device], options);
   return stdout.trim();
 }
 

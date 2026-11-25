@@ -158,6 +158,55 @@ describe("gesture-tap on a Mac app", () => {
   });
 });
 
+describe("gesture-tap modifiers on a Mac app", () => {
+  // A current library echoes the modifier keys it held in its reply to the move.
+  const echoModifiers = {
+    "Input.mouse": (params: Record<string, unknown>) =>
+      params.modifiers !== undefined ? { modifiers: params.modifiers } : {},
+  };
+
+  it("holds the modifier keys through the move, each press and each release, without repeats", async () => {
+    const { invoke, calls, urns } = harness(echoModifiers);
+    await expect(
+      invoke("gesture-tap", {
+        x: 0.3,
+        y: 0.4,
+        clickCount: 2,
+        modifiers: ["shift", "command", "shift"],
+      })
+    ).resolves.toMatchObject({ tapped: true });
+    const modifiers = ["shift", "command"];
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["Input.mouse", { type: "move", x: 0.3, y: 0.4, modifiers }],
+      ...[1, 2].flatMap((clickCount) =>
+        (["down", "up"] as const).map((type) => [
+          "Input.mouse",
+          { type, x: 0.3, y: 0.4, clickCount, modifiers },
+        ])
+      ),
+    ]);
+    expect(urns).toEqual([MAC_URN]);
+  });
+
+  it("refuses with MACOS_APP_LIBRARY_OUTDATED and presses nothing when the library does not echo them", async () => {
+    // An older library answers the move without the modifier keys it dropped.
+    const { invoke, calls } = harness();
+    const err = await errorOf(invoke("gesture-tap", { x: 0.3, y: 0.4, modifiers: ["command"] }));
+    expect(err?.message).toContain("cannot hold modifier keys, so nothing was clicked");
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.MACOS_APP_LIBRARY_OUTDATED);
+    expect(calls.map((c) => c.params.type)).toEqual(["move"]);
+  });
+
+  it("sends no modifier keys for an empty list, a plain click", async () => {
+    const { invoke, calls } = harness();
+    await expect(invoke("gesture-tap", { x: 0.3, y: 0.4, modifiers: [] })).resolves.toMatchObject({
+      tapped: true,
+    });
+    expect(calls.map((c) => c.params.type)).toEqual(["move", "down", "up"]);
+    expect(calls.every((c) => c.params.modifiers === undefined)).toBe(true);
+  });
+});
+
 describe("gesture-drag on a Mac app", () => {
   const drag = { fromX: 0.1, fromY: 0.5, toX: 0.9, toY: 0.5 };
 
@@ -546,6 +595,49 @@ describe("native-* view tools on a Mac app", () => {
       expect(ensureDeps).not.toHaveBeenCalled();
     }
   );
+
+  it("native-view-at-point with hitTest sends the hit-test request, without the flag", async () => {
+    const reply = { view: { className: "NSButton" } };
+    const { invoke, calls } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => reply,
+    });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: true,
+    });
+    expect(result).toEqual({ status: "ok", ...reply });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.userInteractableViewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("native-view-at-point with hitTest: false sends the plain request", async () => {
+    const { invoke, calls } = harness({ "ViewHierarchy.viewAtPoint": () => ({ view: null }) });
+    const result = await invoke("native-view-at-point", {
+      bundleId: MAC_BUNDLE_ID,
+      x: 50,
+      y: 50,
+      hitTest: false,
+    });
+    expect(result).toEqual({ status: "ok", view: null });
+    expect(calls.map((c) => [c.method, c.params])).toEqual([
+      ["ViewHierarchy.viewAtPoint", { x: 50, y: 50 }],
+    ]);
+  });
+
+  it("a failed hit-test through native-view-at-point keeps the hit-test error code", async () => {
+    const { invoke } = harness({
+      "ViewHierarchy.userInteractableViewAtPoint": () => ({ error: "no window" }),
+    });
+    const err = await errorOf(
+      invoke("native-view-at-point", { bundleId: MAC_BUNDLE_ID, x: 1, y: 1, hitTest: true })
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_DEVTOOLS_USER_INTERACTABLE_VIEW_AT_POINT_ERROR
+    );
+  });
 
   it("fails on an error in the library's result", async () => {
     const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ error: "no window" }) });

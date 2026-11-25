@@ -113,8 +113,8 @@ function hasIosState(n: DescribeNode): boolean {
 
 function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
-  // iOS reports a text input's placeholder as both label and value; printing
-  // it twice costs bytes for no signal.
+  // With `AutomationEnabled` set (cloud iOS sims), a text input reports its
+  // placeholder as both label and value; printing it twice costs bytes for no signal.
   const dedupedValue = n.value && n.value !== n.label ? n.value : undefined;
   // Safari reports an HTML `title` as the hint, and it is often the link's own text.
   const dedupedHint = n.hint && n.hint !== n.label ? n.hint : undefined;
@@ -177,6 +177,8 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   const mode: "flat" | "nested" =
     opts.source === "uiautomator" ||
     opts.source === "android-devtools" ||
+    opts.source === "uiautomator+cdp" ||
+    opts.source === "android-devtools+cdp" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
     opts.source === "harmony-uitest" ||
@@ -188,31 +190,25 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
       : "flat";
   const isVega = opts.source === "vega-automation";
   const header: string[] = [];
-  header.push(`Source: ${opts.source}`);
-  header.push(`Mode: ${mode}`);
-  header.push(
-    isMacos
-      ? "Coordinates are normalized [0,1] fractions of the app window, title bar included, grown to hold sheets, alerts and menus past it (x, y, width, height), not pixels."
-      : "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
-  );
+  header.push(`Source: ${opts.source} | Mode: ${mode}`);
   if (isVega) {
     header.push(
-      "Vega is remote-driven, not touch — there is no tap. Use the frames as spatial hints to plan " +
-        "D-pad moves with the `tv-remote` tool: compare the target's frame to the cursor's — the " +
-        "`[focused]` element, or `[selected]` when no element reports `[focused]` (the toolkit often " +
-        "marks the highlighted item `selected` while `focused` stays false) — " +
-        'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
+      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels. " +
+        "Vega is remote-driven (no tap): use frames to plan D-pad moves via `tv-remote` from " +
+        "`[focused]` (or `[selected]` when none reports `[focused]`), counting rows/columns " +
+        '(e.g. ["down","right","right","select"]).'
     );
-  } else {
+  } else if (isMacos) {
     // A Mac app has no touch gestures at all.
     header.push(
-      isMacos
-        ? "Pass them straight to gesture-tap / gesture-drag / gesture-scroll, which expect this same space. " +
-            "A Mac app takes mouse input, not touch gestures. Its menu bar is not in this tree: use menu-bar."
-        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+      "Coordinates: normalized [0,1] app window (title bar + overhanging sheets/alerts/menus; x,y,w,h), not pixels. " +
+        "Mouse input only: pass to gesture-tap / gesture-drag / gesture-scroll; tap centre = (x+w/2, y+h/2). " +
+        "Menu bar not in tree: use menu-bar."
     );
+  } else {
     header.push(
-      "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
+      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels; " +
+        "pass to gesture-tap / gesture-swipe / gesture-pinch; tap centre = (x+w/2, y+h/2)."
     );
   }
   header.push("");

@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import { basename, dirname, join, sep } from "path";
+import type { RnPlatform as Platform } from "../../types/input";
 
 const _require = require;
 
@@ -206,17 +207,15 @@ function collectMemoizedNames(root: TreeSitterNode): Set<string> {
   return names;
 }
 
-// Metro resolves .ios/.android/.native/.web over the base file only when
+// Metro resolves .ios/.android/.macos/.native/.web over the base file only when
 // bundling for that platform, so the base file is the general default and wins
 // as primary when one component name exists in several files.
-const PLATFORM_SUFFIX = /\.(web|ios|android|native)\.[jt]sx?$/;
+const PLATFORM_SUFFIX = /\.(web|ios|android|macos|native)\.[jt]sx?$/;
 const EXTENSION = /\.[jt]sx?$/;
 const NOT_APP_CODE = /\.(test|spec|stories)\.[jt]sx?$/;
 // Metro's order for one module on a native platform. The other platform's
 // variant and .web are not in that bundle.
 const NOT_BUNDLED = 3;
-
-type Platform = "ios" | "android";
 
 function variantRank(file: string, platform?: Platform): number {
   const suffix = PLATFORM_SUFFIX.exec(file)?.[1];

@@ -4,7 +4,7 @@ import {
   type DebuggerNotConnectedReason,
   type DebuggerToolOutcome,
 } from "@argent/telemetry";
-import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
+import { CHROMIUM_ID_PREFIX, MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
@@ -30,9 +30,10 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
- * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
- * live in CHROMIUM_GUIDANCE: there launch-app is a no-op that re-resolves the
- * CDP service that just failed, so pointing an agent at it only fails again.
+ * Guidance for Metro-backed targets (iOS / Android / Vega / Mac apps). Chromium
+ * overrides live in CHROMIUM_GUIDANCE: there launch-app is a no-op that
+ * re-resolves the CDP service that just failed, so pointing an agent at it only
+ * fails again. Mac app overrides live in MACOS_GUIDANCE.
  */
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
@@ -71,6 +72,7 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH]: "device_mismatch",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_SOCKET_CLOSED_BEFORE_OPEN]: "cdp_unreachable",
+  [FAILURE_CODES.DEBUGGER_CDP_ORIGIN_REJECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
   // Raised by the connect pipeline's enable/binding sends when the target
@@ -110,12 +112,25 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "electronAppPath and force: true), then retry once.",
 };
 
+/**
+ * Mac app overrides. A Mac app id never falls back to another runtime on Metro,
+ * so a logicalDeviceId the detail lists belongs to another app or device.
+ */
+const MACOS_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
+  device_mismatch:
+    "No JavaScript runtime of this Mac app is connected to this Metro. Do not re-target with " +
+    "a logicalDeviceId from the detail message: it names another app or device. Start the " +
+    "app (launch-app) if it is not running, wait a few seconds for the bundle to load, then " +
+    "retry once. If the app loads its bundle from another Metro, pass that port.",
+};
+
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
   params: { port?: number; device_id?: string }
 ): DebuggerNotConnectedResult {
   const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
+  const isMacApp = params.device_id?.startsWith(MACOS_APP_ID_PREFIX) ?? false;
   return {
     status: "not_connected",
     connected: false,
@@ -124,7 +139,10 @@ export function buildNotConnected(
     ...(isChromium ? {} : { port: metroPort(params) }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
-    guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],
+    guidance:
+      (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ??
+      (isMacApp ? MACOS_GUIDANCE[reason] : undefined) ??
+      GUIDANCE[reason],
   };
 }
 
@@ -160,22 +178,24 @@ export function trackDebuggerOutcome(
 /**
  * Resolve the shared debugger service for a status-style tool, preserving the
  * connect-on-first-call contract. Passes ref.options through — the Chromium
- * factory hard-fails without the resolved DeviceInfo.
+ * factory hard-fails without the resolved DeviceInfo. `options` reach a Metro
+ * debugger's factory on its first connect.
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port?: number; device_id?: string }
+  params: { port?: number; device_id?: string },
+  options?: Record<string, unknown>
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"
-    ? registry.resolveService<JsRuntimeDebuggerApi>(ref)
+    ? registry.resolveService<JsRuntimeDebuggerApi>(ref, options)
     : registry.resolveService<JsRuntimeDebuggerApi>(ref.urn, ref.options);
 }
 
 /**
  * A not_connected result is a successful tool return, but a flow step using
  * these tools as a connectivity gate must not green-pass on it. Mirrors
- * isUnmetUiWaitResult for await-ui-element.
+ * isUnmetWaitResult for the wait tools.
  */
 export function isDebuggerNotConnectedResult(
   toolId: string,
