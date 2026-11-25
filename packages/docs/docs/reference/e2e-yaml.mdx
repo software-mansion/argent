@@ -616,7 +616,7 @@ Three recording tools write the `env` maps. Each tool checks the names and the v
 
 `e2e-set-env` returns the whole top-level `env` of the file, with the placeholders not resolved.
 
-`e2e-add-script` runs the script with the top-level `env` of the file and the `env` argument of the call. The `env` argument replaces the same names. A replay without values of the run gives the step the same environment. Argent redacts the secrets in the log and the output that the tool returns. When a placeholder does not resolve, the script does not run and the tool records no step.
+`e2e-add-script` runs the script with the top-level `env` of the file and the `env` argument of the call. The `env` argument replaces the same names. A replay without values of the run gives the step the same environment. Argent redacts the secrets in the log and the output that the tool returns. When a placeholder does not resolve, the script does not run and the tool records no step. When a change to the file makes its top-level `env` invalid, the script does not run either.
 
 #### Secrets in environment values
 

@@ -11,6 +11,7 @@ import {
   e2eDirFor,
 } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { z } from "zod";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
@@ -3244,6 +3245,24 @@ export function flowEnvProblem(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * A recorder tool's env map. Zod drops an own `__proto__` key while it parses a
+ * record, so {@link flowEnvProblem} would never see it and the other names
+ * would be written as if the call were valid. The check runs on the input as
+ * sent instead.
+ */
+export function envRecordSchema<T extends z.ZodType>(value: T) {
+  return z.preprocess(
+    (input, ctx) => {
+      if (input !== null && typeof input === "object" && Object.hasOwn(input, "__proto__")) {
+        ctx.addIssue({ code: "custom", message: "env cannot set __proto__" });
+      }
+      return input;
+    },
+    z.record(z.string(), value)
+  );
+}
+
 export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
@@ -4120,27 +4139,51 @@ export function parseFlow(content: string): FlowFile {
     return badEntry(raw, "step must be an object");
   });
 
-  if (parsed.env !== undefined) {
-    const problem = flowEnvProblem(parsed.env);
-    if (problem) {
-      throw new FailureError(`Invalid e2e test file: env ${problem}`, {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "flow_file_parse",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      });
-    }
-  }
+  const env = parseFileEnv(parsed.env);
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
-    ...(parsed.env === undefined ? {} : { env: parsed.env }),
+    ...(env === undefined ? {} : { env }),
     steps,
   };
   validateFlow(flow);
   if (version < FLOW_FILE_VERSION) olderFormatVersions.set(flow, version);
   return flow;
+}
+
+function parseFileEnv(env: unknown): FlowEnv | undefined {
+  if (env === undefined) return undefined;
+  const problem = flowEnvProblem(env);
+  if (problem) {
+    throw new FailureError(`Invalid e2e test file: env ${problem}`, {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_file_parse",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  return env as FlowEnv;
+}
+
+/**
+ * The top-level `env:` of a flow file, also when another part of it does not
+ * parse. Throws the way {@link parseFlow} does when the YAML or the `env:`
+ * itself does not read.
+ */
+export function parseFlowEnv(content: string): FlowEnv | undefined {
+  try {
+    return parseFlow(content).env;
+  } catch (err) {
+    let parsed: unknown;
+    try {
+      parsed = yamlParse(flowYamlSource(content));
+    } catch {
+      throw err;
+    }
+    if (parsed === null || typeof parsed !== "object") throw err;
+    return parseFileEnv((parsed as YamlFlowFile).env);
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolContext, ToolDefinition } from "@argent/registry";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
+  envRecordSchema,
   flowEnvProblem,
   requireRecordingSession,
   setRecordingEnv,
@@ -20,11 +21,9 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
     ),
-  env: z
-    .record(z.string(), z.string().nullable())
-    .describe(
-      'Names to set in the e2e test\'s top-level env:, e.g. { "API_URL": "https://api.example.com", "API_KEY": "{{secret:API_KEY}}" }. A null value removes the name. Names not listed keep their values.'
-    ),
+  env: envRecordSchema(z.string().nullable()).describe(
+    'Names to set in the e2e test\'s top-level env:, e.g. { "API_URL": "https://api.example.com", "API_KEY": "{{secret:API_KEY}}" }. A null value removes the name. Names not listed keep their values.'
+  ),
 });
 
 export const flowSetEnvTool: ToolDefinition<

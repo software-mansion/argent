@@ -8,6 +8,7 @@ import { flowSetEnvTool } from "../../src/tools/flows/flow-set-env";
 import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import { createRegistry } from "../../src/utils/setup-registry";
 
 /**
  * The recording side of environment values: `e2e-set-env` edits the test's
@@ -24,6 +25,18 @@ async function write(relative: string, contents: string): Promise<void> {
   const file = path.join(root, relative);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, contents, "utf8");
+}
+
+const flowFile = (name: string) => path.join(root, ".argent", "e2e", `${name}.yaml`);
+
+async function onWin32<T>(run: () => Promise<T>): Promise<T> {
+  const real = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "platform", { value: real, configurable: true });
+  }
 }
 
 async function onDisk(name: string) {
@@ -77,6 +90,31 @@ describe("e2e-set-env", () => {
     expect((await setEnv("t", { toString: null, valueOf: null })).env).toEqual({});
   });
 
+  it("refuses __proto__ through the registry, whose schema would otherwise drop it", async () => {
+    const registry = createRegistry();
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root, env: { KEEP: "x" } });
+    await write("scripts/noop.mjs", "");
+    // JSON.parse keeps __proto__ as an own key, the way a request body arrives.
+    const env = JSON.parse('{"__proto__": "x", "A": "1"}') as Record<string, string>;
+
+    await expect(
+      registry.invokeTool("e2e-set-env", { name: "t", project_root: root, env })
+    ).rejects.toThrow(/__proto__/);
+    await expect(
+      registry.invokeTool("e2e-add-script", {
+        name: "t",
+        project_root: root,
+        path: "../../scripts/noop.mjs",
+        env,
+      })
+    ).rejects.toThrow(/__proto__/);
+    await expect(
+      registry.invokeTool("e2e-start-recording", { name: "t", project_root: root, env })
+    ).rejects.toThrow(/__proto__/);
+    expect((await onDisk("t")).env).toEqual({ KEEP: "x" });
+    expect((await onDisk("t")).steps).toEqual([]);
+  });
+
   it("refuses a test with no recording in progress", async () => {
     await expect(setEnv("never-started", { A: "1" })).rejects.toThrow(/recording/i);
   });
@@ -110,6 +148,15 @@ describe("e2e-start-recording with env", () => {
 
     await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
     expect((await onDisk("t")).env).toBeUndefined();
+  });
+
+  it("refuses a relative project_root before it looks up a secret", async () => {
+    await expect(
+      flowStartRecordingTool.execute(
+        {},
+        { name: "t", project_root: ".", env: { K: "{{secret:NOT_DEFINED_ANYWHERE_42}}" } }
+      )
+    ).rejects.toThrow(/project_root must be an absolute path/);
   });
 });
 
@@ -149,6 +196,104 @@ describe("e2e-add-script with env", () => {
         env: { B: "step", KEY: "{{secret:API_KEY}}" },
       },
     ]);
+  });
+
+  it("redacts a secret the script used as a property name of its output", async () => {
+    await write(
+      "scripts/keyed.mjs",
+      `globalThis.output = { [process.env.KEY]: true, [process.env.KEY + "-x"]: [1] };`
+    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const result = await flowAddScriptTool.execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        path: "../../scripts/keyed.mjs",
+        env: { KEY: "{{secret:API_KEY}}" },
+      }
+    );
+
+    expect(result.status).toBe("pass");
+    expect(result.outputJson).toBeDefined();
+    expect(result.outputJson).not.toContain(SECRET);
+    expect(Object.values(JSON.parse(result.outputJson!) as object)).toEqual([true, [1]]);
+  });
+
+  it("runs nothing when a hand edit leaves the file's env: unreadable", async () => {
+    await write(
+      "scripts/mark.mjs",
+      `import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(path.join(root, "MARK"))}, String(process.env.MODE));`
+    );
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "t", project_root: root, env: { MODE: "original" } }
+    );
+    await fs.writeFile(flowFile("t"), "env:\n  MODE: 1\nsteps: []\n", "utf8");
+
+    await expect(
+      flowAddScriptTool.execute(
+        {},
+        { name: "t", project_root: root, path: "../../scripts/mark.mjs" }
+      )
+    ).rejects.toThrow(/Nothing ran[\s\S]*non-string value for MODE/);
+    await expect(fs.stat(path.join(root, "MARK"))).rejects.toThrow();
+  });
+
+  it("runs with the file's env: when a hand edit broke only a step", async () => {
+    await write(
+      "scripts/mark.mjs",
+      `import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(path.join(root, "MARK"))}, String(process.env.MODE));\nglobalThis.output = {};`
+    );
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "t", project_root: root, env: { MODE: "original" } }
+    );
+    await fs.writeFile(
+      flowFile("t"),
+      `env:\n  MODE: edited\nsteps:\n  - echo: "created {{output:user.id}}"\n`,
+      "utf8"
+    );
+
+    // The append reports the broken step, as for any hand edit; the script
+    // ran with the env: the file holds, not the one recorded before the edit.
+    await expect(
+      flowAddScriptTool.execute(
+        {},
+        { name: "t", project_root: root, path: "../../scripts/mark.mjs" }
+      )
+    ).rejects.toThrow(/passed, but the step was not recorded/);
+    expect(await fs.readFile(path.join(root, "MARK"), "utf8")).toBe("edited");
+  });
+
+  it("lets a step's name replace the file's in another casing on Windows", async () => {
+    await write(
+      "scripts/print.mjs",
+      `console.log(JSON.stringify(Object.entries(process.env).filter(([n]) => n.toLowerCase() === "api_url")));`
+    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    // A secret this host does not define, replaced by the step's own value.
+    await fs.writeFile(
+      flowFile("t"),
+      `env:\n  API_URL: "{{secret:NOT_DEFINED_ANYWHERE_42}}"\nsteps: []\n`,
+      "utf8"
+    );
+
+    const result = await onWin32(() =>
+      flowAddScriptTool.execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          path: "../../scripts/print.mjs",
+          env: { api_url: "https://step.example" },
+        }
+      )
+    );
+
+    expect(result.status).toBe("pass");
+    expect(JSON.parse(result.log!.trim())).toEqual([["api_url", "https://step.example"]]);
   });
 
   it("records nothing when a secret in its env is missing", async () => {

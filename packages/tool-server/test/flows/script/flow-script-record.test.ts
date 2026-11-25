@@ -601,16 +601,23 @@ describe("a script that did not pass records nothing", () => {
   // With the file unreadable the only count left is the session's, which is the
   // steps as of the last append - a third number again. An author comparing it
   // with what the next append renumbers to has to know which one they are
-  // holding, so it is qualified here as the sibling recorder qualifies it.
+  // holding, so it is qualified here as the sibling recorder qualifies it. The
+  // script breaks the file itself: one already broken runs nothing, since its
+  // env: is unknown.
   it("says when the step count could not come off the file", async () => {
     await start("counted");
     await flowInsertEchoTool.execute(
       {},
       { name: "counted", project_root: root, message: "recorded" }
     );
-    await fs.appendFile(flowPath("counted"), "  - echo: hand-added\n  - bogus: [\n", "utf8");
+    await write(
+      "scripts/break.mjs",
+      `import * as fs from "node:fs";\n` +
+        `fs.appendFileSync(${JSON.stringify(flowPath("counted"))}, "  - echo: hand-added\\n  - bogus: [\\n");\n` +
+        `throw new Error("broke it");`
+    );
 
-    const failed = await addScript("counted", "../../scripts/gone.mjs");
+    const failed = await addScript("counted", "../../scripts/break.mjs");
 
     expect(failed.status).toBe("fail");
     // The in-memory snapshot, while the file itself holds two steps.

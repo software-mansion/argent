@@ -12,8 +12,9 @@ import * as fs from "node:fs/promises";
 import {
   appendStepToFlow,
   countStepsOnDisk,
+  envRecordSchema,
   flowEnvProblem,
-  parseFlow,
+  parseFlowEnv,
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
@@ -79,15 +80,27 @@ async function recordedStepCount(
 
 /**
  * Read off the file, where a hand edit made mid-recording is what the next
- * append keeps. A file that will not read or parse falls back to the last
- * recorded copy: the append after the script then reports the file, with the
- * framing its failure path gives.
+ * append keeps. A hand edit that broke another part of the file is reported by
+ * the append after the script, with the framing its failure path gives. One
+ * that leaves the `env:` unreadable stops the call before the script runs,
+ * since its environment is then unknown.
  */
 async function recordedFileEnv(session: RecordingSession): Promise<FlowEnv | undefined> {
   try {
-    return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
-  } catch {
-    return session.flow.env;
+    return parseFlowEnv(await fs.readFile(session.filePath, "utf8"));
+  } catch (err) {
+    throw wrapFailure(
+      err,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_add_script_env",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      },
+      `The env: of ${session.filePath} did not read, so the script's environment is unknown. ` +
+        `Nothing ran and no step was recorded. Fix the file and retry. ` +
+        `${err instanceof Error ? err.message : String(err)}`
+    );
   }
 }
 
@@ -139,8 +152,7 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
-  env: z
-    .record(z.string(), z.string())
+  env: envRecordSchema(z.string())
     .optional()
     .describe(
       'Environment values for this step only, recorded as the step\'s env:, e.g. { "API_KEY": "{{secret:API_KEY}}" }. They replace the same names from the e2e test\'s env: (set with e2e-set-env).'

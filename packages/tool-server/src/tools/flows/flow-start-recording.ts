@@ -9,6 +9,7 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
+  envRecordSchema,
   flowEnvProblem,
   parseRequires,
   RUNTIME_KINDS,
@@ -72,8 +73,7 @@ const zodSchema = z.object({
         "(`ios` also covers a remote simulator); `runtimeKind` is `tv` or `mobile`. Omit it for a test that runs " +
         "on any target."
     ),
-  env: z
-    .record(z.string(), z.string())
+  env: envRecordSchema(z.string())
     .optional()
     .describe(
       'The e2e test\'s top-level env:, the environment values every script step receives, e.g. { "API_URL": "https://api.example.com" }. A credential is written as {{secret:NAME}}. Change it later with e2e-set-env.'
@@ -147,7 +147,6 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
     if (params.env) {
       const problem = flowEnvProblem(params.env);
       if (problem) throw new InvalidToolInputError(`env ${problem}`);
-      resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
     }
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
@@ -172,6 +171,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       persist === "client" && ctx?.legacyE2eDir
         ? getLegacyFlowPath(params.project_root, params.name)
         : getFlowPath(params.project_root, params.name);
+    // After the path checks, which refuse a project_root the secret lookup
+    // must not search from; before the existing file is replaced.
+    if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
 
     // Truncate-and-register is one critical section: under the flow-file lock a
     // step from the take being discarded can neither slip in between the reset
