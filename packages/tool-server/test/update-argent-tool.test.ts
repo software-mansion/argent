@@ -132,6 +132,7 @@ describe("update-argent tool", () => {
     if (savedProjectRoot === undefined) delete process.env.ARGENT_PROJECT_ROOT;
     else process.env.ARGENT_PROJECT_ROOT = savedProjectRoot;
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
@@ -205,6 +206,17 @@ describe("update-argent tool", () => {
       [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
       expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
     );
+  });
+
+  it("leaves a server started with `argent server start` on the consent path", async () => {
+    vi.stubEnv("ARGENT_SERVER_MANAGED", "cli");
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
   });
 
   it("never replaces a build that was not published to npm", () => {

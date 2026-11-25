@@ -194,6 +194,7 @@ function installWhenReady(version: string, cliEntry: string, activity: ServerAct
 export function scheduleAutomaticUpdate(version: string, activity: ServerActivity): void {
   if (
     process.env.ARGENT_INSTALL_KIND !== "global" ||
+    process.env.ARGENT_SERVER_MANAGED === "cli" ||
     !isReleaseBuild() ||
     updateScheduled ||
     isUpdatingAutomatically(version)
