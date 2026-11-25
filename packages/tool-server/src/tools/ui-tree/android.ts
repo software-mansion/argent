@@ -133,6 +133,11 @@ export function startsAtTop(frame: UiTreeNode["frame"]): boolean {
   return !!frame && frame.y <= TOP_SLACK;
 }
 
+/** Whether a window reaches the bottom of the screen, with the slack of {@link startsAtTop}. */
+export function endsAtBottom(frame: UiTreeNode["frame"]): boolean {
+  return !!frame && frame.y + frame.height >= 1 - TOP_SLACK;
+}
+
 /**
  * Whether an application window (`window-type` 1) of `bundleId` with this
  * frame (normalized to the screen) is a system dialog or sheet over the app:

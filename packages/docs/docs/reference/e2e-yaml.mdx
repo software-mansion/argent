@@ -216,7 +216,7 @@ On an iOS simulator and on a physical iPhone, the runner and `describe` read one
 
 On Android and on Chromium, an id absent from `describe` can still resolve in an e2e test. Verify the id in a scratch fragment.
 
-On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. When a step does not find its target and such a window is on top, the reason of the failed step says that a dialog or a sheet is on top of the app. When a dialog of the app holds a list that scrolls, the reason also says to add a `scroll-to` step, as the target can be further down that list. A full-screen sheet of the app looks like a screen, and apps in split screen or in freeform windows show side by side, so the reason does not say this for them.
+On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. A step can then miss its target. The reason of the failed step says that a dialog or a sheet is on top of the app. A dialog of the app can hold a list that scrolls, with the target further down. The reason then also suggests a `scroll-to` step, or `within` on a `scroll-to` step. A full-screen sheet of the app looks like a screen, so the reason does not mention it. The same holds for apps side by side, in split screen or in freeform windows.
 
 ### On-screen keyboard
 

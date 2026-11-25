@@ -6,10 +6,12 @@ import {
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
   isUiAutomatorScrollable,
+  isVisibleRect,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
 import {
+  endsAtBottom,
   isSystemDialogWindow,
   startsAtTop,
   TYPE_APPLICATION,
@@ -221,7 +223,10 @@ const TYPE_SPLIT_SCREEN_DIVIDER = 5;
  * The topmost application window of a dump, when it is one Android hides the
  * app's window below (see `FlowCover`): a system dialog or sheet, or a window
  * that starts below the top (`startsAtTop`: an app window a cutout or a side
- * navigation bar insets in landscape is not a dialog). Undefined when the dump
+ * navigation bar insets in landscape is not a dialog) and is narrower than the
+ * screen or reaches its bottom (a sheet). A window as wide as the screen that
+ * ends well above its bottom is a landscape-only app the system letterboxes on
+ * a portrait screen, centred, not a dialog. Undefined when the dump
  * has no window list (the `active-window` capture, an older helper: no root
  * has a `window-type`), the topmost application window is the app's screen, or
  * the screen shows apps side by side: split screen and freeform windows list a
@@ -257,6 +262,8 @@ function topWindowCover(
     : undefined;
   if (isSystemDialogWindow(pkg, frame)) return { kind: "window", system: true, package: pkg };
   if (startsAtTop(frame)) return undefined;
+  const fullWidth = !!rect && rect.x <= 0 && rect.x + rect.w >= screenW;
+  if (fullWidth && !endsAtBottom(frame)) return undefined;
   return {
     kind: "window",
     system: false,
@@ -269,17 +276,16 @@ function topWindowCover(
  * Whether a view under `node` scrolls and shows on the screen. Only the
  * `scrollable` flag counts, not the class `isUiAutomatorScrollable` also
  * reads: the Settings "Device name" dialog holds two `ScrollView`s that do not
- * scroll.
+ * scroll. A view hidden from the user (`visible-to-user="false"`) does not show.
  */
 function holdsScroller(node: ParsedXmlNode, screenW: number, screenH: number): boolean {
-  return childNodes(node).some((c) => {
-    const rect = c.attrs.scrollable === "true" && parseUiAutomatorBounds(c.attrs.bounds ?? "");
-    const shows =
-      rect &&
-      Math.min(rect.x + rect.w, screenW) > Math.max(rect.x, 0) &&
-      Math.min(rect.y + rect.h, screenH) > Math.max(rect.y, 0);
-    return shows || holdsScroller(c, screenW, screenH);
-  });
+  return childNodes(node).some(
+    (c) =>
+      (c.attrs.scrollable === "true" &&
+        c.attrs["visible-to-user"] !== "false" &&
+        isVisibleRect(parseUiAutomatorBounds(c.attrs.bounds ?? ""), screenW, screenH)) ||
+      holdsScroller(c, screenW, screenH)
+  );
 }
 
 /**

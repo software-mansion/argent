@@ -217,6 +217,31 @@ describe.concurrent("a miss on a target an in-app alert, sheet or popover covers
     }
   );
 
+  it("does not name the cover for a target scoped within the cover", async ({ expect }) => {
+    const ax = axTree("app");
+    // A covered button under the alert's title.
+    ax.nodes.push({
+      index: 15,
+      parentIndex: 11,
+      label: "u21",
+      traits: ["button"],
+      frame: frame(0.1, 0.41, 0.2, 0.03),
+    });
+    const scoped = await reasonOf(
+      device({ ax }),
+      "00000000-0000-0000-0000-0000000000d5",
+      tap({ text: "u21", within: { text: "In-app alert" } })
+    );
+    const plainTap = await reasonOf(
+      device({ ax }),
+      "00000000-0000-0000-0000-0000000000d6",
+      tap({ text: "u21" })
+    );
+
+    expect(scoped).toBe(plain('text="u21" within (text="In-app alert")'));
+    expect(plainTap).toBe(`no visible element matched selector text="u21": ${IN_APP}`);
+  }, 30_000);
+
   it.for<[string, string, Step, string]>([
     ["assert visible", "e1", { kind: "assert", condition: "visible", selector: U11 }, MISSED],
     ["await", "e2", { kind: "await", condition: "visible", selector: U11, timeout: 500 }, MISSED],
@@ -358,20 +383,29 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
     expect(result.steps[1]?.reason).toBe(plain('text="Model"'));
   }, 20_000);
 
-  it.for<[string, string, string]>([
-    ["a permission prompt", "com.google.android.permissioncontroller", "[28,817][1052,1648]"],
-    ["the share sheet", "android", FULL],
-  ])("names %s as a system dialog", { timeout: 20_000 }, async ([, pkg, bounds], { expect }) => {
-    const sim = device({ android: androidXml([STATUS_BAR, appWindow(pkg, bounds, "Allow")]) });
-    const reason = await reasonOf(sim, `emulator-${pkg.length}`, tap({ text: "Organize" }));
+  it.for<[string, string, string, string]>([
+    [
+      "a permission prompt",
+      "com.google.android.permissioncontroller",
+      "[28,817][1052,1648]",
+      ", or grant the permission before the e2e test with the `settings-permissions` tool.",
+    ],
+    // A share sheet asks for no permission.
+    ["the share sheet", "android", FULL, "."],
+  ])(
+    "names %s as a system dialog",
+    { timeout: 20_000 },
+    async ([, pkg, bounds, remedy], { expect }) => {
+      const sim = device({ android: androidXml([STATUS_BAR, appWindow(pkg, bounds, "Allow")]) });
+      const reason = await reasonOf(sim, `emulator-${pkg.length}`, tap({ text: "Organize" }));
 
-    expect(reason).toBe(
-      `no visible element matched selector text="Organize": a system dialog or sheet of ${pkg} ` +
-        "is on top of the app, and Android leaves the elements below it out of the tree. Add a " +
-        "step before this one that taps a button of it, or grant the permission before the e2e " +
-        "test with the `settings-permissions` tool."
-    );
-  });
+      expect(reason).toBe(
+        `no visible element matched selector text="Organize": a system dialog or sheet of ${pkg} ` +
+          "is on top of the app, and Android leaves the elements below it out of the tree. Add a " +
+          `step before this one that taps a button of it${remedy}`
+      );
+    }
+  );
 
   describe("on a 1080x2400 API 35 emulator", () => {
     const SCREEN = { width: 1080, height: 2400 };
@@ -424,6 +458,44 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       );
     }, 30_000);
 
+    it("gives the dialog text alone to a scroll-to step that names its within:", async ({
+      expect,
+    }) => {
+      const sim = device({ android: androidXml([BAR, COLORS]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5579", {
+        kind: "scroll-to",
+        target: { text: "Color 25" },
+        direction: "down",
+        within: { role: "ScrollView" },
+      });
+
+      expect(reason).toBe(
+        'reached the end of the scroll without finding text="Color 25": a dialog is on top of ' +
+          "the app, and Android leaves the elements below it out of the tree. Dismiss it first, " +
+          "or add an await step for it to close."
+      );
+    }, 30_000);
+
+    it("gives no scroll remedy for a scroller hidden from the user", async ({ expect }) => {
+      const hidden = COLORS.replace(
+        'scrollable="true"',
+        'scrollable="true" visible-to-user="false"'
+      );
+      const sim = device({ android: androidXml([BAR, hidden]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5580", tap({ text: "Model" }));
+
+      expect(reason).toBe(DIALOG);
+    }, 20_000);
+
+    // A landscape-only app the system letterboxes on a portrait screen.
+    it("keeps the scroll hint for a letterboxed app", async ({ expect }) => {
+      const app = listWindow(DLG, "[0,795][1080,1605]", "[0,795][1080,1605]", ["Land row 1"]);
+      const sim = device({ android: androidXml([BAR, app]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5581", tap({ text: "Nowhere" }));
+
+      expect(reason).toBe(plain('text="Nowhere"'));
+    }, 20_000);
+
     it("gives no scroll remedy for a dialog whose ScrollViews do not scroll", async ({
       expect,
     }) => {
@@ -468,8 +540,7 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       expect(reason).toBe(
         'no visible element matched selector text="Quick Share": a system dialog or sheet of ' +
           "android is on top of the app, and Android leaves the elements below it out of the " +
-          "tree. Add a step before this one that taps a button of it, or grant the permission " +
-          "before the e2e test with the `settings-permissions` tool."
+          "tree. Add a step before this one that taps a button of it."
       );
     }, 20_000);
 
