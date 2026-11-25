@@ -419,6 +419,13 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       "[28,817][1052,1648]",
       ", or grant the permission before the e2e test with the `settings-permissions` tool.",
     ],
+    // Before API 29 the package installer draws the permission prompt (API 28, scaled).
+    [
+      "a permission prompt before API 29",
+      "com.google.android.packageinstaller",
+      "[100,59][980,1802]",
+      ", or grant the permission before the e2e test with the `settings-permissions` tool.",
+    ],
     // A share sheet asks for no permission.
     ["the share sheet", "android", FULL, "."],
   ])(

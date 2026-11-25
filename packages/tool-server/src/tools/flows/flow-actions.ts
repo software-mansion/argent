@@ -1129,8 +1129,11 @@ const COVERED_REMEDY = "Dismiss it first, or add an await step for it to close."
 const PERMISSION_REMEDY =
   "or grant the permission before the e2e test with the `settings-permissions` tool.";
 
-// The Android packages whose dialog asks for a runtime permission.
+// The Android packages whose dialog asks for a runtime permission: the
+// package installer drew that dialog before API 29.
 const PERMISSION_PACKAGES = new Set([
+  "com.android.packageinstaller",
+  "com.google.android.packageinstaller",
   "com.android.permissioncontroller",
   "com.google.android.permissioncontroller",
 ]);
