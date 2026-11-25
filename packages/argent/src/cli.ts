@@ -58,6 +58,7 @@ Commands:
   update      ${installerHelpEntry("update")}
   uninstall   ${installerHelpEntry("uninstall")}
   remove      ${installerHelpEntry("remove")}
+  doctor      Check the install, editor MCP entries, skills and device toolchains
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   e2e         Run an e2e test by name or YAML path (use \`argent e2e --help\` for options)
@@ -136,6 +137,8 @@ async function main(): Promise<void> {
     case "uninstall":
     case "remove":
       return (await loadInstaller()).uninstall(rest);
+    case "doctor":
+      return (await loadCli()).doctor(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "tools":
       return (await loadCli()).tools(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "run":
