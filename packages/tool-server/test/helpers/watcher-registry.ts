@@ -7,7 +7,7 @@ import {
 import { nativeDevtoolsRef } from "../../src/blueprints/native-devtools";
 
 /** A registry stub the simulator watcher can subscribe to. */
-export function watcherRegistry(services: Partial<Registry> = {}): Registry {
+export function watcherRegistry(services: Record<string, unknown> = {}): Registry {
   return { ...services, events: new TypedEventEmitter<RegistryEvents>() } as unknown as Registry;
 }
 

@@ -1,7 +1,7 @@
 /**
- * The watcher arms devtools injection on every booted simulator a tool has
- * targeted, by raw UDID and with no tool call behind it after a reboot; the one
- * caller that can walk past a gate keyed on the `ext:` id.
+ * The watcher re-arms a targeted simulator after a reboot by raw UDID, with no
+ * tool call behind it, so it is the one caller that can walk past a gate keyed
+ * on the `ext:` id.
  *
  * The e2e device-provider tier runs under a sandbox `$HOME`, which hides the
  * default simulator set from the watcher, so this file is the only coverage.

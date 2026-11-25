@@ -448,7 +448,12 @@ On success, pass `match.id` to `view-network-request-details`. Use the same targ
 
 ## Native devtools
 
-On an iOS simulator, Argent loads its library into each app that starts after Argent arms the simulator. Argent arms a simulator at the first tool call that uses it, for example input, `screenshot`, `describe`, `launch-app` or a `native-*` tool. When the tool-server finds that the simulator shut down and booted again, Argent arms it again. Argent does not change a simulator that no tool call uses. After `stop-all-simulator-servers`, Argent does not arm the simulator again until the next tool call that uses it. Restart an app that started before Argent armed its simulator.
+On an iOS simulator, Argent loads its library into each app that starts after Argent arms the simulator. Restart an app that started before the current tool-server armed its simulator.
+
+- Argent arms a simulator at the first tool call that can start an app on it or read its views, for example a gesture, `describe` or `launch-app`.
+- When the tool-server finds that the simulator shut down and booted again, Argent arms it again.
+- After `stop-all-simulator-servers`, Argent does not arm the simulator again until the next of these tool calls. The simulator keeps the arming until it shuts down.
+- Argent does not change a simulator that no tool call uses. `native-profiler-launch-analysis` does not arm a simulator.
 
 On a Mac app, these tools read the app through the Argent library:
 

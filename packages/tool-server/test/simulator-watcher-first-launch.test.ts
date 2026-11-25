@@ -441,7 +441,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       const watched = watcherRegistry({
         resolveService: async () => service,
         disposeService: async () => {},
-      } as unknown as Partial<Registry>);
+      });
       const watcher = startSimulatorWatcher(watched);
       targetSimulators(watched, SIMULATOR.id);
       return watcher;

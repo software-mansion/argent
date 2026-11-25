@@ -6,6 +6,7 @@ import {
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
 import { externalClaimForAnyId, externalClaimForNativeId } from "./external-devices";
+import { deviceKeyOf } from "./native-network-record";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -29,9 +30,8 @@ let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
 /**
  * Arms native-devtools injection on a simulator a tool is about to drive, and so
  * makes the watcher keep it armed. Awaited before a tool can start an app on a
- * local iOS or Apple TV simulator, so the app does not start uninjected: by the
- * cross-platform tools, the native profiler's malloc relaunch, and the
- * simulator-server and tv-control services every input goes through.
+ * local iOS or Apple TV simulator, so the app does not start uninjected.
+ * Concurrent calls for one simulator share one attempt and one deadline.
  * Settles after the attempt or {@link ARM_WAIT_MS}, at once when no watcher
  * runs, and never rejects.
  */
@@ -125,11 +125,10 @@ async function armNow(
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
   if (withholdsNativeDevtools(udid)) return;
-  await initUdid(registry, udid, trackedServices);
-  await trackedServices
-    .get(udid)
-    ?.ensureEnvReady()
-    .catch(() => {});
+  const service = await resolveNativeDevtools(registry, udid);
+  if (!service) return;
+  trackedServices.set(deviceKeyOf(udid), service);
+  await service.ensureEnvReady().catch(() => {});
 }
 
 async function armWithinCap(
@@ -344,7 +343,9 @@ export function startSimulatorWatcher(registry: Registry): {
      */
     await handBackClaimed(claimed);
 
-    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
+    const newUdids = [...booted].filter(
+      (udid) => targetedUdids.has(udid) && !trackedServices.has(udid)
+    );
     const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
       initUdid(registry, udid, trackedServices)
     );
@@ -381,7 +382,16 @@ export function startSimulatorWatcher(registry: Registry): {
   }
 
   registry.events.on("serviceStateChange", noteTargeted);
-  armTarget = (udid) => armWithinCap(registry, udid, trackedServices);
+  const armsInFlight = new Map<string, Promise<void>>();
+  armTarget = (udid) => {
+    const existing = armsInFlight.get(udid);
+    if (existing) return existing;
+    const arming = armWithinCap(registry, udid, trackedServices).finally(() =>
+      armsInFlight.delete(udid)
+    );
+    armsInFlight.set(udid, arming);
+    return arming;
+  };
 
   // Settles once the first poll has read the booted simulators, once the
   // bounded simctl call fails, or at once while Xcode's install is pending.

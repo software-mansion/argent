@@ -129,4 +129,36 @@ describe("armSimulator", () => {
 
     expect(order).toEqual([`NativeDevtools:${UDID}`, "handler"]);
   });
+
+  it("shares one attempt and one deadline between concurrent calls for a simulator", async () => {
+    vi.useFakeTimers();
+    listsBooted();
+    const resolveService = vi.fn(() => new Promise(() => {}));
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+
+    const first = armSimulator(UDID);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const second = armSimulator(UDID);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await isSettled(second)).toBe(true);
+    expect(await isSettled(first)).toBe(true);
+    expect(resolveService).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not awaited by a cross-platform tool call on an Android device", async () => {
+    listsBooted();
+    const resolveService = vi.fn(async () => ({ ensureEnvReady: async () => {} }));
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+    const execute = dispatchByPlatform({
+      toolId: "probe",
+      capability: { apple: { simulator: true }, android: { emulator: true } },
+      ios: { handler: async () => "ios" },
+      android: { handler: async () => "android" },
+    });
+
+    await execute({}, { udid: "emulator-5554" });
+
+    expect(resolveService).not.toHaveBeenCalled();
+  });
 });
