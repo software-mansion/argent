@@ -238,6 +238,9 @@ Options (run):
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
                          unless such a step sets updateBaselines
+  --env NAME=value       Set an environment value for the test's script steps,
+                         replacing the same name from the test file and its
+                         steps. Repeatable. The value may hold {{secret:NAME}}
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<test>/ — a stable path for CI artifact
@@ -260,6 +263,7 @@ Examples:
   argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
   argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
   argent e2e run .argent/e2e --recursive
+  argent e2e run checkout --env API_URL=https://staging.example.com
 `);
 }
 
@@ -274,6 +278,7 @@ const RUN_OPTIONS = {
   // run it would stop the whole batch.
   "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
+  "env": { kind: "value", repeatable: true },
 } as const satisfies OptionSpecs;
 
 const LIST_OPTIONS = {
@@ -291,6 +296,8 @@ export function parseRunArgs(argv: string[]): {
   device?: string;
   platform?: string;
   output?: string;
+  /** `--env NAME=value`, in order; a later value for a name wins. */
+  env?: Record<string, string>;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -328,10 +335,32 @@ export function parseRunArgs(argv: string[]): {
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
   if (options.output !== undefined) out.output = options.output as string;
+  if (options.env !== undefined) out.env = parseEnvFlags(options.env as string[]);
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
   return out;
+}
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Checked here rather than left to the tool-server, which would refuse the
+ * same input once per test of a directory run.
+ */
+function parseEnvFlags(values: readonly string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const entry of values) {
+    const eq = entry.indexOf("=");
+    const name = eq === -1 ? entry : entry.slice(0, eq);
+    if (eq === -1 || !ENV_NAME_RE.test(name) || name === "__proto__") {
+      throw new FlagParseException(
+        `--env takes NAME=value with a name of letters, digits and _, not starting with a digit; got ${JSON.stringify(entry)}`
+      );
+    }
+    env[name] = entry.slice(eq + 1);
+  }
+  return env;
 }
 
 /**
@@ -582,7 +611,7 @@ function optionSafePath(p: string): string {
 
 /**
  * The command that runs one flow of a directory run alone, from the same
- * working directory, with the same --device, --platform and --update-baselines,
+ * working directory, with the same --device, --platform, --update-baselines and --env,
  * and an --output that exports to the directory the batch exported that flow
  * to. A flow outside that directory keeps its absolute path, since `run`
  * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
@@ -592,7 +621,10 @@ function rerunCommand(
   flowPath: string,
   rel: string,
   projectRoot: string,
-  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
+  args: Pick<
+    ReturnType<typeof parseRunArgs>,
+    "device" | "platform" | "output" | "updateBaselines" | "env"
+  >
 ): string {
   const pathArg = (p: string) => shellQuoteArg(optionSafePath(p));
   const fromCwd = path.relative(projectRoot, flowPath) || ".";
@@ -607,6 +639,9 @@ function rerunCommand(
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
   if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
+  for (const [name, value] of Object.entries(args.env ?? {})) {
+    parts.push("--env", shellQuoteArg(`${name}=${value}`));
+  }
   return parts.join(" ");
 }
 
@@ -1225,6 +1260,7 @@ function buildRunPayload(
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
   if (args.updateBaselines) payload.updateBaselines = true;
+  if (args.env) payload.env = args.env;
   return payload;
 }
 

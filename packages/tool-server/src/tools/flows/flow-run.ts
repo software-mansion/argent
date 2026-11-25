@@ -41,6 +41,7 @@ import {
   E2E_FILE_TEMPLATES,
   PROJECT_ROOT_INPUT,
   escapeInline,
+  flowEnvProblem,
   flowNameCasingError,
   isBlockStep,
   parseFlow,
@@ -48,11 +49,13 @@ import {
   precedesLeadingLaunch,
   runTargetName,
   type BlockStep,
+  type FlowEnv,
   type FlowFile,
   type FlowStep,
   type Launch,
   windowsPathRefusal,
 } from "./flow-utils";
+import { resolveScriptEnv } from "./flow-script-step";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
 import {
   ClientProjectAccess,
@@ -1150,6 +1153,13 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   attachedAppPath?: string;
   projectRoot: string;
+  /**
+   * The run's own environment values (`argent e2e run --env`, `e2e-execute`'s
+   * `env`). They replace the same names from every other layer, in every
+   * fragment. A `tool: e2e-execute` step is a separate run and gets only what
+   * its own args pass.
+   */
+  runEnv: FlowEnv;
   scriptLogBudget: FlowScriptLogBudget;
   /**
    * The last native network capture note this run reported for each app (see
@@ -1623,8 +1633,18 @@ const zodSchema = z
       .describe(
         "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite: without it, the call runs no step and returns the prerequisite text. Not a dry run: an e2e test with no prerequisite runs in full. To read a prerequisite without running, read executionPrerequisite in the YAML file."
       ),
+    env: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        "Environment values for this run's script steps, e.g. { \"API_URL\": \"https://staging.example.com\" }. Each replaces the same name from the test file's env:, a fragment's env: and a step's env:. A value may hold {{secret:NAME}}, resolved on the tool-server and redacted from what the script prints."
+      ),
   })
   .superRefine((params, ctx) => {
+    const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
+    if (envProblem) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: envProblem, path: ["env"] });
+    }
     if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -1673,6 +1693,9 @@ Without a link, every step kind runs.`,
     async execute(_services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
+      // Before any step: a missing secret in the run's own values would fail
+      // every script step of the run the same way.
+      if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.e2e_test_file,
@@ -1917,6 +1940,7 @@ Without a link, every step kind runs.`,
         snapshotApps: new Map(),
         secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
+        runEnv: params.env ?? {},
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
@@ -1929,6 +1953,7 @@ Without a link, every step kind runs.`,
       try {
         await execSteps(state, flow.steps, {
           runStack: seed,
+          fileEnv: flow.env ?? {},
           rootDisplay: rootEntry.display,
           depth: 0,
           legacyPoints: flowFormatVersion(flow) < 2,
@@ -2458,6 +2483,12 @@ interface StepScope {
   rootDisplay: string;
   depth: number;
   /**
+   * The test files' `env:` defaults in effect here. A fragment's own `env:`
+   * fills only the names its callers did not set, the way a default argument
+   * does, so a test can override what a shared fragment assumes.
+   */
+  fileEnv: FlowEnv;
+  /**
    * The steps are from a version 1 file, whose raw points and raw tool steps
    * are in an iOS simulator's portrait-native space (flow-legacy-points.ts).
    * Set per file: a fragment of either version can run from the other.
@@ -2626,7 +2657,10 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secret.typed = true;
+    // A script's secret goes to its environment, not to the screen.
+    if (step.kind !== "script" && JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) {
+      state.secret.typed = true;
+    }
     // A version 1 file's raw tool step runs in the native coordinates it was
     // recorded in; everything else, also a nested run such a step starts, in
     // the upright ones.
@@ -2951,6 +2985,7 @@ async function execRunStep(
     fragment.steps,
     childScope(scope, {
       runStack: [...scope.runStack, { canonical, display }],
+      fileEnv: { ...fragment.env, ...scope.fileEnv },
       legacyPoints: flowFormatVersion(fragment) < 2,
     })
   );
@@ -2992,10 +3027,13 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
+  const env = { ...scope.fileEnv, ...step.env, ...state.runEnv };
   const { outcome } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
+    env,
+    ...(state.ctx?.clientSecrets ? { clientSecrets: state.ctx.clientSecrets } : {}),
     logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });

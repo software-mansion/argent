@@ -92,146 +92,139 @@ export function resolveSecretPlaceholders(
   return { text: resolved, secrets };
 }
 
+/** Shorter fragments would match ordinary text too often to redact by. */
+const MIN_FRAGMENT = 6;
+
 /**
- * Zero-length values are skipped: replacing an empty string would corrupt the
- * text rather than redact anything.
- *
- * Callers that scrub a *stream* must scrub before any truncation and must hold
- * back a chunk tail across chunk boundaries, since a whole-value match sees
- * neither half of a value split across two writes — see
- * `flow-script-executor.ts`.
+ * Replace each secret in `text` with `{{secret:NAME}}`: the whole value, and
+ * any fragment of it at least {@link MIN_FRAGMENT} characters long, since what
+ * reaches a log is often wrapped, truncated or cut by a size limit. A shorter
+ * value only matches whole. Best effort: it knows the raw, URL-encoded and
+ * JSON-escaped spellings, not every encoding a caller could apply.
  */
-export function scrubSecretValues(
+export function redactSecrets(
   text: string,
   secrets: ReadonlyArray<{ name: string; value: string }>
 ): string {
-  return scrubSecretChunk(text, secrets, true).emit;
+  return secretRedactor(secrets)(text);
+}
+
+export interface SecretRedactor {
+  (text: string, opts?: { cut?: boolean }): string;
+  /** Which secret owns each position of `text`; opaque, for {@link SecretRedactor.render}. */
+  claims(text: string, opts?: { cut?: boolean }): Int32Array;
+  /** `text` with each run of positions one secret owns replaced by its marker. */
+  render(text: string, owner: Int32Array): string;
+  readonly names: ReadonlySet<string>;
 }
 
 /**
- * {@link scrubSecretValues} over one chunk of a stream, holding back the tail a
- * later chunk could still complete into a value. `final` releases everything.
- *
- * The chunk ends at the first position where a value could still begin: past
- * that position no replacement is settled, and releasing further would commit
- * either half of a value split across the cut, or a shorter value where the
- * longer one containing it had not arrived yet.
+ * {@link redactSecrets} with the secrets indexed once, for a caller that
+ * redacts many strings. `cut` says the text ends where a size limit cut it: a
+ * fragment of a secret shorter than {@link MIN_FRAGMENT} at the very end is
+ * then redacted too, since the limit, not the script, decided where it stops.
  */
-export function scrubSecretChunk(
-  text: string,
-  secrets: ReadonlyArray<{ name: string; value: string }>,
-  final: boolean
-): {
-  emit: string;
-  held: number;
-} {
-  const ordered = orderedSecrets(secrets);
-  if (ordered.length === 0) return { emit: text, held: 0 };
-  const longestValue = ordered[0].value.length;
-  const names = new Set(ordered.map((secret) => secret.name));
-  const longestName = Math.max(...ordered.map((secret) => secret.name.length));
-  let out = "";
-  let copied = 0;
-  let at = 0;
-  while (at < text.length) {
-    // A marker one pass wrote is not text the next may look inside: a value
-    // that occurs in some *name* would otherwise be replaced there, nesting one
-    // marker inside another and leaving neither the shape a reader parses.
-    //
-    // Only while the span really is a marker, though. A value that starts
-    // inside it and reaches past its end belongs to text that merely looks like
-    // one — a script echoing an unresolved `{{secret:NAME}}` — and jumping the
-    // span would leave that value in plaintext, here and in the whole-text pass
-    // that skips by this same rule. A marker left nested is the lesser fault.
-    const marker = markerLengthAt(text, at, names, longestName);
-    if (marker > 0 && !valueLeavesMarker(text, at, at + marker, ordered)) {
-      at += marker;
-      continue;
-    }
-    // Ahead of the match, because a value that fits in what is left is not
-    // proof that it is the value there: one value can be a prefix of another —
-    // `sk-` of `sk-live-…` — and replacing the short one at a position the long
-    // one also starts at settles it, leaving the long one's remainder to be
-    // released in plaintext by the next chunk.
-    if (!final && text.length - at < longestValue && beginsAValue(text, at, ordered)) break;
-    // Longest value first: one value can contain another — a host inside a URL
-    // that is itself a secret — and taking the shorter one would leave the rest
-    // of the longer one in the text.
-    const hit = ordered.find((secret) => text.startsWith(secret.value, at));
-    if (hit) {
-      out += `${text.slice(copied, at)}${SECRET_PLACEHOLDER_MARKER}${hit.name}}}`;
-      at += hit.value.length;
-      copied = at;
-      continue;
-    }
-    at += 1;
-  }
-  return {
-    emit: copied === 0 ? text.slice(0, at) : out + text.slice(copied, at),
-    held: text.length - at,
-  };
-}
-
-/**
- * Whether a value starts inside `[from, end)` and runs to the end of the span
- * or past it. A value that ends exactly at `end` counts: it holds the closing
- * characters a reader parses the marker by, and the boundary is set on the
- * scrubbing side on purpose — the cost of counting one is a marker nested in
- * another, the cost of missing one is a value shipped in plaintext.
- *
- * The span is bounded by the longest name there is, so this walk is too.
- */
-function valueLeavesMarker(
-  text: string,
-  from: number,
-  end: number,
-  ordered: ReadonlyArray<{ value: string }>
-): boolean {
-  for (let at = from; at < end; at++) {
-    for (const { value } of ordered) {
-      if (at + value.length >= end && text.startsWith(value, at)) return true;
-    }
-  }
-  return false;
-}
-
-function beginsAValue(
-  text: string,
-  at: number,
-  ordered: ReadonlyArray<{ value: string }>
-): boolean {
-  const rest = text.slice(at);
-  return ordered.some(({ value }) => value.length > rest.length && value.startsWith(rest));
-}
-
-function orderedSecrets(
+export function secretRedactor(
   secrets: ReadonlyArray<{ name: string; value: string }>
-): Array<{ name: string; value: string }> {
-  return secrets
+): SecretRedactor {
+  // A lower index wins a contested position, so a value containing another (a
+  // host inside a URL) is not split around the shorter one.
+  const ordered = secrets
     .filter(({ value }) => value.length > 0)
-    .sort((a, b) => b.value.length - a.value.length);
+    .sort((a, b) => b.value.length - a.value.length || (a.name < b.name ? -1 : +(a.name > b.name)));
+  const none = ordered.length;
+  const spellings = ordered.map(({ value }) => [...spellingsOf(value)]);
+  // Ids rise as entries are visited, so the first one a window records wins.
+  const windows = new Map<string, number>();
+  spellings.forEach((forms, id) => {
+    for (const spelling of forms) {
+      for (let i = 0; i + MIN_FRAGMENT <= spelling.length; i++) {
+        const window = spelling.slice(i, i + MIN_FRAGMENT);
+        if (!windows.has(window)) windows.set(window, id);
+      }
+    }
+  });
+
+  const claims = (text: string, opts: { cut?: boolean } = {}): Int32Array => {
+    const owner = new Int32Array(text.length).fill(none);
+    if (none === 0) return owner;
+    const claim = (from: number, to: number, id: number) => {
+      for (let i = from; i < to; i++) owner[i] = Math.min(owner[i], id);
+    };
+    spellings.forEach((forms, id) => {
+      for (const spelling of forms) {
+        if (spelling.length >= MIN_FRAGMENT) continue;
+        for (let at = text.indexOf(spelling); at !== -1; at = text.indexOf(spelling, at + 1)) {
+          claim(at, at + spelling.length, id);
+        }
+      }
+    });
+    if (windows.size > 0) {
+      for (let p = 0; p + MIN_FRAGMENT <= text.length; p++) {
+        const id = windows.get(text.slice(p, p + MIN_FRAGMENT));
+        if (id !== undefined) claim(p, p + MIN_FRAGMENT, id);
+      }
+    }
+    if (opts.cut) {
+      spellings.forEach((forms, id) => {
+        for (const spelling of forms) {
+          const longest = Math.min(MIN_FRAGMENT - 1, spelling.length - 1, text.length);
+          for (let n = longest; n > 0; n--) {
+            if (text.endsWith(spelling.slice(0, n))) {
+              claim(text.length - n, text.length, id);
+              break;
+            }
+          }
+        }
+      });
+    }
+    // A window can begin or end inside a surrogate pair; redact the whole
+    // character rather than leave half of it.
+    for (let i = 0; i + 1 < text.length; i++) {
+      const high = text.charCodeAt(i);
+      const low = text.charCodeAt(i + 1);
+      if (high < 0xd800 || high > 0xdbff || low < 0xdc00 || low > 0xdfff) continue;
+      const id = Math.min(owner[i], owner[i + 1]);
+      owner[i] = id;
+      owner[i + 1] = id;
+      i++;
+    }
+    return owner;
+  };
+
+  const render = (text: string, owner: Int32Array): string => {
+    let out = "";
+    let copied = 0;
+    for (let at = 0; at < text.length; at++) {
+      if (owner[at] === none) continue;
+      // By name, not entry: a caller may pass several spellings of one secret.
+      const { name } = ordered[owner[at]];
+      let end = at + 1;
+      while (end < text.length && ordered[owner[end]]?.name === name) end++;
+      out += `${text.slice(copied, at)}${SECRET_PLACEHOLDER_MARKER}${name}}}`;
+      copied = end;
+      at = end - 1;
+    }
+    return copied === 0 ? text : out + text.slice(copied);
+  };
+
+  const redact = ((text: string, opts?: { cut?: boolean }) =>
+    none === 0 || text.length === 0 ? text : render(text, claims(text, opts))) as SecretRedactor;
+  return Object.assign(redact, {
+    claims,
+    render,
+    names: new Set(ordered.map(({ name }) => name)),
+  });
 }
 
-function markerLengthAt(
-  text: string,
-  at: number,
-  names: ReadonlySet<string>,
-  longestName: number
-): number {
-  if (!text.startsWith(SECRET_PLACEHOLDER_MARKER, at)) return 0;
-  const from = at + SECRET_PLACEHOLDER_MARKER.length;
-  // Searched inside a window no longer than the longest name there is, because
-  // no wider match could be one: text that opens a marker and never closes it —
-  // which a script can write on every line — would otherwise be read to the end
-  // of the chunk once per occurrence.
-  const window = text.slice(from, from + longestName + 2);
-  const end = window.indexOf("}}");
-  // Only a name this call would itself write: a `{{secret:X}}` the script
-  // printed for an X that is no secret here stays ordinary text, so a value
-  // inside it is still replaced.
-  return end >= 0 && names.has(window.slice(0, end))
-    ? SECRET_PLACEHOLDER_MARKER.length + end + 2
-    : 0;
+function spellingsOf(value: string): Set<string> {
+  const spellings = new Set([value, JSON.stringify(value).slice(1, -1)]);
+  try {
+    spellings.add(encodeURIComponent(value));
+  } catch {
+    // A lone surrogate has no URL encoding, so nothing can print one.
+  }
+  return spellings;
 }
 
 /**
@@ -249,7 +242,7 @@ export function redactSecretsFromError(
     const quoted = secret.value.replaceAll("'", "'\\''");
     return quoted === secret.value ? [secret] : [secret, { name: secret.name, value: quoted }];
   });
-  const scrub = (s: string) => scrubSecretValues(s, forms);
+  const scrub = (s: string) => redactSecrets(s, forms);
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

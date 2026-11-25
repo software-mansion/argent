@@ -1102,7 +1102,7 @@ describe("parseFlow", () => {
       ["metadata: x", "unknown key `metadata`"],
     ])("names the allowed top-level keys for %j", async (line, unknown) => {
       expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(
-        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, requires, steps`
+        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, requires, env, steps`
       );
     });
   });

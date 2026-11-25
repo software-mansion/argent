@@ -285,6 +285,25 @@ describe("parseRunArgs", () => {
     );
   });
 
+  it("collects repeated --env values, splitting each on its first =", () => {
+    expect(
+      parseRunArgs([
+        "checkout.yaml",
+        "--env",
+        "A=1",
+        "--env=URL=https://x.test/?q=a=b",
+        "--env",
+        "A=2",
+        "--env",
+        "EMPTY=",
+      ]).env
+    ).toEqual({ A: "2", URL: "https://x.test/?q=a=b", EMPTY: "" });
+  });
+
+  it.each(["NOEQUALS", "=value", "1A=x", "A-B=x", "__proto__=x"])("refuses --env %s", (entry) => {
+    expect(() => parseRunArgs(["checkout.yaml", "--env", entry])).toThrow(/--env takes NAME=value/);
+  });
+
   it("accepts the --flag=value form for every value-taking flag", () => {
     expect(
       parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform=ios", "--output=dir"])
@@ -4087,6 +4106,24 @@ describe("argent e2e run <dir>", () => {
       "",
       "FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped (0.0s)",
     ]);
+  });
+
+  it("forwards --env to e2e-execute and repeats it, quoted, in the re-run line", async () => {
+    const suiteDir = path.join(tempRoot, "env-suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "one.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended"));
+
+    await expect(
+      flow(["run", suiteDir, "--env", "MODE=fast", "--env", "KEY={{secret:API_KEY}}"], opts)
+    ).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+      env: { MODE: "fast", KEY: "{{secret:API_KEY}}" },
+    });
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent e2e run ${path.join(suiteDir, "one.yaml")} --env MODE=fast --env 'KEY={{secret:API_KEY}}'`
+    );
   });
 
   it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {

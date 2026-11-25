@@ -816,7 +816,10 @@ export type FlowStep =
    */
   | { kind: "fold"; posture?: FoldPosture; angle?: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
-  | { kind: "script"; path: string; timeout?: number };
+  | { kind: "script"; path: string; timeout?: number; env?: FlowEnv };
+
+/** Environment values a `script` step's process receives, by variable name. */
+export type FlowEnv = Record<string, string>;
 
 const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
 type FoldPosture = (typeof FOLD_POSTURES)[number];
@@ -839,6 +842,8 @@ export type FlowFile = {
   executionPrerequisite: string;
   /** Absent when the flow runs on any target. */
   requires?: FlowRequires;
+  /** Defaults for every `script` step in this file. Absent when the file sets none. */
+  env?: FlowEnv;
   steps: FlowStep[];
 };
 
@@ -1114,7 +1119,7 @@ type YamlStep =
   | { rotate: { on?: YamlSelector; by: number } }
   | { fold: YamlFoldBody }
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
-  | { script: { path: string; timeout?: number } };
+  | { script: { path: string; timeout?: number; env?: FlowEnv } };
 
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
@@ -1122,6 +1127,7 @@ type YamlFlowFile = {
   version?: number;
   requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
+  env?: FlowEnv;
   steps: YamlStep[];
 };
 
@@ -1751,8 +1757,9 @@ function toYamlStep(step: FlowStep): YamlStep {
       return { snapshot: body };
     }
     case "script": {
-      const body: { path: string; timeout?: number } = { path: step.path };
+      const body: { path: string; timeout?: number; env?: FlowEnv } = { path: step.path };
       if (step.timeout !== undefined) body.timeout = step.timeout;
+      if (step.env) body.env = step.env;
       return { script: body };
     }
     case "tool": {
@@ -3180,16 +3187,55 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
     );
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
-    badEntry(raw, "script needs { path, timeout? }, e.g. `script: { path: scripts/seed.mjs }`");
+    badEntry(
+      raw,
+      "script needs { path, timeout?, env? }, e.g. `script: { path: scripts/seed.mjs }`"
+    );
   }
   const b = body as Record<string, unknown>;
-  rejectUnknownKeys(raw, b, ["path", "timeout"], "script");
+  rejectUnknownKeys(raw, b, ["path", "timeout", "env"], "script");
   const step: Extract<FlowStep, { kind: "script" }> = {
     kind: "script",
     path: parseScriptPath(raw, b.path),
   };
   if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
+  if (b.env !== undefined) {
+    const problem = flowEnvProblem(b.env);
+    if (problem) badEntry(raw, `script.env ${problem}`);
+    step.env = b.env as FlowEnv;
+  }
   return step;
+}
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Why `value` cannot be an environment map, or undefined when it can. Shared by
+ * the test file's `env:`, a step's `env:` and a run's values, so every channel
+ * refuses the same inputs. Values must be strings: YAML would turn an unquoted
+ * `0800` into the number 800 and `yes` into true, and a script would receive
+ * something other than what the file shows.
+ */
+export function flowEnvProblem(value: unknown): string | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "must be a map of variable names to string values, e.g. `env: { API_URL: https://example.com }`";
+  }
+  for (const [name, entry] of Object.entries(value)) {
+    if (!ENV_NAME_RE.test(name)) {
+      return `has an invalid variable name ${JSON.stringify(name)}: use letters, digits and _, not starting with a digit`;
+    }
+    if (name === "__proto__") return "cannot set __proto__";
+    if (typeof entry === "number" || typeof entry === "boolean") {
+      return `has a non-string value for ${name}: quote it, e.g. \`${name}: "${entry}"\``;
+    }
+    if (typeof entry !== "string") return `has a non-string value for ${name}`;
+    // The operating system ends an environment value at a NUL.
+    if (entry.includes("\0")) return `has a NUL character in the value of ${name}`;
+    if (entry.includes(OUTPUT_REFERENCE_MARKER)) {
+      return `uses unsupported template syntax in ${name}: only {{secret:NAME}} placeholders are resolved`;
+    }
+  }
+  return undefined;
 }
 
 export function parseScriptPath(raw: unknown, value: unknown): string {
@@ -3947,6 +3993,7 @@ export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = {
     version: FLOW_FILE_VERSION,
     ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
+    ...(flow.env ? { env: flow.env } : {}),
     steps: flow.steps.map(toYamlStep),
   };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
@@ -4041,7 +4088,13 @@ export function parseFlow(content: string): FlowFile {
   if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
 
   // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
-  const topKeys: readonly string[] = ["version", "executionPrerequisite", "requires", "steps"];
+  const topKeys: readonly string[] = [
+    "version",
+    "executionPrerequisite",
+    "requires",
+    "env",
+    "steps",
+  ];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -4061,9 +4114,22 @@ export function parseFlow(content: string): FlowFile {
     return badEntry(raw, "step must be an object");
   });
 
+  if (parsed.env !== undefined) {
+    const problem = flowEnvProblem(parsed.env);
+    if (problem) {
+      throw new FailureError(`Invalid e2e test file: env ${problem}`, {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    }
+  }
+
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
+    ...(parsed.env === undefined ? {} : { env: parsed.env }),
     steps,
   };
   validateFlow(flow);

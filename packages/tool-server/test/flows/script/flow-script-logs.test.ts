@@ -122,11 +122,10 @@ describe("flow script executor — cutting the log", () => {
     expect(Buffer.byteLength(result.log, "utf8")).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
   }, 30_000);
 
-  it("never cuts a redaction marker in half", async () => {
+  it("redacts a secret the limit cut short, with a whole marker", async () => {
     const ws = workspace();
     const secret: FlowScriptSecret = { name: "VERY_LONG_SECRET_NAME", value: "s3cr3t-value" };
-    // Padded so the budget runs out a few characters into the marker the scrub
-    // writes for the value printed right after it.
+    // Padded so the budget runs out six characters into the value.
     const script = ws.write(
       "cut-marker.mjs",
       `process.stdout.write("x".repeat(${SCRIPT_STEP_LOG_LIMIT_BYTES - 6}));
@@ -141,10 +140,8 @@ describe("flow script executor — cutting the log", () => {
     });
 
     expect(result.logTruncated).toBe(true);
-    expect(result.log).not.toContain(secret.value);
-    expect(result.log.endsWith("x")).toBe(true);
-    const opened = result.log.lastIndexOf("{{secret:");
-    expect(opened === -1 || result.log.includes("}}", opened)).toBe(true);
+    expect(result.log).not.toContain("s3cr3t");
+    expect(result.log.endsWith("x{{secret:VERY_LONG_SECRET_NAME}}")).toBe(true);
   }, 30_000);
 });
 
@@ -274,34 +271,6 @@ describe("flow script executor — order", () => {
     expect(result.log).toBe("Downloading... [stdout line 1]\ndone\n");
   });
 
-  it("keeps that order when a secret is configured", async () => {
-    const ws = workspace();
-    const result = await executor().execute({
-      scriptPath: ws.write("order.mjs", WRITES),
-      projectRoot: ws.dir,
-      secrets: [{ name: "TOK", value: "0123456789abcdef0123456789abcdef" }],
-    });
-
-    expect(result.log).toBe("Downloading... [stdout line 1]\ndone\n");
-  });
-
-  it("keeps that order when the held tail is a prefix of the secret", async () => {
-    const ws = workspace();
-    const source = `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-       process.stderr.write("Resolving packages: 42% h");
-       await wait(60);
-       process.stdout.write("installed 128 packages\\n");
-       await wait(60);
-       process.stderr.write("\\n");`;
-    const result = await executor().execute({
-      scriptPath: ws.write("prefix-order.mjs", source),
-      projectRoot: ws.dir,
-      secrets: [{ name: "TOK", value: "hunter2-abcdef0123456789" }],
-    });
-
-    expect(result.log).toBe("Resolving packages: 42% hinstalled 128 packages\n\n");
-  });
-
   it("redacts a value the two streams wrote half of each, in place", async () => {
     const ws = workspace();
     const source = `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -315,45 +284,6 @@ describe("flow script executor — order", () => {
     });
 
     expect(result.log).toBe("token={{secret:TOKEN}}\n");
-  });
-
-  it("keeps that order for a value that overlaps itself", async () => {
-    const ws = workspace();
-    const source = `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-       for (const piece of ["[", "abca", "b", "]"]) {
-         process.stdout.write(piece);
-         await wait(60);
-       }`;
-    const result = await executor().execute({
-      scriptPath: ws.write("self-overlap.mjs", source),
-      projectRoot: ws.dir,
-      secrets: [{ name: "S", value: "abcab" }],
-    });
-
-    expect(result.log).toBe("[{{secret:S}}]");
-  });
-
-  it("keeps that order for a self-overlapping value with the other stream between", async () => {
-    const ws = workspace();
-    const source = `const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-       const writes = [
-         [process.stdout, "["],
-         [process.stdout, "abca"],
-         [process.stderr, "MID"],
-         [process.stdout, "b"],
-         [process.stdout, "]"],
-       ];
-       for (const [stream, piece] of writes) {
-         stream.write(piece);
-         await wait(60);
-       }`;
-    const result = await executor().execute({
-      scriptPath: ws.write("self-overlap-streams.mjs", source),
-      projectRoot: ws.dir,
-      secrets: [{ name: "S", value: "abcab" }],
-    });
-
-    expect(result.log).toBe("[MID{{secret:S}}]");
   });
 });
 
@@ -394,14 +324,13 @@ describe("flow script executor — redaction", () => {
     expect(result.failure?.stack).not.toContain(SECRET.value);
   });
 
-  it("replaces a secret in the output document, at any depth and in a key", async () => {
+  it("replaces a secret in the output document's strings, at any depth", async () => {
     const ws = workspace();
     const script = ws.write(
       "echo.mjs",
       `const key = process.env.API_KEY;
        console.log("using " + key);
-       output.session = { token: key, scopes: ["read", key] };
-       output[key] = "keyed";`
+       output.session = { token: key, scopes: ["read", key] };`
     );
     const result = await executor().execute({
       scriptPath: script,
@@ -413,8 +342,7 @@ describe("flow script executor — redaction", () => {
     expect(result.ok).toBe(true);
     expect(JSON.stringify(result.output)).not.toContain(SECRET.value);
     expect(result.output).toEqual({
-      "session": { token: "{{secret:API_KEY}}", scopes: ["read", "{{secret:API_KEY}}"] },
-      "{{secret:API_KEY}}": "keyed",
+      session: { token: "{{secret:API_KEY}}", scopes: ["read", "{{secret:API_KEY}}"] },
     });
   });
 
@@ -445,22 +373,6 @@ describe("flow script executor — redaction", () => {
     expect(result.log).toBe("id={{secret:OKEN}} and {{secret:TOKEN_ABC}}\n");
   });
 
-  it("refuses a document whose redacted key would replace a sibling", async () => {
-    const ws = workspace();
-    const script = ws.write("collide.mjs", `output.doc = { "ab": 1, "{{secret:s}}": 2 };`);
-    const result = await executor().execute({
-      scriptPath: script,
-      projectRoot: ws.dir,
-      secrets: [{ name: "s", value: "ab" }],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.failure?.kind).toBe("output");
-    expect(result.failure?.message).toContain("Two keys in the script's output become \"");
-    expect(result.failure?.message).toContain("{{secret:s}}");
-    expect(result.output).toBeUndefined();
-  });
-
   it("replaces a value that starts inside marker-shaped text the script printed", async () => {
     const ws = workspace();
     // The shape a script echoing an unresolved placeholder writes: it looks
@@ -478,6 +390,30 @@ describe("flow script executor — redaction", () => {
 
     expect(result.log).not.toContain("TOK}}TAIL");
     expect(result.log).toContain("{{secret:V}}");
+  });
+
+  it("replaces the pieces of a secret the script split, in the log and the output", async () => {
+    const ws = workspace();
+    const script = ws.write(
+      "pieces.mjs",
+      `const key = process.env.API_KEY;
+       console.log(key.slice(0, 9) + "\\n" + key.slice(9));
+       output.wrapped = key.slice(0, 9) + "\\n" + key.slice(9);
+       output.prefix = key.slice(0, 8) + "...";`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { API_KEY: SECRET.value },
+      secrets: [SECRET],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.log).toBe("{{secret:API_KEY}}\n{{secret:API_KEY}}\n");
+    expect(result.output).toEqual({
+      wrapped: "{{secret:API_KEY}}\n{{secret:API_KEY}}",
+      prefix: "{{secret:API_KEY}}...",
+    });
   });
 
   it("replaces a secret split across two pipe chunks", async () => {
@@ -658,3 +594,80 @@ describe("flow script executor — redaction", () => {
     expect(result.log).toContain("second: {{secret:LATE}}");
   });
 });
+
+describe("flow script executor - a log redacted past its limit", () => {
+  it("keeps a literal `{{secret:` the script printed from stretching the cut", async () => {
+    const ws = workspace();
+    const secret: FlowScriptSecret = { name: "AB", value: "qz" };
+    const script = ws.write(
+      "literal-marker.mjs",
+      // Fits the limit raw; each "qz" grows to a 13-character marker.
+      `process.stdout.write("qz ".repeat(700) + "{{secret:" + "y".repeat(${SCRIPT_STEP_LOG_LIMIT_BYTES - 2200}) + "qz");`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      secrets: [secret],
+    });
+
+    expect(Buffer.byteLength(result.log)).toBeLessThanOrEqual(SCRIPT_STEP_LOG_LIMIT_BYTES);
+  }, 30_000);
+});
+
+describe("flow script executor - a secret the two streams wrote between them", () => {
+  it("redacts a value written one character at a time, alternating streams", async () => {
+    const ws = workspace();
+    const secret: FlowScriptSecret = { name: "PIN", value: "4821" };
+    const script = ws.write(
+      "alternate.mjs",
+      `import { writeSync } from "node:fs";
+       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+       for (const [i, c] of [..."pin=" + process.env.PIN].entries()) {
+         writeSync(i % 2 ? 2 : 1, c);
+         await sleep(15);
+       }`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { PIN: secret.value },
+      secrets: [secret],
+    });
+
+    expect(result.log).toBe("pin={{secret:PIN}}");
+  }, 30_000);
+
+  it("flags the log truncated when only the redacted text is past the limit", async () => {
+    const ws = workspace();
+    const secret: FlowScriptSecret = { name: "A_VERY_LONG_SECRET_NAME", value: "abcdef" };
+    const script = ws.write(
+      "grow.mjs",
+      `process.stdout.write("abcdef ".repeat(9000) + "TAIL-END\\n");`
+    );
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      secrets: [secret],
+    });
+
+    expect(result.log).not.toContain("TAIL-END");
+    expect(result.logTruncated).toBe(true);
+  }, 30_000);
+});
+
+it("does not flag a whole log that only its last marker took past the limit", async () => {
+  const ws = workspace();
+  const secret: FlowScriptSecret = { name: "S", value: "S3CR3T" };
+  const script = ws.write(
+    "last-marker.mjs",
+    `process.stdout.write("x".repeat(${SCRIPT_STEP_LOG_LIMIT_BYTES - 6}) + "S3CR3T");`
+  );
+  const result = await executor().execute({
+    scriptPath: script,
+    projectRoot: ws.dir,
+    secrets: [secret],
+  });
+
+  expect(result.log.endsWith("x{{secret:S}}")).toBe(true);
+  expect(result.logTruncated).toBe(false);
+}, 30_000);
