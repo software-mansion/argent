@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   isHomeDir,
+  resolveHomeDir,
   updateConfig,
   type ConfigPathOptions,
   type FlagScope,
@@ -95,6 +96,11 @@ interface PersistedConsent {
 function readPersistedConsent(cwd: string): PersistedConsent | null {
   const globalPath = configFilePath("global");
   const projectPath = configFilePath("project", { cwd });
+  // An opt-out in ~/.argent also holds for an install that moved its home with ARGENT_HOME_DIR.
+  const userConfigPath = path.join(resolveHomeDir(), ".argent", "config.json");
+  if (userConfigPath !== globalPath && readConfigOverrideAt(userConfigPath) === false) {
+    return { enabled: false, detail: `${userConfigPath} (user)` };
+  }
   const global = readConfigOverrideAt(globalPath);
   // A project rooted at `~` reads the same file twice; count it once.
   const projectRoot = path.dirname(path.dirname(projectPath));

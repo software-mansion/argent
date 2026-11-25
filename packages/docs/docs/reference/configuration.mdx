@@ -220,6 +220,26 @@ argent secrets
 
 An environment variable changes the behavior of the process that reads it. Export the variable before you start that process. Most variables apply to the tool-server. Restart the tool-server with `argent server stop` after a change.
 
+### Argent home
+
+| Variable          | Default     | Description                                                          |
+| ----------------- | ----------- | -------------------------------------------------------------------- |
+| `ARGENT_HOME_DIR` | `~/.argent` | Absolute path of the directory that holds the global files of Argent |
+
+Set `ARGENT_HOME_DIR` to run a second Argent install next to the global install, for example a project install, a CI job or a script. Export the same value for the CLI and for the MCP server. The directory holds these files:
+
+- Global flags, config and secrets.
+- Device provider files, the `argent link` file and the telemetry ID.
+- Logs, tool-server records and caches, for example the built runner for physical iOS devices.
+
+Each directory has its own tool-server:
+
+- The CLI and the MCP server use only the tool-server that is recorded in their directory.
+- `argent server stop`, `argent update` and `argent uninstall` do not stop a tool-server of a different directory.
+- When a tool-server of a different directory uses the port, the start fails. Use `--port 0` to get a free port.
+
+Project-scope files in `<project-root>/.argent/` and screen recordings do not move. A telemetry opt-out in `~/.argent/config.json` also applies when `ARGENT_HOME_DIR` is set.
+
 ### Tool-server
 
 | Variable                      | Default                              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |

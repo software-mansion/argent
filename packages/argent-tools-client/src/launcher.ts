@@ -2,12 +2,12 @@ import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { homedir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, readdir, unlink, rename, chmod } from "node:fs/promises";
+import { argentHomeDir } from "@argent/configuration-core";
 
-const STATE_DIR = path.join(homedir(), ".argent");
+const STATE_DIR = argentHomeDir();
 // Legacy single-slot state file: read (and cleared) for older-argent compat,
 // never written — each install now has its own file (see stateFileForBundle).
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
@@ -303,6 +303,14 @@ export function resolveToolsServerNode(): string {
   return !(bun || deno || electron) && fs.existsSync(process.execPath) ? process.execPath : "node";
 }
 
+/** The port in the tool-server's "listening" banner line, or null for any other line. */
+export function parseListeningPort(line: string): number | null {
+  // Greedy `.+` backtracks to the trailing `:port`, so hostnames, IPv4 and
+  // bracketed IPv6 (`[::1]`) all match.
+  const match = line.match(/Tools server listening on http:\/\/.+:(\d+)/);
+  return match ? parseInt(match[1]!, 10) : null;
+}
+
 export function spawnToolsServer(
   paths: ToolsServerPaths,
   port: number,
@@ -361,11 +369,8 @@ export function spawnToolsServer(
     const rl = readline.createInterface({ input: child.stdout! });
 
     rl.on("line", (line) => {
-      // Greedy `.+` backtracks to the trailing `:port`, so hostnames, IPv4 and
-      // bracketed IPv6 (`[::1]`) all match.
-      const match = line.match(/Tools server listening on http:\/\/.+:(\d+)/);
-      if (match) {
-        const actualPort = parseInt(match[1]!, 10);
+      const actualPort = parseListeningPort(line);
+      if (actualPort !== null) {
         rl.close();
         // Keep the pipe draining so the child's writes don't back up once
         // readline stops consuming it.

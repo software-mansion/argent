@@ -7,6 +7,7 @@ export {
   buildToolsServerEnv,
   resolveToolsServerNode,
   spawnToolsServer,
+  parseListeningPort,
   findFreePort,
   isToolsServerHealthy,
   isToolsServerProcessAlive,
