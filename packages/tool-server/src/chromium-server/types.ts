@@ -35,7 +35,11 @@ export interface ScreenshotOpts {
   scale?: number;
   /** Algorithm used when `scale < 1`. */
   downscaler?: DownscalerType;
-  /** One image pixel per CSS pixel (device pixels for very large windows or an unknown ratio). */
+  /**
+   * One image pixel per CSS pixel. A window whose long side is above 2000 CSS
+   * pixels stays in device pixels. When the window cannot be read, the session's
+   * last ratio is used.
+   */
   cssPixels?: boolean;
   /** Filename suffix; defaults to a timestamp. */
   id?: string;
