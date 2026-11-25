@@ -80,6 +80,8 @@ An e2e test also runs without an agent. The `argent e2e run` command replays an 
 
 On a shared Mac, you can limit automatic devtools setup to the simulators assigned to your CI job. Set the watcher scope when you start the job's tool-server. See [Simulator watcher configuration](/docs/reference/configuration#devices).
 
+The `argent e2e check` command checks an e2e test file without a device and without running a step. Run it after you edit an e2e test file by hand.
+
 ## Suites
 
 Some e2e tests depend on each other. For example, one e2e test adds a post, and the next e2e test deletes it. Put such e2e tests in a suite. A suite is a directory with a `suite.config.yaml` file. The file sets the order of the e2e tests.
