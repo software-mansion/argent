@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
-import { unchangedTreeNote } from "../src/unchanged-tree.js";
+import { treeDiffHeader, unchangedTreeNote } from "../src/unchanged-tree.js";
 import {
   getWhatsNewSeenVersion,
   setFlag,
@@ -901,7 +901,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(content.some((c) => c.type === "image")).toBe(true);
   });
 
-  it("sends a changed tree in full, under a new id", async () => {
+  it("sends a changed tree in full, under a new id, when the diff is not short enough", async () => {
     const first = await tap();
     describeText = "button Save (0.1,0.2,0.3,0.1)";
 
@@ -909,6 +909,31 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(lastText(second)).toBe(fullTree(second, describeText));
     expect(treeId(second)).not.toBe(treeId(first));
+  });
+
+  it("sends a cumulative diff against the last full tree when only a few lines change", async () => {
+    const list = Array.from(
+      { length: 20 },
+      (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
+    ).join("\n");
+    describeText = list;
+    const first = await tap();
+    const id = treeId(first);
+
+    describeText = list.replace('"Row 2"', '"Row 2" value="on"');
+    const second = await tap();
+
+    expect(lastText(second)).toBe(
+      [
+        AUTO_DESCRIBE_HEADER,
+        treeDiffHeader(id, "gesture-tap"),
+        '    AXButton "Row 1" (0.000,0.040,1.000,0.040)',
+        '-   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '    AXButton "Row 3" (0.000,0.120,1.000,0.040)',
+      ].join("\n")
+    );
+    expect(loggedTrees().at(-1)).toMatchObject({ mode: "diff", identical: false, note: false });
   });
 
   it("gives the tree of the agent's describe call an id, and names it in the next note", async () => {

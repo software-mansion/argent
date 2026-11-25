@@ -265,6 +265,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         name: toolName,
         durationMs: Date.now() - t1,
         chars: tree?.length ?? 0,
+        sentChars: shown?.text.length ?? 0,
+        mode: shown?.mode,
         // `identical` is the repeat rate; `note` is what the agent was spared.
         identical: shown?.identical ?? false,
         note: shown?.note ?? false,
