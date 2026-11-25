@@ -1002,9 +1002,10 @@ async function attemptBoot(params: {
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
     stdio,
-    // `detached: true` on Windows gives the child its own console window
-    // unless this is also set — without it, every boot pops an extra cmd
-    // window alongside the emulator's own GUI window. No-op off Windows.
+    // No-op off Windows, and `detached: true` alone already leaves the child
+    // without a console there. This is the same windowsHide the other
+    // console-subsystem spawns carry (see runAdb in utils/adb.ts), kept so the
+    // boot stays console-less if `detached` is ever dropped.
     windowsHide: true,
   });
   child.unref();

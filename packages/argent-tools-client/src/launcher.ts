@@ -322,11 +322,9 @@ export function spawnToolsServer(
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
-      // `detached: true` on Windows gives node.exe (a console-subsystem
-      // binary) its own console window — this is the ONE persistent popup
-      // that stays open for the tool-server's whole lifetime, distinct from
-      // the many short-lived adb.exe popups fixed in @argent/tool-server.
-      // No-op off Windows.
+      // No-op off Windows, and `detached: true` alone already leaves node.exe
+      // without a console there. Kept only to match the console-subsystem
+      // spawns the tool-server itself makes (see runAdb in its utils/adb.ts).
       windowsHide: true,
     });
     fs.closeSync(logFd);
