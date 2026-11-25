@@ -36,6 +36,7 @@ Obey these lifecycle rules:
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. The recorder still appends `await-ui-element` and `await-network-request` steps that return `success: false`. Check the warning before continuing. To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
+6. Set script environment values through the recorder, not the YAML: `e2e-set-env` changes the test's top-level `env:` (call it directly, not through `e2e-add-step`), and `e2e-add-script`'s `env` becomes that step's `env:`. Set the values before the script step that reads them: `e2e-add-script` runs the script with them. See [E2E YAML: Local scripts](e2e-yaml.md#local-scripts).
 
 ## Start in the correct order
 

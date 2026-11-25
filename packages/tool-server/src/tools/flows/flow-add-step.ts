@@ -958,6 +958,8 @@ const NESTED_RECORDER_TOOLS: Record<string, string> = {
     "fails on every replay.",
   "e2e-add-script":
     "`e2e-add-script` records its own step. Call it directly, not through e2e-add-step.",
+  "e2e-set-env":
+    "`e2e-set-env` edits the e2e test's top-level env:, so it is not a step. Call it directly.",
   "e2e-add-step":
     "e2e-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
   "e2e-start-recording":

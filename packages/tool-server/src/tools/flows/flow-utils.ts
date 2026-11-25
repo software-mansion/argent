@@ -4490,6 +4490,60 @@ export async function countStepsOnDisk(filePath: string): Promise<number | undef
   }
 }
 
+/**
+ * Set or remove names in a recording's top-level `env:`, persisted the way
+ * {@link appendStepToFlow} persists a step: re-read and rewritten on the host,
+ * or carried back to the client in the directive. `null` removes a name; a map
+ * left empty removes the key.
+ */
+export async function setRecordingEnv(
+  session: RecordingSession,
+  changes: Readonly<Record<string, string | null>>
+): Promise<{ env: FlowEnv; savedTo: FlowSavedTo }> {
+  const apply = (flow: FlowFile): FlowFile => {
+    const env: FlowEnv = { ...flow.env };
+    for (const [name, value] of Object.entries(changes)) {
+      if (value === null) delete env[name];
+      else env[name] = value;
+    }
+    const next: FlowFile = { ...flow, env };
+    if (Object.keys(env).length === 0) delete next.env;
+    return next;
+  };
+  return withFlowLock(session.key, async () => {
+    if (recordingSessionState(session) !== "live") {
+      throw new FailureError(
+        `The recording of e2e test "${session.name}" ended while env was being set; nothing was changed.`,
+        {
+          error_code: FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING,
+          failure_stage: "flow_set_env",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
+    }
+    session.lastTouchedSeq = touch();
+    if (session.persist === "host") {
+      const before = session.flow.steps;
+      const flow = apply(parseFlow(await fs.readFile(session.filePath, "utf8")));
+      validateFlow(flow);
+      const updated = serializeFlow(flow);
+      await writeFlowFile(session.filePath, updated);
+      session.flow = parseFlow(updated);
+      // The re-read may take in a hand edit, as an append's does.
+      session.discardedWarnings =
+        (session.discardedWarnings ?? 0) +
+        dropMovedWarnings(session.stepWarnings, session.flow.steps, before);
+      return { env: session.flow.env ?? {}, savedTo: session.filePath };
+    }
+    const flow = apply(session.flow);
+    validateFlow(flow);
+    const savedTo = clientFileDirective(session.filePath, serializeFlow(flow));
+    session.flow = flow;
+    return { env: flow.env ?? {}, savedTo };
+  });
+}
+
 /** Read and parse the flow file, append a step, write it back. */
 async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");

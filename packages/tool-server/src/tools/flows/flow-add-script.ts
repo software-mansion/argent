@@ -8,20 +8,25 @@ import {
   wrapFailure,
   type ToolDefinition,
 } from "@argent/registry";
+import * as fs from "node:fs/promises";
 import {
   appendStepToFlow,
   countStepsOnDisk,
+  flowEnvProblem,
+  parseFlow,
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
+  type FlowEnv,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
+import { InvalidToolInputError } from "../../utils/capability";
 import { utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
 
@@ -73,6 +78,20 @@ async function recordedStepCount(
 }
 
 /**
+ * Read off the file, where a hand edit made mid-recording is what the next
+ * append keeps. A file that will not read or parse falls back to the last
+ * recorded copy: the append after the script then reports the file, with the
+ * framing its failure path gives.
+ */
+async function recordedFileEnv(session: RecordingSession): Promise<FlowEnv | undefined> {
+  try {
+    return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
+  } catch {
+    return session.flow.env;
+  }
+}
+
+/**
  * How a failed call opens, and what it asks the author to do next. The two are
  * written as one entry because the lead may claim no more than the move below
  * it: an agent reads the first clause and stops, so a headline saying the
@@ -120,11 +139,17 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
+  env: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      'Environment values for this step only, recorded as the step\'s env:, e.g. { "API_KEY": "{{secret:API_KEY}}" }. They replace the same names from the e2e test\'s env: (set with e2e-set-env).'
+    ),
 });
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
   id: "e2e-add-script",
-  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
+  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. The script receives the e2e test's \`env:\` (see e2e-set-env) and this call's \`env\`, recorded as the step's own. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],
@@ -174,14 +199,18 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       script: {
         path: params.path,
         ...(params.timeout !== undefined ? { timeout: params.timeout } : {}),
+        ...(params.env !== undefined ? { env: params.env } : {}),
       },
     };
+    const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
+    if (envProblem) throw new InvalidToolInputError(`env ${envProblem}`);
     const step: Extract<FlowStep, { kind: "script" }> = {
       kind: "script",
       path: parseScriptPath(entry, params.path),
       ...(params.timeout !== undefined
         ? { timeout: parseScriptTimeout(entry, params.timeout) }
         : {}),
+      ...(params.env && Object.keys(params.env).length > 0 ? { env: params.env } : {}),
     };
 
     const flowDir = nodePath.dirname(await canonicalFlowPath(session.filePath));
@@ -192,10 +221,16 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     //
     // No `logBudget`: the run-scoped allowance would silently truncate a late
     // script's logs during authoring. The per-step limit still applies.
+    //
+    // The test's env: as it stands, under the step's own: what a replay
+    // without run values gives the step.
+    const env: FlowEnv = { ...(await recordedFileEnv(session)), ...step.env };
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
       projectRoot: params.project_root,
+      env,
+      ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 

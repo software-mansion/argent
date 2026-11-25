@@ -602,7 +602,19 @@ Each `env` map has these rules:
 - Argent rejects an `{{output:...}}` reference. Only `{{secret:NAME}}` placeholders resolve.
 - Some names control the process of the runner. A `script` step that sets one of them is errored when it runs. The names are `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `ELECTRON_RUN_AS_NODE` and `ARGENT_FLOW_SCRIPT_RUNNER`. The names `npm_config_node_options`, `npm_config_userconfig` and `npm_config_globalconfig` are also reserved, in each letter case and with `-` or `_`.
 
-`e2e-start-recording` replaces the whole file, including the top-level `env`. `e2e-add-script` records no `env`. Add the `env` keys to the file after you record the e2e test.
+Three recording tools write the `env` maps. Each tool checks the names and the values as parsing does. Each tool also checks that each `{{secret:NAME}}` placeholder resolves. When a check fails, the tool changes nothing.
+
+| Tool                  | Argument | Result                                                                                                                                                  |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `e2e-start-recording` | `env`    | Writes the top-level `env` of the file                                                                                                                  |
+| `e2e-set-env`         | `env`    | Sets each name in the top-level `env`. A `null` value removes the name. The other names keep their values. Removing the last name removes the `env` key |
+| `e2e-add-script`      | `env`    | Writes the `env` of the `script` step                                                                                                                   |
+
+`e2e-start-recording` replaces the whole file, including the top-level `env`. To keep the `env` when you record an e2e test again, pass it in the `env` argument of the tool.
+
+`e2e-set-env` returns the whole top-level `env` of the file, with the placeholders not resolved.
+
+`e2e-add-script` runs the script with the top-level `env` of the file and the `env` argument of the call. The `env` argument replaces the same names. A replay without values of the run gives the step the same environment. Argent redacts the secrets in the log and the output that the tool returns. When a placeholder does not resolve, the script does not run and the tool records no step.
 
 #### Secrets in environment values
 

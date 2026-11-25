@@ -448,6 +448,7 @@ describe("recording a script step", () => {
 
   it("needs no device of any kind", async () => {
     expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
+      "env",
       "name",
       "path",
       "project_root",
