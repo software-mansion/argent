@@ -544,7 +544,13 @@ function failedRun(result: unknown): unknown {
 
 function sessionFromEnv(): Record<string, string> {
   const session = process.env.ARGENT_SESSION?.trim();
-  return session ? { [SESSION_HEADER]: session } : {};
+  if (!session) return {};
+  if (!/^[\x21-\x7e]{1,128}$/.test(session)) {
+    throw new ToolInvocationError(
+      "ARGENT_SESSION must be 1 to 128 printable ASCII characters without spaces."
+    );
+  }
+  return { [SESSION_HEADER]: session };
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {

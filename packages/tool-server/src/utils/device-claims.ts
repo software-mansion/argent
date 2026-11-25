@@ -1,7 +1,10 @@
+import { FAILURE_CODES } from "@argent/registry";
+import { InvalidToolInputError } from "./capability";
 import { canonicalDeviceId } from "./debugger/device-alias";
 import { externalNativeId } from "./external-devices";
 
-const CLAIM_IDLE_TIMEOUT_MS = 10 * 60_000;
+const CLAIM_IDLE_MINUTES = 10;
+const CLAIM_IDLE_TIMEOUT_MS = CLAIM_IDLE_MINUTES * 60_000;
 
 export const RELEASE_DEVICE_TOOL_ID = "release-device";
 
@@ -27,7 +30,7 @@ export class DeviceClaims {
 
   constructor(
     private readonly idleTimeoutMs = CLAIM_IDLE_TIMEOUT_MS,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = () => Date.now()
   ) {}
 
   /**
@@ -118,9 +121,21 @@ export function parseSession(header: string | undefined): string | null | undefi
 }
 
 export function deviceInUseMessage(device: string): string {
-  const minutes = Math.round(CLAIM_IDLE_TIMEOUT_MS / 60_000);
   return (
     `Device ${device} is in use by another Argent session. Pick another device from list-devices, ` +
-    `or wait: the claim ends when that session releases it, disconnects, or makes no call for ${minutes} minutes.`
+    `or wait: the claim ends when that session releases it, disconnects, or makes no call to it for ${CLAIM_IDLE_MINUTES} minutes.`
   );
+}
+
+/** Claims a device a tool picked itself, after the HTTP gate saw no device in its arguments. */
+export function claimPickedDevice(session: string | undefined, deviceId: string): () => void {
+  if (!session) return () => {};
+  const claim = deviceClaims.claim(session, [claimKey(deviceId)]);
+  if (!claim.ok) {
+    throw new InvalidToolInputError(deviceInUseMessage(claim.device), {
+      error_code: FAILURE_CODES.DEVICE_IN_USE,
+      failure_stage: "picked_device_claim",
+    });
+  }
+  return claim.done;
 }

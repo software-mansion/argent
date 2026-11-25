@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
@@ -152,7 +151,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return {};
   }
 
-  const sessionId = randomUUID();
+  const sessionId = crypto.randomUUID();
 
   function callerHeaders(): Record<string, string> {
     return { ...aiClientHeaders(), [SESSION_HEADER]: sessionId };
@@ -559,20 +558,29 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     healthInterval.unref();
   }
 
-  let devicesReleased = false;
-  function releaseSessionDevices(): void {
-    if (devicesReleased) return;
-    devicesReleased = true;
-    fetch(`${TOOLS_URL}/tools/release-device`, {
+  let release: Promise<unknown> | undefined;
+  function releaseSessionDevices(): Promise<unknown> {
+    release ??= fetch(`${TOOLS_URL}/tools/release-device`, {
       method: "POST",
       headers: { ...authHeader(), "Content-Type": "application/json", [SESSION_HEADER]: sessionId },
       body: "{}",
-      signal: AbortSignal.timeout(3_000),
+      signal: AbortSignal.timeout(2_000),
     }).catch(() => {});
+    return release;
   }
-  server.onclose = releaseSessionDevices;
-  // The stdio transport does not close when the editor ends stdin.
-  if (!options.transport) process.stdin.on("close", releaseSessionDevices);
+
+  function releaseThenRaise(signal: NodeJS.Signals): void {
+    void releaseSessionDevices().finally(() => process.kill(process.pid, signal));
+  }
+
+  server.onclose = () => void releaseSessionDevices();
+  if (!options.transport) {
+    // The stdio transport does not close when the editor ends stdin.
+    process.stdin.on("close", () => void releaseSessionDevices());
+    for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+      process.once(signal, () => releaseThenRaise(signal));
+    }
+  }
 
   if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {

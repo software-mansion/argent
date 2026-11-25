@@ -61,6 +61,13 @@ import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device
 import { isProfiling } from "./utils/profiling-devices";
 import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
+import {
+  RELEASE_DEVICE_TOOL_ID,
+  claimTargets,
+  deviceClaims,
+  deviceInUseMessage,
+  parseSession,
+} from "./utils/device-claims";
 import type { Server as HttpServer } from "node:http";
 import {
   CHROMIUM_CDP_NAMESPACE,
@@ -75,13 +82,6 @@ import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
-import {
-  RELEASE_DEVICE_TOOL_ID,
-  claimTargets,
-  deviceClaims,
-  deviceInUseMessage,
-  parseSession,
-} from "./utils/device-claims";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -801,7 +801,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const session = parseSession(firstHeader(req.headers[SESSION_HEADER]));
       if (session === null) {
         res.status(400).json({
-          error: `The ${SESSION_HEADER} header must be 1 to 128 printable ASCII characters without spaces.`,
+          error: `The ${SESSION_HEADER} header (ARGENT_SESSION for the CLI and the SDK) must be 1 to 128 printable ASCII characters without spaces.`,
         });
         return;
       }
@@ -1012,7 +1012,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Nobody is left to read the result.
       if (callerGone) return;
 
-      let endClaim: (() => void) | undefined;
       if (session && def.id !== RELEASE_DEVICE_TOOL_ID) {
         const claim = deviceClaims.claim(session, claimTargets(parsedData));
         if (!claim.ok) {
@@ -1032,7 +1031,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        endClaim = claim.done;
+        res.once("close", claim.done);
       }
 
       const controller = new AbortController();
@@ -1258,7 +1257,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
-        endClaim?.();
         releaseInvocationMeta?.();
       }
     }

@@ -138,6 +138,7 @@ import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
+import { claimPickedDevice } from "../../utils/device-claims";
 
 // A dual-source call (name + e2e_test_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
@@ -1935,6 +1936,10 @@ Without a link, every step kind runs.`,
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
       };
 
+      const endClaim =
+        device && !params.device && !resolved.booted
+          ? claimPickedDevice(ctx?.session, device.id)
+          : undefined;
       let aborted: boolean;
       try {
         await execSteps(state, flow.steps, {
@@ -1948,6 +1953,7 @@ Without a link, every step kind runs.`,
         // status-bar restore / chromium teardown lands after every step
         // already ran, and must not flip a finished run to FAIL.
         aborted = state.signal?.aborted === true;
+        endClaim?.();
         // Restored on the device the pin was applied to — `state.device` may
         // have moved on since.
         if (state.pinned && device) await restoreStatusBar(device);

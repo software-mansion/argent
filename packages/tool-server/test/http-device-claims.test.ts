@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { Registry, type ToolContext } from "@argent/registry";
 import { z } from "zod";
@@ -36,25 +36,37 @@ function release(server: ReturnType<typeof app>, session: string | undefined, ud
 }
 
 afterEach(() => {
-  deviceClaims.release("a");
-  deviceClaims.release("b");
+  vi.useRealTimers();
+  for (const session of ["a", "b", "session-alpha"]) deviceClaims.release(session);
 });
 
 describe("device claims over HTTP", () => {
   it("refuses a second session on a claimed device with DEVICE_IN_USE", async () => {
     const server = app();
-    const first = await tap(server, SIM, "a");
+    const first = await tap(server, SIM, "session-alpha");
     expect(first.status).toBe(200);
-    expect(first.body.data).toEqual({ session: "a" });
+    expect(first.body.data).toEqual({ session: "session-alpha" });
 
     const second = await tap(server, SIM, "b");
     expect(second.status).toBe(409);
     expect(second.body.error_code).toBe("DEVICE_IN_USE");
     expect(second.body.error).toContain(`Device ${SIM} is in use by another Argent session`);
-    expect(second.body.error).not.toContain('"a"');
+    expect(second.body.error).not.toContain("session-alpha");
 
     expect((await tap(server, OTHER_SIM, "b")).status).toBe(200);
-    expect((await tap(server, SIM, "a")).status).toBe(200);
+    expect((await tap(server, SIM, "session-alpha")).status).toBe(200);
+  });
+
+  it("frees a device 10 minutes after the last call of its session ended", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const server = app();
+    await tap(server, SIM, "a");
+    await new Promise((resolve) => setImmediate(resolve));
+    vi.advanceTimersByTime(10 * 60_000);
+    expect((await tap(server, SIM, "b")).status).toBe(409);
+    await new Promise((resolve) => setImmediate(resolve));
+    vi.advanceTimersByTime(10 * 60_000 + 1);
+    expect((await tap(server, SIM, "b")).status).toBe(200);
   });
 
   it("lets a caller without a session drive a claimed device and claims nothing for it", async () => {

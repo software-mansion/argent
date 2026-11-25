@@ -317,6 +317,8 @@ describe("createToolsClient options", () => {
       vi.stubEnv("ARGENT_SESSION", " ci-job-7 ");
       expect(await sessionOf()).toBe("ci-job-7");
       expect(await sessionOf(() => ({ "x-argent-session": "mcp-1" }))).toBe("mcp-1");
+      vi.stubEnv("ARGENT_SESSION", "my job");
+      await expect(sessionOf()).rejects.toThrow(/ARGENT_SESSION must be/);
     } finally {
       vi.unstubAllEnvs();
     }

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { DeviceClaims, claimTargets, parseSession } from "../src/utils/device-claims";
+import {
+  DeviceClaims,
+  claimPickedDevice,
+  claimTargets,
+  deviceClaims,
+  parseSession,
+} from "../src/utils/device-claims";
 
 const SIM = "11111111-2222-3333-4444-555555555555";
 const EMU = "emulator-5554";
@@ -77,6 +83,19 @@ describe("claimTargets", () => {
     expect(claimTargets({ udid: `ext:acme-1:${SIM}` })).toEqual([SIM]);
     expect(claimTargets({})).toEqual([]);
     expect(claimTargets(undefined)).toEqual([]);
+  });
+});
+
+describe("claimPickedDevice", () => {
+  it("claims a device a tool picked, refuses another session's, and skips a caller without one", () => {
+    const done = claimPickedDevice("a", SIM);
+    try {
+      expect(() => claimPickedDevice("b", SIM)).toThrow(/in use by another Argent session/);
+      expect(() => claimPickedDevice(undefined, SIM)()).not.toThrow();
+    } finally {
+      done();
+      deviceClaims.release("a");
+    }
   });
 });
 
