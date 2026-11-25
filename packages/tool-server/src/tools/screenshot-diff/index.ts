@@ -105,9 +105,7 @@ const zodSchema = z
       .string()
       .min(1)
       .optional()
-      .describe(
-        "Directory where diff artifacts should be written (default: a temp directory). The diff images are returned in the result either way."
-      ),
+      .describe("Directory where diff artifacts should be written (default: a temp directory)."),
   })
   .strict();
 
