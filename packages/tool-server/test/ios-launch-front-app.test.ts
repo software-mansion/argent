@@ -30,11 +30,12 @@ vi.mock("../src/blueprints/native-devtools", async (importOriginal) => ({
   precheckNativeDevtools: async () => undefined,
 }));
 
-import type { Registry } from "@argent/registry";
+import { ArtifactStore, type Registry } from "@argent/registry";
 import { AX_SERVICE_NAMESPACE } from "../src/blueprints/ax-service";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { isTvOsSimulator } from "../src/utils/ios-devices";
 
 const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const APP = "com.example.portrait";
@@ -62,12 +63,22 @@ const registry = {
 const tools = [
   {
     name: "launch-app",
-    run: () => createLaunchAppTool(registry).execute!({}, { udid: UDID, bundleId: APP }),
+    run: (signal?: AbortSignal) =>
+      createLaunchAppTool(registry).execute!(
+        {},
+        { udid: UDID, bundleId: APP },
+        { artifacts: new ArtifactStore(), signal }
+      ),
     ok: { launched: true, bundleId: APP },
   },
   {
     name: "restart-app",
-    run: () => createRestartAppTool(registry).execute!({}, { udid: UDID, bundleId: APP }),
+    run: (signal?: AbortSignal) =>
+      createRestartAppTool(registry).execute!(
+        {},
+        { udid: UDID, bundleId: APP },
+        { artifacts: new ArtifactStore(), signal }
+      ),
     ok: { restarted: true, bundleId: APP },
   },
 ] as const;
@@ -119,6 +130,24 @@ describe.each(tools)("$name on an iOS simulator", ({ run, ok }) => {
 
     expect(foregroundApp).not.toHaveBeenCalled();
   });
+
+  it.each(["timeout", "abort"] as const)(
+    "handles %s during a stalled simulator lookup",
+    async (end) => {
+      vi.useFakeTimers();
+      vi.mocked(isTvOsSimulator).mockImplementationOnce(() => new Promise<boolean>(() => {}));
+      const controller = new AbortController();
+      let settled = false;
+      const result = run(controller.signal).finally(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+      if (end === "abort") controller.abort();
+      await vi.advanceTimersByTimeAsync(end === "abort" ? 0 : 4_900);
+      expect(settled).toBe(true);
+      await expect(result).resolves.toEqual(ok);
+      expect(foregroundApp).not.toHaveBeenCalled();
+    }
+  );
 
   it("asks nothing of an Apple TV simulator, which runs no accessibility service", async () => {
     tvOs.value = true;

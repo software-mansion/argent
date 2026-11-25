@@ -34,19 +34,28 @@ export async function awaitIosAppInFront(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<void> {
-  // An Apple TV runs no accessibility service.
-  if (await isTvOsSimulator(device.id).catch(() => false)) return;
   const deadline = Date.now() + IN_FRONT_TIMEOUT_MS;
+  const remaining = () => deadline - Date.now();
+  if (signal?.aborted) return;
+  // A cold runtime lookup can itself need `simctl list`. An Apple TV runs no AX service.
+  const tv = await settleWithin(
+    isTvOsSimulator(device.id).catch(() => false),
+    remaining(),
+    signal
+  );
+  if (tv.type !== "value" || tv.value || remaining() <= 0) return;
   const ref = axServiceRef(device);
   const service = await settleWithin(
     registry.resolveService<AXServiceApi>(ref.urn, ref.options),
-    IN_FRONT_TIMEOUT_MS,
+    remaining(),
     signal
   );
   if (service.type !== "value") return;
   const frontBundleId = async () => (await service.value.foregroundApp()).bundleId;
-  do {
-    const front = await settleWithin(frontBundleId(), deadline - Date.now(), signal);
+  while (remaining() > 0) {
+    const front = await settleWithin(frontBundleId(), remaining(), signal);
     if (front.type !== "value" || front.value === bundleId) return;
-  } while (Date.now() < deadline && (await sleepOrAbort(IN_FRONT_POLL_MS, signal)));
+    const delay = Math.min(IN_FRONT_POLL_MS, remaining());
+    if (delay <= 0 || !(await sleepOrAbort(delay, signal))) return;
+  }
 }
