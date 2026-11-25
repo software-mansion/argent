@@ -4,6 +4,13 @@
  * entry for a release in its version bump PR.
  */
 export const RELEASE_HIGHLIGHTS: Readonly<Record<string, readonly string[]>> = {
+  "0.35.0": [
+    "`argent doctor` checks your local Argent setup.",
+    "Run a directory of e2e tests as a suite with suite.config.yaml.",
+    "Capture native network requests from iOS and Mac apps and inspect their headers and bodies.",
+    "Throttle an Android emulator's network connection without slowing down Metro.",
+    "Record the screen of a Mac app or a cabled iPhone.",
+  ],
   "0.34.0": [
     "Profile Mac apps with the native profiler, and react-native-macos apps with the React profiler.",
     "e2e script steps run TypeScript (.mts, .ts) and .js files.",
