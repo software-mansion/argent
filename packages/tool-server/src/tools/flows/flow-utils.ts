@@ -4139,51 +4139,27 @@ export function parseFlow(content: string): FlowFile {
     return badEntry(raw, "step must be an object");
   });
 
-  const env = parseFileEnv(parsed.env);
+  if (parsed.env !== undefined) {
+    const problem = flowEnvProblem(parsed.env);
+    if (problem) {
+      throw new FailureError(`Invalid e2e test file: env ${problem}`, {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    }
+  }
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
     ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
-    ...(env === undefined ? {} : { env }),
+    ...(parsed.env === undefined ? {} : { env: parsed.env }),
     steps,
   };
   validateFlow(flow);
   if (version < FLOW_FILE_VERSION) olderFormatVersions.set(flow, version);
   return flow;
-}
-
-function parseFileEnv(env: unknown): FlowEnv | undefined {
-  if (env === undefined) return undefined;
-  const problem = flowEnvProblem(env);
-  if (problem) {
-    throw new FailureError(`Invalid e2e test file: env ${problem}`, {
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "flow_file_parse",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
-  }
-  return env as FlowEnv;
-}
-
-/**
- * The top-level `env:` of a flow file, also when another part of it does not
- * parse. Throws the way {@link parseFlow} does when the YAML or the `env:`
- * itself does not read.
- */
-export function parseFlowEnv(content: string): FlowEnv | undefined {
-  try {
-    return parseFlow(content).env;
-  } catch (err) {
-    let parsed: unknown;
-    try {
-      parsed = yamlParse(flowYamlSource(content));
-    } catch {
-      throw err;
-    }
-    if (parsed === null || typeof parsed !== "object") throw err;
-    return parseFileEnv((parsed as YamlFlowFile).env);
-  }
 }
 
 /**

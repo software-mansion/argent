@@ -340,13 +340,15 @@ describe("recording a script step", () => {
     // The append re-parses the whole file, so an output reference a mid-recording
     // hand edit put in an EARLIER step refuses this write. The script itself ran
     // and passed; wording it as "recording it failed" would send the author back
-    // over the one call that did nothing wrong.
-    await write("scripts/seed.mjs", `output.ok = true;`);
+    // over the one call that did nothing wrong. The edit lands while the script
+    // runs: one made before the call stops it before the script runs.
     await start("handedited");
-    await fs.writeFile(
-      flowPath("handedited"),
-      `steps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(flowPath("handedited"))}, ` +
+        `${JSON.stringify(`steps:\n  - echo: "created {{output:user.id}}"\n`)});\n` +
+        `output.ok = true;`
     );
 
     const err = (await addScript("handedited", "../../scripts/seed.mjs").catch(

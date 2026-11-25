@@ -241,30 +241,23 @@ describe("e2e-add-script with env", () => {
     await expect(fs.stat(path.join(root, "MARK"))).rejects.toThrow();
   });
 
-  it("runs with the file's env: when a hand edit broke only a step", async () => {
+  it("runs nothing when a hand edit broke a step before the call", async () => {
     await write(
       "scripts/mark.mjs",
-      `import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(path.join(root, "MARK"))}, String(process.env.MODE));\nglobalThis.output = {};`
+      `import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(path.join(root, "MARK"))}, "ran");`
     );
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "t", project_root: root, env: { MODE: "original" } }
-    );
-    await fs.writeFile(
-      flowFile("t"),
-      `env:\n  MODE: edited\nsteps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
-    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await fs.writeFile(flowFile("t"), `steps:\n  - echo: "created {{output:user.id}}"\n`, "utf8");
 
-    // The append reports the broken step, as for any hand edit; the script
-    // ran with the env: the file holds, not the one recorded before the edit.
+    // The file could not take the step, so the script's side effects would be
+    // for nothing.
     await expect(
       flowAddScriptTool.execute(
         {},
         { name: "t", project_root: root, path: "../../scripts/mark.mjs" }
       )
-    ).rejects.toThrow(/passed, but the step was not recorded/);
-    expect(await fs.readFile(path.join(root, "MARK"), "utf8")).toBe("edited");
+    ).rejects.toThrow(/Nothing ran[\s\S]*Step 1 \(`echo`\)/);
+    await expect(fs.stat(path.join(root, "MARK"))).rejects.toThrow();
   });
 
   it("lets a step's name replace the file's in another casing on Windows", async () => {

@@ -14,7 +14,7 @@ import {
   countStepsOnDisk,
   envRecordSchema,
   flowEnvProblem,
-  parseFlowEnv,
+  parseFlow,
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
@@ -80,26 +80,24 @@ async function recordedStepCount(
 
 /**
  * Read off the file, where a hand edit made mid-recording is what the next
- * append keeps. A hand edit that broke another part of the file is reported by
- * the append after the script, with the framing its failure path gives. One
- * that leaves the `env:` unreadable stops the call before the script runs,
- * since its environment is then unknown.
+ * append keeps. A file that does not read or parse could not take the step, so
+ * the call stops before the script runs; an edit made while the script runs is
+ * still reported by the append, with the framing its failure path gives.
  */
 async function recordedFileEnv(session: RecordingSession): Promise<FlowEnv | undefined> {
   try {
-    return parseFlowEnv(await fs.readFile(session.filePath, "utf8"));
+    return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
   } catch (err) {
     throw wrapFailure(
       err,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "flow_add_script_env",
+        failure_stage: "flow_add_script_read",
         failure_area: "tool_server",
         error_kind: "validation",
       },
-      `The env: of ${session.filePath} did not read, so the script's environment is unknown. ` +
-        `Nothing ran and no step was recorded. Fix the file and retry. ` +
-        `${err instanceof Error ? err.message : String(err)}`
+      `${session.filePath} did not read, so it cannot take a step. Nothing ran and no step was ` +
+        `recorded. Fix the file and retry. ${err instanceof Error ? err.message : String(err)}`
     );
   }
 }
