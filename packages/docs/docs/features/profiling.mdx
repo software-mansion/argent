@@ -1,10 +1,13 @@
 ---
 sidebar_position: 3
 sidebar_label: Profiling
-title: Profiling
+title: Profile React Native and native apps with an AI agent
+description: Argent profiles the running app with Hermes, React DevTools, Xcode Instruments and Perfetto. The agent finds components that render too often, CPU hot spots, UI hangs and memory leaks.
 sidebar_custom_props:
   icon: gauge
 ---
+
+# Profiling
 
 Argent records a profile of the running app. The agent reads the profile. The agent tells you which component renders too often, which function uses the CPU, and where the app hangs or leaks memory.
 
@@ -19,13 +22,13 @@ Argent records a profile of the running app. The agent reads the profile. The ag
 
 Argent has two profilers. The agent can run one profiler or both profilers at the same time.
 
-| Profiler | Platforms    | Engine                    | Data                                                              |
-| -------- | ------------ | ------------------------- | ----------------------------------------------------------------- |
-| React    | iOS, Android | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
-| Native   | iOS          | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
-| Native   | Android      | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
+| Profiler | Platforms                                                                                            | Engine                    | Data                                                              |
+| -------- | ---------------------------------------------------------------------------------------------------- | ------------------------- | ----------------------------------------------------------------- |
+| React    | iOS simulators, Android, [React Native Mac apps](/docs/features/mac-apps#profile-a-react-native-app) | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
+| Native   | iOS simulators, Mac apps                                                                             | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
+| Native   | Android                                                                                              | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
 
-The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. The native profiler does not need a special build.
+The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. On iOS, the native profiler does not need a special build. See [Profile your Mac app](/docs/features/mac-apps#profile-your-app) for Mac build requirements. On Android, the app must be a debug build or be profileable. Without this, the native profile has no CPU call stacks. To make a release build profileable, add `<profileable android:shell="true"/>` under `<application>` in `AndroidManifest.xml`.
 
 ## A profiling session
 
@@ -36,15 +39,31 @@ A profiling session has four steps. The agent does each step with one tool.
 3. The agent stops the profiler. Argent collects the data and writes it to disk.
 4. The agent analyzes the data. Argent returns a report in Markdown.
 
+A screen capture uses CPU on the device. On a phone, it also raises the clock speeds and makes the app look faster than it is. Thus Argent keeps the screen capture low while a profiler records:
+
+- Argent does not add the screenshot and the element tree after each interaction. The agent can still take a screenshot or read the element tree when it must see the screen. Each interaction still waits until the screen stops changing, so they show the screen after the interaction.
+- On an Android emulator or device, Argent tells the simulator-server to capture the screen only for a screenshot. This needs a simulator-server version with on-demand screenshots.
+  - On an emulator, a screenshot takes one frame in about 100 ms. The capture does not start.
+  - On a physical device, a screenshot takes about 150 ms to 200 ms. It starts the capture for a short time.
+  - Taps and swipes do not start the capture.
+
+Argent keeps returning screenshots and element trees if it cannot match a React recording to the device you are using. This can happen when several devices share Metro.
+
+When no profiler records, a screenshot does not wait for the screen capture.
+
 When the agent runs both profilers, the agent can also ask for a combined report. Argent aligns the native hangs with the React commits on the wall clock. Thus the report tells you which React commit caused which hang.
 
 ## The report
 
 The React report lists the hot commits. A commit is hot when it takes 16 ms or more. For each hot commit, the report shows which components rendered, which component triggered the cascade, and which props changed. The report ends with a table of the components that rendered most.
 
+The report also shows the share of the session that React spent rendering, and the largest share in one second. Idle time decreases the share of the session, but not the one-second value. When no commit is hot, the report lists the app components that use the most re-render time. A report with hot commits contains this list only when the list names a component that the table does not contain. A component that re-renders often but uses little time is not in the list. If Argent cannot read the source of the project, the list can also contain library components. The report does not say that the session is good or bad.
+
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 
-The agent can find the source of a component in the report. Argent returns the file, the line, the memoization status, and 50 lines of source. Thus the agent can propose a fix for the component.
+Instruments reports list CPU time spent by Argent and Instruments separately from app hotspots. Hang reports label functions from either tool so you can recognize profiler and automation overhead.
+
+The React report gives the file and the line of the components in its table that are in the project. When several files define the same name, the report also names the other files. For the five components with the highest render time, the report also shows a suggestion and, if it has the file, 50 lines of source. Thus the agent can propose a fix for the component.
 
 ## Further investigation
 
@@ -52,7 +71,7 @@ After the report, the agent can query the stored data without a new recording.
 
 | Query         | Content                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------- |
-| Commits       | The commits of one component, the commits in a time window, or the cascade tree of a commit         |
+| Commits       | The commits of one component or of a time window, the cascade tree of a commit, or render counts    |
 | CPU           | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
 | Native stacks | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects  |
 
@@ -67,10 +86,14 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 
 ## Limits
 
-- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium and Electron apps.
+- Profiling is unavailable for Chromium and Electron apps.
 - Argent records the data from the start of the session only. Start the session before you do the interaction.
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
+- A session is stale after 5 minutes without a heartbeat. Only `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` calls refresh the heartbeat, so a long recording can go stale while you use the app. An agent on another tool-server can take over a stale session without asking you. Argent tells both agents about the takeover. On React Native 0.84 and older, Metro allows one debugger for each app. A call from a second tool-server disconnects the first tool-server. Argent reports this loss to the first agent as a lost debugger connection, not as a takeover.
+- Agents on one tool-server share its sessions, because Argent cannot tell these agents apart. An agent can find a session that another agent started. If this session is stale, Argent tells the agent to ask you before it discards the session.
+- A JavaScript reload ends a React recording. After a lost debugger connection, Argent cannot collect the recording, even if the app continues to record. In both cases, Argent does not keep the data. The agent can ask Argent if the last recording was saved or lost.
 - A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".
-- The memory leak data is available on iOS only. On Android, Argent reports memory growth as a weak signal.
+- On iOS simulators and Mac apps, a leak can appear in an Instruments trace once a check that started after the leak finishes. Keep recording for about 25 seconds after the suspected leak. On Android, memory growth is a weak signal of a leak.
+- Native network capture can affect timings. If the profiler warns about capture, ask the agent to stop it and restart the app. When a device provider owns capture, turn it off there. See [Network inspection](/docs/features/network).
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

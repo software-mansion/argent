@@ -33,10 +33,15 @@ function clampFinite(n: number): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function fmtCoord(n: number): string {
+  return clampFinite(n).toFixed(3);
+}
+
+// A tree prints this on every row, so the numbers are not separated by spaces.
+// The leading zeros are needed: `.5` is not a valid JSON number, and a model
+// copying the value into a tool call would have the call rejected.
 function fmtFrame(f: DescribeFrame): string {
-  return `(${clampFinite(f.x).toFixed(3)}, ${clampFinite(f.y).toFixed(3)}, ${clampFinite(
-    f.width
-  ).toFixed(3)}, ${clampFinite(f.height).toFixed(3)})`;
+  return `(${fmtCoord(f.x)},${fmtCoord(f.y)},${fmtCoord(f.width)},${fmtCoord(f.height)})`;
 }
 
 function escapeForLine(s: string): string {
@@ -98,16 +103,27 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
+// What an iOS simulator element can report with no label, value or id, which
+// maps it to the AXGroup fallback. Only the flat renderer counts these: the tree
+// sources also set `disabled` and `selected`, and counting them there would
+// print leaves that are pruned today.
+function hasIosState(n: DescribeNode): boolean {
+  return Boolean(n.hint || n.disabled || n.selected);
+}
+
 function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
-  // iOS reports a text input's placeholder as both label and value; printing
-  // it twice costs bytes for no signal.
+  // With `AutomationEnabled` set (cloud iOS sims), a text input reports its
+  // placeholder as both label and value; printing it twice costs bytes for no signal.
   const dedupedValue = n.value && n.value !== n.label ? n.value : undefined;
+  // Safari reports an HTML `title` as the hint, and it is often the link's own text.
+  const dedupedHint = n.hint && n.hint !== n.label ? n.hint : undefined;
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
+  const hintPart = formatAttr("hint", dedupedHint);
   const flagPart = formatFlags(n, source);
-  const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
+  const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
@@ -118,7 +134,7 @@ function renderFlat(
   source: DescribeSource
 ): string[] {
   return root.children
-    .filter((n) => shouldEmit(n, contentRoles))
+    .filter((n) => shouldEmit(n, contentRoles) || hasIosState(n))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1, source));
@@ -154,44 +170,45 @@ interface FormatDescribeOptions {
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  const isMacos = opts.source === "macos-devtools" || opts.source === "macos-fallback";
   // The iOS providers emit a flat list of leaves under a synthetic root; the
   // sources below return a real parent/child tree, whose descendants beyond
   // depth 1 are only visible in nested mode.
   const mode: "flat" | "nested" =
     opts.source === "uiautomator" ||
     opts.source === "android-devtools" ||
+    opts.source === "uiautomator+cdp" ||
+    opts.source === "android-devtools+cdp" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
     opts.source === "harmony-uitest" ||
     // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
-    opts.source === "xcuitest-runner"
+    opts.source === "xcuitest-runner" ||
+    // A Mac app: the library's accessibility tree, with web content under its web view.
+    isMacos
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
   const header: string[] = [];
-  header.push(`Source: ${opts.source}`);
-  header.push(`Mode: ${mode}`);
-  header.push(
-    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
-  );
+  header.push(`Source: ${opts.source} | Mode: ${mode}`);
   if (isVega) {
     header.push(
-      "Vega is remote-driven, not touch — there is no tap. Use the frames as spatial hints to plan " +
-        "D-pad moves with the `tv-remote` tool: compare the target's frame to the cursor's — the " +
-        "`[focused]` element, or `[selected]` when no element reports `[focused]` (the toolkit often " +
-        "marks the highlighted item `selected` while `focused` stays false) — " +
-        'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
+      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels. " +
+        "Vega is remote-driven (no tap): use frames to plan D-pad moves via `tv-remote` from " +
+        "`[focused]` (or `[selected]` when none reports `[focused]`), counting rows/columns " +
+        '(e.g. ["down","right","right","select"]).'
+    );
+  } else if (isMacos) {
+    // A Mac app has no touch gestures at all.
+    header.push(
+      "Coordinates: normalized [0,1] app window (title bar + overhanging sheets/alerts/menus; x,y,w,h), not pixels. " +
+        "Mouse input only: pass to gesture-tap / gesture-drag / gesture-scroll; tap centre = (x+w/2, y+h/2). " +
+        "Menu bar not in tree: use menu-bar."
     );
   } else {
-    // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
     header.push(
-      opts.source === "xcuitest-runner"
-        ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-            "No two-finger gestures on physical iOS."
-        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
-    );
-    header.push(
-      "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."
+      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels; " +
+        "pass to gesture-tap / gesture-swipe / gesture-pinch; tap centre = (x+w/2, y+h/2)."
     );
   }
   header.push("");

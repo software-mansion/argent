@@ -64,6 +64,15 @@ const LISTING = {
       inputSchema: {},
       fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
     },
+    {
+      name: "record",
+      description: "",
+      inputSchema: {},
+      fileInputs: [
+        { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", optional: true },
+        { target: "project_root", path: "${project_root}", kind: "probe" },
+      ],
+    },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
     { name: "slow-plain", description: "", inputSchema: {} },
     { name: "fast", description: "", inputSchema: {} },
@@ -226,6 +235,24 @@ describe("createToolCaller", () => {
     expect(sent.appPath).not.toHaveProperty("content");
   });
 
+  it("refuses a relative project_root, since its cwd is where the editor started it", async () => {
+    const { callTool } = caller();
+
+    await expect(callTool("record", { project_root: "." })).rejects.toThrow(
+      'project_root must be an absolute path (got ".")'
+    );
+    expect(postsTo("/tools/record")).toHaveLength(0);
+  });
+
+  it("refuses a relative e2e_test_path, since its cwd is where the editor started it", async () => {
+    const { callTool } = caller();
+
+    await expect(
+      callTool("record", { e2e_test_path: ".argent/e2e/t.yaml", project_root: "/abs/proj" })
+    ).rejects.toThrow('e2e_test_path must be an absolute path (got ".argent/e2e/t.yaml")');
+    expect(postsTo("/tools/record")).toHaveLength(0);
+  });
+
   it("refuses a routed call that lacks a required argument before it uploads", async () => {
     const { callTool } = caller({ remote: true });
 
@@ -312,6 +339,33 @@ describe("createToolCaller", () => {
 
     await expect(callTool("slow", {})).resolves.toEqual({ result: { ok: true } });
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops a call at the caller's signal, without a retry", async () => {
+    // `slow` is longRunning, so only the signal can end the call before the
+    // stub answers it after 80 ms.
+    const { callTool, reconnect } = caller();
+    const controller = new AbortController();
+
+    const pending = callTool("slow", {}, { signal: controller.signal });
+    await vi.waitFor(() => expect(postsTo("/tools/slow")).toHaveLength(1), { interval: 5 });
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("aborted");
+    expect(postsTo("/tools/slow")).toHaveLength(1);
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a reconnect at the caller's signal", async () => {
+    // `fast` drops its first connection. A local reconnect can wait seconds
+    // for a new tool-server; this one never ends.
+    const { callTool, reconnect } = caller({ reconnect: vi.fn(() => new Promise<void>(() => {})) });
+
+    await expect(callTool("fast", {}, { signal: AbortSignal.timeout(100) })).rejects.toThrow(
+      "aborted"
+    );
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(postsTo("/tools/fast")).toHaveLength(1);
   });
 
   it("retries the request and calls reconnect after the first failure", async () => {
@@ -425,6 +479,33 @@ describe("createToolCaller", () => {
       expect(slow.requests.filter((r) => r.url === "/upload")).toHaveLength(1);
       expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1);
       expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it("ends a call that carried an upload when the caller cancels it", async () => {
+    const slow = await startStub({ installMs: 3_000 });
+    try {
+      const { callTool } = caller({
+        getHandle: () => ({ url: slow.url, token: "tok" }),
+        remote: true,
+      });
+      const controller = new AbortController();
+      const started = Date.now();
+
+      const pending = callTool(
+        "reinstall-app",
+        { udid: "u", bundleId: "x", appPath },
+        { signal: controller.signal }
+      );
+      await vi.waitFor(() =>
+        expect(slow.requests.filter((r) => r.url === "/tools/reinstall-app")).toHaveLength(1)
+      );
+      controller.abort(new Error("stopped in the editor"));
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      expect(Date.now() - started).toBeLessThan(2_000);
     } finally {
       await slow.close();
     }

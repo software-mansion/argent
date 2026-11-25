@@ -183,6 +183,17 @@ export function adbArgv(args: string[]): string[] {
 }
 
 /**
+ * With `ADB_TRACE` set, adb writes its own trace to stderr, and that trace
+ * repeats the command, so a caller judging the command by its stderr would
+ * match its own arguments.
+ */
+function envWithoutAdbTrace(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.ADB_TRACE;
+  return env;
+}
+
+/**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
@@ -207,6 +218,7 @@ export async function runAdb(
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
+      env: envWithoutAdbTrace(),
     });
     return { stdout, stderr };
   } catch (err) {
@@ -254,6 +266,43 @@ export async function adbShell(
   return stdout;
 }
 
+/**
+ * {@linkcode adbShell} with `input` written to the device command's stdin, for
+ * data that must stay out of every argv: the host's and the device's process
+ * lists show the command line, and so does the error a failure throws.
+ */
+export async function adbShellInput(
+  serial: string,
+  shellCommand: string,
+  input: string,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const adbPath = await resolveAdbOrThrow();
+  const argv = adbArgv(["-s", serial, "shell", shellCommand]);
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      adbPath,
+      argv,
+      {
+        timeout: options.timeoutMs ?? 30_000,
+        killSignal: ADB_KILL_SIGNAL,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: "utf-8",
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(describeAdbFailure(argv, Object.assign(err, { stdout, stderr })));
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+    // A stdin that broke early surfaces through the exit callback instead.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+  });
+}
+
 /** `adb -s <serial> exec-out <shellCommand>` — preserves stdout bytes for binary payloads. */
 export async function adbExecOutBinary(
   serial: string,
@@ -263,7 +312,60 @@ export async function adbExecOutBinary(
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
 }
 
-interface AndroidDevice {
+/**
+ * With `hostPort` 0 adb picks a free host port and prints it, and that output
+ * is what this returns; it is empty otherwise. `devicePort` is a TCP port, or
+ * a `{ localabstract }` socket name.
+ */
+export async function adbForward(
+  serial: string,
+  hostPort: number,
+  devicePort: number | { localabstract: string },
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const device =
+    typeof devicePort === "number"
+      ? `tcp:${devicePort}`
+      : `localabstract:${devicePort.localabstract}`;
+  const { stdout } = await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, device], options);
+  return stdout.trim();
+}
+
+/**
+ * With `noRebind`, a device port that already has a reverse fails with
+ * "cannot rebind existing socket" instead of being taken over. A port a device
+ * process listens on fails with "cannot bind listener" either way.
+ */
+export async function adbReverse(
+  serial: string,
+  devicePort: number,
+  hostPort: number,
+  options: { timeoutMs?: number; noRebind?: boolean } = {}
+): Promise<void> {
+  await runAdb(
+    [
+      "-s",
+      serial,
+      "reverse",
+      ...(options.noRebind ? ["--no-rebind"] : []),
+      `tcp:${devicePort}`,
+      `tcp:${hostPort}`,
+    ],
+    { timeoutMs: options.timeoutMs }
+  );
+}
+
+export async function removeAdbReverse(serial: string, devicePort: number): Promise<void> {
+  try {
+    await runAdb(["-s", serial, "reverse", "--remove", `tcp:${devicePort}`], {
+      timeoutMs: 5_000,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export interface AndroidDevice {
   serial: string;
   state: string;
   isEmulator: boolean;
@@ -365,6 +467,11 @@ async function listAndroidSerials(
 // at one ENRICH_TIMEOUT_MS rather than a multiple of it.
 export const ENRICH_TIMEOUT_MS = 5_000;
 
+/** One enrichment shell read, bounded by ENRICH_TIMEOUT_MS; "" when it fails or times out. */
+function readEnrichment(serial: string, shellCommand: string): Promise<string> {
+  return adbShell(serial, shellCommand, { timeoutMs: ENRICH_TIMEOUT_MS }).catch(() => "");
+}
+
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` on newer emulator
@@ -374,15 +481,66 @@ export const ENRICH_TIMEOUT_MS = 5_000;
  * ENRICH_TIMEOUT_MS here, not two.
  */
 async function readAvdName(serial: string): Promise<string | null> {
+  return (await readAvd(serial)).name;
+}
+
+/**
+ * {@linkcode readAvdName} plus whether the device answered either getprop, so
+ * a null name from a device without the avd props can be told apart from one
+ * that didn't answer.
+ */
+async function readAvd(serial: string): Promise<{ name: string | null; answered: boolean }> {
+  const read = (prop: string) =>
+    adbShell(serial, `getprop ${prop}`, { timeoutMs: ENRICH_TIMEOUT_MS }).then(
+      (value) => value.trim(),
+      () => null
+    );
   const [modern, legacy] = await Promise.all([
-    adbShell(serial, "getprop ro.boot.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-      () => ""
-    ),
-    adbShell(serial, "getprop ro.kernel.qemu.avd_name", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-      () => ""
-    ),
+    read("ro.boot.qemu.avd_name"),
+    read("ro.kernel.qemu.avd_name"),
   ]);
-  return modern.trim() || legacy.trim() || null;
+  return { name: modern || legacy || null, answered: modern !== null || legacy !== null };
+}
+
+export type EmulatorConsoleAvdName =
+  | { status: "ok"; avdName: string }
+  // Nothing listens on the console port: qemu has exited (adb may still list the
+  // serial for up to a second), so the port is free for the next emulator.
+  | { status: "unreachable" }
+  // Timed out or answered something else: alive but not responding (frozen,
+  // shutting down), or an unexpected console.
+  | { status: "unknown" };
+
+/**
+ * Ask an emulator's console for its AVD name (`adb -s <serial> emu avd name`).
+ *
+ * Unlike getprop, the console answers within milliseconds from the moment the
+ * serial is listed, while adb still reports it `offline`, and it tells a serial
+ * nothing is behind any more ("Connection refused") apart from one that is alive
+ * but not answering. `adb emu` connects to the console port straight from the
+ * serial, so it works whether or not the adb server still lists the device.
+ */
+export async function readEmulatorConsoleAvdName(
+  serial: string,
+  options: { timeoutMs?: number } = {}
+): Promise<EmulatorConsoleAvdName> {
+  try {
+    const { stdout } = await runAdb(["-s", serial, "emu", "avd", "name"], {
+      timeoutMs: options.timeoutMs ?? 2_000,
+    });
+    // "<name>\nOK\n" on success; "KO: …" when the console rejects the command.
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const name = lines.find((line) => line !== "OK" && !line.startsWith("KO"));
+    if (name && lines.includes("OK")) return { status: "ok", avdName: name };
+    return { status: "unknown" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/Connection refused/i.test(message)) return { status: "unreachable" };
+    return { status: "unknown" };
+  }
 }
 
 /**
@@ -402,22 +560,22 @@ async function readAvdName(serial: string): Promise<string | null> {
  * still-booting TV re-probes instead of being pinned to "mobile".
  */
 async function readRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const features = await adbShell(serial, "pm list features", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
+  // Both run concurrently so a device that answers neither costs one
+  // ENRICH_TIMEOUT_MS, not two.
+  const [features, characteristics] = await Promise.all([
+    readEnrichment(serial, "pm list features"),
+    readEnrichment(serial, "getprop ro.build.characteristics"),
+  ]);
   if (/feature:android\.(software\.leanback|hardware\.type\.television)\b/.test(features)) {
     return "tv";
   }
 
   // A populated, non-leanback feature list is determinate: don't let a stray
-  // characteristics token override it, and skip a round-trip on the phone path.
+  // characteristics token override it.
   if (features.trim()) return "mobile";
 
   // Empty feature list (mid-boot / timeout / image without `pm`): fall back to
   // the characteristics token, correct on most physical TV hardware.
-  const characteristics = await adbShell(serial, "getprop ro.build.characteristics", {
-    timeoutMs: ENRICH_TIMEOUT_MS,
-  }).catch(() => "");
   const isTv = characteristics
     .split(",")
     .map((c) => c.trim().toLowerCase())
@@ -447,8 +605,7 @@ export function __resetAndroidRuntimeKindCacheForTesting(): void {
 /**
  * Probe (or return the cached) runtime kind for a serial, keyed by its current
  * avdName so a reclaimed emulator slot can't inherit the prior AVD's verdict.
- * Indeterminate probes are not cached. Shared by the `listAndroidDevices`
- * enrichment and `getAndroidRuntimeKind` so both honor the same cache.
+ * Indeterminate probes are not cached. Used by `getAndroidRuntimeKind`.
  */
 async function resolveRuntimeKindCached(
   serial: string,
@@ -459,6 +616,30 @@ async function resolveRuntimeKindCached(
   const kind = await readRuntimeKind(serial);
   if (kind === undefined) return undefined;
   androidRuntimeKindCache.set(serial, { avdName, kind });
+  return kind;
+}
+
+/**
+ * `listAndroidDevices` variant of {@linkcode resolveRuntimeKindCached}, sharing
+ * its cache. On a cache miss the probe starts without waiting for the avd read,
+ * so a wedged device costs one ENRICH_TIMEOUT_MS for the whole enrichment. A
+ * cached emulator that doesn't answer the avd read gets undefined instead of a
+ * re-probe: it may be a new occupant of a reused slot, and a fresh probe would
+ * cost a second window on a device that isn't answering. A new occupant that
+ * does answer re-probes when its avd name differs from the cached one.
+ */
+async function resolveRuntimeKindAlongside(
+  serial: string,
+  avdPromise: Promise<{ name: string | null; answered: boolean }>
+): Promise<"mobile" | "tv" | undefined> {
+  const cached = androidRuntimeKindCache.get(serial);
+  const probe = cached ? undefined : readRuntimeKind(serial);
+  const avd = await avdPromise;
+  if (cached && !avd.answered && consolePortFromAdbSerial(serial) !== null) return undefined;
+  if (cached && cached.avdName === avd.name) return cached.kind;
+  const kind = await (probe ?? readRuntimeKind(serial));
+  if (kind === undefined) return undefined;
+  androidRuntimeKindCache.set(serial, { avdName: avd.name, kind });
   return kind;
 }
 
@@ -475,10 +656,14 @@ async function resolveRuntimeKindCached(
  * Readiness goes through the cheap `adb devices` listing rather than the full
  * `listAndroidDevices` enrichment. The avdName getprop is read only for
  * `emulator-NNNN` serials, where it detects a reused console slot; a physical
- * serial is never reclaimed and has no qemu avd_name.
+ * serial is never reclaimed and has no qemu avd_name. `devicesTimeoutMs` bounds
+ * that listing, as in `listAndroidSerials`.
  */
-export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const serials = await listAndroidSerials();
+export async function getAndroidRuntimeKind(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<"mobile" | "tv" | undefined> {
+  const serials = await listAndroidSerials(options);
   const ready = serials.find((d) => d.serial === serial && d.state === "device");
   if (!ready) {
     // Gone / offline: drop any cached verdict so a future occupant of this
@@ -491,8 +676,11 @@ export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | 
 }
 
 /** True when the given Android serial is an Android TV (leanback) target. */
-export async function isAndroidTv(serial: string): Promise<boolean> {
-  return (await getAndroidRuntimeKind(serial)) === "tv";
+export async function isAndroidTv(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial, options)) === "tv";
 }
 
 /**
@@ -519,7 +707,7 @@ export function getCachedAndroidRuntimeKind(serial: string): "mobile" | "tv" | u
  * the serial list — it avoids the extra round-trips.
  *
  * `runtimeKind` (TV vs mobile) is resolved only when `opts.runtimeKind` is set:
- * it costs an extra `pm list features` (+ a characteristics fallback) per device,
+ * it costs an extra `pm list features` + characteristics getprop per uncached device,
  * and `pm` often doesn't answer mid-boot, so each probe can block up to
  * ENRICH_TIMEOUT_MS. `list-devices` is the only caller that opts in, because it
  * surfaces the kind to the agent; the tv-* tools go through
@@ -545,27 +733,20 @@ export async function listAndroidDevices(
           sdkLevel: null,
         };
       }
-      const [model, sdk, avd] = await Promise.all([
-        adbShell(d.serial, "getprop ro.product.model", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-          () => ""
-        ),
-        adbShell(d.serial, "getprop ro.build.version.sdk", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
-          () => ""
-        ),
-        readAvdName(d.serial),
+      const avdPromise = readAvd(d.serial);
+      const [model, sdk, avd, runtimeKind] = await Promise.all([
+        readEnrichment(d.serial, "getprop ro.product.model"),
+        readEnrichment(d.serial, "getprop ro.build.version.sdk"),
+        avdPromise,
+        opts.runtimeKind ? resolveRuntimeKindAlongside(d.serial, avdPromise) : undefined,
       ]);
-      // Through the shared cache (serial+avdName) so a re-list of a known
-      // device skips the feature probe and a reclaimed emulator slot re-probes.
-      const runtimeKind = opts.runtimeKind
-        ? await resolveRuntimeKindCached(d.serial, avd)
-        : undefined;
       const sdkLevel = parseInt(sdk.trim(), 10);
       return {
         serial: d.serial,
         state: d.state,
         isEmulator: d.serial.startsWith("emulator-"),
         model: model.trim() || null,
-        avdName: avd,
+        avdName: avd.name,
         sdkLevel: Number.isFinite(sdkLevel) ? sdkLevel : null,
         runtimeKind,
       };

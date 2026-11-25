@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import { promisify } from "node:util";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
 import { externalNativeId } from "./external-devices";
 import { isFoldableSimulator } from "./ios-devices";
 import { settleWithin, sleepOrAbort } from "./timing";
+import { xcodeFirstLaunchPending } from "./xcode-first-launch";
 
 const execFileAsync = promisify(execFile);
 
@@ -286,6 +288,14 @@ export async function readCoreDeviceDisplays(udid: string): Promise<{
   const [bin, argv] = fs.existsSync(DEVICECTL_BIN)
     ? [DEVICECTL_BIN, args]
     : ["xcrun", ["devicectl", ...args]];
+  // CoreDevice's own binary has no wrapper in front of it, so only the fallback can start the install.
+  if (bin === "xcrun" && xcodeFirstLaunchPending("devicectl")) {
+    return {
+      displays: null,
+      reason:
+        "Xcode has not finished installing its components, so devicectl would wait for an administrator password",
+    };
+  }
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(bin, argv, {
@@ -524,7 +534,7 @@ function sameAspect(a: Size, b: Size): boolean {
 }
 
 /**
- * The posture that produced a capture of `size`, for the aspect-mismatch
+ * The posture that produced a capture of `size`, for the dimension-mismatch
  * message of the visual tools: `the cover panel (closed)` or `the inner panel
  * (half-open or open)`. Undefined when the size matches no panel.
  */
@@ -537,10 +547,11 @@ function postureForSize(size: Size, panels: readonly FoldablePanel[]): string | 
 }
 
 /**
- * The sentence the visual tools add to their aspect-mismatch failure on a
+ * The sentence the visual tools add to their dimension-mismatch failure on a
  * foldable simulator: baselines are per posture, and here is which posture
  * produced each size. Undefined for any device that is not foldable, so the
- * message is unchanged everywhere else.
+ * message is unchanged everywhere else, and for two sizes of one aspect (either
+ * way up), which are one panel at another scale or orientation, not posture.
  *
  * The panel list comes from one CoreDevice read (the pure-PNG diff of a
  * foldable's screenshots touches no simulator-server, which is where argent
@@ -551,7 +562,15 @@ export async function foldablePostureHint(
   expected: Size,
   actual: Size
 ): Promise<string | undefined> {
-  if (!(await isFoldableSimulator(udid))) return undefined;
+  const rotated = { width: actual.height, height: actual.width };
+  if (sameAspect(expected, actual) || sameAspect(expected, rotated)) return undefined;
+  // Wording only, so a type that cannot be read while Xcode's install is
+  // pending leaves the postures unnamed rather than failing the comparison.
+  const foldable = await isFoldableSimulator(udid).catch((err: unknown) => {
+    if (err instanceof XcodeFirstLaunchPendingError) return false;
+    throw err;
+  });
+  if (!foldable) return undefined;
   const panels = (await readCoreDeviceDisplays(udid)).displays?.panels;
   const base =
     "This simulator is foldable: a baseline belongs to the posture that produced it, and the " +

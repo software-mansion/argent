@@ -9,6 +9,7 @@ import {
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -124,8 +125,9 @@ function activeWindow(root: ParsedXmlNode): ParsedXmlNode {
 }
 
 /**
- * Collect the focused node and every focusable node. `parseUiAutomatorDump`
- * drops the `focused` attribute, so the focus walk needs its own pass.
+ * Collect the focused node and every focusable node, from the window holding
+ * focus. `parseUiAutomatorDump` reads every window, so the focus walk needs its
+ * own pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);
@@ -237,24 +239,18 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
       const raw = (
-        await adbExecOutBinary(
-          serial,
-          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-          { timeoutMs: 20_000 }
+        await withUiautomatorLock(serial, () =>
+          adbExecOutBinary(
+            serial,
+            `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+            { timeoutMs: 20_000 }
+          )
         )
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
         const output = raw.trim().slice(0, 200);
-        // `uiautomator` can't register its UiAutomation connection while another
-        // client holds one, and the system kills it.
-        if (/\bKilled\b/.test(output)) {
-          throw new Error(
-            `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
-              `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
-              `the accessibility connection. Stop it, for the helper with ` +
-              `\`adb shell am force-stop com.argent.androiddevtools\`, and try again.`
-          );
-        }
+        const killed = uiautomatorKilledMessage(output, serial);
+        if (killed) throw new Error(killed);
         throw new Error(
           `uiautomator could not capture the screen: ${output}. ` +
             `The device may be locked or showing a secure overlay — take a screenshot to confirm.`

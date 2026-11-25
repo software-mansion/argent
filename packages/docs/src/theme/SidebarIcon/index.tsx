@@ -1,6 +1,7 @@
 import React from "react";
 import {
   ArrowLeftRight,
+  AudioLines,
   Bot,
   Bug,
   Download,
@@ -11,6 +12,7 @@ import {
   KeyRound,
   Layers,
   LifeBuoy,
+  Monitor,
   MousePointerClick,
   Network,
   Plug,
@@ -43,6 +45,7 @@ import styles from "./styles.module.css";
  */
 export const ICONS: Record<string, LucideIcon | BrandIcon> = {
   "arrow-left-right": ArrowLeftRight,
+  "audio-lines": AudioLines,
   "bot": Bot,
   "bug": Bug,
   "download": Download,
@@ -53,6 +56,7 @@ export const ICONS: Record<string, LucideIcon | BrandIcon> = {
   "key-round": KeyRound,
   "layers": Layers,
   "life-buoy": LifeBuoy,
+  "monitor": Monitor,
   "mouse-pointer-click": MousePointerClick,
   "network": Network,
   "plug": Plug,

@@ -22,6 +22,7 @@ import {
   TOOL_FILE_EXTENSIONS,
   baselineKeyFor,
   canonicalFlowPath,
+  canonicalToolArgs,
   canonicalToolId,
   classifyOnDiskSpelling,
   e2eDirFor,
@@ -32,15 +33,18 @@ import {
   pickE2eFile,
   collectFlowRequests,
   flowMemberKey,
+  flowYamlSource,
   hasToolFileExtension,
   isClientFileArgument,
   nestedFlowTarget,
+  toolParamAliases,
   toolStepFiles,
   type FileInputMember,
   type NestedFlowTarget,
 } from "@argent/registry";
 
 import {
+  callerPath,
   readFileInputWire,
   uploadFile,
   type FileInputSpec,
@@ -55,7 +59,7 @@ import {
  */
 const INLINE_MEMBERS_BYTES = 256 * 1024;
 
-/** `ARGENT_E2E_FILES_LOG=1` turns the `[flow-files]` lines on; `ARGENT_FLOW_FILES_LOG` is its old name. */
+/** `ARGENT_E2E_FILES_LOG=1` turns the `[e2e-files]` lines on; `ARGENT_FLOW_FILES_LOG` is its old name. */
 export function filesLogEnabled(): boolean {
   return (process.env.ARGENT_E2E_FILES_LOG ?? process.env.ARGENT_FLOW_FILES_LOG) === "1";
 }
@@ -83,18 +87,24 @@ function isResolvedAbsolute(value: unknown): value is string {
 
 /**
  * The tool-server's own shape rules for the flow a call names: `project_root`
- * absolute with no `..` segment, and exactly one of `flow_path` (the same,
+ * absolute with no `..` segment, and exactly one of `e2e_test_path` (the same,
  * named `<flow-name>.yaml`) and `name` (a flow name). The tool-server refuses
  * any other call before step 1, and roots taken from its arguments could
  * reach past the project, so such a call sends none of the flow's files.
  */
 function namesValidFlow(args: Record<string, unknown>): boolean {
-  const { project_root, flow_path, name } = args;
+  let canonical: Record<string, unknown>;
+  try {
+    canonical = canonicalToolArgs("e2e-execute", args);
+  } catch {
+    return false;
+  }
+  const { project_root, e2e_test_path: testPath, name } = canonical;
   if (!isResolvedAbsolute(project_root)) return false;
   if (name === undefined) {
-    return isResolvedAbsolute(flow_path) && FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path));
+    return isResolvedAbsolute(testPath) && FLOW_FILE_NAME_PATTERN.test(path.basename(testPath));
   }
-  return flow_path === undefined && typeof name === "string" && FLOW_NAME_PATTERN.test(name);
+  return testPath === undefined && typeof name === "string" && FLOW_NAME_PATTERN.test(name);
 }
 
 /**
@@ -397,8 +407,9 @@ function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
   const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
   const emit = (member: FileInputMember, sent: string): void => {
     members.push(member);
-    const subject = member.role === "flow" ? member.canonical : member.key;
-    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
+    const [label, subject] =
+      member.role === "flow" ? ["e2e test", member.canonical] : [member.role, member.key];
+    if (logging) log(printable(`[e2e-files] ${label} ${subject}: ${sent}`));
   };
 
   /**
@@ -524,7 +535,7 @@ function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
         let doc: unknown;
         try {
           // The runner's parse; its warnings belong to the run, not to this terminal.
-          doc = parseYaml(file.text.trim(), { logLevel: "error" });
+          doc = parseYaml(flowYamlSource(file.text), { logLevel: "error" });
         } catch {
           continue;
         }
@@ -670,7 +681,7 @@ function recordedStep(
   if (typeof text !== "string") return undefined;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = canonicalToolArgs(command, JSON.parse(text));
   } catch {
     return undefined;
   }
@@ -686,12 +697,13 @@ function recordedStep(
  * that run. The recorder also resolves the recording file
  * `<project_root>/.argent/e2e/<name>.yaml` for its real directory, and the
  * sibling `<name>.yaml` there, which a nested flow is recorded as a `run:`
- * step of only when it is the flow that ran. A `flow_path` the recorder
+ * step of only when it is the flow that ran. An `e2e_test_path` the recorder
  * rewrites to that sibling's name (it is a file in the recording's
  * directory, or in the project's other e2e test directory) is sent under its
  * own spelling too, for the recorder's on-disk
  * spelling check, and its run as the name the recorder runs it by. Nothing
- * for a call without a valid `name` and absolute `project_root`, or whose
+ * for a call without a valid `name` and an absolute `project_root` free of
+ * `..`, which the tool-server refuses, or whose
  * step does not parse. `recordingDirFor` is where the tool-server records:
  * `.argent/flows/` for one that predates `.argent/e2e/`.
  */
@@ -705,8 +717,7 @@ export async function collectStepMembers(
   if (
     typeof name !== "string" ||
     !FLOW_NAME_PATTERN.test(name) ||
-    typeof projectRoot !== "string" ||
-    !path.isAbsolute(projectRoot) ||
+    !isResolvedAbsolute(projectRoot) ||
     step === undefined
   ) {
     return [];
@@ -721,7 +732,7 @@ export async function collectStepMembers(
     const self = await collector.flow(path.dirname(recording), path.basename(recording));
     let runArgs = step.args;
     const named = nestedFlowTarget(runArgs);
-    if (named?.kind === "flow_path") {
+    if (named?.kind === "e2e_test_path") {
       const stem = path.basename(named.path, ".yaml");
       const base = path.basename(named.path);
       const dir = path.resolve(path.dirname(named.path));
@@ -732,7 +743,7 @@ export async function collectStepMembers(
       if (dirs.some((d) => path.resolve(d) === dir)) {
         await collector.flow(path.dirname(named.path), base);
         runArgs = { ...runArgs, name: stem };
-        delete runArgs.flow_path;
+        delete runArgs.e2e_test_path;
       }
     }
     const target = nestedFlowTarget(runArgs);
@@ -755,8 +766,8 @@ export async function collectStepMembers(
  * The args of an `e2e-execute` or `e2e-read-prerequisite` call by `name` for a
  * tool-server that predates `.argent/e2e/`: its `flow_file` spec has no
  * `paths`, so it reads only `.argent/flows/`. When the test is in
- * `.argent/e2e/`, the call names it by `flow_path` instead, as `argent e2e run`
- * does. Any other call is returned unchanged.
+ * `.argent/e2e/`, the call names it by `e2e_test_path` instead, as `argent e2e
+ * run` does. Any other call is returned unchanged.
  */
 export async function nameToE2ePathForOlderServer(
   tool: string,
@@ -772,7 +783,30 @@ export async function nameToE2ePathForOlderServer(
   const picked = await pickE2eFile(target.paths);
   if (!picked.exists || picked.legacy) return args;
   const { name: _name, ...rest } = args as Record<string, unknown>;
-  return { ...rest, flow_path: picked.path };
+  return { ...rest, e2e_test_path: picked.path };
+}
+
+/**
+ * `args` for a tool-server that predates a param rename, which lists the tool
+ * (`meta`) with the param under its former name only: that param under the
+ * former name. Any other call is returned unchanged.
+ */
+export function formerParamsForOlderServer(
+  meta: { name: string; inputSchema: Record<string, unknown> },
+  args: unknown
+): unknown {
+  const listed = meta.inputSchema.properties;
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  if (typeof listed !== "object" || listed === null) return args;
+  const record = args as Record<string, unknown>;
+  let out: Record<string, unknown> | undefined;
+  for (const [former, current] of Object.entries(toolParamAliases(meta.name))) {
+    if (record[current] === undefined || current in listed || !(former in listed)) continue;
+    out ??= { ...record };
+    out[former] = out[current];
+    delete out[current];
+  }
+  return out ?? args;
 }
 
 /**
@@ -814,7 +848,8 @@ export async function stepForOlderServer(
  * when the test it runs hides a legacy test of the same name
  * ({@link e2eShadowWarning}). A tool-server that reads the test in place
  * returns it; over a link, or to a tool-server that predates `.argent/e2e/`,
- * the client picks the file and owes it instead.
+ * the client picks the file and owes it instead. A relative `project_root` is
+ * resolved as the file input sends it ({@link callerPath}).
  */
 export async function e2eShadowWarningFor(
   tool: string,
@@ -822,7 +857,10 @@ export async function e2eShadowWarningFor(
 ): Promise<string | undefined> {
   const id = canonicalToolId(tool);
   if (id !== "e2e-execute" && id !== "e2e-read-prerequisite") return undefined;
-  const target = nestedFlowTarget(args);
+  const root = (args as { project_root?: unknown } | null)?.project_root;
+  const target = nestedFlowTarget(
+    typeof root === "string" ? { ...(args as object), project_root: callerPath(root) } : args
+  );
   if (target?.kind !== "name") return undefined;
   const picked = await pickE2eFile(target.paths);
   return picked.shadowed === undefined ? undefined : e2eShadowWarning(picked.path, picked.shadowed);

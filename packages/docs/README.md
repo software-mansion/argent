@@ -8,14 +8,14 @@ The site has no landing page of its own. That is [argent.swmansion.com](https://
 
 ## Development
 
-This site lives at `packages/docs` but is a standalone npm project with its own lockfile, excluded from the root `packages/*` workspace glob so its dependencies stay out of the toolkit's lockfile. ESLint still runs from the repo root (`npm run lint`) with the shared `eslint.config.mjs`; install this package's dependencies first so the type-aware rules can load `tsconfig.json`.
+This site lives at `packages/docs` but is a standalone project with its own lockfile, excluded from the root `packages/*` workspace glob so its dependencies stay out of the toolkit's lockfile. ESLint still runs from the repo root (`bun run lint`) with the shared `eslint.config.mjs`; install this package's dependencies first so the type-aware rules can load `tsconfig.json`.
 
 ```bash
 cd packages/docs
-npm install
-npm start        # dev server on http://localhost:3000/argent/
-npm run build    # production build into packages/docs/build
-npm run serve    # serve the production build
+bun install
+bun run start    # dev server on http://localhost:3000/argent/
+bun run build    # production build into packages/docs/build
+bun run serve    # serve the production build
 ```
 
 ## Layout
@@ -40,7 +40,7 @@ Screen recordings go through `scripts/encode-video.sh`, which produces a
 web-sized MP4 and a poster frame in `static/video/`:
 
 ```bash
-npm run encode:video -- ~/Desktop/tap-flow.mov
+bun run encode:video -- ~/Desktop/tap-flow.mov
 ```
 
 Record in the simulator or with QuickTime, then encode. Never commit a GIF: the

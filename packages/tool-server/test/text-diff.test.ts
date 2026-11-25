@@ -41,6 +41,9 @@ describe("text diff", () => {
     expect(normalizeTextForDiff("10%")).toBe("10%");
     expect(normalizeTextForDiff("$ 10")).toBe("$10");
     expect(normalizeTextForDiff("A / B")).toBe("a/b");
+    expect(normalizeTextForDiff("1+2-3")).toBe("1+2-3");
+    expect(normalizeTextForDiff("a/b/c")).toBe("a/b/c");
+    expect(normalizeTextForDiff("1+2-3")).not.toBe(normalizeTextForDiff("1+2+3"));
     expect(normalizeTextForDiff("10%")).not.toBe(normalizeTextForDiff("10"));
   });
 
@@ -263,21 +266,6 @@ describe("text diff", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("skips OCR when image pixels match", async () => {
-    const result = await analyzeScreenshotTextChanges({
-      baselinePath: "baseline.png",
-      currentPath: "current.png",
-      hasPixelDiff: false,
-    });
-
-    expect(result).toMatchObject({
-      status: "skipped",
-      provider: "ocr",
-      changes: [],
-    });
-    expect(ocrMock.extractOcrTextBlocks).not.toHaveBeenCalled();
-  });
-
   it("returns unavailable when OCR is unavailable (e.g. missing system tesseract)", async () => {
     ocrMock.extractOcrTextBlocks.mockResolvedValue({
       status: "unavailable",
@@ -288,7 +276,6 @@ describe("text diff", () => {
     const result = await analyzeScreenshotTextChanges({
       baselinePath: "baseline.png",
       currentPath: "current.png",
-      hasPixelDiff: true,
     });
 
     expect(result).toEqual({

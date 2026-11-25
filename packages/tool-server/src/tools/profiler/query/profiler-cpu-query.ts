@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import {
   buildCpuSampleIndex,
+  buildChildToParent,
   queryCpuWindow,
   deserializeCpuSampleIndex,
   isArgentProfilerFunction,
@@ -18,65 +19,47 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 import {
   resolveComponentName,
   renderComponentNameMiss,
-  describeResolution,
 } from "../../../utils/react-profiler/component-names";
+import {
+  describeStoredResolution,
+  parseRenderSummary,
+  renderNameOutsideStoredCommits,
+  storedOnlyNote,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
+import { renderNoStoredCommits } from "./profiler-commit-query";
 import { promises as fs } from "fs";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const timeWindowSchema = z.object({
-  start: z.coerce
-    .number()
-    .describe(
-      "Start of window in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-  end: z.coerce
-    .number()
-    .describe(
-      "End of window in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-});
+interface StoredCommits {
+  commits: {
+    commitIndex: number;
+    timestamp: number;
+    commitDuration: number;
+    componentName: string;
+    didRender: boolean;
+  }[];
+  /** Null for sessions saved before react-profiler-stop wrote the summary. */
+  renderSummary: RenderSummary | null;
+  totalReactCommits: number | null;
+}
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-  ),
-  mode: z
-    .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
-    .describe(
-      "Query mode: top_functions (global hotspots), time_window (CPU in a time range), " +
-        "call_tree (callers/callees of a function), component_cpu (CPU during a component's commits)"
-    ),
-  time_window_ms: timeWindowSchema
-    .optional()
-    .describe(
-      "Time window filter for time_window mode (ms since profiling started, the same clock profiler-commit-query prints)"
-    ),
-  component_name: z.string().optional().describe("Component name for component_cpu mode"),
-  function_name: z.string().optional().describe("Function name for call_tree mode"),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(15)
-    .describe("Number of results to return (default 15)"),
-  include_callers: z
-    .boolean()
-    .default(false)
-    .describe("For call_tree mode: also show callers of the function"),
-});
+async function readStoredCommits(
+  sessionPaths: ProfilerSessionPaths
+): Promise<StoredCommits | null> {
+  if (!sessionPaths.commitsPath) return null;
+  const onDisk = await readCommitTree(sessionPaths.commitsPath);
+  return {
+    commits: onDisk.commits,
+    renderSummary: parseRenderSummary(onDisk.meta?.renderSummary),
+    totalReactCommits: onDisk.meta?.totalReactCommits ?? sessionPaths.totalReactCommits ?? null,
+  };
+}
 
 async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   index: CpuSampleIndex;
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null;
+  commitTree: StoredCommits | null;
 }> {
   if (!sessionPaths?.cpuProfilePath) {
     throw new FailureError(
@@ -95,25 +78,17 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     try {
       const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
       const index = deserializeCpuSampleIndex(raw);
-      let commitTree = null;
-      if (sessionPaths.commitsPath) {
-        const onDisk = await readCommitTree(sessionPaths.commitsPath);
-        commitTree = { commits: onDisk.commits };
-      }
-      return { index, commitTree };
+      return { index, commitTree: await readStoredCommits(sessionPaths) };
     } catch {
       // Fall through to building from the raw profile.
     }
   }
 
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
-  let commitTree = null;
-  if (sessionPaths.commitsPath) {
-    const onDisk = await readCommitTree(sessionPaths.commitsPath);
-    commitTree = { commits: onDisk.commits };
-  }
-
-  return { index: buildCpuSampleIndex(cpuProfile), commitTree };
+  return {
+    index: buildCpuSampleIndex(cpuProfile),
+    commitTree: await readStoredCommits(sessionPaths),
+  };
 }
 
 /**
@@ -158,16 +133,33 @@ function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number
   );
 }
 
+/**
+ * The `react_only` filter: a PascalCase function name, the shape of a React
+ * function component. A heuristic: it also keeps PascalCase non-components
+ * (classes, constructors) and drops anonymous or lowercase components.
+ */
+function isReactComponentName(name: string): boolean {
+  return /^[A-Z][A-Za-z0-9]*$/.test(name);
+}
+
 /** States what the numbers below are a measurement of. */
-function coverageNote(res: CpuWindowResult, startMs: number, endMs: number): string {
+function coverageNote(
+  res: CpuWindowResult,
+  startMs: number,
+  endMs: number,
+  reactOnly: boolean
+): string {
   const widthMs = endMs - startMs;
   const lines = [
     `**Window:** ${startMs.toFixed(1)}ms → ${endMs.toFixed(1)}ms (${widthMs.toFixed(1)}ms)`,
     `**Samples:** ${res.samplesInWindow} covering ${res.coveredMs.toFixed(1)}ms` +
       (res.idleMs > 0 ? `, of which ${res.idleMs.toFixed(1)}ms idle` : "") +
       ` — sampling interval ~${res.medianIntervalMs.toFixed(1)}ms. Self-times sum to sampled` +
-      " coverage, not to the window width.",
+      " coverage, not to the window width. Self % is a share of that coverage.",
   ];
+  if (reactOnly) {
+    lines.push("**Filter:** React components only (PascalCase function names)");
+  }
   if (widthMs > 0 && widthMs < 3 * res.medianIntervalMs) {
     lines.push(
       `> This window is narrower than ~3 sampling intervals, so every figure carries ±1 sample` +
@@ -187,24 +179,37 @@ function renderTopFunctions(
   index: CpuSampleIndex,
   topN: number,
   startMs?: number,
-  endMs?: number
+  endMs?: number,
+  reactOnly = false
 ): string {
   const windowStart = startMs ?? index.intervalStartsMs[0] ?? 0;
   const windowEnd = endMs ?? index.timestampsMs[index.timestampsMs.length - 1] ?? 0;
-  const res = queryCpuWindow(index, windowStart, windowEnd, topN);
+  // Filter before the top-N cut, or components ranked below N would be lost.
+  const res = queryCpuWindow(index, windowStart, windowEnd, reactOnly ? Infinity : topN);
 
   if (res.hotspots.length === 0) return explainEmptyWindow(res, windowStart, windowEnd);
 
-  const header = "| Function | Self (ms) | Total (ms) | Location |";
-  const sep = "|---|---|---|---|";
-  const rows = res.hotspots.map((hs) => {
+  const hotspots = reactOnly
+    ? res.hotspots.filter((hs) => isReactComponentName(hs.name)).slice(0, topN)
+    : res.hotspots;
+  if (hotspots.length === 0) {
+    return (
+      `_No function sampled in ${windowStart.toFixed(1)}–${windowEnd.toFixed(1)}ms has a ` +
+      "PascalCase (React component) name. Query again without react_only to see the JS work._"
+    );
+  }
+
+  const header = "| Function | Self (ms) | Self % | Total (ms) | Location |";
+  const sep = "|---|---|---|---|---|";
+  const rows = hotspots.map((hs) => {
     const loc = hs.url
       ? `${shortenUrl(hs.url)}${hs.lineNumber != null ? `:${hs.lineNumber}` : ""}`
       : "—";
-    return `| \`${hs.name}\` | ${hs.selfMs} | ${hs.totalMs} | ${loc} |`;
+    const selfPct = res.coveredMs > 0 ? `${((hs.selfMs / res.coveredMs) * 100).toFixed(1)}%` : "—";
+    return `| \`${hs.name}\` | ${hs.selfMs} | ${selfPct} | ${hs.totalMs} | ${loc} |`;
   });
 
-  return `## CPU Hotspots\n\n${coverageNote(res, windowStart, windowEnd)}\n\n${header}\n${sep}\n${rows.join("\n")}`;
+  return `## CPU Hotspots\n\n${coverageNote(res, windowStart, windowEnd, reactOnly)}\n\n${header}\n${sep}\n${rows.join("\n")}`;
 }
 
 function renderCallTree(
@@ -323,21 +328,17 @@ function renderCallTree(
   return lines.join("\n");
 }
 
-function renderComponentCpu(
+export function renderComponentCpu(
   index: CpuSampleIndex,
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null,
+  commitTree: StoredCommits | null,
   componentName: string,
   topN: number
 ): string {
-  if (!commitTree || commitTree.commits.length === 0) {
+  if (!commitTree) {
     return "_No commit data available. Run react-profiler-analyze first._";
+  }
+  if (commitTree.commits.length === 0) {
+    return `${renderNoStoredCommits(commitTree)}\n\nUse mode=\`top_functions\` for JS CPU.`;
   }
 
   // The report prints display names (wrappers stripped), so accept those too —
@@ -346,6 +347,13 @@ function renderComponentCpu(
     componentName,
     commitTree.commits.map((c) => c.componentName)
   );
+  if (resolution.kind === "missing" && commitTree.renderSummary) {
+    return renderNameOutsideStoredCommits(
+      componentName,
+      commitTree.renderSummary,
+      " Use mode=`top_functions` for JS CPU over the whole session."
+    );
+  }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {
       fiberRenders: commitTree.commits.length,
@@ -353,7 +361,7 @@ function renderComponentCpu(
     });
   }
   const resolvedName = resolution.rawName;
-  const resolutionNote = describeResolution(resolution);
+  const resolutionNote = describeStoredResolution(resolution, commitTree.renderSummary);
 
   const componentCommits = commitTree.commits.filter((c) => c.componentName === resolvedName);
 
@@ -372,30 +380,69 @@ function renderComponentCpu(
     }
   }
 
-  const aggregated = new Map<
-    string,
-    { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
-  >();
+  const aggregated = new Map<string, { selfMs: number; totalMs: number }>();
+  // Hermes can give one function a different line in each call-tree node, so rows
+  // go by name and show the line that took the most self time.
+  const selfMsByLocation = new Map<string, Map<string, SourceSelfTime>>();
+  // By node, so a node's rows in later windows skip rebuilding its location key.
+  const locationOfNode = new Map<number, SourceSelfTime>();
+
+  const nestedInSameName = nodesNestedInSameName(
+    index.nodeMap,
+    index.childToParent ?? buildChildToParent(index.nodeMap)
+  );
 
   for (const window of commitWindows.values()) {
-    const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Every node on the sampled stacks: a name's outer frame can rank below the cut, or
+    // take no self sample at all, while its nested one does. Unrounded, since a row
+    // sums many nodes and rounding each could print its Self above its Total.
+    const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity, {
+      withCallers: true,
+      unrounded: true,
+    });
+    // Rows are per call-tree node. Self time adds; inclusive time sums only
+    // the outermost of a name's nodes, since recursion nests them.
+    const perWindow = new Map<string, { selfMs: number; totalMs: number }>();
     for (const hs of hotspots) {
-      const existing = aggregated.get(hs.name);
-      if (existing) {
-        existing.selfMs += hs.selfMs;
-        existing.totalMs += hs.totalMs;
+      let location = locationOfNode.get(hs.nodeId);
+      if (!location) {
+        const locations = selfMsByLocation.get(hs.name) ?? new Map<string, SourceSelfTime>();
+        selfMsByLocation.set(hs.name, locations);
+        const locationKey = `${hs.url ?? ""}:${hs.lineNumber ?? ""}`;
+        location = locations.get(locationKey);
+        if (!location) {
+          location = { url: hs.url, lineNumber: hs.lineNumber, selfMs: 0 };
+          locations.set(locationKey, location);
+        }
+        locationOfNode.set(hs.nodeId, location);
+      }
+      location.selfMs += hs.selfMs;
+      // A frame's ancestors are rows of the same window, so a nested frame's
+      // outer namesake is always counted.
+      const totalMs = nestedInSameName.has(hs.nodeId) ? 0 : hs.totalMs;
+      const seen = perWindow.get(hs.name);
+      if (seen) {
+        seen.selfMs += hs.selfMs;
+        seen.totalMs += totalMs;
       } else {
-        aggregated.set(hs.name, {
-          selfMs: hs.selfMs,
-          totalMs: hs.totalMs,
-          url: hs.url,
-          lineNumber: hs.lineNumber,
-        });
+        perWindow.set(hs.name, { selfMs: hs.selfMs, totalMs });
+      }
+    }
+    for (const [name, win] of perWindow) {
+      const existing = aggregated.get(name);
+      if (existing) {
+        existing.selfMs += win.selfMs;
+        existing.totalMs += win.totalMs;
+      } else {
+        aggregated.set(name, { ...win });
       }
     }
   }
 
-  const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
+  const sorted = [...aggregated.entries()]
+    .filter(([, row]) => roundMs(row.selfMs) > 0)
+    .sort((a, b) => b[1].selfMs - a[1].selfMs)
+    .slice(0, topN);
 
   if (sorted.length === 0) {
     return `_No CPU samples found during \`${resolvedName}\` commits._`;
@@ -407,20 +454,41 @@ function renderComponentCpu(
     `## CPU During \`${resolvedName}\` Commits`,
     "",
     ...(resolutionNote ? [resolutionNote, ""] : []),
-    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms`,
+    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms` +
+      storedOnlyNote(
+        resolvedName,
+        componentCommits.filter((c) => c.didRender).length,
+        commitTree.renderSummary,
+        "`profiler-commit-query` mode=`render_counts`"
+      ),
     "",
     "| Function | Self (ms) | Total (ms) | Location |",
     "|---|---|---|---|",
   ];
 
-  for (const [name, { selfMs, totalMs, url, lineNumber }] of sorted) {
+  for (const [name, { selfMs, totalMs }] of sorted) {
+    let top: SourceSelfTime | undefined;
+    for (const location of selfMsByLocation.get(name)!.values()) {
+      if (!top || location.selfMs > top.selfMs) top = location;
+    }
+    const { url, lineNumber } = top!;
     const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
-    lines.push(
-      `| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`
-    );
+    // Total contains Self but sums in another order, so float error can leave it just below.
+    const total = roundMs(Math.max(totalMs, selfMs));
+    lines.push(`| \`${name}\` | ${roundMs(selfMs)} | ${total} | ${loc} |`);
   }
 
   return lines.join("\n");
+}
+
+interface SourceSelfTime {
+  url?: string;
+  lineNumber?: number;
+  selfMs: number;
+}
+
+function roundMs(ms: number): number {
+  return Math.round(ms * 100) / 100;
 }
 
 function shortenUrl(url: string): string {
@@ -428,28 +496,92 @@ function shortenUrl(url: string): string {
   return parts.slice(-2).join("/");
 }
 
+/** Call-tree nodes with an ancestor of the same function name, as recursion produces. */
+function nodesNestedInSameName(
+  nodeMap: Map<number, HermesProfileNode>,
+  childToParent: Map<number, number>
+): Set<number> {
+  const nested = new Set<number>();
+  // Frames of each name on the current root-to-node path.
+  const onPath = new Map<string, number>();
+  const stack: { id: number; leaving: boolean }[] = [];
+  for (const id of nodeMap.keys()) {
+    if (!childToParent.has(id)) stack.push({ id, leaving: false });
+  }
+  while (stack.length > 0) {
+    const { id, leaving } = stack.pop()!;
+    const node = nodeMap.get(id)!;
+    const name = node.callFrame.functionName;
+    const count = onPath.get(name) ?? 0;
+    if (leaving) {
+      onPath.set(name, count - 1);
+      continue;
+    }
+    if (count > 0) nested.add(id);
+    onPath.set(name, count + 1);
+    stack.push({ id, leaving: true });
+    for (const child of node.children ?? []) {
+      // Follow the parent links queryCpuWindow sums inclusive time along.
+      if (childToParent.get(child) === id && nodeMap.has(child)) {
+        stack.push({ id: child, leaving: false });
+      }
+    }
+  }
+  return nested;
+}
+
+const timeWindowSchema = z.object({
+  start: z.coerce.number().describe("Start of window in ms"),
+  end: z.coerce.number().describe("End of window in ms"),
+});
+
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Device ID used to record or load the React profile<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
+  ),
+  mode: z
+    .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
+    .describe("Query mode; see Modes in the tool description."),
+  time_window_ms: timeWindowSchema
+    .optional()
+    .describe(
+      "Time window in ms since profiling started, the same clock profiler-commit-query prints"
+    ),
+  component_name: z.string().optional().describe("Component name"),
+  function_name: z.string().optional().describe("Function name"),
+  top_n: z.coerce.number().int().positive().default(15).describe("Number of results to return"),
+  include_callers: z.boolean().default(false).describe("Also show callers of the function"),
+  react_only: z
+    .boolean()
+    .default(false)
+    .describe(
+      "top_functions and time_window: list only React component functions (PascalCase names)"
+    ),
+});
+
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
+  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
+Modes:
+- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
+- time_window: CPU breakdown for time_window_ms (e.g. during a slow commit or hang).
+- call_tree: For a given function_name, show its callees, and its callers with include_callers.
+- component_cpu: For a given component_name, aggregate CPU activity across its stored commits.
+In top_functions and time_window, self-times are the summed sampling intervals of the samples that
+landed in the window, so they measure sampled coverage rather than the window's width and do not
+change if you widen the query. Their tables state how many samples they cover and how much was idle.
+Each row is one call path, so a function can have several rows and top_n counts rows.
+Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
+Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
+Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-profiler-analyze) first.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Querying CPU profile by ${params.mode.replaceAll("_", " ")}`,
     completedMsg: ({ params }) => `Queried CPU profile by ${params.mode.replaceAll("_", " ")}`,
     failedMsg: ({ failureSignal }) => `Failed to query CPU profile: ${failureSignal.error_code}`,
   },
-  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
-Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.
-Modes:
-- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
-- time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
-
-Self-times are the summed sampling intervals of the samples that landed in the window, so they
-measure sampled coverage rather than the window's width and do not change if you widen the query.
-Every table states how many samples it covers and how much of that was idle.
-- call_tree: For a given function_name, show its callees and optionally callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
-Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
-Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
-Fails if no CPU profile is stored; run react-profiler-stop first.`,
-  zodSchema,
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
@@ -474,7 +606,8 @@ Fails if no CPU profile is stored; run react-profiler-stop first.`,
           index,
           params.top_n,
           params.time_window_ms?.start,
-          params.time_window_ms?.end
+          params.time_window_ms?.end,
+          params.react_only
         );
 
       case "time_window": {
@@ -490,7 +623,8 @@ Fails if no CPU profile is stored; run react-profiler-stop first.`,
           index,
           params.top_n,
           params.time_window_ms.start,
-          params.time_window_ms.end
+          params.time_window_ms.end,
+          params.react_only
         );
       }
 

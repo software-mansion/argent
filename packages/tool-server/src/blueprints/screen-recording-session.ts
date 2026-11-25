@@ -12,14 +12,72 @@ import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import { parseMacosAppBundleId, stripRemotePrefix } from "../utils/device-info";
+import { macosAppBlueprint } from "./macos-app";
 
-// Session for the `screen-recording-*` tools, one shape for both platforms:
-// frames come from simulator-server's MJPEG stream and are paced into an ffmpeg
-// child that writes the mp4 host-side, so there is nothing device-side to clean
-// up. Mirrors the native-profiler session.
+// Session for the `screen-recording-*` tools, one shape for every platform.
+// Local iOS/Android captures pace simulator-server's MJPEG stream into an
+// ffmpeg child that writes the mp4 host-side, so there is nothing device-side
+// to clean up; remote (`remote:`) simulators record on the runner instead and
+// leave a buffer there that a teardown has to end (`remote.end`), and a Mac
+// app records inside the app, which a teardown has to end too (`macos.end`).
+// Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+/** What the download of a remote recording has to say for itself. */
+export interface EndedRecording {
+  /** Set when the stop did not get through but the runner held the video anyway. */
+  warning?: string;
+}
+
+/**
+ * A recording running on a remote simulator's runner. It keeps recording until
+ * told to stop, so whoever ends the capture here — the time-limit cap, the
+ * stop, a teardown — has to end it there too.
+ */
+export interface RemoteCapture {
+  /** The runner's id for the recording: what a failed download is fetched again by. */
+  recordingId: string;
+  /** Whether the capture asked for the corner watermark; stamped after the download. */
+  watermark: boolean;
+  /**
+   * Ends the recording on the runner and downloads it to the session's
+   * `outputFile`, once: the first caller does the work, every later one gets
+   * the same promise, and a failure reaches all of them.
+   */
+  end: () => Promise<EndedRecording>;
+}
+
+/** What the app said about a Mac app's recording when it ended it. */
+export interface EndedMacosRecording {
+  /** Size of the video at the session's `outputFile`. */
+  sizeBytes: number;
+  /** Length of the video. */
+  durationMs: number;
+  /** Real elapsed recording time. */
+  wallClockMs: number;
+  /** Still time cut from the video. */
+  trimmedMs: number;
+  /** The app ended the capture at the time limit. */
+  timedOut: boolean;
+  warnings: string[];
+}
+
+/**
+ * A recording that argent's library makes inside a Mac app. It keeps
+ * recording until told to stop (or its time limit), so whoever ends the
+ * capture here (the cap, the stop, a teardown) has to end it there too.
+ */
+export interface MacosCapture {
+  /**
+   * Ends the recording in the app, which writes the video to a file of its
+   * own, and copies it to the session's `outputFile`, once: the first caller
+   * does the work, every later one gets the same promise.
+   */
+  end: () => Promise<EndedMacosRecording>;
+}
 
 export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
   return {
@@ -30,7 +88,6 @@ export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
 
 export interface ScreenRecordingSessionApi {
   deviceId: string;
-  platform: "ios" | "android";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
   /**
@@ -100,6 +157,10 @@ export interface ScreenRecordingSessionApi {
   pumpTimer: NodeJS.Timeout | null;
   /** Drop unchanged frames past a short grace so dead stretches don't pad the video. */
   trimStatic: boolean;
+  /** The runner-side half of a remote (`remote:`) capture; null for a local one. */
+  remote: RemoteCapture | null;
+  /** The in-app half of a Mac app's capture; null on every other platform. */
+  macos: MacosCapture | null;
   /** Frames the pump has fed the encoder; the output video's length in frames. */
   framesWritten: number;
   /** Whether trimming ever collapsed a static stretch (crossed the grace and dropped frames). */
@@ -128,6 +189,28 @@ export interface ScreenRecordingSessionApi {
 // finalize contract.
 const DISPOSE_FINALIZE_GRACE_MS = 1_500;
 const DISPOSE_REAP_MS = 1_000;
+// How long a teardown waits for a recording made elsewhere to end. A remote
+// release ends the runner-side recording and downloads it, which can take
+// minutes; once the stop has reached the runner it finishes there anyway and
+// the recording is kept for `sim-remote screen-record fetch`.
+const DISPOSE_RELEASE_GRACE_MS = 5_000;
+// A Mac app ends its recording over the connection that started it, which
+// the teardown closes next, and the app drops a video it is still writing when
+// that connection closes. It usually writes the video out within a second.
+// The wait stays below the 30 s after which the MCP adapter sends a call
+// again, so a stop-simulator-server is answered once.
+const MACOS_DISPOSE_GRACE_MS = 20_000;
+
+async function endWithinGrace(end: () => Promise<unknown>, graceMs: number): Promise<void> {
+  let grace: NodeJS.Timeout | undefined;
+  await Promise.race([
+    end().catch(() => {}),
+    new Promise<void>((resolve) => {
+      grace = setTimeout(resolve, graceMs);
+    }),
+  ]);
+  clearTimeout(grace);
+}
 
 function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.recordingActive = false;
@@ -147,6 +230,8 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.panelReadFailures = 0;
   state.pointerDisable = null;
   state.pointerFailed = false;
+  state.remote = null;
+  state.macos = null;
   state.recordingTimedOut = false;
   state.recordingExitedUnexpectedly = false;
   state.lastExitInfo = null;
@@ -160,6 +245,16 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
 
   getURN(device: DeviceInfo) {
     return `${SCREEN_RECORDING_SESSION_NAMESPACE}:${device.id}`;
+  },
+
+  // A Mac app's recording lives in the app and ends with argent's connection
+  // to it. As a dependent of that connection, the session is torn down first
+  // (stop-simulator-server, stop-all-simulator-servers, a shutdown), while the
+  // app can still be asked to write the video out. The registry passes the
+  // URN's payload: the device id.
+  getDependencies(context: DeviceInfo | string): Record<string, string> {
+    const deviceId = typeof context === "string" ? context : context.id;
+    return parseMacosAppBundleId(deviceId) ? { macosApp: macosAppBlueprint.getURN(deviceId) } : {};
   },
 
   async factory(_deps, _payload, options) {
@@ -177,7 +272,12 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    if (device.platform !== "ios" && device.platform !== "android") {
+    if (
+      device.platform !== "ios" &&
+      device.platform !== "android" &&
+      device.platform !== "ios-remote" &&
+      device.platform !== "macos"
+    ) {
       throw new FailureError(
         `${SCREEN_RECORDING_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
         {
@@ -190,7 +290,6 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
     }
     const state: ScreenRecordingSessionApi = {
       deviceId: device.id,
-      platform: device.platform,
       recordingActive: false,
       startPending: false,
       stopPending: false,
@@ -209,6 +308,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       panelReadFailures: 0,
       pumpTimer: null,
       trimStatic: true,
+      remote: null,
+      macos: null,
       framesWritten: 0,
       trimmedAnyFrames: false,
       pointerDisable: null,
@@ -236,6 +337,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         const hadUnretrievedCapture =
           state.recordingActive || state.startPending || state.pendingRetrieval;
         const abandonedOutput = state.outputFile;
+        const abandonedRemote = state.remote;
+        const abandonedMacos = state.macos;
         if (state.recordingTimeout) {
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
@@ -251,6 +354,23 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           state.panelPollTimer = null;
         }
         state.frameStream?.close();
+
+        // A remote capture keeps recording on the runner until someone tells
+        // it to stop; abandoning it here would leave simulator-server
+        // buffering frames for a video nobody will ever collect.
+        if (state.remote) {
+          const { end } = state.remote;
+          state.remote = null;
+          await endWithinGrace(end, DISPOSE_RELEASE_GRACE_MS);
+        }
+
+        // A Mac app keeps recording until its time limit; ending it now has
+        // the app write what it captured to `outputFile`.
+        if (state.macos) {
+          const { end } = state.macos;
+          state.macos = null;
+          await endWithinGrace(end, MACOS_DISPOSE_GRACE_MS);
+        }
 
         // The overlay is sim-server global state that must not outlive the
         // capture.
@@ -304,9 +424,19 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
               "screen-recording",
               state.deviceId,
               abandonedOutput
-                ? `ffmpeg was given a moment to finalize the container first, so the video ` +
-                    `captured up to that point is usually playable at ${abandonedOutput} — ` +
-                    `check it before re-recording.`
+                ? abandonedRemote
+                  ? `The runner-side recording was ended and its download started, so the ` +
+                    `video captured up to that point is at ${abandonedOutput} if the download ` +
+                    `finished. Otherwise the remote machine keeps it until the machine is ` +
+                    `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
+                    `<FILE> --recording ${abandonedRemote.recordingId}\`.`
+                  : abandonedMacos
+                    ? `The app was asked to end the recording and write it out first, so the ` +
+                      `video captured up to that point is at ${abandonedOutput} if the app ` +
+                      `finished writing it.`
+                    : `ffmpeg was given a moment to finalize the container first, so the video ` +
+                      `captured up to that point is usually playable at ${abandonedOutput} — ` +
+                      `check it before re-recording.`
                 : undefined
             );
           }

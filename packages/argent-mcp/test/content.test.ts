@@ -33,9 +33,153 @@ const mockOk = (bytes: number[]) =>
 // ── toMcpContent ─────────────────────────────────────────────────────
 
 describe("toMcpContent", () => {
-  it("returns JSON text block for plain results", async () => {
+  it("returns compact JSON text block for plain results", async () => {
     const result = await toMcpContent({ foo: "bar" });
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: '{"foo":"bar"}' }]);
+  });
+
+  it("passes non-empty string results through without JSON escaping", async () => {
+    const log = '=== NETWORK LOGS ===\n{id: rn-net-1} "GET /api" 200 OK';
+    const result = await toMcpContent(log);
+    expect(result).toEqual([{ type: "text", text: log }]);
+  });
+
+  it("does not emit an empty text block for an empty string or undefined", async () => {
+    expect(await toMcpContent("")).toEqual([{ type: "text", text: '""' }]);
+    expect(await toMcpContent(undefined)).toEqual([{ type: "text", text: "null" }]);
+  });
+
+  it("unwraps top-level multi-line text fields after compact JSON metadata", async () => {
+    const result = await toMcpContent({
+      report: "# Report\n| Name | Ms |\n| `Row` | 12 |",
+      warning: "No source files found",
+      reportFile: "/tmp/report.md",
+    });
+    expect(result).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"warning":"No source files found","reportFile":"/tmp/report.md"}',
+          "",
+          "report:",
+          "# Report",
+          "| Name | Ms |",
+          "| `Row` | 12 |",
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  it("breaks arrays of objects onto one line per item as valid JSON", async () => {
+    const payload = {
+      status: "ok",
+      requests: [
+        {
+          id: "ios-1",
+          method: "GET",
+          url: "https://api.example.com/v1/users/profile",
+          status: 200,
+        },
+        {
+          id: "ios-2",
+          method: "POST",
+          url: "https://api.example.com/v1/orders/create",
+          status: 201,
+        },
+      ],
+    };
+    const result = await toMcpContent(payload);
+    const text = (result[0] as { text: string }).text;
+    expect(text).toBe(
+      [
+        "{",
+        '"status":"ok",',
+        '"requests":[',
+        '{"id":"ios-1","method":"GET","url":"https://api.example.com/v1/users/profile","status":200},',
+        '{"id":"ios-2","method":"POST","url":"https://api.example.com/v1/orders/create","status":201}',
+        "]",
+        "}",
+      ].join("\n")
+    );
+    expect(JSON.parse(text)).toEqual(payload);
+  });
+
+  it("preserves JSON.stringify semantics for nested containers, undefined elements, and toJSON", async () => {
+    const date = new Date("2026-11-24T12:00:00.000Z");
+    const payload = {
+      at: date,
+      skipped: undefined,
+      windows: [
+        {
+          className: "UIWindow",
+          frame: { x: 0, y: 0, width: 393, height: 852 },
+          subviews: [
+            { className: "RCTView", label: "A".repeat(80) },
+            undefined,
+            { className: "RCTTextView", label: "B".repeat(80) },
+          ],
+        },
+      ],
+    };
+    const result = await toMcpContent(payload);
+    const text = (result[0] as { text: string }).text;
+    expect(JSON.parse(text)).toEqual(JSON.parse(JSON.stringify(payload)));
+    // Each subview breaks onto its own line rather than collapsing into a single giant line.
+    expect(text.split("\n").length).toBeGreaterThan(5);
+  });
+
+  it("formats deeply nested fiber trees without overflowing the call stack", async () => {
+    type Fiber = {
+      name: string;
+      tag: number;
+      actualDuration: number;
+      selfBaseDuration: number;
+      children: Fiber[];
+    };
+    const depth = 4_000;
+    let node: Fiber = {
+      name: "Leaf",
+      tag: 5,
+      actualDuration: 0.1,
+      selfBaseDuration: 0.1,
+      children: [],
+    };
+    for (let i = depth - 1; i >= 0; i--) {
+      node = {
+        name: `Fiber${i}`,
+        tag: 0,
+        actualDuration: 1,
+        selfBaseDuration: 0.2,
+        children: [node],
+      };
+    }
+    const result = await toMcpContent([node]);
+    const text = (result[0] as { text: string }).text;
+    expect(text).toContain('"name":"Fiber0"');
+    expect(text).toContain('"name":"Leaf"');
+  });
+
+  it("allows shared non-circular references and rejects circular ones", async () => {
+    const shared = { id: 1 };
+    const dag = await toMcpContent([shared, shared]);
+    expect(dag).toEqual([{ type: "text", text: '[{"id":1},{"id":1}]' }]);
+
+    const cycle: Record<string, unknown> = { id: 1 };
+    cycle.self = cycle;
+    await expect(toMcpContent(cycle)).rejects.toThrow(TypeError);
+  });
+
+  it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
+    const warning = "No source files found under project_root";
+    const result = await toMcpContent({ report: "x".repeat(50_000), warning });
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ type: "text" });
+    expect((result[0] as { text: string }).text).toContain(warning);
+  });
+
+  it("keeps the order of the result's keys, so a warning placed first is read first", async () => {
+    const result = await toMcpContent({ warning: "first", report: "x".repeat(50_000) });
+    expect((result[0] as { text: string }).text.indexOf('"warning"')).toBeLessThan(10);
   });
 
   it("returns JSON text block when outputHint is not image", async () => {
@@ -43,7 +187,7 @@ describe("toMcpContent", () => {
     expect(result).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ url: "http://x" }, null, 2),
+        text: '{"url":"http://x"}',
       },
     ]);
   });
@@ -122,7 +266,7 @@ describe("toMcpContent", () => {
 
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: '{"foo":1}' }]);
   });
 
   // Regression for #255 — fetched bytes that aren't a PNG must NOT be shipped
@@ -198,6 +342,8 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      { type: "text", text: `diffPath: ${path.join(dir, "full.diff.png")}` },
+      { type: "text", text: `contextDiffPath: ${contextDiffPath}` },
     ]);
   });
 
@@ -245,6 +391,55 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders a screenshot-diff's path handles as their downloaded local paths", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, , diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(diffBlock!.text).toMatch(/^diffPath: /);
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    const diffPath = diffBlock!.text.replace(/^diffPath: /, "");
+    const contextDiffPath = contextBlock!.text.replace(/^contextDiffPath: /, "");
+    expect(diffPath.startsWith(root)).toBe(true);
+    expect(path.basename(diffPath)).toBe("current-diff.png");
+    expect(path.basename(contextDiffPath)).toBe("current-context-diff.png");
+    expect([...(await fs.readFile(diffPath))]).toEqual(pngBytes);
+  });
+
+  it("marks a screenshot-diff path whose download failed as unavailable", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const fetchImpl = (async (url: string) =>
+      url.endsWith("/artifacts/d1")
+        ? { ok: false }
+        : {
+            ok: true,
+            arrayBuffer: async () => new Uint8Array(pngBytes).buffer,
+          }) as unknown as typeof fetch;
+    const content = await screenshotDiffToMcpContent(
+      {
+        summary: "Screenshot diff summary",
+        diffPath: artifactHandle("d1", "current-diff.png", "image/png"),
+        contextDiffPath: artifactHandle("c1", "current-context-diff.png", "image/png"),
+      },
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl }
+    );
+
+    expect(content.map((b) => b.type)).toEqual(["image", "text", "text", "text"]);
+    const [, summary, diffBlock, contextBlock] = content as { type: "text"; text: string }[];
+    expect(summary!.text).toBe("Screenshot diff summary");
+    expect(diffBlock!.text).toBe("diffPath: (unavailable)");
+    expect(contextBlock!.text).toMatch(/^contextDiffPath: /);
+    expect(path.basename(contextBlock!.text)).toBe("current-context-diff.png");
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {
@@ -371,6 +566,41 @@ describe("flowRunToMcpContent", () => {
       type: "text",
       text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
     });
+  });
+
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
+  });
+
+  it("names each baseline the client could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      ok: false,
+      passed: 1,
+      failed: 0,
+      errored: 0,
+      skipped: 0,
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks.slice(-2)).toEqual([
+      { type: "text", text: "✗ baseline not written: /p/b.png: EACCES: permission denied" },
+      { type: "text", text: "FAIL — 1 passed, 0 failed, 0 errored, 0 skipped" },
+    ]);
   });
 
   it("produces header and footer text blocks", async () => {
@@ -799,7 +1029,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] gesture-tap" });
     expect(blocks[2]).toEqual({
       type: "text",
-      text: JSON.stringify({ ok: true }, null, 2),
+      text: '{"ok":true}',
     });
   });
 

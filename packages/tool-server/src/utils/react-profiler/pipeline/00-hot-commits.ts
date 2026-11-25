@@ -59,30 +59,34 @@ export function buildHotCommitSummaries(
       return !(cd === null || cd.isFirstMount === true);
     });
 
-    // All entries, first mounts included, so navigation mount cost stays visible
+    const rerenderNames = new Set(rerenderEntries.map((e) => e.componentName));
+
+    // All entries, first mounts included, so navigation mount cost stays visible.
+    // Same-named instances nest, so `actualDuration` is maxed, not summed.
     const componentMap = new Map<
       string,
       {
         totalSelf: number;
-        totalActual: number;
+        maxActual: number;
         count: number;
         firstEntry: DevToolsFiberCommit;
         isFirstMount: boolean;
       }
     >();
     for (const e of entries) {
-      const cd = e.changeDescription;
-      const isFirstMount = cd === null || cd.isFirstMount === true;
+      // No change data is not a mount: DevTools records none for a context
+      // fiber on any render, and `render_counts` counts those apart too.
+      const isFirstMount = e.changeDescription?.isFirstMount === true;
       const existing = componentMap.get(e.componentName);
       if (existing) {
         existing.totalSelf += e.selfDuration ?? 0;
-        existing.totalActual += e.actualDuration ?? 0;
+        existing.maxActual = Math.max(existing.maxActual, e.actualDuration ?? 0);
         existing.count++;
         if (!isFirstMount) existing.isFirstMount = false;
       } else {
         componentMap.set(e.componentName, {
           totalSelf: e.selfDuration ?? 0,
-          totalActual: e.actualDuration ?? 0,
+          maxActual: e.actualDuration ?? 0,
           count: 1,
           firstEntry: e,
           isFirstMount,
@@ -95,12 +99,14 @@ export function buildHotCommitSummaries(
     const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
-      .map(([name, { totalSelf, totalActual, count, firstEntry, isFirstMount }]) => {
+      .map(([name, { totalSelf, maxActual, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
-        const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
+        // A reason needs a re-render: mounts and fibers with no change data have none.
+        const rerendered = rerenderNames.has(name);
+        const reason = rerendered && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
         let topChangedHookNames: string[] | undefined;
-        if (!isFirstMount && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
+        if (rerendered && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
           const seen = new Set<string>();
           topChangedHookNames = [];
           for (const idx of cd.hooks.slice(0, 3)) {
@@ -116,11 +122,11 @@ export function buildHotCommitSummaries(
         const entry: HotCommitComponentEntry = {
           name,
           selfDurationMs: Math.round(totalSelf * 100) / 100,
-          actualDurationMs: Math.round(totalActual * 100) / 100,
+          actualDurationMs: Math.round(maxActual * 100) / 100,
           count,
           ...(isFirstMount && { isFirstMount: true }),
           ...(reason !== undefined && { reason }),
-          ...(!isFirstMount &&
+          ...(rerendered &&
             cd?.props &&
             cd.props.length > 0 && { topChangedProps: cd.props.slice(0, 3) }),
           ...(topChangedHookNames && { topChangedHookNames }),

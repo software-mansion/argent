@@ -6,13 +6,19 @@
  * `ensureAutomationToolkitEnabled`.
  */
 import { request } from "node:http";
-import { runAdb } from "./adb";
+import { adbForward, runAdb } from "./adb";
+import { withKeyedLock } from "./keyed-lock";
 import { emulatorSerial } from "./vega-automation";
 
 const TOOLKIT_DEVICE_PORT = 8383;
 // Derived from the console port so repeated calls reuse one idempotent
 // `adb forward` instead of leaking ports.
 const HOST_PORT_OFFSET = 10_000;
+
+// Keyed by adb serial. Overlapping `getPageSource` requests fail ("socket hang
+// up") and can wedge the toolkit until the VVD reboots; a timed-out wait tool
+// leaves its read running into the next describe.
+const pageSourceLocks = new Map<string, Promise<unknown>>();
 
 /**
  * Raw page-source XML from the on-device automation toolkit; describe parses it
@@ -21,11 +27,17 @@ const HOST_PORT_OFFSET = 10_000;
  */
 export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
   const { serial, consolePort } = await emulatorSerial();
-  const hostPort = consolePort + HOST_PORT_OFFSET;
+  return withKeyedLock(pageSourceLocks, serial, () =>
+    fetchPageSource(serial, consolePort + HOST_PORT_OFFSET, timeoutMs)
+  );
+}
 
-  await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${TOOLKIT_DEVICE_PORT}`], {
-    timeoutMs: 10_000,
-  });
+async function fetchPageSource(
+  serial: string,
+  hostPort: number,
+  timeoutMs: number
+): Promise<string> {
+  await adbForward(serial, hostPort, TOOLKIT_DEVICE_PORT, { timeoutMs: 10_000 });
   try {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getPageSource", params: {} });
     const respText = await postJson("127.0.0.1", hostPort, "/jsonrpc", body, timeoutMs);
@@ -75,6 +87,8 @@ function postJson(
         let data = "";
         res.setEncoding("utf-8");
         res.on("data", (chunk) => (data += chunk));
+        // A body cut off mid-way ends here, never in "end".
+        res.on("error", reject);
         res.on("end", () => {
           // Reject non-2xx: an error body handed downstream would either parse as
           // a real tree or be misreported as an empty screen.

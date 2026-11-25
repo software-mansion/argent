@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Returns nil when the block completed, otherwise "Name: reason".
 + (NSString *_Nullable)runCatching:(NS_NOESCAPE dispatch_block_t)block;
 
+/// Returns nil when the block completed, otherwise the exception it raised.
++ (NSException *_Nullable)exceptionFrom:(NS_NOESCAPE dispatch_block_t)block;
+
 @end
 
 NS_ASSUME_NONNULL_END

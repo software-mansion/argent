@@ -1,12 +1,15 @@
 ---
 sidebar_position: 4
 sidebar_label: Network inspection
-title: Network inspection
+title: Inspect the network requests of an app with an AI agent
+description: Inspect HTTP requests, responses, and payloads on iOS simulators, Android, Mac apps, and Chromium. Simulate a slow or offline network on supported targets.
 sidebar_custom_props:
   icon: network
 ---
 
-Argent records the HTTP requests of the running app in a network log. The agent reads this log. The agent tells you which request the app sent, which response came back, and what the payload contains.
+# Network inspection
+
+Argent records the HTTP requests your app sends. Ask your agent to find a failed request, inspect its headers and payload, or compare responses before and after a change.
 
 <Video
   src="/video/native-network-inspector.mp4"
@@ -15,85 +18,47 @@ Argent records the HTTP requests of the running app in a network log. The agent 
   caption="The agent finds a wrong endpoint name in the requests that the app sent"
 />
 
-## Capture layers
+## Choose which traffic to inspect
 
-Argent captures the traffic in three different layers.
+- **React Native**. Inspect JavaScript requests, including React Native and Expo fetch, and XMLHttpRequest calls such as axios. The app needs a development build connected to Metro.
+- **iOS simulators and Mac apps**. Inspect HTTP requests from URLSession and NSURLConnection, including requests from native modules. Background URLSession transfers and web views are outside this capture.
+- **Android**. Inspect OkHttp requests in a debuggable app. Android 8 has [limited coverage](/docs/reference/tools#native-network-capture-on-android).
+- **Chromium and Electron**. Inspect the active tab, including page requests and assets.
 
-| Layer                    | Platforms             | Content                                                                                       |
-| ------------------------ | --------------------- | --------------------------------------------------------------------------------------------- |
-| JS runtime               | iOS, Android, Vega    | The `XMLHttpRequest` calls, also from axios, and the `fetch()` calls of React Native and Expo |
-| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers                               |
-| Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets                                |
+Argent can inspect HTTPS without a proxy or a certificate. One request can appear in both JavaScript and native logs. An empty log only describes the traffic that the selected capture can see.
 
-Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
+## Start and stop the capture
 
-In React Native, the JS runtime layer records each request where the request leaves the JavaScript code. The JS runtime layer records the requests in these functions:
+Ask your agent to start capture, repeat the action that sends the requests, then inspect the log. On iOS simulators, Android, and Mac apps, the agent can start JavaScript and native capture together or separately. On Vega, reading the JavaScript log starts capture. Argent records traffic when it connects to a Chromium or Electron page. Start and stop mark a window for request checks on these targets. The log keeps recording.
 
-- `XMLHttpRequest`. Axios and the `fetch()` function of React Native use `XMLHttpRequest`.
-- The `fetch()` function of Expo (`expo/fetch`), also when the app imports it directly. Expo SDK 56 and later use this function as the global `fetch()`.
-- The network module of React Native, when a library sends its requests there itself. An example is react-native-fetch-api, which replaces the global `fetch()`.
+A JavaScript reload or app restart clears the JavaScript log. Start capture again before repeating the action. On Vega, read the log again. Argent can resume native capture when it relaunches the app. Capture can miss startup requests. On an iOS simulator where the device provider controls native capture, a restart ends the capture and clears its history. Check native capture [on Android](/docs/reference/tools#native-network-capture-on-android) or [on iOS and Mac apps](/docs/reference/tools#native-network-capture-on-ios-and-mac-apps) before trying to capture startup traffic.
 
-Argent records each request one time. A function of the app that wraps `fetch()` does not change the number of records. An app can keep a reference to `fetch()` from before the capture started. Argent also records the requests through this reference. Argent also records the requests of a library that the app installs after the capture started.
+Stopping capture keeps the requests already recorded. Read any Android native bodies you need before stopping. Native capture can affect profile timings. Ask the agent to stop it and restart the app before profiling, or turn it off in the device provider if it owns the capture.
 
-The type of a record is `Fetch` for the `fetch()` functions of React Native and Expo, and for a library that sends its requests to the network module of React Native. The type is `XHR` for the `XMLHttpRequest` calls of the app, also from axios. An `XMLHttpRequest` call that the app sends through a copy of `send()` from before the capture started has the type `Fetch`.
+## Wait for a request
 
-For the `fetch()` function of Expo, Argent records the body of a response when the app reads the body. Expo gives the body to one reader only. Thus Argent does not read a body while the request runs. After the request ends, Argent takes the body of an error response that the app did not read. Argent gives this body to the app when the app reads it.
+Ask the agent to check that an action sends the expected request. For example, check that tapping Sign In sends a POST and receives a successful response. The agent starts capture before the action and can find the response even if it has already finished. If the check misses, Argent can show requests with a different status or URL. You can record the check in an [e2e test](/docs/features/e2e).
 
-Native code does not use these functions. For native code, use the iOS native layer.
+## Read request details
 
-## The request record
+The agent can read a request's URL, status, duration, headers, and available bodies. Argent redacts sensitive header values, but URLs and bodies can contain secrets. Treat the log as app data.
 
-First the agent reads the list of records in the network log. Each line shows one record in this format:
+Capture keeps a recent history and shows previews of large bodies. Read native bodies before the app exits or restarts if you need them for a comparison.
 
-```
-{id: rn-net-4} "GET /v1/users" 200 OK Fetch 12.4 kB 143 ms
-```
+## Network conditions
 
-In the JS runtime layer, the text after the status is the standard reason phrase of the status code, for example `OK` or `Not Found`. A request that a redirect sent to a different URL ends with that URL, for example `→ /v2/users`.
+Ask your agent to slow the network or go offline to test loading states, retries, and error handling.
 
-A size with `~`, for example `~1.2 MB`, is approximate. The JS runtime layer shows this size when the size in bytes of a body is not known: for a large text body, or for a binary body that the app reads as text. This size is the length of the body in characters. The size in bytes is equal to this length or larger.
+- **Local iOS simulators**. Add latency, limit speeds, or go offline for one app's URLSession traffic. The app bypasses its HTTP cache while Argent shapes or inspects requests.
+- **Android emulators**. Add latency or limit speeds for traffic that uses the system proxy. Offline mode disables Wi-Fi and mobile data. Ports forwarded with `adb reverse` stay reachable, and Ethernet can prevent offline mode. Provider emulators support only offline mode and reset.
+- **Chromium and Electron**. Add latency, limit speeds, or go offline for the active tab's page.
 
-Then the agent reads the details of one record. The details contain these items:
-
-- The URL, the method and the status. In the JS runtime layer, the details also give the final URL after a redirect.
-- The headers of the request and of the response
-- The duration and the size
-- The bodies of the request and of the response
-- For Chromium, the initiator of the request
-
-For the JS runtime and Chrome DevTools Protocol layers, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. The native `NSURLProtocol` layer does not replace these values. See the Limits section.
-
-Argent also shortens a body that is longer than 1000 characters. A message before the shortened body gives the size of the full body. The JS runtime layer can keep only the start of a large body. For such a body, the message gives the full size in bytes, the full length in characters or a minimum length.
-
-Argent removes the bundle traffic and the HMR traffic of Metro from the network log. Thus the network log contains the requests of your app only.
+Network conditions are unavailable on physical devices and remote iOS simulators. Ask the agent to restore normal networking after each test. Android offline mode persists after Argent stops. See the [network conditions reference](/docs/reference/tools#network-conditions) for platform behavior and recovery.
 
 ## Example instructions
 
-- "The list screen is empty. Examine the response of the API."
-- "Compare the payload of the request before and after my change."
-- "Show the requests that this screen sends at mount. Show their durations."
-- "Make sure that the app sends the second request after the error 500."
+- "Start capture and sign in. Show me the sign-in response and any requests that failed."
+- "Compare the request payload before and after my change."
+- "Slow the network and show me the loading state of the feed."
 
-## Limits
-
-- Argent does not capture the requests that the app sends before the capture starts. Do the operation again after the capture starts. Argent starts the capture at these moments:
-  - JS runtime layer: the agent reads the network log for the first time.
-  - Chrome DevTools Protocol layer: Argent attaches to the Chromium app.
-  - Native `NSURLProtocol` layer: you activate the native inspection.
-- A reload or a restart of the app clears the network log of the JS runtime layer. Argent starts the capture again when the agent reads the network log.
-- After an upgrade of Argent, the network capture of the earlier version stays in the app until the app reloads. The earlier network capture keeps no records, but it still reads a copy of each `fetch()` response. Reload the app to remove the earlier network capture.
-- Expo `fetch()` does not always report a connection that breaks in the middle of the response body. The app then gets a part of the body, or its read of the body does not end. The record shows the same: that part of the body, or a pending request. If the app does not read the body, the record shows a finished request.
-- If the app aborts an `XMLHttpRequest` while the response body streams, the record shows a failed request with the error `aborted`. The record contains the part of the text body that the app received before the abort. For example, `react-native-sse` aborts its request to close the connection. The same applies to a library request that streams text, for example a react-native-fetch-api request with `textStreaming`. If the app aborts an Expo `fetch()` while it streams the body, the record has no body.
-- A `fetch()` call that fails before it sends the request has no record. An example is a call with a signal that is already aborted.
-- If the app aborts a library request before the network module of React Native gives the request its ID, the request still runs. The app gets an abort error, but the record shows the finished request and its response.
-- If the app does not read the body of a successful Expo `fetch()` response, the record has no body and no size. A response that cannot have a body, for example the response to a `HEAD` request, has the size 0.
-- Argent finds the network module of React Native in the list of modules that Metro adds to a development build. Without this list, Argent does not record the requests that a library sends to the network module itself.
-- The network log keeps the most recent records only. The limits are 2000 records for the JS runtime layer and 1000 records for Chromium. For native iOS, the limit is 1000 protocol events. A request produces several events, so the native log holds fewer than 1000 requests.
-- The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only. For Chromium, Argent does not show a response body that is not UTF-8 text. The details give the type and the size of this body only.
-- The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
-- For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
-- The `NSURLProtocol` layer is available on iOS only. On Android, use the JS runtime layer.
-- Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
-- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a native network log as you protect other data of the app.
-
-Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
+See the [tools reference](/docs/reference/tools#network-capture-on-ios-android-and-mac-apps) for capture options and platform limits.
