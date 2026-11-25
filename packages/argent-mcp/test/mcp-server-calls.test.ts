@@ -185,6 +185,60 @@ async function startStub({
       if (req.method === "POST" && reqUrl === "/tools/list-devices") {
         return json(200, { data: DEVICES });
       }
+      if (req.method === "POST" && reqUrl === "/tools/native-network-logs") {
+        return json(200, {
+          data: {
+            status: "ok",
+            header: "ios-native: armed, 1 request (pid 42)",
+            armed: true,
+            count: 1,
+            total: 1,
+            requests: [
+              {
+                id: "ios-1",
+                method: "GET",
+                url: "https://api.example.com/health",
+                state: "complete",
+                status: 200,
+                mimeType: "application/json",
+                durationMs: 12,
+              },
+            ],
+          },
+        });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/debugger-log-registry") {
+        return json(200, {
+          data: {
+            status: "connected",
+            file: "/tmp/argent-logs.log",
+            totalEntries: 1,
+            byLevel: { error: 1 },
+            fileSizeBytes: 128,
+            appName: "Demo",
+            deviceName: "iPhone 17",
+            clusters: [
+              {
+                message: "Boom",
+                count: 1,
+                level: "error",
+                firstId: 1,
+                lastId: 1,
+                sourceFile: "App.tsx",
+                sourceLine: 9,
+              },
+            ],
+            entries: [
+              {
+                id: 1,
+                timestamp: "2026-11-25T08:00:00.000Z",
+                level: "error",
+                message: "Boom",
+              },
+            ],
+          },
+        });
+      }
       // Both made while a profiler records on the device.
       if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
         return json(200, { data: { done: true }, profiling: true });
@@ -390,6 +444,34 @@ describe("startMcpServer tool calls", () => {
         '"avds":[]}',
         "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:",
         'ios STOPPED "iPad" iOS 27.0 Shutdown',
+      ].join("\n")
+    );
+  });
+
+  it("renders native-network-logs and debugger-log-registry in their short text forms", async () => {
+    const net = await client.callTool({ name: "native-network-logs", arguments: {} });
+    expect(net.isError).toBeFalsy();
+    expect(net.content).toHaveLength(1);
+    expect(textOf(net)).toBe(
+      [
+        "ios-native: armed, 1 request (pid 42)",
+        '{id: ios-1} "GET https://api.example.com/health" 200 application/json 12ms',
+      ].join("\n")
+    );
+
+    const logs = await client.callTool({ name: "debugger-log-registry", arguments: {} });
+    expect(logs.isError).toBeFalsy();
+    expect(logs.content).toHaveLength(1);
+    expect(textOf(logs)).toBe(
+      [
+        'JS console logs (connected): 1 entry (error=1) | app=Demo device="iPhone 17"',
+        "File: /tmp/argent-logs.log (128 B)",
+        "",
+        "Clusters (1):",
+        "[x1] error #1 App.tsx:9 | Boom",
+        "",
+        "Recent entries (1, oldest first):",
+        "[L:1] 2026-11-25T08:00:00.000Z error | Boom",
       ].join("\n")
     );
   });
