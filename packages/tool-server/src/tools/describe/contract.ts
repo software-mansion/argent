@@ -155,7 +155,31 @@ export interface DescribeTreeData {
   // real, but an element past the cut reads as absent. Set by the iOS
   // simulator flow tree.
   truncated?: boolean;
+  // What may hide a selector's target from `tree`, for the wording of a miss
+  // only: never matched, never quoted. Set by the iOS simulator and Android
+  // flow trees (see `FlowCover`).
+  cover?: FlowCover;
 }
+
+/**
+ * Why elements below a cover are not in a flow tree.
+ *
+ * `covered` (iOS simulator): the accessibility service marks what an alert,
+ * sheet or popover covers, and the app below a system alert. `leaves` are
+ * those elements, flattened as the flow tree flattens its own; `systemAlert` is
+ * the read's `alertVisible`. Absent when nothing is covered.
+ *
+ * `window` (Android): Android leaves the app's window out of the tree while
+ * one of these windows is on top. The topmost application window, when it is
+ * a system dialog or sheet (`system`, the test `alertVisible` uses) or a
+ * window that starts below the top. `scrolls`: that window of the app holds a
+ * view that scrolls on the screen, so the target may be further down its list.
+ * Absent otherwise, and while apps show side by side.
+ */
+export type FlowCover =
+  | { kind: "covered"; leaves: DescribeNode[]; systemAlert: boolean }
+  | { kind: "window"; system: true; package: string }
+  | { kind: "window"; system: false; package: string; scrolls: boolean };
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */
 export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";

@@ -294,7 +294,7 @@ export function labelOf(attrs: Record<string, string>): string {
   return (attrs.text ?? "").trim();
 }
 
-function isVisibleRect(b: PixelRect | null, sw: number, sh: number): boolean {
+export function isVisibleRect(b: PixelRect | null, sw: number, sh: number): boolean {
   if (!b) return false;
   if (b.w <= 0 || b.h <= 0) return false;
   if (b.x >= sw || b.y >= sh || b.x + b.w <= 0 || b.y + b.h <= 0) return false;

@@ -8,7 +8,7 @@ import { describeIosDevice } from "../describe/platforms/ios-device";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree";
 import type { FlowTreeTarget } from "./flow-actions";
-import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
+import { flattenHoisting, type ClipRect, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
@@ -85,8 +85,8 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
 
 /**
  * Project one accessibility node for the shared flatten (see
- * `flow-tree-flatten`). Covered subtrees (under a system alert) are dropped,
- * as describe drops them, and so are a scroller's indicators; what a scrolling
+ * `flow-tree-flatten`). A scroller's indicators are dropped; covered subtrees
+ * are left to {@link adaptIosUiTreeForFlows}. What a scrolling
  * container has scrolled out of its frame is pruned by the flatten's scroll
  * clip (`rect` + `scrolls`). Only scrolling ancestors clip: a UIKit stack view
  * reports a frame smaller than its children, so clipping by every framed
@@ -104,9 +104,6 @@ function onScreenFrame(frame: DescribeFrame): DescribeFrame | undefined {
  * nodes in the same order.
  */
 function projectAxNode(node: UiTreeNode, quoted?: (text: string) => string): FlatNode<UiTreeNode> {
-  if (node.covered) {
-    return { skip: true, children: [], ownText: "", leaf: null, shield: false };
-  }
   const frame = node.frame && onScreenFrame(node.frame);
   const scrollable = node.type !== undefined && SCROLLING_TYPES.has(node.type);
   const addressable =
@@ -169,6 +166,27 @@ export function holdsKeyboard(node: UiTreeNode): boolean {
   return node.type === "Keyboard" || node.children.some(holdsKeyboard);
 }
 
+const SKIPPED: FlatNode<UiTreeNode> = {
+  skip: true,
+  children: [],
+  ownText: "",
+  leaf: null,
+  shield: false,
+};
+
+/** Flatten one window of an app into `out`, marking every leaf of a keyboard window. */
+function flattenWindow(
+  window: UiTreeNode,
+  project: (node: UiTreeNode, clip: ClipRect | null) => FlatNode<UiTreeNode>,
+  out: DescribeNode[]
+): void {
+  const first = out.length;
+  flattenHoisting(window, project, out);
+  if (holdsKeyboard(window)) {
+    for (let i = first; i < out.length; i++) out[i]!.keyboard = true;
+  }
+}
+
 /**
  * Flatten the accessibility tree into the flow contract: flat leaves under one
  * synthetic root, descendant text hoisted onto container leaves. Each app root
@@ -176,22 +194,32 @@ export function holdsKeyboard(node: UiTreeNode): boolean {
  * children; the Application nodes themselves are not leaves. Every leaf of a
  * keyboard window ({@link holdsKeyboard}) is marked `keyboard`. `quoted` builds
  * the projection a result may quote (see {@link projectAxNode}).
+ *
+ * What an alert, sheet or popover covers (`covered`, and the app below a
+ * system alert, whose root is `covered`) is not in the tree, as describe drops
+ * it. With `coveredOut`, its leaves go there instead, flattened as they would
+ * be in place (the same projection, the same scroll clip), so a miss can tell
+ * a covered target from an absent one. Their text never hoists onto an
+ * uncovered container, so the tree is the same with or without `coveredOut`.
  */
 export function adaptIosUiTreeForFlows(
   tree: UiTree,
-  quoted?: (text: string) => string
+  quoted?: (text: string) => string,
+  coveredOut?: DescribeNode[]
 ): DescribeNode {
   const children: DescribeNode[] = [];
-  const project = (node: UiTreeNode): FlatNode<UiTreeNode> => projectAxNode(node, quoted);
+  const keep = (node: UiTreeNode): FlatNode<UiTreeNode> => projectAxNode(node, quoted);
+  const project = (node: UiTreeNode, clip: ClipRect | null): FlatNode<UiTreeNode> => {
+    if (!node.covered) return keep(node);
+    if (coveredOut) flattenHoisting(node, keep, coveredOut, clip);
+    return SKIPPED;
+  };
   for (const root of tree.roots) {
-    if (root.covered) continue;
-    for (const window of root.children) {
-      const first = children.length;
-      flattenHoisting(window, project, children);
-      if (holdsKeyboard(window)) {
-        for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
-      }
+    if (root.covered) {
+      if (coveredOut) for (const window of root.children) flattenWindow(window, keep, coveredOut);
+      continue;
     }
+    for (const window of root.children) flattenWindow(window, project, children);
   }
   return parseDescribeResult({
     role: "AXGroup",
@@ -323,9 +351,24 @@ export async function queryIosSimulatorFlowTree(
   const quotableTree = secretTypedOn(device.id)
     ? adaptIosUiTreeForFlows(tree, (text) => redactTypedSecrets(device.id, text))
     : undefined;
+  const covered: DescribeNode[] = [];
+  const flowTree = adaptIosUiTreeForFlows(tree, undefined, covered);
   return {
-    tree: adaptIosUiTreeForFlows(tree),
+    tree: flowTree,
     ...(quotableTree ? { quotableTree } : {}),
+    ...(covered.length > 0
+      ? {
+          cover: {
+            kind: "covered",
+            leaves: parseDescribeResult({
+              role: "AXGroup",
+              frame: { x: 0, y: 0, width: 1, height: 1 },
+              children: covered,
+            }).children,
+            systemAlert: tree.alertVisible === true,
+          },
+        }
+      : {}),
     source: "ax-service",
     screen: tree.screen,
     ...(tree.truncated ? { truncated: true } : {}),

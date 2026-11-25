@@ -5,6 +5,7 @@ import {
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
+  type FlowCover,
 } from "../describe/contract";
 import { isBlindRead } from "../describe/blind-read";
 import {
@@ -135,12 +136,15 @@ export interface ActionEnv {
   treeOutage?: { proven?: { deviceId: string; error: Error } };
   /**
    * The tree of the run's most recent read that goes through
-   * {@link readFlowTree}, cleared by a read that fails or was cut short: a miss
-   * reason reads it instead of reading the device again. One holder per run,
-   * shared with nested `run:` flows like {@link ActionEnv.treeOutage}. Absent
-   * for a caller that builds an `ActionEnv` by hand.
+   * {@link readFlowTree}, with what that read found covering the app
+   * (`DescribeTreeData.cover`, read only with the tree). The tree is cleared
+   * by a read that fails or was cut short. A miss reason reads them instead of
+   * reading the device again. One
+   * holder per run, shared with nested `run:` flows like
+   * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
+   * `ActionEnv` by hand.
    */
-  lastRead?: { tree?: DescribeNode };
+  lastRead?: { tree?: DescribeNode; cover?: FlowCover };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -492,7 +496,10 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
     (data) => {
       if (env.treeOutage) env.treeOutage.proven = undefined;
       // A cut-short read cannot show that only a field holds a text.
-      if (env.lastRead) env.lastRead.tree = data.truncated ? undefined : data.tree;
+      if (env.lastRead) {
+        env.lastRead.tree = data.truncated ? undefined : data.tree;
+        env.lastRead.cover = data.cover;
+      }
       return data;
     },
     (err: unknown) => {
@@ -911,7 +918,10 @@ async function scrollToVisible(
         ...warnedBy(warning),
       };
     }
-    const stale = await staleSelectorReason(env, target, reason, true);
+    const stale = await staleSelectorReason(env, target, reason, {
+      ignoresKeys: true,
+      scrollTo: { within: within !== undefined },
+    });
     if (stale === "aborted") return { aborted: true };
     return { reason: stale ?? reason, ...warnedBy(warning) };
   };
@@ -1114,10 +1124,97 @@ function unknownRoleReason(
   return `${missed}, and no element on an iOS simulator has the role "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
 }
 
+const COVERED_REMEDY = "Dismiss it first, or add an await step for it to close.";
+
+const PERMISSION_REMEDY =
+  "or grant the permission before the e2e test with the `settings-permissions` tool.";
+
+// The Android packages whose dialog asks for a runtime permission: the
+// package installer drew that dialog before API 29.
+const PERMISSION_PACKAGES = new Set([
+  "com.android.packageinstaller",
+  "com.google.android.packageinstaller",
+  "com.android.permissioncontroller",
+  "com.google.android.permissioncontroller",
+]);
+
+/** How a miss came about, for the wording of {@link staleSelectorReason}. */
+interface MissContext {
+  /** The miss is a verdict that does not see the on-screen keyboard (a condition, `scroll-to`'s target). */
+  ignoresKeys?: boolean;
+  /** The miss ends a `scroll-to` step; `within` says whether the step names its scroll container. */
+  scrollTo?: { within: boolean };
+}
+
+function systemAlertReason(missed: string): string {
+  return (
+    `${missed}: a system alert covers it. Add a step before this one that taps a button of the ` +
+    `alert, such as \`tap: { text: Allow }\`, ${PERMISSION_REMEDY}`
+  );
+}
+
 /**
- * Why a selector that matched nothing may be stale, on an iOS simulator only;
- * undefined when nothing shows it. A role the simulator tree never gives needs
- * no read. A miss on an `id` pays one more read of the accessibility tree,
+ * Why a selector misses when what it targets is under a cover, judged on the
+ * run's last read ({@link ActionEnv.lastRead}) with no new read; undefined when
+ * that read found no cover or the selector misses there for another reason.
+ *
+ * iOS simulator: the selector has no visible match in the tree, and has one
+ * among the leaves the read kept aside as covered, its scopes too: a scope on
+ * the cover itself (`within` an alert) asks for an element of the cover, which
+ * dismissing it would not bring. The cover is not
+ * named: the leaf after the covered ones is UIKit's dismiss region for every
+ * sheet and popover, and a covered SpringBoard card under a system alert.
+ *
+ * Android: the elements below a dialog are not in the tree at all, so any
+ * miss while one is on top gets the text. A full-screen in-app sheet looks
+ * like a screen, and gets none. A dialog of the app that scrolls may hold the
+ * target further down, so the text gives the scroll remedy too: a `scroll-to`
+ * step before this one, or on a `scroll-to` step, its `within:`, since a swipe
+ * of half the screen passes a short list. A `scroll-to` step that names its
+ * `within:` has scrolled that list to its end, and gets the dialog text alone.
+ * A system sheet gets no scroll remedy: `scroll-to` swipes at the centre of
+ * the screen, above the share sheet, and closes it. Only a permission dialog
+ * gets the permission remedy.
+ */
+function coverReason(
+  env: ActionEnv,
+  sel: FlowSelector,
+  missed: string,
+  scrollTo: MissContext["scrollTo"]
+): string | undefined {
+  const tree = env.lastRead?.tree;
+  const cover = env.lastRead?.cover;
+  if (!tree || !cover) return undefined;
+  if (flowFindAll(tree, sel).some(isVisible)) return undefined;
+  if (cover.kind === "window") {
+    const below = "is on top of the app, and Android leaves the elements below it out of the tree";
+    if (cover.system) {
+      const tap = `${missed}: a system dialog or sheet of ${cover.package} ${below}. Add a step before this one that taps a button of it`;
+      return PERMISSION_PACKAGES.has(cover.package) ? `${tap}, ${PERMISSION_REMEDY}` : `${tap}.`;
+    }
+    if (!cover.scrolls || scrollTo?.within)
+      return `${missed}: a dialog ${below}. ${COVERED_REMEDY}`;
+    const scroll = scrollTo
+      ? "add within: with the dialog's scroll container to this step"
+      : "add a scroll-to step before this one";
+    return (
+      `${missed}: a dialog ${below}. If the element is in the dialog, ${scroll}. Else dismiss ` +
+      `the dialog first, or add an await step for it to close.`
+    );
+  }
+  const covered = { ...tree, children: cover.leaves };
+  if (!flowFindAll(covered, sel).some(isVisible)) return undefined;
+  return cover.systemAlert
+    ? systemAlertReason(missed)
+    : `${missed}: it is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
+}
+
+/**
+ * Why a selector that matched nothing may be stale or covered; undefined when
+ * nothing shows it. Off an iOS simulator only a cover the last read found
+ * ({@link coverReason}) is looked for. A role the simulator tree never gives needs
+ * no read. A cover the last read found is looked for next, for every selector,
+ * an `id` too. A miss on an `id` it does not explain pays one more read of the accessibility tree,
  * hidden nodes included: the flow tree drops off-screen nodes, so only this
  * read can tell an id that is off the screen from one that is nowhere right
  * now. That still has two causes the read cannot tell apart, a transient
@@ -1125,8 +1222,7 @@ function unknownRoleReason(
  * hierarchy, so the reason names both. The read only words the reason, never
  * decides a match, and any failure of it gives undefined.
  *
- * `ignoresKeys`: the miss is a verdict that does not see the on-screen
- * keyboard (a condition, `scroll-to`'s target), so a key that carries the id
+ * With `ignoresKeys` (see {@link MissContext}) a key that carries the id
  * is not cited. A key that alone carries it gives undefined: the id is not
  * nowhere, and it is not stale either.
  */
@@ -1134,15 +1230,17 @@ async function staleSelectorReason(
   env: ActionEnv,
   sel: FlowSelector,
   missed = `no visible element matched selector ${describeSelector(sel)}`,
-  ignoresKeys = false
+  { ignoresKeys = false, scrollTo }: MissContext = {}
 ): Promise<string | "aborted" | undefined> {
-  if (!isIosSimulatorEnv(env)) return undefined;
+  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, missed, scrollTo);
   const role = unknownRoleReason(env, sel, missed);
   if (role !== undefined) return role;
   const field = fieldTextReason(env, sel, missed);
   if (field !== undefined) return field;
+  const covered = coverReason(env, sel, missed, scrollTo);
+  if (covered !== undefined) return covered;
   // Every alternative must be an id: a bare string also tries its text, which
-  // this check does not look for.
+  // the read below does not look for.
   const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
   if (!ids.every((id): id is string => id !== undefined)) return switchRoleReason(sel, missed);
   const read = await settleWithin(
@@ -1188,10 +1286,8 @@ async function staleSelectorReason(
   }
   // The flow tree drops what an alert, sheet or popover covers.
   if (!uncovered) {
-    return (
-      `${missed}: the element with this id is covered by an alert, sheet or popover. Dismiss ` +
-      `it first, or add an await step for it to close.`
-    );
+    if (read.value.alertVisible === true) return systemAlertReason(missed);
+    return `${missed}: the element with this id is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
   }
   const wanted = sel.role?.toLowerCase();
   if (wanted !== undefined && carriers.every((n) => !n.role?.toLowerCase().includes(wanted))) {
@@ -2211,7 +2307,7 @@ async function waitForCondition(
       : "";
   // Nothing matched: say so when the selector looks stale.
   if (explainMiss && lastMatches.length === 0 && step.condition !== "hidden") {
-    const stale = await staleSelectorReason(env, step.selector, undefined, true);
+    const stale = await staleSelectorReason(env, step.selector, undefined, { ignoresKeys: true });
     if (stale === "aborted") return ABORTED_OUTCOME;
     if (stale) return { ok: false, reason: stale + blipNote };
   }

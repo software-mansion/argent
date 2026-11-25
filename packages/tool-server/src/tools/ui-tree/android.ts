@@ -22,7 +22,7 @@ const LEGACY_UNSUPPORTED_FIELDS = [
 ];
 
 // AccessibilityWindowInfo types, as the helper writes them in `window-type`.
-const TYPE_APPLICATION = 1;
+export const TYPE_APPLICATION = 1;
 export const TYPE_INPUT_METHOD = 2;
 const TYPE_SYSTEM = 3;
 
@@ -115,9 +115,39 @@ function onScreen(frame: UiTreeNode["frame"]): boolean {
   return w > 0 && h > 0;
 }
 
+// How far below the top a window that fills the screen may start (a status bar).
+const TOP_SLACK = 0.1;
+
 // Spans the width from the top: an activity, not a dialog or a sheet.
 function fillsScreen(frame: UiTreeNode["frame"]): boolean {
-  return !!frame && frame.x <= 0 && frame.x + frame.width >= 1 && frame.y <= 0.1;
+  return !!frame && frame.x <= 0 && frame.x + frame.width >= 1 && frame.y <= TOP_SLACK;
+}
+
+/**
+ * Whether a window starts at the top of the screen, as {@link fillsScreen}
+ * asks, with any width: in landscape a display cutout or a side navigation
+ * bar insets an app's own window on a side. A dialog or a sheet starts below
+ * the top.
+ */
+export function startsAtTop(frame: UiTreeNode["frame"]): boolean {
+  return !!frame && frame.y <= TOP_SLACK;
+}
+
+/** Whether a window reaches the bottom of the screen, with the slack of {@link startsAtTop}. */
+export function endsAtBottom(frame: UiTreeNode["frame"]): boolean {
+  return !!frame && frame.y + frame.height >= 1 - TOP_SLACK;
+}
+
+/**
+ * Whether an application window (`window-type` 1) of `bundleId` with this
+ * frame (normalized to the screen) is a system dialog or sheet over the app:
+ * what `alertVisible` reports. Shared with the flow tree's miss wording.
+ */
+export function isSystemDialogWindow(bundleId: string, frame: UiTreeNode["frame"]): boolean {
+  return (
+    SYSTEM_SHEET_PACKAGES.has(bundleId) ||
+    (SYSTEM_DIALOG_PACKAGES.has(bundleId) && !fillsScreen(frame))
+  );
 }
 
 function markCovered(node: UiTreeNode): void {
@@ -165,10 +195,7 @@ export function adaptAndroidTree(
       // The system server's crash and "isn't responding" dialogs.
       if (windowType === TYPE_SYSTEM && root.bundleId === "android") alert = true;
       if (windowType !== TYPE_APPLICATION) return;
-      if (
-        SYSTEM_SHEET_PACKAGES.has(root.bundleId) ||
-        (SYSTEM_DIALOG_PACKAGES.has(root.bundleId) && !fillsScreen(root.frame))
-      ) {
+      if (isSystemDialogWindow(root.bundleId, root.frame)) {
         alert = true;
       } else foreground = i;
     });

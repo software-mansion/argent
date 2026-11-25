@@ -68,7 +68,12 @@ export interface FlatNode<T> {
   shield: boolean;
 }
 
-type NodeProjection<T> = (node: T) => FlatNode<T>;
+/**
+ * `scrollClip` is the clip the node itself is checked against (see
+ * {@link flattenHoisting}); a projection that flattens a subtree on its own
+ * passes it on, so that subtree is clipped as it would be in place.
+ */
+type NodeProjection<T> = (node: T, scrollClip: ClipRect | null) => FlatNode<T>;
 
 // Intersection of a scroller's rect with the clip inherited from any outer
 // scrollers (null = unclipped).
@@ -117,7 +122,7 @@ export function flattenHoisting<T>(
   out: DescribeNode[],
   scrollClip: ClipRect | null = null
 ): string {
-  const view = project(node);
+  const view = project(node, scrollClip);
   if (view.skip) return "";
 
   // Scroll-clip prune — the flow-tree counterpart of the describe path's

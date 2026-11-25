@@ -159,6 +159,76 @@ describe("iOS simulator flow tree projection", () => {
     expect(leaves(tree)).toEqual(["Allow"]);
   });
 
+  it("keeps what is covered aside, flattened as in place, without changing the tree", () => {
+    const ax = adaptAxTree(
+      reply([
+        app,
+        // An uncovered card whose covered child must not hoist its text onto it.
+        { index: 1, parentIndex: 0, identifier: "card", frame: frame(0, 0.1, 1, 0.3) },
+        { index: 2, parentIndex: 1, label: "Title", frame: frame(0, 0.1, 1, 0.05) },
+        { index: 3, parentIndex: 1, label: "Hidden", covered: true, frame: frame(0, 0.2, 1, 0.05) },
+        // An uncovered list: its covered row scrolled out of it stays out.
+        {
+          index: 4,
+          parentIndex: 0,
+          identifier: "list",
+          elementType: 26,
+          frame: frame(0, 0.5, 1, 0.2),
+        },
+        {
+          index: 5,
+          parentIndex: 4,
+          label: "Row 1",
+          covered: true,
+          frame: frame(0, 0.5, 1, 0.1),
+        },
+        {
+          index: 6,
+          parentIndex: 4,
+          label: "Row 2",
+          covered: true,
+          frame: frame(0, 0.8, 1, 0.1),
+        },
+        // Covered and off the screen: no leaf.
+        { index: 7, parentIndex: 0, label: "Far", covered: true, frame: frame(0, 1.5, 1, 0.1) },
+      ])
+    );
+    const covered: DescribeNode[] = [];
+    const tree = adaptIosUiTreeForFlows(ax, undefined, covered);
+
+    expect(tree).toEqual(adaptIosUiTreeForFlows(ax));
+    expect(leaves(tree)).toEqual(["Title", "card", "list"]);
+    expect(tree.children[1]!.subtreeText).toBe("Title");
+    expect(covered.map((c) => c.label)).toEqual(["Hidden", "Row 1"]);
+  });
+
+  it("keeps the app under a system alert aside, its keyboard window marked", () => {
+    const covered: DescribeNode[] = [];
+    const tree = adaptIosUiTreeForFlows(
+      adaptAxTree(
+        reply(
+          [
+            { index: 0, label: "SpringBoard", bundleId: "com.apple.springboard" },
+            { index: 1, parentIndex: 0, label: "Allow", frame: frame(0.2, 0.5, 0.6, 0.05) },
+            { ...app, index: 2, covered: true },
+            { index: 3, parentIndex: 2, label: "Login", frame: frame(0.2, 0.3, 0.6, 0.05) },
+            { index: 4, parentIndex: 2, elementType: 19, frame: frame(0, 0.7, 1, 0.3) },
+            { index: 5, parentIndex: 4, label: "q", frame: frame(0, 0.7, 0.1, 0.05) },
+          ],
+          { alertVisible: true }
+        )
+      ),
+      undefined,
+      covered
+    );
+
+    expect(leaves(tree)).toEqual(["Allow"]);
+    expect(covered.map((c) => [c.label ?? c.role, c.keyboard === true])).toEqual([
+      ["Login", false],
+      ["q", true],
+    ]);
+  });
+
   it("clips hidden rows but keeps the rest of the list", () => {
     const tree = adaptIosUiTreeForFlows(
       adaptAxTree(
