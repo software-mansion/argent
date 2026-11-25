@@ -650,6 +650,8 @@ All coordinates use the UI as the user sees it, also when the UI is landscape or
 
 Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
 
+On a local iOS simulator, `launch-app` and `restart-app` return when the accessibility service of the simulator reports the started app in front, or after 5 seconds. Thus the next reading gives the orientation of the started app, not the orientation of the previous app.
+
 If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
 Scrolling targets the nearest scrollable content under the point. Web content scrolls first; an enclosing native scroll view can take over at the page boundary. The call fails if no eligible content can scroll.
