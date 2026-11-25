@@ -177,6 +177,8 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   const mode: "flat" | "nested" =
     opts.source === "uiautomator" ||
     opts.source === "android-devtools" ||
+    opts.source === "uiautomator+cdp" ||
+    opts.source === "android-devtools+cdp" ||
     opts.source === "cdp-dom" ||
     opts.source === "vega-automation" ||
     opts.source === "harmony-uitest" ||
