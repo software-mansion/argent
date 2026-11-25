@@ -49,6 +49,8 @@ interface ScopeSpec {
   removeArgs: string[];
 }
 
+type SkillRefreshScopes = "all" | "global";
+
 function getScopeSpecs(projectRoot: string): ScopeSpec[] {
   return [
     {
@@ -73,7 +75,10 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
 //
 // Sync prefers the GitHub-pinned source so the lockfile entry stays portable
 // across machines, and retries with the bundled SKILLS_DIR when that fails.
-export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
+export function refreshArgentSkills(
+  projectRoot: string,
+  scopes: SkillRefreshScopes = "all"
+): SkillScopeResult[] {
   const bundled = new Set(listBundledSkills());
   // An empty bundled set means this package's skills dir is unreadable (broken
   // or mid-update install), not that argent ships no skills — acting on it
@@ -94,7 +99,10 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
     env: NodeJS.ProcessEnv;
   };
 
-  for (const spec of getScopeSpecs(projectRoot)) {
+  const specs = getScopeSpecs(projectRoot).filter(
+    (spec) => scopes === "all" || spec.scope === "global"
+  );
+  for (const spec of specs) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
     if (tracked.length === 0) continue;
 
@@ -287,8 +295,12 @@ function summarizeSkillRefreshForTelemetry(
 // differ only in this stage name.
 type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_refresh";
 
-export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
-  const results = refreshArgentSkills(projectRoot);
+export function reportSkillRefresh(
+  projectRoot: string,
+  stage: SkillRefreshStage,
+  scopes: SkillRefreshScopes = "all"
+): void {
+  const results = refreshArgentSkills(projectRoot, scopes);
   const summary = formatSkillRefreshSummary(results);
   if (summary) {
     p.note(summary, "Skills Updated");

@@ -443,6 +443,23 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
     expect(killToolServerForInstallDir).not.toHaveBeenCalled();
   });
 
+  it("refreshes the global skills and leaves the project's skills alone", async () => {
+    const lock = JSON.stringify({ skills: { "argent-device-interact": {} } });
+    const globalLock = path.join(tmpDir, ".agents", ".skill-lock.json");
+    fs.mkdirSync(path.dirname(globalLock), { recursive: true });
+    fs.writeFileSync(globalLock, lock);
+    fs.writeFileSync(path.join(projDir, "skills-lock.json"), lock);
+    fs.writeFileSync(path.join(tmpDir, "skills-lock.json"), lock);
+
+    await update(["--yes", "--global", "--version", "99.0.0"]);
+
+    const skillRuns = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>)
+      .filter(([bin, args]) => bin === "npx" && args.includes("skills"))
+      .map(([, args]) => args);
+    expect(skillRuns.length).toBeGreaterThan(0);
+    expect(skillRuns.every((args) => args.includes("-g"))).toBe(true);
+  });
+
   it.each(["other running copy", "other npm prefix", "release held by policy", "linked checkout"])(
     "falls back to asking for a %s",
     async (reason) => {

@@ -1,6 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import semver from "semver";
 import { getConfigValueByKey } from "@argent/configuration-core";
@@ -152,6 +153,201 @@ function isLivePinnedEntry(entry: McpServerEntry | null): boolean {
     fs.existsSync(entry.command) &&
     fs.existsSync(entry.args[0])
   );
+}
+
+interface ConfigurationRefresh {
+  projectRoot: string;
+  installMode: InstallMode;
+  nonInteractive: boolean;
+  globalOnly: boolean;
+}
+
+// The refresh is keyed on the PROJECT's mode (installMode), not the install
+// just updated: a local-mode project keeps its committed node-path command
+// even when only the global install was bumped.
+async function refreshConfiguration({
+  projectRoot,
+  installMode,
+  nonInteractive,
+  globalOnly,
+}: ConfigurationRefresh): Promise<void> {
+  const spinner = p.spinner();
+  spinner.start("Refreshing workspace configuration...");
+
+  const results: string[] = [];
+
+  // Project-scope entries in local mode run the repo-local copy (the bin
+  // path may move across versions); global scopes run the global install.
+  const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
+  const globalCmdMode = resolveGlobalCommandMode();
+  const globalInstallOnPath = isGlobalInstallFirstOnPath();
+  // Never REWRITE existing entries to the degraded npx fallback: local-npx
+  // only means the repo-local bin can't be resolved right now (fresh clone,
+  // pruned pnpm store), and the committed node-path command is right again
+  // once the install materializes. (init still writes the fallback from
+  // scratch, with its own warning.)
+  const skipEntryRewrite = localCmdMode?.kind === "local-npx";
+  const entryFor = (scope: "local" | "global"): McpServerEntry =>
+    getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
+
+  // Only scopes that already contain an argent entry: a present editor dir
+  // (`.gemini`, `.cursor`, ...) is not consent — issue #195.
+  const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot).filter(
+    ({ scope }) => !globalOnly || scope !== "project"
+  );
+  const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
+    ["local", new Set()],
+    ["global", new Set()],
+  ]);
+
+  // Classify BEFORE writing: an entry argent didn't author (custom command,
+  // extra args, env vars) is a deliberate override — rewriting it would
+  // destroy the customization AND launder it into a bare shape the
+  // stale-config sweep below could judge dead and delete. Everything else is
+  // rewritten unconditionally; the write also REPAIRS state the normalized
+  // view can't see (an opencode `enabled: false`, or getArgentEntry's
+  // unreadable sentinel { command: "" }).
+  for (const { adapter, scope, configPath } of configuredScopes) {
+    const normScope = scope === "project" ? "local" : "global";
+    // Rules and the allowlist carry-over still run for this adapter
+    // either way — only the MCP entry itself is protected.
+    adaptersByScope.get(normScope)!.add(adapter);
+    if (skipEntryRewrite && normScope === "local") continue;
+    let existing: McpServerEntry | null;
+    try {
+      existing = adapter.getArgentEntry(configPath);
+    } catch {
+      continue;
+    }
+    const isUnreadableSentinel =
+      existing !== null && existing.command === "" && existing.args.length === 0;
+    if (existing !== null && !isUnreadableSentinel && !isArgentManagedEntry(existing)) {
+      results.push(
+        `${pc.yellow("!")} ${adapter.name} left a customized entry untouched ${pc.dim(configPath)}`
+      );
+      continue;
+    }
+    const entry = entryFor(normScope);
+    const replacesLivePin = isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry);
+    if (replacesLivePin && normScope === "local") continue;
+    // A run without the user's PATH (the update-argent tool in a
+    // Dock-launched editor) sees no install at all, and bare `argent` fails
+    // with ENOENT in that editor.
+    if (replacesLivePin && !globalInstallOnPath) {
+      results.push(
+        `${pc.yellow("!")} ${adapter.name} kept its absolute-path entry (no global install ` +
+          `found first on PATH) ${pc.dim(configPath)}`
+      );
+      continue;
+    }
+    try {
+      adapter.write(configPath, entry);
+      results.push(
+        replacesLivePin
+          ? `${pc.yellow("!")} ${adapter.name} now runs the bare argent command (the global ` +
+              `install on PATH has no node beside it to pin) ${pc.dim(configPath)}`
+          : `${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`
+      );
+    } catch {
+      // Skip paths that can't be written.
+    }
+  }
+  if (skipEntryRewrite && configuredScopes.some(({ scope }) => scope === "project")) {
+    p.log.info(
+      pc.dim(
+        "Left project MCP entries unchanged — the repo-local argent binary can't be " +
+          "resolved right now (fresh checkout: run your package manager's install; " +
+          "after an out-of-band version bump, just re-run argent update)."
+      )
+    );
+  }
+
+  // Allowlists are written once, by init, when the user agrees. Update
+  // never re-adds them: the user may have removed or narrowed them since.
+  // It only carries an allowlist the user still has over to tools this
+  // version added (Codex lists each tool id; the others use wildcards).
+  for (const [scope, adapters] of adaptersByScope) {
+    for (const adapter of adapters) {
+      if (!adapter.refreshAllowlist) continue;
+      try {
+        adapter.refreshAllowlist(projectRoot, scope);
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+
+  // Rules/agents the same way: only adapters opted into in that scope.
+  const localAdapters = [...adaptersByScope.get("local")!];
+  const globalAdapters = [...adaptersByScope.get("global")!];
+  const ruleResults = [
+    ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
+    ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
+  ];
+
+  spinner.stop("Configuration refreshed.");
+
+  if (results.length > 0) {
+    p.note(results.join("\n"), "MCP Configs Updated");
+  }
+
+  // The same stale-config sweep init runs (its step 1d): configs the
+  // refresh did not rewrite can still shadow or block the refreshed entries
+  // (a `claude mcp add` leftover, a dead global entry after a global→local
+  // migration, a recorded .mcp.json rejection).
+  if (!globalOnly) {
+    const staleCleanup = await cleanupStaleMcpConfigs({
+      writtenAdapters: [...new Set([...localAdapters, ...globalAdapters])],
+      detectedAdapters: detectAdapters(),
+      installMode,
+      scope: localAdapters.length > 0 ? "local" : "global",
+      effectiveRoot: projectRoot,
+      // Same one-shot confirmation init uses for cross-project removals.
+      // --yes passes no confirmer (the sweep goes report-only) — the
+      // agent-triggered `update --yes` must never delete cross-project state
+      // on a fallible PATH probe.
+      confirmCrossProjectRemovals: nonInteractive
+        ? undefined
+        : async (items) => {
+            p.log.warn(
+              `Dead argent entries from a previous global install were found in\n` +
+                `  global (cross-project) config files:\n` +
+                items.map((item) => `    ${pc.cyan(item)}`).join("\n")
+            );
+            const choice = await p.confirm({
+              message: "Remove these dead global entries? - recommended",
+              initialValue: true,
+            });
+            return !p.isCancel(choice) && choice === true;
+          },
+    });
+    if (staleCleanup.lines.length > 0) {
+      p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");
+      track("installation:stale_config_cleanup", {
+        removed_count: staleCleanup.removedCount,
+        warned_count: staleCleanup.warnedCount,
+      });
+    }
+  }
+
+  if (ruleResults.length > 0) {
+    p.note(ruleResults.join("\n"), "Rules Updated");
+  }
+
+  await reportRetiredFiles(
+    findRetiredRulesAndAgents(
+      [
+        { adapters: globalAdapters, scope: "global" },
+        { adapters: localAdapters, scope: "local" },
+      ],
+      projectRoot,
+      RULES_DIR,
+      AGENTS_DIR
+    ),
+    !nonInteractive
+  );
+
+  reportSkillRefresh(projectRoot, "installer_update_skills_refresh", globalOnly ? "global" : "all");
 }
 
 export async function update(args: string[]): Promise<void> {
@@ -616,7 +812,7 @@ export async function update(args: string[]): Promise<void> {
       // project. Even a "global" launcher hint must match the actual package
       // on PATH and the directory this package manager would update.
       const runningRoot = fs.realpathSync(resolvePackageRoot(import.meta.dirname));
-      // Bypass interactive target selection and the workspace refresh. Both can
+      // Bypass interactive target selection and the project refresh. Both can
       // modify a checkout even when only the global package needs an upgrade.
       const result = requestedVersion ? await applyUpdateForTarget("global", runningRoot) : "noop";
       if (result === "updated" && requestedVersion) {
@@ -624,6 +820,12 @@ export async function update(args: string[]): Promise<void> {
           mode: "global",
           projectRoot: runningRoot,
           version: getGloballyInstalledVersion() ?? requestedVersion,
+        });
+        await refreshConfiguration({
+          projectRoot: os.homedir(),
+          installMode: "global",
+          nonInteractive: true,
+          globalOnly: true,
         });
         await completeUpdateTelemetry();
       } else {
@@ -738,184 +940,7 @@ export async function update(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    // The refresh is keyed on the PROJECT's mode (installMode), not the install
-    // just updated: a local-mode project keeps its committed node-path command
-    // even when only the global install was bumped.
-    {
-      const spinner = p.spinner();
-      spinner.start("Refreshing workspace configuration...");
-
-      const results: string[] = [];
-
-      // Project-scope entries in local mode run the repo-local copy (the bin
-      // path may move across versions); global scopes run the global install.
-      const localCmdMode = installMode === "local" ? resolveLocalCommandMode(projectRoot) : null;
-      const globalCmdMode = resolveGlobalCommandMode();
-      const globalInstallOnPath = isGlobalInstallFirstOnPath();
-      // Never REWRITE existing entries to the degraded npx fallback: local-npx
-      // only means the repo-local bin can't be resolved right now (fresh clone,
-      // pruned pnpm store), and the committed node-path command is right again
-      // once the install materializes. (init still writes the fallback from
-      // scratch, with its own warning.)
-      const skipEntryRewrite = localCmdMode?.kind === "local-npx";
-      const entryFor = (scope: "local" | "global"): McpServerEntry =>
-        getMcpEntryForScope(installMode, scope, localCmdMode, globalCmdMode);
-
-      // Only scopes that already contain an argent entry: a present editor dir
-      // (`.gemini`, `.cursor`, ...) is not consent — issue #195.
-      const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
-      const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
-        ["local", new Set()],
-        ["global", new Set()],
-      ]);
-
-      // Classify BEFORE writing: an entry argent didn't author (custom command,
-      // extra args, env vars) is a deliberate override — rewriting it would
-      // destroy the customization AND launder it into a bare shape the
-      // stale-config sweep below could judge dead and delete. Everything else is
-      // rewritten unconditionally; the write also REPAIRS state the normalized
-      // view can't see (an opencode `enabled: false`, or getArgentEntry's
-      // unreadable sentinel { command: "" }).
-      for (const { adapter, scope, configPath } of configuredScopes) {
-        const normScope = scope === "project" ? "local" : "global";
-        // Rules and the allowlist carry-over still run for this adapter
-        // either way — only the MCP entry itself is protected.
-        adaptersByScope.get(normScope)!.add(adapter);
-        if (skipEntryRewrite && normScope === "local") continue;
-        let existing: McpServerEntry | null;
-        try {
-          existing = adapter.getArgentEntry(configPath);
-        } catch {
-          continue;
-        }
-        const isUnreadableSentinel =
-          existing !== null && existing.command === "" && existing.args.length === 0;
-        if (existing !== null && !isUnreadableSentinel && !isArgentManagedEntry(existing)) {
-          results.push(
-            `${pc.yellow("!")} ${adapter.name} left a customized entry untouched ${pc.dim(configPath)}`
-          );
-          continue;
-        }
-        const entry = entryFor(normScope);
-        const replacesLivePin = isLivePinnedEntry(existing) && !isPinnedGlobalEntry(entry);
-        if (replacesLivePin && normScope === "local") continue;
-        // A run without the user's PATH (the update-argent tool in a
-        // Dock-launched editor) sees no install at all, and bare `argent` fails
-        // with ENOENT in that editor.
-        if (replacesLivePin && !globalInstallOnPath) {
-          results.push(
-            `${pc.yellow("!")} ${adapter.name} kept its absolute-path entry (no global install ` +
-              `found first on PATH) ${pc.dim(configPath)}`
-          );
-          continue;
-        }
-        try {
-          adapter.write(configPath, entry);
-          results.push(
-            replacesLivePin
-              ? `${pc.yellow("!")} ${adapter.name} now runs the bare argent command (the global ` +
-                  `install on PATH has no node beside it to pin) ${pc.dim(configPath)}`
-              : `${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`
-          );
-        } catch {
-          // Skip paths that can't be written.
-        }
-      }
-      if (skipEntryRewrite && configuredScopes.some(({ scope }) => scope === "project")) {
-        p.log.info(
-          pc.dim(
-            "Left project MCP entries unchanged — the repo-local argent binary can't be " +
-              "resolved right now (fresh checkout: run your package manager's install; " +
-              "after an out-of-band version bump, just re-run argent update)."
-          )
-        );
-      }
-
-      // Allowlists are written once, by init, when the user agrees. Update
-      // never re-adds them: the user may have removed or narrowed them since.
-      // It only carries an allowlist the user still has over to tools this
-      // version added (Codex lists each tool id; the others use wildcards).
-      for (const [scope, adapters] of adaptersByScope) {
-        for (const adapter of adapters) {
-          if (!adapter.refreshAllowlist) continue;
-          try {
-            adapter.refreshAllowlist(projectRoot, scope);
-          } catch {
-            // non-fatal
-          }
-        }
-      }
-
-      // Rules/agents the same way: only adapters opted into in that scope.
-      const localAdapters = [...adaptersByScope.get("local")!];
-      const globalAdapters = [...adaptersByScope.get("global")!];
-      const ruleResults = [
-        ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
-        ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
-      ];
-
-      spinner.stop("Configuration refreshed.");
-
-      if (results.length > 0) {
-        p.note(results.join("\n"), "MCP Configs Updated");
-      }
-
-      // The same stale-config sweep init runs (its step 1d): configs the
-      // refresh did not rewrite can still shadow or block the refreshed entries
-      // (a `claude mcp add` leftover, a dead global entry after a global→local
-      // migration, a recorded .mcp.json rejection).
-      const staleCleanup = await cleanupStaleMcpConfigs({
-        writtenAdapters: [...new Set([...localAdapters, ...globalAdapters])],
-        detectedAdapters: detectAdapters(),
-        installMode,
-        scope: localAdapters.length > 0 ? "local" : "global",
-        effectiveRoot: projectRoot,
-        // Same one-shot confirmation init uses for cross-project removals.
-        // --yes passes no confirmer (the sweep goes report-only) — the
-        // agent-triggered `update --yes` must never delete cross-project state
-        // on a fallible PATH probe.
-        confirmCrossProjectRemovals: nonInteractive
-          ? undefined
-          : async (items) => {
-              p.log.warn(
-                `Dead argent entries from a previous global install were found in\n` +
-                  `  global (cross-project) config files:\n` +
-                  items.map((item) => `    ${pc.cyan(item)}`).join("\n")
-              );
-              const choice = await p.confirm({
-                message: "Remove these dead global entries? - recommended",
-                initialValue: true,
-              });
-              return !p.isCancel(choice) && choice === true;
-            },
-      });
-      if (staleCleanup.lines.length > 0) {
-        p.note(staleCleanup.lines.join("\n"), "Stale Config Cleanup");
-        track("installation:stale_config_cleanup", {
-          removed_count: staleCleanup.removedCount,
-          warned_count: staleCleanup.warnedCount,
-        });
-      }
-
-      if (ruleResults.length > 0) {
-        p.note(ruleResults.join("\n"), "Rules Updated");
-      }
-
-      await reportRetiredFiles(
-        findRetiredRulesAndAgents(
-          [
-            { adapters: globalAdapters, scope: "global" },
-            { adapters: localAdapters, scope: "local" },
-          ],
-          projectRoot,
-          RULES_DIR,
-          AGENTS_DIR
-        ),
-        !nonInteractive
-      );
-
-      reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
-    }
+    await refreshConfiguration({ projectRoot, installMode, nonInteractive, globalOnly: false });
 
     if (firstFailure) {
       // Partial run: one target updated (its refresh just ran), another
