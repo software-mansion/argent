@@ -150,13 +150,11 @@ export function createRecoverTouchInjectionTool(
   const listSimulators = deps.listSimulators ?? listIosSimulators;
   return {
     id: "recover-touch-injection",
-    description: `Recover a local iOS simulator whose touch injection has silently wedged — gesture-tap / gesture-swipe report success but the synthesized touches never reach the UI, while describe / screenshot / launch-app keep working.
+    description: `Restart the host CoreSimulator daemon to make a local iOS simulator take touches again. Use when gesture-tap / gesture-swipe report success but the touches never reach the app while describe and screenshot keep working, for example when a tap with { verify: true } returns verified:false on a control that should change the screen. stop-simulator-server and boot-device with force do not clear this state.
 
-Argent's normal recovery (stop-simulator-server, then re-boot) does NOT clear this; only restarting the host CoreSimulator daemon does. This tool disposes argent's services for EVERY local Apple simulator (the daemon restart is host-wide, so all of their handles go stale), runs \`xcrun simctl shutdown all\`, \`killall com.apple.CoreSimulator.CoreSimulatorService\`, then re-boots the target device (waiting for it) and restarts every other simulator that was booted, in the background (unless rebootAfter:false).
+This is host-wide: it stops Argent's services for every local iOS simulator, runs \`xcrun simctl shutdown all\` and \`killall com.apple.CoreSimulator.CoreSimulatorService\`, boots the target and waits for it, then boots the other previously booted simulators in the background (rebootAfter:false leaves all of them shut down). Ask the user first when other simulators are booted.
 
-WARNING: this is host-wide — ALL booted simulators are briefly shut down; the target and any other previously-booted simulators are then re-booted automatically (the target is waited on, siblings finish in the background). Reach for it only when a device's taps have stopped landing; confirm the wedge first with gesture-tap { verify: true }.
-
-iOS simulators only. Returns { recovered, steps, disposedServices, note } — recovered is false when a recovery step failed (see steps).`,
+Local iOS simulators only. Returns { recovered, steps, disposedServices, note }; recovered is false when a step failed (see steps), and note names each simulator that did not boot again. Fails for an unknown UDID or a non-iOS device.`,
     searchHint:
       "recover fix wedged stuck touch injection tap not landing coresimulator daemon restart reset simulator hid silent failure",
     zodSchema,
