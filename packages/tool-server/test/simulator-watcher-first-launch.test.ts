@@ -357,7 +357,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       expectArmed(afterReboot);
     });
 
-    it("arms a simulator again that rebooted before any poll took its service up", async () => {
+    it("re-applies the env when a poll takes up a service a tool call started", async () => {
       execSimctlMock.mockResolvedValue('{"devices":{}}');
       const { ready, stop } = startSimulatorWatcher(realRegistry);
       await ready;
