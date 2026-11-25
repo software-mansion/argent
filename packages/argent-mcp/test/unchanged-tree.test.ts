@@ -88,6 +88,43 @@ describe("createTreeMemory", () => {
     });
   });
 
+  it("calls out lines from a prior diff that reverted back to the base tree", () => {
+    const tallTree = [
+      "Source: ax-service",
+      "Mode: flat",
+      "",
+      "ROOT  AXApplication (0.000,0.000,1.000,1.000)",
+      ...Array.from(
+        { length: 20 },
+        (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
+      ),
+    ].join("\n");
+    const { trees } = memoryWithClock();
+    trees.afterAction("u", tallTree, "describe");
+
+    // Step 1: Row 2 changes from base.
+    const step1 = tallTree.replace('"Row 2"', '"Row 2" value="on"');
+    expect(trees.afterAction("u", step1, "gesture-tap").mode).toBe("diff");
+
+    // Step 2: Row 2 reverts back to base while Row 5 changes. Without calling out
+    // Row 2's reversion, smaller models often assume Row 2 is still `value="on"`.
+    const step2 = tallTree.replace('"Row 5"', '"Row 5" value="on"');
+    const second = trees.afterAction("u", step2, "gesture-tap");
+    expect(second).toEqual({
+      mode: "diff",
+      identical: false,
+      note: false,
+      text: [
+        treeDiffHeader("t-1", "describe"),
+        '-   AXButton "Row 5" (0.000,0.200,1.000,0.040)',
+        '+   AXButton "Row 5" value="on" (0.000,0.200,1.000,0.040)',
+        "Also since previous step (- gone from prior diff, + restored to `t-1`):",
+        '-   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+      ].join("\n"),
+    });
+  });
+
   it("counts diffs and unchanged notes together toward the consecutive cap", () => {
     const { trees } = memoryWithClock();
     trees.afterAction("u", LONG_TREE, "gesture-tap");

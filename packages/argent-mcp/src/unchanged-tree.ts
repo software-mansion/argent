@@ -45,6 +45,8 @@ export type TreeRenderMode = "full" | "diff" | "unchanged";
 interface SentTree {
   id: string;
   tree: string;
+  /** Most recent screen tree for this device, used to surface lines that revert back to `tree`. */
+  prevTree: string;
   /** The tool whose result carried the full tree. */
   tool: string;
   sentAt: number;
@@ -92,7 +94,7 @@ export function unchangedTreeNote(id: string, tool: string): string {
 
 /** Header line that introduces a cumulative diff against full tree `id`. */
 export function treeDiffHeader(id: string, tool: string): string {
-  return `Changes from \`${id}\` (\`${tool}\`) (- gone, + new; call \`describe\` if you lack that tree):`;
+  return `Diff against \`${id}\` (\`${tool}\`) — all other lines match \`${id}\` (supersedes earlier diffs; - gone, + new; call \`describe\` if you lack \`${id}\`):`;
 }
 
 function nonBlankLines(tree: string): string[] {
@@ -135,14 +137,19 @@ function treeMetaSignature(tree: string): string {
 
 /**
  * Computes a `-` / `+` line diff from `base` to `next`, preserving tree order
- * and multiset counts for repeated lines. Returns `null` when metadata changed
- * or when the diff is not short enough (exceeds `MAX_DIFF_RATIO` of `next`).
+ * and multiset counts for repeated lines. When `prev` (the tree from the
+ * previous step) held diff lines against `base` that are no longer present in
+ * `next` (e.g. a toggle reverted back to `base`'s state or a temporary error
+ * banner disappeared), those changes are called out explicitly so smaller
+ * models do not assume the prior diff still applies. Returns `null` when
+ * metadata changed or when the diff exceeds `MAX_DIFF_RATIO` of `next`.
  */
 export function formatTreeDiff(
   base: string,
   next: string,
   id: string,
-  tool: string
+  tool: string,
+  prev: string = base
 ): { mode: "unchanged" | "diff"; text: string } | null {
   if (treeMetaSignature(base) !== treeMetaSignature(next)) return null;
   const before = nonBlankLines(base);
@@ -152,11 +159,24 @@ export function formatTreeDiff(
   if (removed.length === 0 && added.length === 0) {
     return { mode: "unchanged", text: unchangedTreeNote(id, tool) };
   }
-  const text = [
+  const lines = [
     treeDiffHeader(id, tool),
     ...removed.map((line) => `- ${line}`),
     ...added.map((line) => `+ ${line}`),
-  ].join("\n");
+  ];
+  if (prev !== base) {
+    const prevLines = nonBlankLines(prev);
+    const prevAdded = linesMissingFrom(prevLines, before);
+    const prevRemoved = linesMissingFrom(before, prevLines);
+    const goneFromPriorDiff = linesMissingFrom(prevAdded, added);
+    const restoredToBase = linesMissingFrom(prevRemoved, removed);
+    if (goneFromPriorDiff.length > 0 || restoredToBase.length > 0) {
+      lines.push(`Also since previous step (- gone from prior diff, + restored to \`${id}\`):`);
+      for (const line of goneFromPriorDiff) lines.push(`- ${line}`);
+      for (const line of restoredToBase) lines.push(`+ ${line}`);
+    }
+  }
+  const text = lines.join("\n");
   if (text.length > Math.floor(next.length * MAX_DIFF_RATIO)) return null;
   return { mode: "diff", text };
 }
@@ -184,6 +204,7 @@ export function createTreeMemory(
     lastSent.set(udid, {
       id,
       tree,
+      prevTree: tree,
       tool: normalizeToolName(toolName),
       sentAt: now(),
       shortResults: 0,
@@ -204,6 +225,7 @@ export function createTreeMemory(
       if (canShorten) {
         if (identical) {
           last.shortResults += 1;
+          last.prevTree = tree;
           return {
             text: unchangedTreeNote(last.id, last.tool),
             mode: "unchanged",
@@ -211,9 +233,10 @@ export function createTreeMemory(
             note: true,
           };
         }
-        const diff = formatTreeDiff(last.tree, tree, last.id, last.tool);
+        const diff = formatTreeDiff(last.tree, tree, last.id, last.tool, last.prevTree);
         if (diff !== null) {
           last.shortResults += 1;
+          last.prevTree = tree;
           return {
             text: diff.text,
             mode: diff.mode,
