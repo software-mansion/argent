@@ -249,8 +249,9 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
 }
 
 /**
- * The size of a complete PNG: signature, then IHDR, then IEND at the very end.
- * Undefined for anything else, so a damaged file is still decoded and reported.
+ * The size of a PNG with a signature, an IHDR and an IEND at the very end.
+ * Undefined for anything else, so a truncated file is still decoded and reported.
+ * Chunk CRCs and image data are not checked.
  */
 function completePngSize(bytes: Buffer): Size | undefined {
   const complete =
