@@ -319,7 +319,16 @@ describe("createToolsClient options", () => {
       expect(await sessionOf(() => ({ "x-argent-session": "mcp-1" }))).toBe("mcp-1");
       expect(await sessionOf(() => ({ "X-Argent-Session": "mcp-2" }))).toBeUndefined();
       vi.stubEnv("ARGENT_SESSION", "my job");
-      await expect(sessionOf()).rejects.toThrow(/ARGENT_SESSION must be/);
+      const baseUrl = vi.fn(async () => ({ url, token: "t", remote: true }));
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({ baseUrl, fetchImpl });
+      const sentBefore = requests.length;
+      await expect(callTool("reinstall-app", { appPath: TEST_HOME })).rejects.toThrow(
+        /ARGENT_SESSION must be/
+      );
+      expect(baseUrl).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(sentBefore);
     } finally {
       vi.unstubAllEnvs();
     }
