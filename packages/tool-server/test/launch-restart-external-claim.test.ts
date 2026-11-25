@@ -34,6 +34,7 @@ vi.mock("node:child_process", async () => {
 });
 
 import type { Registry } from "@argent/registry";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../src/blueprints/native-devtools";
 import { makeIosImpl as makeLaunchIosImpl } from "../src/tools/launch-app/platforms/ios";
 import { makeIosImpl as makeRestartIosImpl } from "../src/tools/restart-app/platforms/ios";
 import { resolveDevice } from "../src/utils/device-info";
@@ -77,7 +78,10 @@ function publishDescriptor(): void {
   delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
 }
 
-/** Resolving anything through this is the failure the tests watch for. */
+/**
+ * Resolving native-devtools through this is the failure the tests watch for.
+ * It refuses every service, as a provider that grants only simctl does.
+ */
 function refusingRegistry(): { registry: Registry; resolveService: ReturnType<typeof vi.fn> } {
   const resolveService = vi.fn(async () => {
     throw new Error("native-devtools must not be resolved on a provider's device");
@@ -114,7 +118,10 @@ describe("launch-app and restart-app on a device a provider claims", () => {
     );
 
     expect(result).toEqual({ launched: true, bundleId: BUNDLE_ID });
-    expect(resolveService).not.toHaveBeenCalled();
+    expect(resolveService).not.toHaveBeenCalledWith(
+      expect.stringMatching(`^${NATIVE_DEVTOOLS_NAMESPACE}:`),
+      expect.anything()
+    );
     /** Both spellings reach simctl as the provider's real udid. */
     expect(execFileMock).toHaveBeenCalledWith("xcrun", ["simctl", "launch", IOS_UDID, BUNDLE_ID]);
   });
@@ -131,7 +138,10 @@ describe("launch-app and restart-app on a device a provider claims", () => {
       resolveDevice(udid)
     );
 
-    expect(resolveService).not.toHaveBeenCalled();
+    expect(resolveService).not.toHaveBeenCalledWith(
+      expect.stringMatching(`^${NATIVE_DEVTOOLS_NAMESPACE}:`),
+      expect.anything()
+    );
   });
 
   it("still resolves native-devtools for a device argent booted itself", async () => {
