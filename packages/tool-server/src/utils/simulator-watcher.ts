@@ -88,12 +88,13 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
-  const service = await resolveNativeDevtools(registry, udid);
+  // A tool call can have started the service, and spent its attempt, before this poll.
+  const started = await runningNativeDevtools(registry, udid);
+  const service = started ?? (await resolveNativeDevtools(registry, udid));
   if (!service) return;
   trackedServices.set(udid, service);
-  // A tool call can have started the service, and spent its attempt, before this poll.
-  if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
-    await service.ensureEnvReady().catch(() => {});
+  if (started && !started.isEnvSetup() && !started.getInitFailure()?.givenUp) {
+    await started.ensureEnvReady().catch(() => {});
   }
 }
 
@@ -123,8 +124,7 @@ async function resolveNativeDevtools(
  */
 async function armNow(registry: Registry, udid: string): Promise<void> {
   if (externalClaimForAnyId(udid)) return;
-  const service = await resolveNativeDevtools(registry, udid);
-  await service?.ensureEnvReady().catch(() => {});
+  await resolveNativeDevtools(registry, udid);
 }
 
 /** The simulator's native-devtools service if one is running, without starting one. */

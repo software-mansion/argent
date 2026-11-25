@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 describe("armSimulator", () => {
-  it("resolves only the simulator it is given, and settles once that attempt has", async () => {
+  it("resolves only the simulator it is given, leaves the attempt to its factory, and settles after it", async () => {
     vi.useFakeTimers();
     listsBooted();
     let finishInit!: () => void;
@@ -76,7 +76,7 @@ describe("armSimulator", () => {
 
     finishInit();
     expect(await isSettled(armed)).toBe(true);
-    expect(ensureEnvReady).toHaveBeenCalledTimes(1);
+    expect(ensureEnvReady).not.toHaveBeenCalled();
     expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
   });
 
