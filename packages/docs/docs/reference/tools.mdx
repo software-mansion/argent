@@ -110,7 +110,15 @@ An emulator started with `-port` belongs to the boots that give that `port`:
 - With `force: true`, a boot stops an emulator only when no other emulator of the AVD would still block the boot. Otherwise it fails with `BOOT_ANDROID_READ_ONLY_CONFLICT` and stops nothing.
 - A read-only boot with `port` fails with `BOOT_ANDROID_PORT_IN_USE` when the AVD runs writable on that port. Add `force: true` to stop that emulator and boot it read-only.
 
-A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
+A read-only boot also reuses a read-only emulator that Argent did not start, under the rules above:
+
+- A boot with `port` reuses such an emulator on that port.
+- A boot without `port` reuses such an emulator started without `-port`.
+
+If the screenshot check fails on that external emulator during a boot without `port`, Argent reports an error and leaves the emulator running.
+Set `force: true` to replace it.
+
+The process list does not show the serial of an emulator started without `-port`. Argent takes that emulator as read-only when all the emulators of the AVD in the process list are read-only. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
 
 On Windows, Argent cannot read the command lines of the emulators. There:
 
