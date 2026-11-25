@@ -46,9 +46,7 @@ import {
   isBlockStep,
   parseFlow,
   flowFormatVersion,
-  precedesLeadingLaunch,
   resolveStepOutputs,
-  runTargetName,
   type BlockStep,
   type FlowEnv,
   type FlowFile,
@@ -79,7 +77,19 @@ import {
   type ToolFileFix,
 } from "./flow-tool-inputs";
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
-import { runFlowScriptStep, typeScriptScriptRefusal } from "./flow-script-step";
+import { runFlowScriptStep } from "./flow-script-step";
+import {
+  findRetiredToolArg,
+  findUnrunnableScript,
+  fragmentLoadRefusal,
+  leadingLaunch,
+  retiredArgReason,
+  runDisplayFor,
+  walkFlow,
+  walkSteps,
+  type RunStackEntry,
+  type ToolSchemaLookup,
+} from "./flow-preflight";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { evaluateOutputCheck, OutputReferenceError, type FlowOutput } from "./flow-output";
 import { sleepOrAbort } from "../../utils/timing";
@@ -1242,205 +1252,8 @@ function displayFlowName(params: { name?: string; e2e_test_path?: string }): str
   return params.name || stem || params.e2e_test_path || "(unspecified)";
 }
 
-/**
- * Yield every parsed step, recursing into a block directive's children through
- * {@link blockSteps}: this is the sole feeder of
- * {@link assertUploadSelfContained}, so a block absent from the recursion would
- * carry an uploaded flow's nested `run:`, `script:` or `snapshot` past the
- * preflight.
- *
- * Each step arrives with its AUTHORED position - its place in the file as
- * written, every entry counted, `echo` included. A pre-run refusal has no report
- * line to point at, so the file is the one thing its reader can count against;
- * the CLI and MCP renderers number differently again, and already disagree with
- * each other. {@link retiredArgReason} says which counting its number uses.
- *
- * A `run:` target is deliberately not followed: the fragment resolves at run
- * time, so reading it here would duplicate that lookup.
- * {@link execRunStep} repeats the pass where the fragment loads.
- */
-function* walkSteps(
-  steps: FlowStep[],
-  within = "",
-  label = "step"
-): Generator<{ step: FlowStep; where: string }> {
-  for (const [i, step] of steps.entries()) {
-    const where = `${label} ${i + 1}${within}`;
-    yield { step, where };
-    const inner = blockSteps(step);
-    if (inner) yield* walkSteps(inner, ` of the ${step.kind}: block at ${where}`);
-  }
-}
-
-/** {@link walkSteps} over a file's `steps:`, then its `shutdown:`. */
-function* walkFlow(flow: FlowFile, within = ""): Generator<{ step: FlowStep; where: string }> {
-  yield* walkSteps(flow.steps, within);
-  if (flow.shutdown) yield* walkSteps(flow.shutdown, within, "shutdown step");
-}
-
-/** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
-interface RetiredArgUse {
-  where: string;
-  tool: string;
-  key: string;
-  guidance: string;
-}
-
-/**
- * The guidance a schema property carries if - and only if - it is a RETIRED
- * field, else undefined (an empty string is retired with no guidance).
- *
- * A retired field is declared `z.never().optional()`, which serializes to a
- * `not: {}` with no `type`. Matched by SHAPE and never by field name, so a key
- * retired on any tool later is refused with no edit here - the same test
- * `isRetiredField` applies on the CLI's flag paths.
- */
-function retiredKeyGuidance(prop: unknown): string | undefined {
-  const schema = prop as { not?: Record<string, unknown>; description?: string } | undefined;
-  if (!schema?.not || Object.keys(schema.not).length > 0) return undefined;
-  // Minus the "Retired: " label - every caller already says retired.
-  return (schema.description ?? "").replace(/^Retired:\s*/, "");
-}
-
-/** The schema properties a registered tool declares, or undefined for a tool this registry lacks. */
-function toolArgProps(registry: Registry, tool: string): Record<string, unknown> | undefined {
-  return (
-    registry.getTool(tool)?.inputSchema as { properties?: Record<string, unknown> } | undefined
-  )?.properties;
-}
-
-/** The first retired key in one invocation's args, against the properties its tool declares. */
-function retiredArgIn(
-  props: Record<string, unknown>,
-  tool: string,
-  args: Record<string, unknown>,
-  where: string
-): RetiredArgUse | undefined {
-  for (const key of Object.keys(args)) {
-    const guidance = retiredKeyGuidance(props[key]);
-    if (guidance !== undefined) return { where, tool, key, guidance };
-  }
-  return undefined;
-}
-
-/**
- * The tool invocations a `tool:` step's args carry inline, each with the
- * position naming it. Matched by SHAPE - a `{ tool, args }` entry, in an arg's
- * array (run-sequence's `steps`) or as an arg itself - never by the carrying
- * tool's name.
- *
- * Only under a key the carrying tool DECLARES: a non-strict schema strips an
- * undeclared key before execute, so the invocation it looks like is never made
- * and refusing the flow over it would refuse a call that never happens.
- *
- * One level only: those args are forwarded verbatim to the named tool, and no
- * tool that batches others allows a batching tool among them.
- */
-function* nestedInvocations(
-  props: Record<string, unknown>,
-  args: Record<string, unknown>
-): Generator<{ tool: string; args: Record<string, unknown>; at: string }> {
-  for (const [key, value] of Object.entries(args)) {
-    if (!Object.hasOwn(props, key)) continue;
-    const entries = Array.isArray(value) ? value : [value];
-    for (const [i, entry] of entries.entries()) {
-      const call = entry as { tool?: unknown; args?: unknown } | null | undefined;
-      if (typeof call?.tool !== "string") continue;
-      if (typeof call.args !== "object" || call.args === null || Array.isArray(call.args)) continue;
-      yield {
-        tool: call.tool,
-        args: call.args as Record<string, unknown>,
-        at: Array.isArray(value) ? `step ${i + 1}` : `\`${key}\``,
-      };
-    }
-  }
-}
-
-/**
- * The first retired key a raw `tool:` step in these steps passes - in its own
- * args, or in an invocation those args carry inline (a recorded run-sequence
- * batch).
- *
- * The typed directives refuse a retired spelling at parse time (`swipe.settle`),
- * but a recorded `tool:` step carries its args opaquely - the parser knows no
- * tool schemas - so the same key reached `registry.invokeTool` and failed only
- * there, with every earlier step already run against the device. Callers use
- * this to move that refusal to load time.
- *
- * An unknown tool is skipped: that step already fails on its own, with a better
- * message than a missing schema could produce here.
- */
-function findRetiredToolArg(registry: Registry, flow: FlowFile): RetiredArgUse | undefined {
-  for (const { step, where } of walkFlow(flow)) {
-    if (step.kind !== "tool") continue;
-    const props = toolArgProps(registry, step.name);
-    if (!props) continue;
-    const direct = retiredArgIn(props, step.name, step.args, where);
-    if (direct) return direct;
-    for (const call of nestedInvocations(props, step.args)) {
-      const nestedProps = toolArgProps(registry, call.tool);
-      if (!nestedProps) continue;
-      // Spelled like walkSteps' block position, so both nestings read alike:
-      // "step 1 of the run-sequence step at step 2".
-      const hit = retiredArgIn(
-        nestedProps,
-        call.tool,
-        call.args,
-        `${call.at} of the ${step.name} step at ${where}`
-      );
-      if (hit) return hit;
-    }
-  }
-  return undefined;
-}
-
-/**
- * The refusal text for {@link findRetiredToolArg}'s hit, shared by both callers.
- * The position carries its counting rule, since "step 2" alone is ambiguous: the
- * CLI renderers would call that same step step 1 (see {@link walkSteps}).
- * Qualified once at the end of `use.where`, not once per nesting level.
- */
-function retiredArgReason(use: RetiredArgUse): string {
-  return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
-}
-
-/**
- * The refusal for the first `script:` step in these steps that this host cannot
- * run, or undefined: a TypeScript file, on a Node.js that does not run
- * TypeScript (see `typeScriptScriptRefusal`).
- *
- * Nothing a step does changes that answer, so it is asked before any of them
- * runs, a `when:` block's included. Left to the step, the refusal lands after
- * earlier steps have seeded data and driven the device, and a step under a
- * `when:` guard passes or errors by the branch the device happens to take.
- */
-async function findUnrunnableScript(flow: FlowFile): Promise<string | undefined> {
-  for (const { step } of walkFlow(flow)) {
-    if (step.kind !== "script") continue;
-    const refusal = await typeScriptScriptRefusal(step.path);
-    if (refusal !== undefined) return refusal;
-  }
-  return undefined;
-}
-
-/**
- * Why a loaded `run:` fragment is refused before any of its steps runs, or
- * undefined: the root flow's load-time gates, applied to the fragment at the
- * only moment its steps exist. One function for both callers:
- * {@link execRunStep}, which charges the refusal to the `run:` step, and
- * {@link scanLeadingLaunch}, which must not follow a launch into a fragment
- * the executor refuses.
- */
-async function fragmentLoadRefusal(
-  registry: Registry,
-  fragment: FlowFile,
-  target: string
-): Promise<string | undefined> {
-  const retiredArg = findRetiredToolArg(registry, fragment);
-  const shown = escapeInline(target);
-  if (retiredArg) return `fragment "${shown}" ${retiredArgReason(retiredArg)}`;
-  const unrunnableScript = await findUnrunnableScript(fragment);
-  return unrunnableScript ? `fragment "${shown}" cannot run. ${unrunnableScript}` : undefined;
+function toolSchemas(registry: Registry): ToolSchemaLookup {
+  return (tool) => registry.getTool(tool)?.inputSchema;
 }
 
 /**
@@ -1788,7 +1601,7 @@ Without a link, every step kind runs.`,
       // Refused before the prerequisite handshake and before any step touches
       // the device: a mid-run refusal would land after earlier steps had already
       // driven it (see findRetiredToolArg).
-      const retiredArg = findRetiredToolArg(registry, flow);
+      const retiredArg = findRetiredToolArg(toolSchemas(registry), flow);
       if (retiredArg) {
         throw new FailureError(`E2E test "${flowName}" ${retiredArgReason(retiredArg)}`, {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -1861,7 +1674,10 @@ Without a link, every step kind runs.`,
       // `launch` there is restart-app, which terminates and relaunches whatever
       // device it is handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, seed, { registry, project });
+        const leading = await leadingLaunch(flow, seed, {
+          schemas: toolSchemas(registry),
+          project,
+        });
         if (leading) {
           // Offer the pin only where it is a real way out (see
           // chromiumPinnable): the guard also fires for unpinned runs of every
@@ -2112,7 +1928,10 @@ async function resolveRunDevice(
   if (!params.device) {
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
-    const leading = await leadingLaunch(flow, runStack, { registry, project });
+    const leading = await leadingLaunch(flow, runStack, {
+      schemas: toolSchemas(registry),
+      project,
+    });
     // A block that allows only chromium (or only macos) picks that entry of a multi-platform launch.
     const only = flow.requires?.platform?.length === 1 ? flow.requires.platform[0] : undefined;
     const platform =
@@ -2239,9 +2058,6 @@ function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
   return chromiumLaunchSpec(app) !== null;
 }
 
-/** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
-const NO_EXECUTABLE_STEP = "no-executable-step";
-
 /**
  * Where the root flow REALLY lives on the client — what a co-located run gets
  * from `canonicalFlowPath` before it anchors anything. The client's spelling
@@ -2273,85 +2089,6 @@ function clientRootCanonical(
       : flowNameCasingError(name, root.spelling);
   }
   return root.canonical ?? root.clientPath;
-}
-
-/**
- * The launch the RUN begins with, following a leading `run:` — a fragment whose
- * first step composes a standalone flow starts with that flow's launch, and the runner
- * has to know that before step 1 to boot a chromium app for it (and to refuse a
- * prerequisite that launch would invalidate). `flow` names the flow whose first
- * step IS the launch, so a rejection can point at the right file. Null when the
- * run doesn't begin with a launch, or when the chain can't be read (a broken
- * `run:` target is reported by {@link execRunStep} when it executes).
- */
-async function leadingLaunch(
-  flow: FlowFile,
-  stack: RunStackEntry[],
-  env: Pick<ExecState, "registry" | "project">
-): Promise<{ app: Launch; flow: string } | null> {
-  // The root of this run is the top of the seed; the entries below it are
-  // the runs that enclose it.
-  const found = await scanLeadingLaunch(flow, stack, stack.at(-1)!.display, env);
-  return found === NO_EXECUTABLE_STEP ? null : found;
-}
-
-/**
- * {@link leadingLaunch}'s recursion, plus the third outcome it needs internally:
- * {@link NO_EXECUTABLE_STEP} — this flow, and everything its leading `run:`s
- * pulled in, contribute no executable step. That is not a reason to give up on
- * the run: {@link execRunStep} inlines such a fragment and carries straight on
- * to the *parent's* next step, so the scan resumes there too. Abandoning the
- * whole scan instead would make `[run: <echo-only frag>, run: <e2e>]` look
- * launch-free while the run really does launch first thing — the chromium hoist
- * would skip and the prerequisite guard would wave through a run that destroys
- * the state it just asked the caller to establish.
- *
- * The walk below IS the executor's, run ahead of time: it takes the same
- * `runStack` (seeded with the enclosing runs and the root flow) and the same
- * `rootDisplay` the hops are named against, and resolves each hop through the same
- * {@link ProjectAccess.resolveFlowFile} {@link execRunStep} uses, then applies
- * the same cycle, depth, and on-disk-casing guards and the same load-time
- * gates ({@link fragmentLoadRefusal}). A chain the executor refuses never
- * reaches its launch, so any hop it would error on stays `null` (give up)
- * here, never transparent. Anything unreadable is `null` too — a fragment the
- * client did not send included: the executor reports that when it executes
- * the step.
- */
-async function scanLeadingLaunch(
-  flow: FlowFile,
-  stack: RunStackEntry[],
-  rootDisplay: string,
-  env: Pick<ExecState, "registry" | "project">
-): Promise<{ app: Launch; flow: string } | typeof NO_EXECUTABLE_STEP | null> {
-  const top = stack[stack.length - 1]!;
-  for (const step of flow.steps) {
-    if (precedesLeadingLaunch(step)) continue;
-    if (step.kind === "launch") return { app: step.app, flow: top.display };
-    if (step.kind !== "run") return null;
-    let nested: FlowFile;
-    let canonical: string;
-    try {
-      const hop = await resolveRunTarget(env.project, path.dirname(top.canonical), step.flow);
-      canonical = hop.canonical;
-      if (stack.some((entry) => entry.canonical === canonical)) return null;
-      if (stack.length >= MAX_RUN_DEPTH) return null;
-      if (hop.spelling.state === "case_folded") return null;
-      const text = await hop.read();
-      if (text === null) return null;
-      nested = parseFlow(text);
-    } catch {
-      return null;
-    }
-    if ((await fragmentLoadRefusal(env.registry, nested, step.flow)) !== undefined) return null;
-    const inner = await scanLeadingLaunch(
-      nested,
-      [...stack, { canonical, display: runDisplayFor(step.flow, rootDisplay) }],
-      rootDisplay,
-      env
-    );
-    if (inner !== NO_EXECUTABLE_STEP) return inner;
-  }
-  return NO_EXECUTABLE_STEP;
 }
 
 /**
@@ -2551,15 +2288,6 @@ function pushReport(state: ExecState, report: StepReport): void {
 }
 
 /**
- * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
- * paths; error messages render the human-readable display names.
- */
-interface RunStackEntry {
-  canonical: string;
-  display: string;
-}
-
-/**
  * Where a list of steps executes: the `run:` chain (cycle/depth guards) plus
  * the display nesting depth. Attribution and anchor directory derive from the
  * chain's top entry ({@link scopeFlow} / {@link scopeFlowDir}), so no second
@@ -2592,7 +2320,7 @@ function scopeFlow(scope: StepScope): string {
 
 /**
  * The report attribution for a `run:` target: its basename stem
- * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
+ * (`runTargetName`), except when that stem equals the ROOT flow's name —
  * then the as-written path with the `.yaml` extension stripped (control
  * characters escaped, as only the basename is pattern-checked), or `./<stem>`
  * when the spelling is bare (stripping would reproduce the stem). Two
@@ -2610,20 +2338,6 @@ function scopeFlow(scope: StepScope): string {
  */
 function runDisplayName(target: string, scope: StepScope): string {
   return runDisplayFor(target, scope.rootDisplay);
-}
-
-/**
- * {@link runDisplayName} against a root name rather than a scope, so
- * {@link scanLeadingLaunch} — which walks the same chain before any scope
- * exists — attributes a hop exactly as the executor will.
- */
-function runDisplayFor(target: string, rootDisplay: string): string {
-  const stem = runTargetName(target);
-  if (stem !== rootDisplay) return stem;
-  // Parse guarantees the target ends in lowercase ".yaml", so slicing the
-  // extension off never truncates a real path segment.
-  const spelled = target.slice(0, -".yaml".length);
-  return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
 /**
@@ -3188,7 +2902,7 @@ async function execRunStep(
 
   // Charged to the run: step, so the fragment is refused whole rather than
   // part-executed up to the offending step.
-  const refusal = await fragmentLoadRefusal(state.registry, fragment, target);
+  const refusal = await fragmentLoadRefusal(toolSchemas(state.registry), fragment, target);
   if (refusal !== undefined) return fail(refusal);
 
   // A failure, not a skip: a fragment that silently did not run would leave a green report.
