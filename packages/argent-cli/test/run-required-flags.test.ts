@@ -25,6 +25,10 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 
+vi.mock("../src/run-capture.js", () => ({
+  captureAfterAction: vi.fn(async () => ({ lines: [] })),
+}));
+
 const gestureTap = {
   name: "gesture-tap",
   description: "Tap the screen",
@@ -59,10 +63,6 @@ function stderr(): string {
   return (console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls
     .map((c) => String(c[0]))
     .join("\n");
-}
-
-function callsTo(toolName: string): unknown[][] {
-  return toolsClientMock.callTool.mock.calls.filter((c: unknown[]) => c[0] === toolName);
 }
 
 function stdout(): string {
@@ -130,7 +130,7 @@ describe("argent run input validation", () => {
 
   it("accepts required fields split across --args and flags", async () => {
     await invoke(["gesture-tap", "--udid", "X", "--args", '{"x":0.5,"y":0.5}']);
-    expect(callsTo("gesture-tap")).toHaveLength(1);
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
   });
 
   it("reports only the fields still missing after --args is merged", async () => {
@@ -149,7 +149,7 @@ describe("argent run input validation", () => {
     toolsClientMock.fetchTool.mockResolvedValue(runSequence);
 
     await invoke(["run-sequence", "--udid", "X", "--steps-json", '[{"tool":"button"}]']);
-    expect(callsTo("run-sequence")).toHaveLength(1);
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
   });
 
   it("still prints help for --help without demanding flags", async () => {

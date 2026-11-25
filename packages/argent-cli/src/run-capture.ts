@@ -20,7 +20,6 @@ import {
 import type { FlagsPathOptions } from "@argent/configuration-core";
 
 export interface AfterActionCapture {
-  /** Lines to print after the result. */
   lines: string[];
   /** Printed on stderr in place of a capture that was skipped. */
   note?: string;
@@ -37,6 +36,7 @@ export interface AfterActionCaptureOptions {
 }
 
 const NO_CAPTURE: AfterActionCapture = { lines: [] };
+const NEVER_ABORTED = new AbortController().signal;
 
 /**
  * What `argent run` prints after an interaction tool, as the MCP server appends
@@ -53,13 +53,12 @@ export async function captureAfterAction(
   if (!udid || !(wantScreenshot || wantTree)) return NO_CAPTURE;
   if (containsSecretPlaceholder(payload)) return { lines: [], note: SECRET_CAPTURE_SKIPPED_NOTE };
 
-  const signal = new AbortController().signal;
   const call: CaptureToolCall = async (name, args, s) =>
     (await client.callTool(name, args, { signal: s })).data;
 
   if (profiling) {
     if (toolName === "describe") return NO_CAPTURE;
-    await awaitScreenSettled(call, udid, toolName, signal, CAPTURE_TIMEOUT_MS);
+    await awaitScreenSettled(call, udid, toolName, NEVER_ABORTED, CAPTURE_TIMEOUT_MS);
     return { lines: [], note: PROFILING_CAPTURE_SKIPPED_NOTE };
   }
 
@@ -77,7 +76,7 @@ export async function captureAfterAction(
     call,
     udid,
     toolName,
-    signal,
+    signal: NEVER_ABORTED,
     captureTimeoutMs: CAPTURE_TIMEOUT_MS,
     screenshot: wantScreenshot ? captureScreenshot : undefined,
     tree: wantTree ? captureTree : undefined,

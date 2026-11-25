@@ -26,6 +26,7 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
 interface FakeServer {
   idle: unknown;
   describeFails?: boolean;
+  noIdleTool?: boolean;
 }
 
 function fakeClient(server: FakeServer) {
@@ -34,7 +35,10 @@ function fakeClient(server: FakeServer) {
     order.push(`start:${name}`);
     await new Promise((r) => setTimeout(r, 5));
     order.push(`end:${name}`);
-    if (name === "await-screen-idle") return { data: server.idle };
+    if (name === "await-screen-idle") {
+      if (server.noIdleTool) throw new Error('Tool "await-screen-idle" not found');
+      return { data: server.idle };
+    }
     if (name === "screenshot") return { data: "shot-handle" };
     if (name === "describe") {
       if (server.describeFails) throw new Error("describe failed");
@@ -233,5 +237,37 @@ describe("captureAfterAction", () => {
     });
 
     expect(capture.lines).toEqual(["Screen after action: /tmp/after.png"]);
+  });
+
+  it("sleeps out the settle budget on a tool-server without await-screen-idle", async () => {
+    const { client, callTool } = fakeClient({ idle: null, noIdleTool: true });
+    const started = Date.now();
+
+    const capture = await captureAfterAction({
+      client,
+      toolName: "keyboard",
+      payload: { udid: "SIM-1", text: "hi" },
+      profiling: false,
+      flagsPath,
+    });
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+    expect(toolNames(callTool)).toEqual(["await-screen-idle", "screenshot", "describe"]);
+    expect(capture.lines[0]).toBe("Screen after action: /tmp/after.png");
+  });
+
+  it("neither waits nor notes anything after describe while a profiler records", async () => {
+    const { client, callTool } = fakeClient({ idle: { settled: true } });
+
+    const capture = await captureAfterAction({
+      client,
+      toolName: "describe",
+      payload: { udid: "SIM-1" },
+      profiling: true,
+      flagsPath,
+    });
+
+    expect(callTool).not.toHaveBeenCalled();
+    expect(capture).toEqual({ lines: [] });
   });
 });

@@ -198,10 +198,10 @@ Examples:
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
 
-After an interaction tool (gestures, key presses, app launches), the output
-waits for the screen to settle and adds the screen: a screenshot file and the
-element tree. The disable-auto-screenshot and disable-auto-describe flags turn
-these off; --json prints only the result.
+After an interaction tool (gestures, key presses, app launches), argent run
+waits for the screen to settle, then prints a screenshot path and the element
+tree; --out also saves that screenshot. The disable-auto-screenshot and
+disable-auto-describe flags turn these off. --json prints only the result.
 
 Exits 1 when the tool fails. Also exits 1 when the result reports that the
 call did not do its job: an e2e test that does not pass, an await-ui-element
@@ -444,9 +444,13 @@ settled=false or debugger-status's not_connected.
     if (capture.note) console.error(capture.note);
     for (const line of capture.lines) console.log(line);
     const { screenshot } = capture;
-    if (outPath && meta.outputHint !== "image" && screenshot) {
-      await saveImage(async () => writeImageFile(outPath, screenshot.data));
-      console.log(`Wrote: ${outPath}`);
+    if (outPath && meta.outputHint !== "image") {
+      if (screenshot) {
+        await saveImage(async () => writeImageFile(outPath, screenshot.data));
+        console.log(`Wrote: ${outPath}`);
+      } else {
+        console.error(`No screen was captured, so ${outPath} was not written.`);
+      }
     }
   }
 

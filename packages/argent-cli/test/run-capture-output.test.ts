@@ -43,6 +43,7 @@ const gestureTap = {
 describe("argent run after an interaction tool", () => {
   let tmp: string;
   let logs: string[];
+  let errs: string[];
   const savedHome = process.env.HOME;
 
   beforeEach(() => {
@@ -53,7 +54,8 @@ describe("argent run after an interaction tool", () => {
     vi.spyOn(process, "cwd").mockReturnValue(tmp);
     logs = [];
     vi.spyOn(console, "log").mockImplementation((...a) => void logs.push(a.join(" ")));
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    errs = [];
+    vi.spyOn(console, "error").mockImplementation((...a) => void errs.push(a.join(" ")));
     client.fetchTool.mockResolvedValue(gestureTap);
     client.callTool.mockImplementation(async (name: string) => {
       if (name === "gesture-tap") return { data: { tapped: true } };
@@ -96,5 +98,16 @@ describe("argent run after an interaction tool", () => {
 
     expect(fs.readFileSync(out)).toEqual(SHOT.data);
     expect(logs.at(-1)).toBe(`Wrote: ${out}`);
+  });
+
+  it("says when --out was not written because no screen was captured", async () => {
+    const out = path.join(tmp, "after.png");
+
+    await run([...tapArgs, "--out", out, "--args", '{"text":"{{secret:PIN}}"}'], {
+      paths: {} as never,
+    });
+
+    expect(fs.existsSync(out)).toBe(false);
+    expect(errs.at(-1)).toBe(`No screen was captured, so ${out} was not written.`);
   });
 });
