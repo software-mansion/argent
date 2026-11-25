@@ -95,7 +95,7 @@ describe("snapshot step wiring", () => {
     expect(Date.now() - lastActionAt).toBeGreaterThanOrEqual(50);
   });
 
-  it("warms the capture backend only for a run with a snapshot step", async () => {
+  it("warms the capture backend only for a run with a snapshot or run: step", async () => {
     await writeFlow("with-snapshot", {
       executionPrerequisite: "",
       steps: [{ kind: "snapshot", name: "home" }],
@@ -114,5 +114,21 @@ describe("snapshot step wiring", () => {
       expect.anything(),
       expect.objectContaining({ platform: "ios" })
     );
+  });
+
+  it("warms the capture backend for a run whose snapshot steps live in a run: fragment", async () => {
+    await writeFlow("fragment", {
+      executionPrerequisite: "",
+      steps: [{ kind: "snapshot", name: "home" }],
+    });
+    await writeFlow("includes-fragment", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "fragment.yaml" }],
+    });
+    vi.mocked(warmSnapshotCapture).mockClear();
+
+    await run("includes-fragment");
+
+    expect(vi.mocked(warmSnapshotCapture)).toHaveBeenCalledTimes(1);
   });
 });

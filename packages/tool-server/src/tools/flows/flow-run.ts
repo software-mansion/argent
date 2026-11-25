@@ -1872,7 +1872,7 @@ Without a link, every step kind runs.`,
       // false) on chromium/vega and on a run already cancelled; restored on
       // teardown.
       const statusBarPinned = device !== null && (await pinStatusBar(device, signal));
-      if (device !== null && !signal?.aborted && hasSnapshotStep(flow)) {
+      if (device !== null && !signal?.aborted && mayRunSnapshotStep(flow)) {
         void warmSnapshotCapture(registry, device);
       }
 
@@ -2550,8 +2550,11 @@ function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
   return scope.depth ? { depth: scope.depth } : {};
 }
 
-function hasSnapshotStep(flow: FlowFile): boolean {
-  return [...walkSteps(flow.steps)].some(({ step }) => step.kind === "snapshot");
+/** A `run:` target is read only when its step executes, so it counts as a possible snapshot. */
+function mayRunSnapshotStep(flow: FlowFile): boolean {
+  return [...walkSteps(flow.steps)].some(
+    ({ step }) => step.kind === "snapshot" || step.kind === "run"
+  );
 }
 
 /** Steps that only read the screen or wait, so the screen cannot change because of them. */
