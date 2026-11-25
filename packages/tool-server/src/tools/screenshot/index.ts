@@ -146,14 +146,18 @@ export async function tvScreenshot(
     await execFileAsync("xcrun", await simctlArgsForUdid(udid, io), { signal });
   };
 
-  if (scale !== undefined && scale >= 1.0) {
+  // A capture at a given scale stays lossless. The flow settle compares these
+  // frames for motion, and JPEG spreads a thin coloured line over more pixels:
+  // a 2 pt red line changes 800 pixels at scale 0.25 as PNG and 1200 as JPEG.
+  if (scale !== undefined) {
     await capture(file);
+    await downscalePngInPlace(file, scale, signal);
     return file;
   }
 
-  // The capture is downscaled anyway, so it is taken as JPEG: simctl encodes a
-  // 4K frame as PNG in about 350 ms and as JPEG in about 150 ms, and the
-  // downscale writes the PNG.
+  // The default capture, which every Apple TV action attaches, is downscaled
+  // anyway, so it is taken as JPEG: simctl encodes a 4K frame as PNG in about
+  // 350 ms and as JPEG in about 150 ms, and the downscale writes the PNG.
   const jpeg = file.replace(/\.png$/, ".jpg");
   await capture(jpeg, "jpeg");
   try {

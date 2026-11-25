@@ -197,12 +197,15 @@ describe("screenshot tool on an Apple TV simulator", () => {
     expect(resize.at(-1)).toMatch(/\.png$/);
   });
 
-  it("keeps a full-resolution capture lossless", async () => {
-    const { io } = await capturesFor({ scale: 1 });
+  it("keeps a capture at a given scale lossless", async () => {
+    // Scale 0.25 is the flow settle's: JPEG would change its motion counts.
+    for (const scale of [1, 0.25]) {
+      const { io } = await capturesFor({ scale });
 
-    expect(io).toHaveLength(1);
-    expect(io[0]).not.toContain("--type=jpeg");
-    expect(io[0]!.at(-1)).toMatch(/\.png$/);
+      expect(io).toHaveLength(1);
+      expect(io[0]).not.toContain("--type=jpeg");
+      expect(io[0]!.at(-1)).toMatch(/\.png$/);
+    }
   });
 
   it("falls back to a full-resolution PNG when the downscale fails", async () => {
