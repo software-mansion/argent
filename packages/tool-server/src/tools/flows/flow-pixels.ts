@@ -513,6 +513,13 @@ const ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS = 400;
 // caret or a spinner that never stops still lets the snapshot go ahead.
 const SNAPSHOT_LOCALIZED_POLLS = 3;
 
+// An eased or low-contrast fade can change less than PIXEL_THRESHOLD per poll.
+// For this long after the last action, a frame must also not be moving against
+// the one SNAPSHOT_SLOW_START_POLLS polls earlier. The steps between the action
+// and the snapshot (an await, slow captures) use up part of it.
+const SNAPSHOT_SLOW_START_WINDOW_MS = 2_000;
+const SNAPSHOT_SLOW_START_POLLS = 3;
+
 // The home indicator (iOS) or gesture bar (Android) at the bottom of a phone
 // capture, which the system fades after an app comes to the front.
 const HOME_INDICATOR_MASK_FRACTION = 0.02;
@@ -533,35 +540,54 @@ export async function settlesOnPixels(device: ActionEnv["device"]): Promise<bool
 /**
  * Wait until two captures one poll apart show the same screen, and a quiet
  * window ({@link SNAPSHOT_QUIET_AFTER_ACTION_MS}) has passed since the run's
- * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. `blind` means no
- * two captures could be compared.
+ * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. Soon after an
+ * action the screen also has to hold against a capture from
+ * {@link SNAPSHOT_SLOW_START_POLLS} polls earlier. `blind` means no two
+ * captures could be compared.
  */
 export async function settleOnPixels(
   env: ActionEnv
 ): Promise<"still" | "moving" | "aborted" | "blind"> {
   const deadline = Date.now() + SNAPSHOT_SETTLE_TIMEOUT_MS;
+  const lastActionAt = env.lastActionAt ?? 0;
   const quietAfter =
-    (env.lastActionAt ?? 0) +
+    lastActionAt +
     (env.device.platform === "android"
       ? ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS
       : SNAPSHOT_QUIET_AFTER_ACTION_MS);
   const maskTopFraction = await statusBarMaskFraction(env.device);
   const maskBottomFraction = maskTopFraction > 0 ? HOME_INDICATOR_MASK_FRACTION : 0;
-  let previous = await capturePixelsWithin(env, deadline, true);
+  const compare = (a: PixelFrame, b: PixelFrame) =>
+    comparePixels(a, b, maskTopFraction, maskBottomFraction);
+  const mayStillBeChanging = (recent: PixelFrame[], frame: PixelFrame) => {
+    if (Date.now() - lastActionAt >= SNAPSHOT_SLOW_START_WINDOW_MS) return false;
+    if (recent.length < SNAPSHOT_SLOW_START_POLLS) return true;
+    return compare(recent[0], frame) === "moving";
+  };
+
+  const first = await capturePixelsWithin(env, deadline, true);
+  let recent = first ? [first] : [];
   let compared = false;
   let localizedPolls = 0;
   while (Date.now() < deadline) {
     if (!(await sleepOrAbort(SNAPSHOT_SETTLE_POLL_MS, env.signal))) return "aborted";
     const frame = await capturePixelsWithin(env, deadline, false);
     if (env.signal?.aborted) return "aborted";
-    if (previous && frame) {
+    if (!frame) {
+      recent = [];
+      continue;
+    }
+    const previous = recent.at(-1);
+    if (previous) {
       compared = true;
-      const change = comparePixels(previous, frame, maskTopFraction, maskBottomFraction);
+      const change = compare(previous, frame);
       localizedPolls = change === "localized" ? localizedPolls + 1 : 0;
-      const settled = change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS;
+      const settled =
+        (change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS) &&
+        !mayStillBeChanging(recent, frame);
       if (settled && Date.now() >= quietAfter) return "still";
     }
-    previous = frame;
+    recent = [...recent, frame].slice(-SNAPSHOT_SLOW_START_POLLS);
   }
   return compared ? "moving" : "blind";
 }
