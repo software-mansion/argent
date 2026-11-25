@@ -1,25 +1,23 @@
 ---
-sidebar_position: 9
+sidebar_position: 11
 sidebar_label: Automatic updates
 title: Automatic updates
 sidebar_custom_props:
   icon: repeat-2
 ---
 
-Argent can install eligible updates without a separate confirmation. Automatic updates are disabled by default.
+Argent checks for updates when the tool server starts and every 24 hours. By default, Argent updates a confirmed global installation in the background. Argent follows the minimum release age policy.
 
-Enable automatic updates with this command:
+If your project declares the Argent version, the agent asks before updating it. The agent also asks when Argent cannot confirm which installation the package manager would update.
+
+A background update leaves your workspace files and running session alone. The next MCP session uses the updated version. On the first tool call, the agent tells you what changed.
+
+To ask before every update, run:
 
 ```bash
-argent config set autoUpdate.enabled true
+argent config set autoUpdate.enabled false
 ```
 
-The tool-server checks for updates at startup and every 24 hours. Argent updates the install that runs the tool-server.
+To turn off release highlights, run `argent disable whats-new`.
 
-Argent uses the same update process as `argent update --yes`. The tool-server restarts after a successful update.
-
-Argent follows the configured minimum release age. Argent waits until a release meets that policy.
-
-Run `argent config set autoUpdate.enabled false` to disable automatic updates.
-
-The [configuration reference](/docs/reference/configuration) describes the setting and its storage. The [tools reference](/docs/reference/tools) describes the related update tools.
+See the [configuration reference](/docs/reference/configuration) and the [tools reference](/docs/reference/tools).

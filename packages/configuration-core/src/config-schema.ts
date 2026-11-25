@@ -122,13 +122,12 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "autoUpdate.enabled",
     description:
-      "Whether argent automatically installs an eligible update when the tool-server finds one. " +
-      "Disabled by default. This is a machine-level setting, so it may only be set globally.",
+      "Automatically update the global Argent installation. Project-local installs require confirmation.",
     scopes: ["global"],
     parse: asBoolean,
     merge: "prioritize-local",
-    default: false,
-    example: "true",
+    default: true,
+    example: "false",
   },
   {
     key: "lens.agent",

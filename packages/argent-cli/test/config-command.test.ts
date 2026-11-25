@@ -280,16 +280,16 @@ describe("argent config — list & json", () => {
     expect(telemetry.effective).toBe(true);
   });
 
-  it("enables automatic updates through the boolean config command", () => {
-    config(["set", "autoUpdate.enabled", "true"]);
+  it("disables automatic updates through the boolean config command", () => {
+    config(["set", "autoUpdate.enabled", "false"]);
     logSpy.mockClear();
     config(["get", "autoUpdate.enabled"]);
-    expect(output()).toBe("true");
+    expect(output()).toBe("false");
 
     const globalCfg = JSON.parse(
       fs.readFileSync(path.join(homeDir, ".argent", "config.json"), "utf8")
     );
-    expect(globalCfg).toEqual({ autoUpdate: { enabled: true } });
+    expect(globalCfg).toEqual({ autoUpdate: { enabled: false } });
   });
 
   it("get --json emits a structured record", () => {

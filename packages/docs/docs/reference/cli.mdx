@@ -38,6 +38,8 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
 
+Global installations support [automatic updates](/docs/features/automatic-updates). Project-local installations require confirmation.
+
 After an update, the agent tells you the main changes once, on its first Argent tool call (`argent disable whats-new` turns this off).
 
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.

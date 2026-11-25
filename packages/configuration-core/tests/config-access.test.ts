@@ -189,14 +189,11 @@ describe("setConfigValue — return value", () => {
   });
 });
 
-describe("autoUpdate.enabled — opt-in global setting", () => {
-  it("defaults to false and accepts a global boolean", () => {
-    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(false);
-    setConfigValue("autoUpdate.enabled", true, "global", opts());
+describe("autoUpdate.enabled", () => {
+  it("defaults on and accepts a machine-wide opt-out", () => {
     expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(true);
-  });
-
-  it("rejects project scope", () => {
+    setConfigValue("autoUpdate.enabled", false, "global", opts());
+    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(false);
     expect(() => setConfigValue("autoUpdate.enabled", true, "project", opts())).toThrow(
       ConfigScopeError
     );

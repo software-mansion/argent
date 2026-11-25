@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -243,6 +244,43 @@ export function globalCommandOptions(pm: PackageManager): {
   if (pm !== "yarn" || !process.env.npm_config_user_agent?.startsWith("npm/")) return cwd;
   const { npm_config_prefix: _npmPrefix, ...env } = process.env;
   return { ...cwd, env };
+}
+
+// pnpm 11 installs each global package in its own directory. Its listing
+// names the actual package path on both sides of that layout change.
+const globalLocationArgs: Record<PackageManager, string[]> = {
+  npm: ["root", "-g"],
+  pnpm: ["list", "-g", "--depth", "0", "--json", PACKAGE_NAME],
+  yarn: ["global", "dir"],
+  bun: ["pm", "ls", "-g"],
+};
+
+/** A PATH shim alone cannot prove where an unattended global install would write. */
+export function ownsGlobalInstall(pm: PackageManager, runningRoot: string): boolean {
+  try {
+    const output = execFileSync(pm, globalLocationArgs[pm], {
+      ...globalCommandOptions(pm),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      shell: process.platform === "win32",
+      timeout: 5000,
+    }).trim();
+    let pkg: string | undefined;
+    if (pm === "pnpm") {
+      const listings = JSON.parse(output) as { dependencies?: Record<string, { path: string }> }[];
+      pkg = listings[0]?.dependencies?.[PACKAGE_NAME]?.path;
+    } else {
+      // Yarn reports the global project directory. Bun prefixes its package
+      // list with "<global project> node_modules (<count>)".
+      const dir = pm === "bun" ? /^([^\r\n]+) node_modules \(/.exec(output)?.[1] : output;
+      if (!dir || !path.isAbsolute(dir)) return false;
+      pkg =
+        pm === "npm" ? path.join(dir, PACKAGE_NAME) : path.join(dir, "node_modules", PACKAGE_NAME);
+    }
+    return !!pkg && path.isAbsolute(pkg) && fs.realpathSync(pkg) === runningRoot;
+  } catch {
+    return false;
+  }
 }
 
 export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {

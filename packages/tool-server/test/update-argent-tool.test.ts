@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -15,13 +16,20 @@ vi.mock("../src/utils/update-checker", () => ({
 import { spawn } from "node:child_process";
 import { getUpdateState } from "../src/utils/update-checker";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+
 const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
   // `on` is required: the tool attaches 'error' and 'exit' listeners (spawn
   // ENOENT must not crash the tool-server; a no-op updater exit unblocks later calls).
-  return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
+  return Object.assign(new EventEmitter(), { unref: vi.fn() }) as unknown as ReturnType<
+    typeof spawn
+  >;
 }
 
 function stateWithUpdate(latestVersion = "99.0.0") {
@@ -138,30 +146,34 @@ describe("update-argent tool", () => {
     );
   });
 
-  it("automatic update reuses the updater for the running global install", () => {
-    expect(scheduleAutomaticUpdate("99.0.0")).toBe(true);
+  it("runs the bundled global updater and restores the reminder after a failed attempt", async () => {
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0");
+    scheduleAutomaticUpdate("99.0.0");
 
+    expect(isUpdatingAutomatically("99.0.0")).toBe(true);
     vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
     expect(mockSpawn).toHaveBeenCalledWith(
-      "argent",
-      ["update", "--yes", "--global", "--version", "99.0.0"],
-      expect.objectContaining({ detached: true, stdio: "ignore" })
+      process.execPath,
+      [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
+      expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
     );
+    const child = mockSpawn.mock.results[0]!.value!;
+    child.emit("exit", 1, null);
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
   });
 
-  it("automatic update pins the project root for the running local install", () => {
-    const projDir = stageDeclaringProject();
-    process.env.ARGENT_INSTALL_KIND = "local";
-    process.env.ARGENT_PROJECT_ROOT = projDir;
-
-    expect(scheduleAutomaticUpdate("99.0.0")).toBe(true);
+  it.each(["local", undefined])("keeps a %s installation on the consent path", async (kind) => {
+    if (kind) process.env.ARGENT_INSTALL_KIND = kind;
+    else delete process.env.ARGENT_INSTALL_KIND;
+    process.env.ARGENT_PROJECT_ROOT = stageDeclaringProject();
+    scheduleAutomaticUpdate("99.0.0");
     vi.advanceTimersByTime(2000);
-
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "argent",
-      ["update", "--yes", "--local", "--version", "99.0.0", "--project-root", projDir],
-      expect.objectContaining({ detached: true, stdio: "ignore" })
-    );
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
   });
 
   it("a global-serving server refuses a local target instead of guessing the project", async () => {

@@ -113,65 +113,57 @@ const zodSchema = z.object({
     ),
 });
 
-function scheduleUpdater(updateArgs: string[]): boolean {
-  if (updateScheduled) return false;
-  updateScheduled = true;
+// A running server can outlive its package on disk. Keep its old-version
+// reminder quiet until the next launch, or re-offer if the updater fails.
+let automaticVersion: string | null = null;
 
-  // Delay the spawn so an in-flight MCP response can reach the client before
-  // the updater stops this tool-server.
+export function isUpdatingAutomatically(version: string | null): boolean {
+  return version !== null && automaticVersion === version;
+}
+
+function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automatic = false): void {
+  updateScheduled = true;
+  // Let a manual update's MCP response reach the client before its server stops.
   setTimeout(() => {
-    const cliEntry = resolveCliEntry();
-    const cmd = cliEntry ? process.execPath : "argent";
-    const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
-    const child = spawn(cmd, args, {
-      detached: true,
-      stdio: "ignore",
-      env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
-    });
-    // Without an error listener a spawn failure (ENOENT when `argent` isn't
-    // on PATH — the norm in local mode) crashes the tool-server. A later check
-    // or tool call can retry after the flag is cleared.
+    const child = spawn(
+      cliEntry ? process.execPath : "argent",
+      cliEntry ? [cliEntry, ...updateArgs] : updateArgs,
+      {
+        detached: true,
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          ARGENT_UPDATE_TRIGGER: "mcp_update",
+          ...(automatic && { ARGENT_AUTOMATIC_UPDATE: "1" }),
+        },
+      }
+    );
     child.on("error", (err) => {
       console.error(`[update-argent] failed to spawn updater: ${err}`);
+      if (automatic) automaticVersion = null;
       updateScheduled = false;
     });
-    // Updater exited without killing this server (failed or no-op'd) — unblock
-    // future attempts; a successful update restarts this server anyway.
-    child.on("exit", () => {
+    child.on("exit", (code) => {
+      if (automatic && code !== 0) automaticVersion = null;
       updateScheduled = false;
     });
     child.unref();
   }, 2000);
-
-  return true;
 }
 
-/** Schedule the existing non-interactive updater for the install serving this server. */
-export function scheduleAutomaticUpdate(installableVersion: string): boolean {
-  const running = classifyRunningInstall();
-  let projectRoot: string | null = null;
-
-  if (running.kind === "local") {
-    const recordedRoot =
-      running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null;
-    projectRoot = recordedRoot ?? findDeclaringProjectRoot(process.cwd());
-    if (!projectRoot) {
-      console.error(
-        "[update-argent] automatic update skipped: could not determine the local project root"
-      );
-      return false;
-    }
-  }
-
-  const updateArgs = [
-    "update",
-    "--yes",
-    ...targetFlagsFor(running.kind),
-    "--version",
-    installableVersion,
-  ];
-  if (projectRoot) updateArgs.push("--project-root", projectRoot);
-  return scheduleUpdater(updateArgs);
+export function scheduleAutomaticUpdate(version: string): void {
+  if (
+    process.env.ARGENT_INSTALL_KIND !== "global" ||
+    updateScheduled ||
+    isUpdatingAutomatically(version)
+  )
+    return;
+  // Only invoke our own bundled CLI. It verifies the global destination again
+  // before writing, including for a launcher that guessed "global" from cwd.
+  const cliEntry = resolveCliEntry();
+  if (!cliEntry) return;
+  automaticVersion = version;
+  scheduleUpdater(["update", "--yes", "--global", "--version", version], cliEntry, true);
 }
 
 export const updateArgentTool: ToolDefinition<{
@@ -276,7 +268,7 @@ export const updateArgentTool: ToolDefinition<{
       projectRoot ??
       (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
     if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
-    scheduleUpdater(updateArgs);
+    scheduleUpdater(updateArgs, resolveCliEntry());
 
     const targetLabel =
       effectiveTarget === "both"

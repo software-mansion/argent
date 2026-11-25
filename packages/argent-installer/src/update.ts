@@ -3,6 +3,7 @@ import pc from "picocolors";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import semver from "semver";
+import { getConfigValueByKey } from "@argent/configuration-core";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
@@ -37,6 +38,7 @@ import {
   hasProjectPackageJson,
   isDeclaredLocally,
   resolveInstallMode,
+  resolvePackageRoot,
   formatShellCommand,
   resolveProjectRoot,
   RULES_DIR,
@@ -45,7 +47,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
-import { yarnClassicNote } from "./package-manager.js";
+import { ownsGlobalInstall, yarnClassicNote } from "./package-manager.js";
 import { reportSkillRefresh } from "./skills.js";
 import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -157,6 +159,7 @@ export async function update(args: string[]): Promise<void> {
   const noTelemetry = args.includes("--no-telemetry");
   const requestedVersion = getRequestedVersion(args);
   const trigger = getUpdateTriggerFromEnv();
+  const automatic = process.env.ARGENT_AUTOMATIC_UPDATE === "1";
   telemetryInit("installer");
   const updateStartTime = performance.now();
   let telemetryFinalized = false;
@@ -310,19 +313,35 @@ export async function update(args: string[]): Promise<void> {
 
     const pm =
       mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
+    if (automatic) {
+      const globalRoot = getGloballyInstalledPackageRoot();
+      if (
+        !globallyInstalled ||
+        !globalRoot ||
+        fs.realpathSync(globalRoot) !== projectRoot ||
+        getConfigValueByKey("autoUpdate.enabled") !== true ||
+        !ownsGlobalInstall(pm, projectRoot)
+      ) {
+        spinner.stop("Could not confirm an automatic update for this installation.");
+        return "noop";
+      }
+    }
     // Local installs must rewrite the project's manifest/lockfile.
     const runIn = mode === "local" ? { cwd: projectRoot } : globalCommandOptions(pm);
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
 
-    if (requestedVersion !== null) {
+    if (requestedVersion !== null && !automatic) {
       // Validated once, before the target loop.
       target = requestedVersion;
     } else {
       let resolved;
       try {
-        resolved = await resolveInstallableUpdateTarget(pm, installed, runIn.cwd);
+        resolved =
+          automatic && requestedVersion
+            ? await resolveInstallableUpdateTarget(pm, installed, runIn.cwd, requestedVersion)
+            : await resolveInstallableUpdateTarget(pm, installed, runIn.cwd);
       } catch (err) {
         spinner.stop(pc.red("Could not reach registry."));
         await trackPackageAction(
@@ -345,6 +364,13 @@ export async function update(args: string[]): Promise<void> {
         );
         p.log.error("Failed to determine the latest Argent release from the registry.");
         return { failed: UPDATE_REGISTRY_CHECK_FAILED };
+      }
+
+      // The checker and package manager can read different release-age policies.
+      // An unattended update needs both to agree on the pinned candidate.
+      if (automatic && resolved.targetVersion !== requestedVersion) {
+        spinner.stop("The eligible version has changed.");
+        return "noop";
       }
 
       latest = resolved.latestVersion;
@@ -420,31 +446,35 @@ export async function update(args: string[]): Promise<void> {
 
       p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
-      // Stop only tool-server(s) from the install we're replacing — a
-      // DIFFERENT install's server may be serving another editor session (same
-      // invariant as the launcher's reuse gate and dead-bundle sweep). An
-      // unresolvable install dir (fresh install, Yarn PnP) means nothing of
-      // ours to stop; the reuse gate retires a stale server on the next call.
-      const installDirToStop =
-        mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
-      try {
-        if (installDirToStop) {
-          await killToolServerForInstallDir(installDirToStop);
-        } else if (mode === "global") {
-          // The global package root can be unresolvable (Windows .cmd-wrapper
-          // layouts — see getGloballyInstalledPackageRoot). Fall back to the
-          // legacy single-slot record, which only older argent versions write.
-          await killToolServer();
+      // Keep active sessions alive during a background update. The launcher
+      // checks the version on disk before reusing a server on the next connection.
+      if (!automatic) {
+        // Stop only tool-server(s) from the install we're replacing — a
+        // DIFFERENT install's server may be serving another editor session (same
+        // invariant as the launcher's reuse gate and dead-bundle sweep). An
+        // unresolvable install dir (fresh install, Yarn PnP) means nothing of
+        // ours to stop; the reuse gate retires a stale server on the next call.
+        const installDirToStop =
+          mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
+        try {
+          if (installDirToStop) {
+            await killToolServerForInstallDir(installDirToStop);
+          } else if (mode === "global") {
+            // The global package root can be unresolvable (Windows .cmd-wrapper
+            // layouts — see getGloballyInstalledPackageRoot). Fall back to the
+            // legacy single-slot record, which only older argent versions write.
+            await killToolServer();
+          }
+        } catch (err) {
+          await trackPackageAction(
+            "update_failed",
+            updateStartTime,
+            false,
+            UPDATE_TOOLSERVER_STOP_FAILED
+          );
+          p.log.error(`Could not stop the running tool server: ${err}`);
+          return { failed: UPDATE_TOOLSERVER_STOP_FAILED };
         }
-      } catch (err) {
-        await trackPackageAction(
-          "update_failed",
-          updateStartTime,
-          false,
-          UPDATE_TOOLSERVER_STOP_FAILED
-        );
-        p.log.error(`Could not stop the running tool server: ${err}`);
-        return { failed: UPDATE_TOOLSERVER_STOP_FAILED };
       }
 
       const packageAction = resolveUpdatePackageAction(
@@ -579,6 +609,30 @@ export async function update(args: string[]): Promise<void> {
       await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
       p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
       process.exit(1);
+    }
+
+    if (automatic) {
+      // An editor can launch a repo-local or temporary binary outside its
+      // project. Even a "global" launcher hint must match the actual package
+      // on PATH and the directory this package manager would update.
+      const runningRoot = fs.realpathSync(resolvePackageRoot(import.meta.dirname));
+      // Bypass interactive target selection and the workspace refresh. Both can
+      // modify a checkout even when only the global package needs an upgrade.
+      const result = requestedVersion ? await applyUpdateForTarget("global", runningRoot) : "noop";
+      if (result === "updated" && requestedVersion) {
+        writeCliRecord({
+          mode: "global",
+          projectRoot: runningRoot,
+          version: getGloballyInstalledVersion() ?? requestedVersion,
+        });
+        await completeUpdateTelemetry();
+      } else {
+        // The server resumes its normal reminder after a skipped/failed update.
+        process.exitCode = 1;
+        if (typeof result === "object") await failUpdateTelemetry(result.failed);
+        else await completeUpdateTelemetry();
+      }
+      return;
     }
 
     // The committed .argent/install.json (else a manifest declaration) decides

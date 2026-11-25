@@ -33,6 +33,7 @@ import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
+import { isUpdatingAutomatically } from "./tools/system/update-argent";
 import { buildUpdateNote } from "./update-utils";
 import {
   buildScreenRecordingNote,
@@ -1075,7 +1076,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // Gate on `updateInstallable`, not `updateAvailable`, and advertise the
         // version the resolver would install: both honour the release-age policy.
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
-        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
+        const shouldNotify =
+          updateInstallable &&
+          !isUpdatingAutomatically(installableVersion) &&
+          !isUpdateNoteSuppressed();
         if (shouldNotify) {
           suppressUpdateNote(AUTO_SUPPRESS_MS);
         }

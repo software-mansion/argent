@@ -216,7 +216,7 @@ export function start(): void {
   const warmKeepAlive = setInterval(() => {}, 1_000);
   void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
-  const updateChecker = startUpdateChecker({ onAutoUpdate: scheduleAutomaticUpdate });
+  let updateChecker: ReturnType<typeof startUpdateChecker> | undefined;
 
   const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
@@ -347,7 +347,7 @@ export function start(): void {
     }
 
     previewWindow.dispose();
-    updateChecker.dispose();
+    updateChecker?.dispose();
     httpHandle.dispose();
 
     // A network capture start or stop under way ends first, as at
@@ -443,6 +443,7 @@ export function start(): void {
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
+        updateChecker = startUpdateChecker({ onAutoUpdate: scheduleAutomaticUpdate });
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
         const origin = formatOrigin(HOST, boundPort);
