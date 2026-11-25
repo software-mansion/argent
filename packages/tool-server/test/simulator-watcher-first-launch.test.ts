@@ -357,6 +357,25 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       expectArmed(afterReboot);
     });
 
+    it("arms a simulator again that rebooted before any poll took its service up", async () => {
+      execSimctlMock.mockResolvedValue('{"devices":{}}');
+      const { ready, stop } = startSimulatorWatcher(realRegistry);
+      await ready;
+      await armSimulator(SIMULATOR.id);
+      const service = await resolveLikeATool();
+      expectArmed(service);
+
+      execFileMock.mockClear();
+      execSimctlMock.mockResolvedValue(BOOTED_LIST);
+      await vi.advanceTimersByTimeAsync(10_000);
+      stop();
+
+      expect(launchctlSetenvs()).toContainEqual([
+        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
+        service.socketPath,
+      ]);
+    });
+
     it("arms a service that was refused while the install was pending, counting no failure", async () => {
       pending.value = true;
       const service = await resolveLikeATool();
@@ -386,20 +405,22 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       await ready;
       const service = await resolveLikeATool();
       const ensureEnvReady = vi.spyOn(service, "ensureEnvReady");
+      const reverifyEnv = vi.spyOn(service, "reverifyEnv");
+      const attempts = () => ensureEnvReady.mock.calls.length + reverifyEnv.mock.calls.length;
 
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(ensureEnvReady).not.toHaveBeenCalled();
+      expect(attempts()).toBe(0);
       expect(execSimctlMock).not.toHaveBeenCalled();
       expect(xcrunCalls()).toEqual([]);
 
       pending.value = false;
       await vi.advanceTimersByTimeAsync(20_000);
       expectArmed(service);
-      expect(ensureEnvReady).toHaveBeenCalledTimes(1);
+      expect(attempts()).toBe(1);
 
       // Armed, so it costs later polls nothing.
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(ensureEnvReady).toHaveBeenCalledTimes(1);
+      expect(attempts()).toBe(1);
       stop();
     });
 

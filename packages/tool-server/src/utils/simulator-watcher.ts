@@ -88,14 +88,13 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
-  // A tool call can have started the service, and spent its attempt, before this poll.
+  // A tool call can have started the service before this poll, and the
+  // simulator can have rebooted since, out of the watcher's sight.
   const started = await runningNativeDevtools(registry, udid);
   const service = started ?? (await resolveNativeDevtools(registry, udid));
   if (!service) return;
   trackedServices.set(udid, service);
-  if (started && !started.isEnvSetup() && !started.getInitFailure()?.givenUp) {
-    await started.ensureEnvReady().catch(() => {});
-  }
+  await started?.reverifyEnv().catch(() => {});
 }
 
 function nativeDevtoolsUrn(udid: string): string {
