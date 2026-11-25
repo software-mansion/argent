@@ -179,10 +179,10 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
             keepFile
               ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
               : stored
-                ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
-                  `registry starts empty rather than the app having logged nothing.`
-                : `The ${entries} went with it — no log file held them, so this ` +
-                  `registry starts empty rather than the app having logged nothing.`,
+                ? `The ${entries} went with it: the log file is deleted on teardown. This ` +
+                  `registry holds only what the app has logged since.`
+                : `The ${entries} went with it: no log file held them. This ` +
+                  `registry holds only what the app has logged since.`,
             connectionLost
           );
         }
