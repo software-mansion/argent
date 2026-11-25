@@ -6,7 +6,7 @@ import {
   type MessageCluster,
   type RecentLogEntry,
 } from "../../utils/debugger/log-file-writer";
-import { DEBUGGER_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { DEBUGGER_TOOL_CAPABILITY, reapedDebuggerKind } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
@@ -87,7 +87,7 @@ export function createDebuggerLogRegistryTool(
     id: "debugger-log-registry",
     description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, messages cut to 300 characters).
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Supports React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> and Chromium.
-Use when investigating warnings, errors, or unexpected output. Read { entries } first; Grep the returned file only for older lines or full messages, and never Read it whole: capture stops at 50,000 lines per session. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the stats are empty BECAUSE the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). Without that note, empty means the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output. Read { entries } first; Grep the returned file only for older lines or full messages, and never Read it whole: capture stops at 50,000 lines per session. Returns empty stats if no log data has been captured yet. Check { note }, which is present when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). With a note about the previous session, the stats and { entries } hold only what the runtime replayed or logged since. Without a note, empty means the app has logged nothing.
 When the debugger cannot be reached, it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Grep a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
     zodSchema,
     readOnly: true,
@@ -123,22 +123,16 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
           logicalDeviceId: api.logicalDeviceId,
         };
 
-        // Resolving above silently reconnects after a teardown, so only an
-        // EMPTY registry is ambiguous; one with entries is this session's own
-        // capture, and consuming a breadcrumb there would attach a stale
-        // explanation to a healthy result.
-        if (stats.totalEntries === 0) {
-          // Every id this device answers to: the disposer files the breadcrumb
-          // under the connect id and the `logicalDeviceId` Metro echoed, and
-          // `forgetDeviceAlias` ran in that same dispose, so only the freshly
-          // resolved api still knows the logical id.
-          const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
-            canonicalDeviceId(params.device_id),
-            params.device_id,
-            api.logicalDeviceId,
-          ]);
-          if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
-        }
+        // Every id this device answers to: the disposer files the breadcrumb
+        // under the connect id and the `logicalDeviceId` Metro echoed, and
+        // `forgetDeviceAlias` ran in that same dispose, so only the freshly
+        // resolved api still knows the logical id.
+        const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
+          canonicalDeviceId(params.device_id),
+          params.device_id,
+          api.logicalDeviceId,
+        ]);
+        if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
         const inFile = api.logWriter.getFileEntryCount();
         const fileNote = !api.logWriter.hasFile()
           ? `No log file exists at ${stats.file}, so there is nothing to grep: the counts, clusters and { entries } are all that was captured. Usually the disk was full or ~/.argent/tmp was not writable when this session started (if root owns ~/.argent: sudo chown -R "$USER" ~/.argent). Only a new debugger session gets a file: once that is fixed, call stop-all-simulator-servers with devices: ["${canonicalDeviceId(params.device_id)}"], then debugger-connect again.`
@@ -158,7 +152,7 @@ When the debugger cannot be reached, it returns { status: "not_connected", reaso
           err,
           params
         );
-        const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
+        const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
           canonicalDeviceId(params.device_id),
           params.device_id,
         ]);
