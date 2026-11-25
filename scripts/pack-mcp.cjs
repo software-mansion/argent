@@ -3,9 +3,11 @@
 "use strict";
 
 // Pins the argent-private-releases tag the native binaries and the
-// trace-processor bundle are downloaded from (default: argent-main):
+// trace-processor bundle are downloaded from (default: the newest
+// argent-private main build, argent-main-<sha>; see
+// scripts/resolve-main-binaries-tag.sh):
 //
-//   npm run pack:mcp -- argent-v0.7.1
+//   bun run pack:mcp argent-v0.7.1
 //
 // simulator-server is a separate release stream with its own default, so it
 // never takes the tag.
@@ -18,7 +20,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "..");
 const args = process.argv.slice(2);
 if (args.length > 1) {
   console.error(`Unexpected extra arguments: ${args.slice(1).join(" ")}`);
-  console.error("Usage: npm run pack:mcp -- [argent-release-tag]");
+  console.error("Usage: bun run pack:mcp [argent-release-tag]");
   process.exit(1);
 }
 const tag = args[0];
@@ -41,6 +43,7 @@ function run(cmd, cmdArgs) {
 run("bash", ["scripts/download-simulator-server.sh"]);
 run("bash", ["scripts/download-native-binaries.sh", ...(tag ? [tag] : [])]);
 run("bash", ["scripts/download-trace-processor.sh", ...(tag ? [tag] : [])]);
-run("npm", ["run", "build"]);
-run("npm", ["run", "build", "-w", "@swmansion/argent"]);
-run("npm", ["pack", "-w", "@swmansion/argent", "--pack-destination", "."]);
+run("bun", ["run", "build"]);
+run("node", ["scripts/check-trace-processor.cjs"]);
+run("bun", ["run", "--filter", "@swmansion/argent", "build"]);
+run("bun", ["pm", "pack", "--cwd", "packages/argent", "--destination", WORKSPACE_ROOT]);

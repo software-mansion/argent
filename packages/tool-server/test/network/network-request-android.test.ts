@@ -1,12 +1,24 @@
 import * as zlib from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Registry, type ToolCapability } from "@argent/registry";
 import {
   findAndroidNativeRecord,
-  type AndroidNativeRecord,
-  type AndroidNetworkBody,
+  hasAndroidNetworkCapture,
   type AndroidNetworkInspectorApi,
 } from "../../src/blueprints/android-network-inspector";
+import {
+  forgetJsCapturesOf,
+  jsCapturePayload,
+  setJsCapture,
+} from "../../src/blueprints/network-inspector";
+import type { NativeNetworkBody, NativeNetworkRecord } from "../../src/utils/native-network-record";
 import { networkRequestTool } from "../../src/tools/network/network-request";
+import { networkLogsTool } from "../../src/tools/network/network-logs";
+import { createNativeNetworkLogsTool } from "../../src/tools/native-devtools/native-network-logs";
+import { createNetworkCaptureStartTool } from "../../src/tools/network/network-capture-start";
+import { canonicalDeviceId } from "../../src/utils/debugger/device-alias";
+import { assertSupported } from "../../src/utils/capability";
+import { resolveDevice } from "../../src/utils/device-info";
 
 /**
  * The record store is the inspector's; these tests cover how
@@ -16,14 +28,15 @@ import { networkRequestTool } from "../../src/tools/network/network-request";
 vi.mock("../../src/blueprints/android-network-inspector", () => ({
   ANDROID_NATIVE_REQUEST_ID: /^android-[0-9a-f]{4}-\d+$/,
   findAndroidNativeRecord: vi.fn(),
+  hasAndroidNetworkCapture: vi.fn(),
 }));
 
 const ID = "android-1a2b-7";
 const SERIAL = "emulator-5554";
 const MIB = 1024 * 1024;
 
-const responseBody = vi.fn<(id: string) => Promise<AndroidNetworkBody>>();
-const requestPostData = vi.fn<(id: string) => Promise<AndroidNetworkBody>>();
+const responseBody = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
+const requestPostData = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
 const inspector = { responseBody, requestPostData } as unknown as AndroidNetworkInspectorApi;
 
 interface Details {
@@ -53,11 +66,11 @@ interface Details {
 }
 
 function record(
-  over: Omit<Partial<AndroidNativeRecord>, "request" | "response"> & {
-    request?: Partial<AndroidNativeRecord["request"]>;
-    response?: Partial<NonNullable<AndroidNativeRecord["response"]>>;
+  over: Omit<Partial<NativeNetworkRecord>, "request" | "response"> & {
+    request?: Partial<NativeNetworkRecord["request"]>;
+    response?: Partial<NonNullable<NativeNetworkRecord["response"]>>;
   } = {}
-): AndroidNativeRecord {
+): NativeNetworkRecord {
   const { request, response, ...rest } = over;
   return {
     id: ID,
@@ -74,18 +87,32 @@ function record(
       mimeType: "application/json",
       ...response,
     },
-  } as AndroidNativeRecord;
+  } as NativeNetworkRecord;
 }
 
-function heldBody(bytes: Buffer, truncated = false): AndroidNetworkBody {
+function heldBody(bytes: Buffer, truncated = false): NativeNetworkBody {
   return { available: true, body: bytes.toString("base64"), base64Encoded: true, truncated };
 }
 
-function serve(rec: AndroidNativeRecord): void {
+/** A record is served by an inspector, so Android capture was started. */
+function serve(rec: NativeNetworkRecord): void {
+  vi.mocked(hasAndroidNetworkCapture).mockReturnValue(true);
   vi.mocked(findAndroidNativeRecord).mockImplementation((id: string) =>
     id === rec.id ? { inspector, record: rec } : undefined
   );
 }
+
+/** JS capture started for the device, so the JS layer names its debugger. */
+function startJs(deviceId = SERIAL): void {
+  setJsCapture(jsCapturePayload(8081, canonicalDeviceId(deviceId)!), {
+    bundleId: "com.example.demo",
+    intent: "started",
+    installed: true,
+  });
+}
+
+const NOT_STARTED_HINT =
+  "Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.";
 
 async function details(deviceId = SERIAL, requestId = ID): Promise<Details> {
   const out = await networkRequestTool.execute!(
@@ -124,6 +151,8 @@ function japaneseCatalogue(): Buffer {
 
 beforeEach(() => {
   vi.mocked(findAndroidNativeRecord).mockReset();
+  vi.mocked(hasAndroidNetworkCapture).mockReset().mockReturnValue(false);
+  forgetJsCapturesOf();
   responseBody.mockReset().mockResolvedValue(heldBody(Buffer.from("{}")));
   requestPostData.mockReset();
 });
@@ -333,6 +362,32 @@ describe("view-network-request-details: request bodies and charsets", () => {
     }
   );
 
+  it("decodes windows-1252 on a Node whose TextDecoder reads it as ISO-8859-1", async () => {
+    // 24.9.0 is one such Node; CI's is not, so stand one in.
+    class Iso88591Decoder extends TextDecoder {
+      override decode(...args: Parameters<TextDecoder["decode"]>): string {
+        if (this.encoding !== "windows-1252") return super.decode(...args);
+        return Buffer.from(args[0] as Uint8Array).toString("latin1");
+      }
+    }
+    vi.stubGlobal("TextDecoder", Iso88591Decoder);
+    try {
+      responseBody.mockResolvedValue(heldBody(Buffer.from([0x93, 0x68, 0x69, 0x94, 0x80])));
+      serve(
+        record({
+          response: {
+            headers: { "Content-Type": "text/plain; charset=windows-1252" },
+            mimeType: "text/plain",
+          },
+        })
+      );
+
+      expect((await details()).response.body).toBe("“hi”€");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("drops only the incomplete Shift_JIS character a cut leaves", async () => {
     const sjis = Buffer.from([0x93, 0x8c, 0x8b, 0x9e]); // 東京
     responseBody.mockResolvedValue(heldBody(sjis.subarray(0, 3), true));
@@ -368,7 +423,7 @@ describe("view-network-request-details: request bodies and charsets", () => {
   });
 
   /** A POST the server answered with a 303: the follow-up GET carries no body headers. */
-  function postThen303(firstHopHeaders?: Record<string, string>): AndroidNativeRecord {
+  function postThen303(firstHopHeaders?: Record<string, string>): NativeNetworkRecord {
     return record({
       request: {
         url: "http://localhost:9090/upload",
@@ -628,6 +683,8 @@ describe("view-network-request-details: routing an android- ID", () => {
     ["a logicalDeviceId shaped like an iOS UDID", "6F9619FF-8B86-D011-B42D-00C04FC964FF"],
   ])("resolves through %s, with no debugger service", async (_, deviceId) => {
     serve(record());
+    // With JS capture started too, so only the id keeps the debugger out.
+    startJs(deviceId);
 
     expect(
       networkRequestTool.services!({ device_id: deviceId, requestId: ID, includeBody: true })
@@ -636,7 +693,7 @@ describe("view-network-request-details: routing an android- ID", () => {
     expect(findAndroidNativeRecord).toHaveBeenCalledWith(ID);
   });
 
-  it("says an unknown android- ID is not found and names native-network-logs", async () => {
+  it("says an unknown android- ID is not found and names native-network-logs while Android capture is started", async () => {
     serve(record());
 
     expect(
@@ -653,6 +710,16 @@ describe("view-network-request-details: routing an android- ID", () => {
     );
   });
 
+  it("says native capture is not started for an unknown android- ID when no Android capture was started", async () => {
+    expect(
+      await networkRequestTool.execute!(
+        {},
+        { device_id: SERIAL, requestId: "android-1a2b-99", includeBody: true }
+      )
+    ).toBe(`Request android-1a2b-99 not found. ${NOT_STARTED_HINT}`);
+    expect(findAndroidNativeRecord).toHaveBeenCalledWith("android-1a2b-99");
+  });
+
   it("resolves an android- ID under a Chromium device_id, never touching Chromium", async () => {
     serve(record());
     const get = vi.fn();
@@ -666,10 +733,72 @@ describe("view-network-request-details: routing an android- ID", () => {
     expect(
       await networkRequestTool.execute!({ chromium }, { ...params, requestId: "android-1a2b-99" })
     ).toBe(
-      "Request android-1a2b-99 not found. Use native-network-logs to list the requests the Android native layer recorded."
+      "Request android-1a2b-99 not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests."
     );
     expect(get).not.toHaveBeenCalled();
   });
+
+  const listingTools = (): Record<string, ToolCapability | undefined> => ({
+    "native-network-logs": createNativeNetworkLogsTool(new Registry()).capability,
+    "view-network-logs": networkLogsTool.capability,
+    "network-capture-start": createNetworkCaptureStartTool(new Registry()).capability,
+  });
+
+  it.each([
+    ["the adb serial", SERIAL, "native-network-logs"],
+    ["an ext: spelling", "ext:acme-3f2a9c:emulator-5554", "native-network-logs"],
+    ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184", "native-network-logs"],
+    [
+      "a logicalDeviceId shaped like an iOS UDID",
+      "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "native-network-logs",
+    ],
+    [
+      "a remote iOS simulator",
+      "remote:6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "native-network-logs",
+    ],
+    ["a Chromium target", "chromium-cdp-9222", "view-network-logs"],
+    ["a Vega device", "amazon-4a27df03c9777152", "view-network-logs"],
+  ])(
+    "answers an unknown android- ID under %s with a tool that accepts it",
+    async (_, deviceId, tool) => {
+      serve(record());
+
+      const answer = await networkRequestTool.execute!(
+        {},
+        { device_id: deviceId, requestId: "android-1a2b-99", includeBody: true }
+      );
+
+      expect(answer).toContain(`Use ${tool} to list`);
+      expect(() =>
+        assertSupported(tool, listingTools()[tool], resolveDevice(deviceId))
+      ).not.toThrow();
+    }
+  );
+
+  it.each([
+    ["the adb serial", SERIAL],
+    ["an ext: spelling", "ext:acme-3f2a9c:emulator-5554"],
+    ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184"],
+    ["a logicalDeviceId shaped like an iOS UDID", "6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+    ["a remote iOS simulator", "remote:6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+  ])(
+    "names tools that accept %s when it says no Android capture was started",
+    async (_, deviceId) => {
+      const answer = await networkRequestTool.execute!(
+        {},
+        { device_id: deviceId, requestId: "android-1a2b-99", includeBody: true }
+      );
+
+      expect(answer).toBe(`Request android-1a2b-99 not found. ${NOT_STARTED_HINT}`);
+      for (const tool of ["network-capture-start", "native-network-logs"]) {
+        expect(() =>
+          assertSupported(tool, listingTools()[tool], resolveDevice(deviceId))
+        ).not.toThrow();
+      }
+    }
+  );
 
   it("keeps a Chromium request ID on Chromium and any other ID on the JS layer", async () => {
     const params = { device_id: "chromium-cdp-9222", requestId: "1234.5", includeBody: false };
@@ -689,9 +818,83 @@ describe("view-network-request-details: routing an android- ID", () => {
     expect(out.requestId).toBe("1234.5");
     expect(out.response.status).toBe(200);
 
+    startJs();
     expect(
       networkRequestTool.services!({ device_id: SERIAL, requestId: "rn-net-4", includeBody: true })
-    ).toEqual({ inspector: `NetworkInspector:8081:${SERIAL}` });
+    ).toEqual({ debugger: `JsRuntimeDebugger:8081:${SERIAL}` });
     expect(findAndroidNativeRecord).not.toHaveBeenCalled();
   });
+
+  describe.each(["android-", "android-26a0", "android-26a0-", "android-zz!!-x", "android-26A0-1"])(
+    "the malformed ID %s",
+    (requestId) => {
+      it.each([
+        ["the adb serial", SERIAL],
+        ["an ext: spelling", "ext:acme-3f2a9c:emulator-5554"],
+        ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184"],
+        ["a logicalDeviceId shaped like an iOS UDID", "6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+        ["a remote iOS simulator", "remote:6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+      ])("is not found under %s, with no debugger service", async (_, deviceId) => {
+        startJs(deviceId);
+        const params = { device_id: deviceId, requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. ${NOT_STARTED_HINT}`
+        );
+        // Once Android capture is started, the plain answer.
+        vi.mocked(hasAndroidNetworkCapture).mockReturnValue(true);
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`
+        );
+      });
+
+      it("is not found on Vega, without naming the native tool Vega refuses", async () => {
+        const params = { device_id: "amazon-4a27df03c9777152", requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
+        );
+      });
+
+      it("is not found on a Mac app, whose native-network-logs lists no android- ID", async () => {
+        const params = { device_id: "macos-app-com.example.app", requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. An android- ID comes from an Android device. Use native-network-logs or view-network-logs to list this Mac app's requests.`
+        );
+      });
+
+      it("stays Chromium's to answer, because a Chromium request ID is opaque", async () => {
+        const params = { device_id: "chromium-cdp-9222", requestId, includeBody: false };
+        expect(Object.keys(networkRequestTool.services!(params))).toEqual(["chromium"]);
+
+        const get = vi.fn();
+        const chromium = { server: { network: { get } } };
+        expect(await networkRequestTool.execute!({ chromium }, params)).toBe(
+          `Request ${requestId} not found. Use view-network-logs to list available requests.`
+        );
+
+        get.mockReturnValue({ requestId, method: "GET", url: "https://x.test/", status: 200 });
+        const out = (await networkRequestTool.execute!({ chromium }, params)) as Details;
+        expect(out.requestId).toBe(requestId);
+        expect(findAndroidNativeRecord).not.toHaveBeenCalled();
+      });
+    }
+  );
+
+  it.each(["not-an-android-id", "Android-26a0", "android", "rn-net-4", "1234.5"])(
+    "keeps %s on the JS layer: it does not start with android-",
+    (requestId) => {
+      const params = { device_id: SERIAL, requestId, includeBody: true };
+      // Before a JS start the JS layer reaches nothing, and after it, its debugger.
+      expect(networkRequestTool.services!(params)).toEqual({});
+      startJs();
+      expect(networkRequestTool.services!(params)).toEqual({
+        debugger: `JsRuntimeDebugger:8081:${SERIAL}`,
+      });
+    }
+  );
 });

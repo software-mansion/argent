@@ -17,9 +17,9 @@
  * device providers of the machine running the script are ignored.
  *
  * Usage:
- *   npm run render:agent-context
+ *   bun run render:agent-context
  *       Writes packages/tool-server/agent-context/, which git ignores.
- *   npm run render:agent-context -- --out <dir> [--enable <flag>]...
+ *   bun run render:agent-context --out <dir> [--enable <flag>]...
  *       Writes to <dir>, with the named flags on. --enable needs --out, so the
  *       default folder only ever holds the default render.
  *
@@ -48,8 +48,12 @@ const GENERATED_MARK =
 // What Claude Code does with the payload, as seen in the requests it sent to the
 // Anthropic API. Re-check these after a Claude Code update.
 const CLAUDE_CODE_SEEN = "Claude Code 2.1.312, requests captured on 2026-10-28";
-// Claude Code cuts the description of an always-loaded tool after this many chars.
+// Claude Code cuts an MCP tool description after this many chars whenever it sends
+// the tool up front: the always-loaded tools, and every tool with tool search off.
+// A tool loaded through ToolSearch gets the second limit. Read from the 2.1.316
+// binary; CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH overrides both.
 const CLAUDE_CODE_DESCRIPTION_LIMIT = 4096;
+const CLAUDE_CODE_TOOLSEARCH_DESCRIPTION_LIMIT = 16384;
 // Tool fields Claude Code does not pass to the model.
 const NOT_SENT_BY_CLAUDE_CODE = new Set(["_meta", "annotations"]);
 
@@ -89,7 +93,7 @@ function parseOptions() {
     },
   });
   if (values.help) {
-    console.log("Usage: npm run render:agent-context [-- --out <dir> [--enable <flag>]...]");
+    console.log("Usage: bun run render:agent-context [--out <dir> [--enable <flag>]...]");
     process.exit(0);
   }
   if (values.enable.length > 0 && !values.out) {
@@ -247,14 +251,17 @@ function claudeCodeNote(tool) {
     points.push(
       `Always loaded: this whole definition is sent with every request, as ${qualified}.`
     );
-    if (tool.description.length > CLAUDE_CODE_DESCRIPTION_LIMIT) {
-      points.push(
-        `The description has ${n(tool.description.length)} characters. Claude Code keeps the first ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} and adds ${code("… [truncated]")}, so the model never sees the rest.`
-      );
-    }
   } else {
     points.push(
       `Deferred: at first the model sees only the name ${qualified}, in a list of tools it can load. It gets this definition once it loads the tool with ToolSearch.`
+    );
+  }
+  if (tool.description.length > CLAUDE_CODE_DESCRIPTION_LIMIT) {
+    const when = isAlwaysLoaded(tool)
+      ? ""
+      : ` when it sends the tool up front, as it does with tool search off (${n(CLAUDE_CODE_TOOLSEARCH_DESCRIPTION_LIMIT)} once loaded through ToolSearch)`;
+    points.push(
+      `The description has ${n(tool.description.length)} characters. Claude Code keeps the first ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} and adds ${code("… [truncated]")}${when}.`
     );
   }
   const ellipses = JSON.stringify([tool.description, tool.inputSchema]).split("…").length - 1;
@@ -362,7 +369,7 @@ function renderIndex(tools, instructions, notListed, enable) {
   const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
   const always = sorted.filter(isAlwaysLoaded);
   const total = (list) => list.reduce((sum, t) => sum + sizeOf(t).total, 0);
-  const cut = always.filter((t) => t.description.length > CLAUDE_CODE_DESCRIPTION_LIMIT);
+  const cut = sorted.filter((t) => t.description.length > CLAUDE_CODE_DESCRIPTION_LIMIT);
   return lines(
     GENERATED_MARK,
     "",
@@ -374,7 +381,7 @@ function renderIndex(tools, instructions, notListed, enable) {
       ? `Feature flags on: ${enable.map(code).join(", ")}. All others at their defaults.`
       : "Every feature flag is at its default.",
     "",
-    "Regenerate with `npm run render:agent-context`.",
+    "Regenerate with `bun run render:agent-context`.",
     "",
     "## How to read a tool file",
     "",
@@ -407,8 +414,11 @@ function renderIndex(tools, instructions, notListed, enable) {
     '- The server instructions are in a message, under "# MCP Server Instructions" and "## argent",',
     "  not in the system prompt.",
     "- `_meta` (always-load, search hint) and `annotations` are never sent to the model.",
-    "- All text arrives unchanged, with two exceptions: the description of an always-loaded tool",
-    `  is cut after ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} characters and ends in \`… [truncated]\`, and every \`…\` becomes \`...\`.`,
+    "- All text arrives unchanged, with two exceptions: every `…` becomes `...`, and a description",
+    `  sent up front is cut after ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} characters and ends in \`… [truncated]\`. Up front means`,
+    "  the always-loaded tools, or every tool with tool search off. A tool loaded through ToolSearch",
+    `  keeps ${n(CLAUDE_CODE_TOOLSEARCH_DESCRIPTION_LIMIT)} characters (limits read from the 2.1.316 binary;`,
+    "  `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` overrides both).",
     "",
     "### Other clients",
     "",
@@ -424,7 +434,7 @@ function renderIndex(tools, instructions, notListed, enable) {
     "| Kiro CLI 2.34, default engine | keeps | dropped | not checked |",
     "| VS Code 1.143, agent host | moves `minimum`/`maximum`/`pattern` into the description text | dropped | at most 128 tools |",
     "| VS Code Copilot Chat 0.71, `gpt-4*` models (source read) | drops `default`, `minimum`/`maximum`, `pattern` and other keywords; cuts parameter descriptions at 1,024 characters | not checked | not checked |",
-    "| Cursor (cursor-agent, model's self-report) | keeps | sent | names first, schemas on demand |",
+    "| Cursor (cursor-agent, model's self-report; server instructions confirmed with a canary on 2026-11-19, cursor-agent 2026.11.19) | keeps | sent | names first, schemas on demand |",
     "| Hermes 0.19 (source read) | keeps | dropped | not checked |",
     "",
     "So a fact that only a schema keyword states does not reach every model, and neither does",
@@ -437,7 +447,7 @@ function renderIndex(tools, instructions, notListed, enable) {
     `- Size: ${n(total(sorted))} chars for all tools, ${n(total(always))} for the always-loaded ones.`,
     "  Size counts the name, description and input schema as compact JSON, without `_meta`.",
     cut.length > 0 &&
-      `- Warning: Claude Code cuts these always-loaded descriptions at ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} chars: ${cut.map((t) => `${t.name} (${n(t.description.length)})`).join(", ")}`,
+      `- Warning: Claude Code cuts these descriptions at ${n(CLAUDE_CODE_DESCRIPTION_LIMIT)} chars when it sends them up front: ${cut.map((t) => `${t.name} (${n(t.description.length)})`).join(", ")}`,
     "",
     "## Tools",
     "",

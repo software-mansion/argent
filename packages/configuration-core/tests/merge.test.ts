@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyMergePolicy, MERGE_PRESETS, type MergeFn } from "../src/merge.js";
+import { applyMergePolicy, type MergeFn } from "../src/merge.js";
 
 describe("applyMergePolicy — presets", () => {
   it("prioritize-local prefers the project value, falling back to global", () => {
@@ -49,17 +49,5 @@ describe("applyMergePolicy — custom function", () => {
     const sum: MergeFn<number> = ({ local, global }) => (local ?? 0) + (global ?? 0);
     expect(applyMergePolicy(sum, 2, 3)).toBe(5);
     expect(applyMergePolicy(sum, undefined, 3)).toBe(3);
-  });
-});
-
-describe("MERGE_PRESETS", () => {
-  it("lists every preset name", () => {
-    expect(MERGE_PRESETS).toEqual([
-      "prioritize-local",
-      "prioritize-global",
-      "prioritize-restrictive",
-      "union",
-      "intersection",
-    ]);
   });
 });

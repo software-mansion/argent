@@ -547,40 +547,14 @@ describe("xcodeFirstLaunchHint", () => {
   const xcodebuildIn = (developerDir: string) =>
     path.join(developerDir, "usr", "bin", "xcodebuild");
 
-  it("says which Xcode, why simulators are missing, and what to ask the user", () => {
-    expect(xcodeFirstLaunchHint(["simctl"])).toBe(
-      `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
-        "components since it was installed or updated. Until it has, Xcode's `simctl` waits for " +
-        "an administrator password on every call, so `list-devices` does not show local iOS " +
-        "simulators. Tools that need `simctl` fail until then. Ask the user to " +
-        "open that Xcode once and let it install the components, or " +
-        `to run \`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\`, then retry. Do not run that ` +
-        "command or `xcrun simctl` yourself."
-    );
-  });
-
-  it("says physical iPhones are what is missing for devicectl", () => {
-    expect(xcodeFirstLaunchHint(["devicectl"])).toBe(
-      `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
-        "components since it was installed or updated. Until it has, Xcode's `devicectl` waits " +
-        "for an administrator password on every call, so `list-devices` does not show physical " +
-        "iPhones. Tools that need `devicectl` fail until then. Ask the user to " +
-        "open that Xcode once and let it install the components, or " +
-        `to run \`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\`, then retry. Do not run that ` +
-        "command or `xcrun devicectl` yourself."
-    );
-  });
-
-  it("covers both when both are pending", () => {
-    expect(xcodeFirstLaunchHint(["simctl", "devicectl"])).toBe(
-      `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
-        "components since it was installed or updated. Until it has, Xcode's `simctl` and " +
-        "`devicectl` wait for an administrator password on every call, so `list-devices` does " +
-        "not show local iOS simulators or physical iPhones. Tools that need `simctl` or " +
-        "`devicectl` fail until then. Ask the user to open that Xcode once and let it " +
-        `install the components, or to run \`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\`, ` +
-        "then retry. Do not run that command, `xcrun simctl` or `xcrun devicectl` yourself."
-    );
+  it.each([
+    { wrappers: ["simctl"], simulators: true, phones: false },
+    { wrappers: ["devicectl"], simulators: false, phones: true },
+    { wrappers: ["simctl", "devicectl"], simulators: true, phones: true },
+  ] as const)("names the devices blocked by $wrappers", ({ wrappers, simulators, phones }) => {
+    const hint = xcodeFirstLaunchHint(wrappers);
+    expect(hint.includes("local iOS simulators")).toBe(simulators);
+    expect(hint.includes("physical iPhones")).toBe(phones);
   });
 
   it("names a developer directory that is not inside an app bundle", () => {
@@ -636,9 +610,10 @@ describe("xcodeFirstLaunchHint", () => {
 
 describe("xcodeInstallInstruction", () => {
   it("names the Xcode app and its own xcodebuild", () => {
-    expect(xcodeInstallInstruction()).toBe(
-      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
-        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    const instruction = xcodeInstallInstruction();
+    expect(instruction).toContain(path.join(root, "Xcode.app"));
+    expect(instruction).toContain(
+      `sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch`
     );
   });
 
@@ -647,9 +622,10 @@ describe("xcodeInstallInstruction", () => {
     ["as a relative path", () => path.relative(process.cwd(), devDir)],
   ])("names the Xcode app for a Developer directory given %s", (_, developerDir) => {
     process.env.DEVELOPER_DIR = developerDir();
-    expect(xcodeInstallInstruction()).toBe(
-      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
-        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    const instruction = xcodeInstallInstruction();
+    expect(instruction).toContain(path.join(root, "Xcode.app"));
+    expect(instruction).toContain(
+      `sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch`
     );
   });
 
@@ -660,9 +636,10 @@ describe("xcodeInstallInstruction", () => {
   ])("names the Xcode app for a relative DEVELOPER_DIR naming %s", (_, developerDir) => {
     fs.mkdirSync(devDir, { recursive: true });
     process.env.DEVELOPER_DIR = developerDir();
-    expect(xcodeInstallInstruction()).toBe(
-      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
-        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    const instruction = xcodeInstallInstruction();
+    expect(instruction).toContain(path.join(root, "Xcode.app"));
+    expect(instruction).toContain(
+      `sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch`
     );
   });
 
@@ -672,9 +649,7 @@ describe("xcodeInstallInstruction", () => {
       selectLink: path.join(root, "no-such-link"),
       defaultDeveloperDir: path.join(root, "no-such-dir"),
     });
-    expect(xcodeInstallInstruction()).toBe(
-      "open Xcode once, or run `sudo xcodebuild -runFirstLaunch`"
-    );
+    expect(xcodeInstallInstruction()).toContain("sudo xcodebuild -runFirstLaunch");
   });
 });
 

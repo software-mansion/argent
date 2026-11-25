@@ -21,22 +21,10 @@ type Params = z.infer<typeof zodSchema>;
 
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
-  interaction: {
-    startedMsg: () => "Waiting for variant selection",
-    completedMsg: () => "Received variant selection",
-    failedMsg: ({ failureSignal }) =>
-      `Failed while waiting for variant selection: ${failureSignal.error_code}`,
-  },
-  featureFlag: "argent-lens",
-  // Hidden while an `argent lens` CLI session owns the preview window: there the
-  // user's picks are relayed into the agent's terminal as a normal message (see
-  // `argent-cli/src/lens.ts`), so the agent ends its turn after propose_variant
-  // instead of blocking.
-  hideWhen: () => variantProposalStore.isCliSession(),
   description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
 
 Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
-It parks until the user presses "Complete selection" in the Argent Lens window (a native window
+It parks until the user presses "Complete" in the Argent Lens window (a native window
 that opens automatically on the user's screen), then returns their choices and any comments.
 
 Returns one of:
@@ -54,9 +42,21 @@ Returns one of:
 
 This tool is long-running; it intentionally holds the request open. It honors client
 disconnects (aborts cleanly).`,
-  searchHint: "await wait user selection choice variant blocking confirm picks complete",
-  longRunning: true,
   zodSchema,
+  searchHint: "await wait user selection choice variant blocking confirm picks complete",
+  featureFlag: "argent-lens",
+  // Hidden while an `argent lens` CLI session owns the preview window: there the
+  // user's picks are relayed into the agent's terminal as a normal message (see
+  // `argent-cli/src/lens.ts`), so the agent ends its turn after propose_variant
+  // instead of blocking.
+  hideWhen: () => variantProposalStore.isCliSession(),
+  interaction: {
+    startedMsg: () => "Waiting for variant selection",
+    completedMsg: () => "Received variant selection",
+    failedMsg: ({ failureSignal }) =>
+      `Failed while waiting for variant selection: ${failureSignal.error_code}`,
+  },
+  longRunning: true,
   services: () => ({}),
   async execute(_services, params, options) {
     const timeoutMs = (params.timeoutSeconds ?? 1800) * 1000;

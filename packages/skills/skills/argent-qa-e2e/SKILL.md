@@ -1,17 +1,17 @@
 ---
 name: argent-qa-e2e
-description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
+description: Write repeatable QA regression e2e tests from test cases, tickets, or acceptance criteria. Use when the user asks to write, automate, or generate an e2e test or preserve an automated regression scenario, with deterministic setup, stable targets, executable structural or visual evidence, and two consecutive full passes. For one-off UI checks or replayable paths without acceptance criteria, use argent-test-ui-flow or argent-create-e2e. Supports iOS, Android, Chromium, Mac apps, and Vega (Fire TV), where recorded tv-remote steps replace touch directives. Apple TV and Android TV are unsupported; use argent-tv-interact there and report the limitation.
 ---
 
 # Create a QA regression e2e test
 
 Load `argent-create-e2e` as the authoring engine. Follow its required references for recorder syntax, selectors, polish, platform exceptions, and repair. This skill adds the QA contract and completion gate.
 
-**Vega** supports every item below: `launch: { vega: ... }`, `await:`/`assert:` selectors, `snapshot:`, and `idle` all run there. Only the touch directives are missing, because Vega is remote-driven. Navigate with recorded `tool: tv-remote` steps and type with `tool: keyboard`, which leaves item 5 with nothing to govern. A D-pad path is relative to where focus already is, so gate every move with item 4's identity check rather than assuming the cursor landed. Read `argent-tv-interact` for focus reading and remote navigation.
+**Vega** supports `launch: { vega: ... }`, `await:`/`assert:` selectors, `snapshot:`, and `idle`. Network checks are unavailable on Vega. Navigate with recorded `tool: tv-remote` steps and type with `tool: keyboard`, which leaves item 5 with nothing to govern. A D-pad path is relative to where focus already is, so gate every move with item 4's identity check rather than assuming the cursor landed. Read `argent-tv-interact` for focus reading and remote navigation.
 
-**Apple TV and Android TV are out of scope.** The runner does not reject touch directives there, so they fail at the gesture layer instead of with authoring guidance. Use `argent-tv-interact` and report the limitation.
+**Apple TV and Android TV are out of scope.** The runner does not reject touch directives there: on Apple TV they fail at the gesture layer, and on Android TV a `tap:` can pass without doing anything. Use `argent-tv-interact` and report the limitation.
 
-**Physical iPhones** run QA e2e tests, with two hardware limits: replay never auto-binds a phone, so pass its udid as `device` (CLI `--device`) and keep it `connected`; the runner tree is the `describe` tree (same ids and roles), so a selector authored on a simulator can miss there. `pinch`/`rotate` steps run as two-finger gestures, in apps drawn in portrait. Read `argent-ios-device-interact` for the app-scoped contract before recording.
+**Physical iPhones** run QA e2e tests under the hardware limits listed in `argent-create-e2e`. Expect a selector authored on a simulator to miss on the phone's `describe`-based runner tree.
 
 ## Definition of done
 
@@ -19,7 +19,7 @@ A QA e2e test is complete only when:
 
 1. The first step that is not `echo:` or `script:` is `launch:`. In-test setup proves a deterministic data baseline. Repeated runs do not accumulate artifacts or require manual cleanup.
 2. The first walkthrough recorded every action and live structural check. Only the three documented polish insertions are unrecorded.
-3. Every requirement maps to a hard `await:`, `assert:`, or reviewed `snapshot:`. Echoes and screenshots are not verdicts. A negative check needs the same stable selector established as visible earlier.
+3. Every requirement maps to an executable check: `await:`, `assert:`, a reviewed `snapshot:`, or `tool: await-network-request`. Echoes and screenshots are not verdicts. A negative UI check needs the same stable selector established as visible earlier.
 4. Every screen change has destination identity followed by `idle` readiness.
 5. Targets satisfy the stable-selector and coordinate-fallback rules. QA keeps coordinates only for genuinely unlabeled targets. Vacuous on Vega, which has no coordinate targets.
 6. The unchanged YAML passes twice with the same runner. Pass 1 starts with fresh mobile Argent services, and pass 2 follows immediately.
@@ -34,7 +34,7 @@ Before touching the app, write a compact table. Restate it in the final report. 
 - Stable executable evidence for each row.
 - Required data and side effects.
 
-Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test.
+Use structural checks for semantic state, snapshots for pixels, and both for mixed requirements. One behavioral scenario becomes one `qa-<area>-<behavior>` e2e test. Do not make it depend on the state that another test leaves. A suite does not change this rule.
 
 Do not invent a material value or weaken ambiguity. Choose the strongest UI-verifiable reading and report it. Ask when the choice changes test meaning.
 
@@ -83,6 +83,7 @@ A snapshot has no recorder form. Inspect its stable state during the walkthrough
 - **Repeated controls:** prefer an id. Otherwise use YAML-only `within` with a stable container. Use `text.in` to prove rendered membership inside that container.
 - **Dynamic content:** assert controlled state or stable app chrome. Use anchored structure for unavoidable dynamic values and disclose the dependency.
 - **Visual state:** snapshot only a correct, settled, deterministic screen. Use full screen for global changes and `cropOn` for one component.
+- **Network requests:** record capture inside the test, after `launch:`, so both replays establish their own capture window. On Android, start just before the triggering action and stop after the wait. For many related requests, stop after the last wait. A wait requires a match, so use it only for requests the app must send. See [Network capture](../argent-create-e2e/references/live-authoring.md#network-capture).
 
 Never put acceptance evidence inside `when:`. Use `when:` only for optional setup that reconverges to the required path.
 
@@ -98,7 +99,7 @@ Complete the create-e2e polish and blocking audit. Then:
 | ------------------ | ----------- | ------------------------- | --------- |
 | Tap `settings-tab` | Settings    | `settings-screen` visible | `idle`    |
 
-The two are repaired differently. A missing identity check must be recorded live on the restored screen. A missing `idle` check is added in YAML, because `await: { idle: true }` has no recorder form and is one of `argent-create-e2e`'s three permitted polish insertions. Re-record any missing action or other structural check.
+Repair a missing gate as the create-e2e blocking audit says: record identity live on the restored screen, and add `idle` in YAML as one of the three permitted polish insertions. Re-record any missing action or other structural check.
 
 ## 5. Prove two consecutive passes
 
@@ -106,9 +107,9 @@ After the last edit and audit, set the streak to zero:
 
 1. Choose one runner for both passes. Use `e2e-execute` locally or `argent e2e run <name> --platform <platform>` for CI. Switching runners resets the streak.
 2. Seed, review, and freeze snapshot baselines. Baseline updates do not count as passes.
-3. Before mobile pass 1, recycle Argent services for this test's device: two warm passes are correlated evidence, because a fixed timing margin can pass twice simply because environment speed did not change. Scope `stop-all-simulator-servers` to `devices: [<device>]`. Never omit the scope: a bare call is the machine-wide sweep, and step 7 restarts this proof often enough to reap every other agent's devices repeatedly. Use the MCP call for `e2e-execute`, or `argent run stop-all-simulator-servers --devices <device>` from the CLI's install. The reset must not change app or account data. For Chromium, let the runner boot the declared app and omit `device`. Vega owns no recyclable Argent services, so the teardown is a no-op there and both passes are warm.
+3. Before mobile pass 1, recycle Argent services for this test's device: two warm passes are correlated evidence, because a fixed timing margin can pass twice simply because environment speed did not change. Scope `stop-all-simulator-servers` to `devices: [<device>]`. Never omit the scope: step 7 restarts this proof often, and every bare call sweeps the devices of all other agents. Use the MCP call for `e2e-execute`, or `argent run stop-all-simulator-servers --devices <device>` from the CLI's install. The reset must not change app or account data. For Chromium, let the runner boot the declared app and omit `device`. Vega owns no recyclable Argent services, so the teardown is a no-op there and both passes are warm.
 4. Run from the test's launch and setup without baseline-update mode. Count a pass only when `ok: true` and every acceptance check executed. A false `when:` can skip optional setup only. An errored step does not advance the streak, and the count mixes two kinds: read each reason. One that could not run (an unreadable tree under `idle`, an unresolvable `run:` target) is environment: fix it and rerun. **A failed `launch:` also scores `errored`, and it is a verdict about the app**; an app that no longer installs or starts is the regression this test exists to catch, so report it instead of rerunning.
-5. Resolve every passing-step warning before completion. Also resolve recorded-wait warnings from `e2e-finish-recording`. Follow [Live waits and checks](../argent-create-e2e/references/live-authoring.md#live-waits-and-checks). For runner warnings, `await: { idle: true }` raises [six different warnings](../argent-create-e2e/references/e2e-yaml.md#idle-readiness), so read which one it is first. Two say the screen was moving. One says the wait ran out mid-hold and needs a larger `timeout:`. One says the tree stayed empty. One, **settled on the UI tree alone**, says the hierarchy did hold still and only the screenshot pairs were missing, so inspect the capture path rather than the app's rendering. One says the step ended with no evidence either way. Inspect the screen, disclose the cause, and verify that surrounding acceptance checks use stable elements rather than stillness. A [selector-less gesture](../argent-create-e2e/references/e2e-yaml.md#directives) (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) warns in a different shape: a tree-source outage left it unsettled, so it dispatched blind and the green says only that the gesture was sent. Restore the tree source, usually by relaunching the app so the instrumentation loads, and rerun. Accepting that warning needs an app that serves no tree, which cannot satisfy this contract anyway.
+5. Resolve every passing-step warning before completion. Also resolve recorded-wait warnings from `e2e-finish-recording`. Follow [Live waits and checks](../argent-create-e2e/references/live-authoring.md#live-waits-and-checks). For runner warnings, `await: { idle: true }` raises [six different warnings](../argent-create-e2e/references/e2e-yaml.md#idle-readiness), each with its own repair, so read which one it is first. Inspect the screen, disclose the cause, and verify that surrounding acceptance checks use stable elements rather than stillness. A [selector-less gesture](../argent-create-e2e/references/e2e-yaml.md#directives) warning means the gesture was dispatched blind during a tree-source outage: restore the tree source, usually by relaunching the app, and rerun. Accepting that warning needs an app that serves no tree, which cannot satisfy this contract anyway.
 6. Run the same YAML again immediately with the same runner. Do not manually reset app or account data.
 7. Reset the streak after any failure, edit, re-recording, baseline update, or state-changing manual recovery. Repair through `argent-create-e2e`, audit again, and restart with fresh services.
 

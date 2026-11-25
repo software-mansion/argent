@@ -8,7 +8,7 @@ import {
   type TextAnalysis,
 } from "./text-diff";
 import { formatScreenshotDiffSummary } from "./screenshot-diff-summary";
-import { normalizeToCommonSize, resizeDecodedPng } from "./resize";
+import { resizeDecodedPng } from "./resize";
 
 export interface Size {
   width: number;
@@ -55,16 +55,6 @@ export interface PngDiffResult {
     expected: Size;
     actual: Size;
   };
-  /**
-   * Present only when the inputs were resampled to a common size to compare, so
-   * its presence is the signal that a green result means "equal after
-   * rescaling", not "equal".
-   */
-  sizeNormalization?: {
-    baseline: Size;
-    current: Size;
-    comparedAt: Size;
-  };
   regions: DiffRegion[];
   textAnalysis?: TextAnalysis;
 }
@@ -85,13 +75,6 @@ interface ChangeRegion {
   currentSum: Rgb;
 }
 
-interface DiffSettings {
-  thresholdSquared: number;
-  ignoreTopNormalizedY: number;
-  joinGapPixels: number;
-  contextDiffScale: number;
-}
-
 interface DiffMask {
   mask: Uint8Array;
   differentPixels: number;
@@ -101,6 +84,23 @@ interface DiffMask {
 interface DiffArtifactPaths {
   diffPath: string;
   contextDiffPath: string;
+}
+
+interface ComparedPixels {
+  baseline: DecodedPng;
+  current: DecodedPng;
+  mask: Uint8Array;
+  ignoreTopNormalizedY: number;
+}
+
+export interface ScreenshotComparison {
+  totalPixels: number;
+  differentPixels: number;
+  mismatchPercentage: number;
+  imageSize?: Size;
+  dimensionMismatch?: PngDiffResult["dimensionMismatch"];
+  /** Absent when nothing was decoded: byte-identical files or a dimension mismatch. */
+  pixels?: ComparedPixels;
 }
 
 const MAX_RGB_DISTANCE_SQUARED = 255 * 255 * 3;
@@ -124,157 +124,161 @@ const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
 // Treat only near-equal RGB movement as luminance so color-tinted changes
 // still report the dominant RGB channel.
 const UNIFORM_BRIGHTNESS_DELTA_TOLERANCE = 4;
+const DIFF_PNG_ENCODING = { filterType: 1, deflateLevel: 3 };
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_IHDR_CHUNK_LENGTH = 25;
+const PNG_IEND_CHUNK = Buffer.from([0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
 
 type TopMaskPolicy = "none" | "status-bar";
 
-export interface DiffPngFilesOptions {
+export interface CompareScreenshotsOptions {
   baselinePath: string;
   currentPath: string;
-  outputDir: string;
   topMask?: TopMaskPolicy;
-  /**
-   * Default true: same-aspect images at different resolutions are resampled to
-   * a common size before comparing. Set false when dimensions carry meaning
-   * (e.g. element crops) — any dimension difference is then a hard mismatch.
-   */
-  normalizeSizes?: boolean;
 }
 
-export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
-  const settings = resolveDiffSettings(options.topMask ?? "status-bar");
+export interface DiffPngFilesOptions extends CompareScreenshotsOptions {
+  outputDir: string;
+}
 
-  const [decodedBaseline, decodedCurrent] = await Promise.all([
-    decodePngFile(options.baselinePath),
-    decodePngFile(options.currentPath),
+/** Count the changed pixels, without writing diff images or reading text. */
+export async function compareScreenshots(
+  options: CompareScreenshotsOptions
+): Promise<ScreenshotComparison> {
+  const [baselineBytes, currentBytes] = await Promise.all([
+    readPngFile(options.baselinePath),
+    readPngFile(options.currentPath),
   ]);
-
-  // Same-aspect screenshots saved at different scales are uniform scalings of
-  // one framebuffer, so resample them to a common size instead of failing on
-  // the resolution mismatch. Different aspect ratios still hard-fail below —
-  // and with normalizeSizes: false, so does ANY dimension difference.
-  const normalized =
-    options.normalizeSizes === false
-      ? sameDimensionsOrNull(decodedBaseline, decodedCurrent)
-      : normalizeToCommonSize(decodedBaseline, decodedCurrent);
-  if (!normalized) {
-    return summarizeResult(
-      buildDimensionMismatchResult({
-        baseline: decodedBaseline,
-        current: decodedCurrent,
-      })
-    );
+  const identicalSize = baselineBytes.equals(currentBytes)
+    ? completePngSize(baselineBytes)
+    : undefined;
+  if (identicalSize) {
+    return {
+      totalPixels: identicalSize.width * identicalSize.height,
+      differentPixels: 0,
+      mismatchPercentage: 0,
+      imageSize: identicalSize,
+    };
   }
-  const baseline = normalized.baseline;
-  const current = normalized.current;
 
-  // Reported from here because normalizeToCommonSize does not return the
-  // original sizes.
-  const sizeNormalization =
-    decodedBaseline.width === decodedCurrent.width &&
-    decodedBaseline.height === decodedCurrent.height
-      ? undefined
-      : {
-          baseline: { width: decodedBaseline.width, height: decodedBaseline.height },
-          current: { width: decodedCurrent.width, height: decodedCurrent.height },
-          comparedAt: { width: baseline.width, height: baseline.height },
-        };
+  const baseline = decodePng(baselineBytes, options.baselinePath);
+  const current = decodePng(currentBytes, options.currentPath);
 
+  // Resampling produces artifacts that read as changes, so sizes must match.
+  if (baseline.width !== current.width || baseline.height !== current.height) {
+    return {
+      totalPixels: baseline.width * baseline.height,
+      differentPixels: 0,
+      mismatchPercentage: 0,
+      dimensionMismatch: {
+        expected: { width: baseline.width, height: baseline.height },
+        actual: { width: current.width, height: current.height },
+      },
+    };
+  }
+
+  const ignoreTopNormalizedY =
+    (options.topMask ?? "status-bar") === "none" ? 0 : DEFAULT_IGNORE_TOP_NORMALIZED_Y;
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
     baseline,
     current,
-    thresholdSquared: settings.thresholdSquared,
-    ignoreTopNormalizedY: settings.ignoreTopNormalizedY,
-  });
-  const regions = getChangedRegions({
-    mask: pixelDiff.mask,
-    baseline,
-    current,
-    joinGapPixels: settings.joinGapPixels,
+    thresholdSquared: DEFAULT_THRESHOLD * DEFAULT_THRESHOLD * MAX_RGB_DISTANCE_SQUARED,
+    ignoreTopNormalizedY,
   });
 
+  return {
+    totalPixels,
+    differentPixels: pixelDiff.differentPixels,
+    mismatchPercentage: totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100,
+    imageSize: { width: baseline.width, height: baseline.height },
+    pixels: { baseline, current, mask: pixelDiff.mask, ignoreTopNormalizedY },
+  };
+}
+
+/**
+ * Write the downscaled, annotated diff image of a comparison to `destination`.
+ * Returns false when no pixel differs, and writes nothing.
+ */
+export async function writeContextDiff(
+  comparison: ScreenshotComparison,
+  destination: string
+): Promise<boolean> {
+  if (!comparison.pixels || comparison.differentPixels === 0) return false;
+  const diffImage = buildAnnotatedDiff(comparison.pixels, changedRegionsOf(comparison.pixels));
+  await writePngFile(destination, downscalePng(diffImage, DEFAULT_CONTEXT_DIFF_SCALE));
+  return true;
+}
+
+/** Compare two PNG files and, when any pixel differs, write diff images and read the text. */
+export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
+  const { pixels, ...comparison } = await compareScreenshots(options);
+  if (!pixels || comparison.differentPixels === 0) {
+    return summarizeResult({
+      ...comparison,
+      regions: [],
+      textAnalysis: { status: "skipped", provider: "ocr", changes: [] },
+    });
+  }
+
+  const regions = changedRegionsOf(pixels);
   const artifactPaths = resolveDiffArtifactPaths(options);
-  await writeDiffArtifacts({
-    baseline,
-    current,
-    mask: pixelDiff.mask,
-    regions,
-    paths: artifactPaths,
-    contextDiffScale: settings.contextDiffScale,
-  });
+  const diffImage = buildAnnotatedDiff(pixels, regions);
+  await writePngFile(artifactPaths.diffPath, diffImage);
+  await writePngFile(
+    artifactPaths.contextDiffPath,
+    downscalePng(diffImage, DEFAULT_CONTEXT_DIFF_SCALE)
+  );
 
-  const mismatchPercentage =
-    totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
-
-  // OCR re-reads the two files from disk, so its bounds come back in each
-  // image's own coordinate space; the scales rebase them onto the normalized
-  // space the pixel diff and summary use (1/1 when the sizes already matched).
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
-    hasPixelDiff: pixelDiff.differentPixels > 0,
-    baselineImage: baseline,
-    currentImage: current,
-    baselineRegionScale: regionScaleBetween(decodedBaseline, baseline),
-    currentRegionScale: regionScaleBetween(decodedCurrent, current),
-    ignoreTopPixels: ignoredTopRowsFor(baseline.height, settings.ignoreTopNormalizedY),
+    baselineImage: pixels.baseline,
+    currentImage: pixels.current,
+    ignoreTopPixels: ignoredTopRowsFor(pixels.baseline.height, pixels.ignoreTopNormalizedY),
     textChangeMinConfidence: DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   });
 
   return summarizeResult({
-    totalPixels,
-    differentPixels: pixelDiff.differentPixels,
-    mismatchPercentage,
-    imageSize: { width: baseline.width, height: baseline.height },
+    ...comparison,
     diffPath: artifactPaths.diffPath,
     contextDiffPath: artifactPaths.contextDiffPath,
     regions,
     textAnalysis,
-    ...(sizeNormalization && { sizeNormalization }),
   });
 }
 
-function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
-  return {
-    thresholdSquared: DEFAULT_THRESHOLD * DEFAULT_THRESHOLD * MAX_RGB_DISTANCE_SQUARED,
-    ignoreTopNormalizedY: topMask === "none" ? 0 : DEFAULT_IGNORE_TOP_NORMALIZED_Y,
+/**
+ * The size of a PNG with a signature, an IHDR and an IEND at the very end.
+ * Undefined for anything else, so a truncated file is still decoded and reported.
+ * Chunk CRCs and image data are not checked.
+ */
+function completePngSize(bytes: Buffer): Size | undefined {
+  const complete =
+    bytes.length >= PNG_SIGNATURE.length + PNG_IHDR_CHUNK_LENGTH + PNG_IEND_CHUNK.length &&
+    bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE) &&
+    bytes.toString("latin1", 12, 16) === "IHDR" &&
+    bytes.subarray(bytes.length - PNG_IEND_CHUNK.length).equals(PNG_IEND_CHUNK);
+  return complete ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } : undefined;
+}
+
+function changedRegionsOf(pixels: ComparedPixels): DiffRegion[] {
+  return getChangedRegions({
+    mask: pixels.mask,
+    baseline: pixels.baseline,
+    current: pixels.current,
     joinGapPixels: DEFAULT_REGION_MERGE_DISTANCE,
-    contextDiffScale: DEFAULT_CONTEXT_DIFF_SCALE,
-  };
+  });
+}
+
+function buildAnnotatedDiff(pixels: ComparedPixels, regions: DiffRegion[]): PNG {
+  const diffImage = buildContextDiff(pixels);
+  drawRegionRectangles(diffImage, regions);
+  return diffImage;
 }
 
 function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult {
   return { ...result, summary: formatScreenshotDiffSummary(result) };
-}
-
-function sameDimensionsOrNull(
-  baseline: DecodedPng,
-  current: DecodedPng
-): { baseline: DecodedPng; current: DecodedPng } | null {
-  return baseline.width === current.width && baseline.height === current.height
-    ? { baseline, current }
-    : null;
-}
-
-function buildDimensionMismatchResult(params: {
-  baseline: DecodedPng;
-  current: DecodedPng;
-}): Omit<PngDiffResult, "summary"> {
-  return {
-    totalPixels: params.baseline.width * params.baseline.height,
-    differentPixels: 0,
-    mismatchPercentage: 0,
-    dimensionMismatch: {
-      expected: { width: params.baseline.width, height: params.baseline.height },
-      actual: { width: params.current.width, height: params.current.height },
-    },
-    regions: [],
-    textAnalysis: {
-      status: "skipped" as const,
-      provider: "ocr" as const,
-      changes: [],
-    },
-  };
 }
 
 function markChangedPixels(params: {
@@ -310,14 +314,6 @@ function markChangedPixels(params: {
 
 function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number {
   return Math.min(height, Math.ceil(height * ignoreTopNormalizedY));
-}
-
-// Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
-function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
-  return {
-    x: from.width === 0 ? 1 : to.width / from.width,
-    y: from.height === 0 ? 1 : to.height / from.height,
-  };
 }
 
 function getChangedRegions(params: {
@@ -366,49 +362,35 @@ function outputArtifactBaseName(filePath: string): string {
   return parsed.name || parsed.base;
 }
 
-async function writeDiffArtifacts(params: {
-  baseline: DecodedPng;
-  current: DecodedPng;
-  mask: Uint8Array;
-  regions: DiffRegion[];
-  paths: DiffArtifactPaths;
-  contextDiffScale: number;
-}): Promise<void> {
-  const diffImage = buildContextDiff({
-    baseline: params.baseline,
-    current: params.current,
-    mask: params.mask,
-  });
-  drawRegionRectangles(diffImage, params.regions);
-  await writePngFile(params.paths.diffPath, diffImage);
-  await writePngFile(
-    params.paths.contextDiffPath,
-    downscalePng(diffImage, params.contextDiffScale)
-  );
+// Both sides are read concurrently, so naming the path is the only thing that
+// tells the caller which of the two images was the bad one.
+async function readPngFile(filePath: string): Promise<Buffer> {
+  try {
+    return await fs.readFile(filePath);
+  } catch (err) {
+    throw unreadablePngError(filePath, err);
+  }
 }
 
-// Both sides decode concurrently, so naming the path is the only thing that
-// tells the caller which of the two images was the bad one.
-async function decodePngFile(filePath: string): Promise<DecodedPng> {
+function decodePng(buffer: Buffer, filePath: string): DecodedPng {
   try {
-    const buffer = await fs.readFile(filePath);
     const png = PNG.sync.read(buffer);
-    return {
-      width: png.width,
-      height: png.height,
-      data: png.data,
-    };
+    return { width: png.width, height: png.height, data: png.data };
   } catch (err) {
-    throw new FailureError(
-      `Could not read PNG at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
-      {
-        error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
-        failure_stage: "screenshot_diff_decode_failed",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
+    throw unreadablePngError(filePath, err);
   }
+}
+
+function unreadablePngError(filePath: string, err: unknown): FailureError {
+  return new FailureError(
+    `Could not read PNG at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+    {
+      error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+      failure_stage: "screenshot_diff_decode_failed",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 async function analyzeScreenshotTextChangesSafely(
@@ -425,11 +407,7 @@ async function analyzeScreenshotTextChangesSafely(
   }
 }
 
-function buildContextDiff(params: {
-  baseline: DecodedPng;
-  current: DecodedPng;
-  mask: Uint8Array;
-}): PNG {
+function buildContextDiff(params: ComparedPixels): PNG {
   const output = new PNG({ width: params.current.width, height: params.current.height });
 
   for (let pixelIndex = 0; pixelIndex < params.mask.length; pixelIndex++) {
@@ -460,7 +438,7 @@ function luminanceFromOffset(data: Buffer, offset: number): number {
 
 async function writePngFile(filePath: string, png: PNG): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, PNG.sync.write(png));
+  await fs.writeFile(filePath, PNG.sync.write(png, DIFF_PNG_ENCODING));
 }
 
 function downscalePng(source: PNG, scale: number): PNG {
