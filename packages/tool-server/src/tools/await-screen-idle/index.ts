@@ -88,19 +88,6 @@ function treeSignature(root: DescribeNode): string {
 }
 
 /**
- * The wait before the next read while the screen holds. `leftMs` is the time
- * until the window ends and `readMs` is how long the last read took. A read that
- * comes back before the window ends can only see a change. If a read as long as
- * the last one would come back short of the window after the poll interval, and
- * the window ends before the read after next, the next read waits until the
- * window ends. On the defaults (200 ms poll, 250 ms window) a read taking under
- * 50 ms otherwise comes back short of the window and costs a third poll.
- */
-function confirmWaitMs(leftMs: number, readMs: number, pollIntervalMs: number): number {
-  return leftMs > pollIntervalMs + readMs && leftMs <= 2 * pollIntervalMs ? leftMs : pollIntervalMs;
-}
-
-/**
  * Explain an unsettled wait from whatever the last read reported. Mirrors the
  * diagnostics `await-ui-element` folds onto its timeout note — this tool had no
  * equivalent, so a caller got a silent stall on a degraded read.
@@ -251,17 +238,14 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
       let stableSignature: string | undefined;
       let stableSince = 0;
       let lastReadAt = 0;
-      // How much longer than the poll interval the wait after the last read was.
-      let lastExtraWaitMs = 0;
 
       const poll = await pollDescribeTree<true>({
         fetchTree: (budgetMs) => fetchTree(device, services, tvApi, androidIsTv, budgetMs),
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs,
         signal: ctx?.signal,
-        onSample: (data, nowMs, startedMs) => {
+        onSample: (data, nowMs) => {
           lastReadAt = nowMs;
-          lastExtraWaitMs = 0;
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
             stableSignature = undefined;
@@ -281,22 +265,24 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
               ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
               : minStableMs;
           if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
-          const leftMs = stableSince + requiredMs - nowMs;
-          const waitMs = confirmWaitMs(leftMs, nowMs - startedMs, pollIntervalMs);
-          lastExtraWaitMs = waitMs - pollIntervalMs;
-          return { done: false, waitMs };
+          // Read again after the poll interval, or when the window ends if that
+          // is sooner. A read sent when the window ends comes back after it, so
+          // it confirms a static screen, and reads inside the window are never
+          // more than one poll interval apart.
+          return {
+            done: false,
+            waitMs: Math.min(stableSince + requiredMs - nowMs, pollIntervalMs),
+          };
         },
       });
 
       const settled = poll.result === true;
       // The last read abandoned at the deadline is routine: the loop straddles it
       // on most timeouts. Only a gap wider than the polls explain is a hung
-      // reader; without this it reads like a screen that kept moving. A wait for
-      // the window's end is longer than a poll, so the gap can be longer too.
+      // reader; without this it reads like a screen that kept moving.
       const darkTailMs = Date.now() - lastReadAt;
       const hung =
-        lastReadAt > 0 &&
-        darkTailMs > Math.min(DARK_TAIL_POLLS * pollIntervalMs, DARK_TAIL_MAX_MS) + lastExtraWaitMs;
+        lastReadAt > 0 && darkTailMs > Math.min(DARK_TAIL_POLLS * pollIntervalMs, DARK_TAIL_MAX_MS);
       // On settled, only a stale read needs a caveat. On unsettled, only an empty
       // or failed read has a diagnosis: a populated tree that kept changing has
       // none, and some hints (Android TV's) are standing advice, not a reason.

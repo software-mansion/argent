@@ -15,8 +15,8 @@ const UNWAITABLE_FAILURES: ReadonlySet<string> = new Set([
 
 /**
  * Verdict from evaluating one successfully-fetched tree. `waitMs` replaces the
- * poll interval before the next fetch, for a predicate that knows a sooner fetch
- * cannot end the wait.
+ * poll interval before the next fetch, for a predicate that knows when a fetch
+ * can end the wait.
  */
 type PollVerdict<R> = { done: true; result: R } | { done: false; waitMs?: number };
 
@@ -31,11 +31,10 @@ interface PollDescribeTreeArgs<R> {
   pollIntervalMs: number;
   signal?: AbortSignal;
   /**
-   * `nowMs` is `Date.now()` at the sample and `startedMs` when its fetch was
-   * sent, so predicates can track stability windows without their own timer.
-   * Return `{ done: true, result }` to stop early.
+   * `nowMs` is `Date.now()` at the sample, so predicates can track stability
+   * windows without their own timer. Return `{ done: true, result }` to stop early.
    */
-  onSample: (data: DescribeTreeData, nowMs: number, startedMs: number) => PollVerdict<R>;
+  onSample: (data: DescribeTreeData, nowMs: number) => PollVerdict<R>;
 }
 
 interface PollDescribeTreeResult<R> {
@@ -81,8 +80,7 @@ export async function pollDescribeTree<R>(
   for (;;) {
     if (signal?.aborted) return outcome(undefined, true);
 
-    const startedMs = Date.now();
-    const remaining = Math.max(0, deadline - startedMs);
+    const remaining = Math.max(0, deadline - Date.now());
     const settled = await settleWithin(fetchTree(remaining), remaining, signal);
     polls += 1;
     let waitMs = pollIntervalMs;
@@ -107,7 +105,7 @@ export async function pollDescribeTree<R>(
     } else {
       lastData = settled.value;
       lastError = undefined;
-      const verdict = onSample(settled.value, Date.now(), startedMs);
+      const verdict = onSample(settled.value, Date.now());
       if (verdict.done) return outcome(verdict.result, false);
       waitMs = verdict.waitMs ?? pollIntervalMs;
     }

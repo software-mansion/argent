@@ -133,13 +133,14 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(describeIosMock).not.toHaveBeenCalled();
   });
 
-  it("settles a static screen on its second read", async () => {
-    // The 250 ms window is longer than the 200 ms poll, so a second read at the
-    // poll interval landed short of it and every remote press paid a third poll.
+  it("settles a static screen when the window ends", async () => {
+    // The 250 ms window is longer than the 200 ms poll, so a read at the poll
+    // interval landed short of it and every remote press waited a further poll.
+    // The read after it is sent when the window ends.
     const res = await runIdle(makeTvApi([SCREEN]));
 
     expect(res.settled).toBe(true);
-    expect(res.polls).toBe(2);
+    expect(res.polls).toBe(3);
     expect(res.waitedMs).toBe(250);
   });
 
@@ -153,6 +154,27 @@ describe("await-screen-idle on an Apple TV", () => {
 
     expect(res.polls).toBe(2);
     expect(res.waitedMs).toBe(400);
+  });
+
+  it("sees a change that lasts less than the window between two reads", async () => {
+    // With 20 ms reads, another screen shows from 60 to 260 ms. A wait longer
+    // than the poll interval reads at 0 and 270 ms and misses it.
+    const changed = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
+    const start = Date.now();
+    const api = makeTvApi([SCREEN]);
+    api.describe = () =>
+      new Promise((resolve) =>
+        setTimeout(() => {
+          const at = Date.now() - start;
+          resolve(at >= 60 && at < 260 ? changed : SCREEN);
+        }, 20)
+      );
+
+    const res = await runIdle(api);
+
+    expect(res.settled).toBe(true);
+    // Settled on the screen after the change, once it held for 250 ms.
+    expect(res.waitedMs).toBeGreaterThanOrEqual(510);
   });
 
   it("does not count a slow first read as time the screen held", async () => {
@@ -197,8 +219,8 @@ describe("await-screen-idle on an Apple TV", () => {
 
     expect(res.settled).toBe(true);
     expect(res.note).toBeUndefined();
-    // The field's read, and the one that confirms it.
-    expect(api.calls()).toBe(5);
+    // The field's read, one at the poll interval, and the one that confirms it.
+    expect(api.calls()).toBe(6);
   });
 
   it("does not settle while the cursor is still moving", async () => {
