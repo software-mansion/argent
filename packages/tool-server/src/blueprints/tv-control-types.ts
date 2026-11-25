@@ -13,6 +13,8 @@ export interface TvElement {
   traits?: string[];
   value?: string;
   isFocused?: boolean;
+  /** tvOS: the raw accessibility trait bits, as hex, e.g. "0x2200240000". */
+  _traitsHex?: string;
   /**
    * Normalized 0..1 rect. The tvOS daemon omits it for a zero-size element, and
    * Android TV's focus view reports none.

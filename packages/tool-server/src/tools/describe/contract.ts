@@ -132,9 +132,9 @@ export interface DescribeTreeData {
   // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
   // so an element's absence proves nothing; `hint` says why.
   partial?: boolean;
-  // Apple TV: the focused element is absent from the focusable list, as while
-  // the keyboard opens or closes. The cursor has not landed on this screen yet.
-  cursorNotListed?: boolean;
+  // Apple TV: the focused element is one the screen has left, as while the
+  // keyboard opens or closes. The cursor has not landed on this screen yet.
+  cursorNotLanded?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
