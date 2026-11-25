@@ -19,7 +19,12 @@ import {
   SKILLS_DIR,
 } from "./utils.js";
 import { ALL_ADAPTERS, getManagedContentTargets } from "./mcp-configs.js";
-import { NO_SKILLS_RUNNER_MESSAGE, resolveSkillsRunner, skillsCommand } from "./skills-runner.js";
+import {
+  NO_SKILLS_RUNNER_MESSAGE,
+  noSkillsRunnerHelp,
+  resolveSkillsRunner,
+  skillsCommand,
+} from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
 
@@ -264,7 +269,9 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
   const lines: string[] = [];
   for (const r of results) {
     const parts: string[] = [];
-    if (r.syncError) {
+    if (r.syncError === NO_SKILLS_RUNNER_MESSAGE) {
+      parts.push(`${pc.red("not synced")} ${pc.dim("(no package runner, see above)")}`);
+    } else if (r.syncError) {
       parts.push(`${pc.red("sync failed")} ${pc.dim(`(${r.syncError})`)}`);
     } else if (r.synced > 0) {
       parts.push(`synced ${r.synced}`);
@@ -300,6 +307,9 @@ type SkillRefreshStage = "installer_skills_refresh" | "installer_update_skills_r
 
 export function reportSkillRefresh(projectRoot: string, stage: SkillRefreshStage): void {
   const results = refreshArgentSkills(projectRoot);
+  if (results.some((r) => r.syncError === NO_SKILLS_RUNNER_MESSAGE)) {
+    p.log.warn(noSkillsRunnerHelp("argent update"));
+  }
   const summary = formatSkillRefreshSummary(results);
   if (summary) {
     p.note(summary, "Skills Updated");

@@ -219,7 +219,7 @@ describe("refreshArgentSkills", () => {
     const results = refreshArgentSkills(tmpDir);
 
     expect(execFileSyncMock).not.toHaveBeenCalled();
-    expect(results[0]!.syncError).toBe("neither npx nor pnpm is on PATH");
+    expect(results[0]!.syncError).toBe("no package runner on PATH");
   });
 
   it("runs the skills CLI through `pnpm dlx` when the resolver picks pnpm (#1206)", () => {
@@ -427,5 +427,20 @@ describe("formatSkillRefreshSummary", () => {
     expect(summary).toContain("network down");
     expect(summary).toContain("prune failed");
     expect(summary).toContain("permission denied");
+  });
+
+  it("says no package runner was found instead of a raw sync error", () => {
+    const summary = formatSkillRefreshSummary([
+      {
+        scope: "project",
+        synced: 0,
+        syncError: "no package runner on PATH",
+        pruned: [],
+        pruneError: null,
+      },
+    ]);
+    expect(summary).toContain("not synced");
+    expect(summary).toContain("no package runner");
+    expect(summary).not.toContain("sync failed");
   });
 });

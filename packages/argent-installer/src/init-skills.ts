@@ -19,6 +19,7 @@ import {
 } from "./utils.js";
 import {
   NO_SKILLS_RUNNER_MESSAGE,
+  noSkillsRunnerHelp,
   isSkillsCliCached,
   resolveSkillsRunner,
   skillsCommand,
@@ -143,7 +144,7 @@ export function formatSkillsSummaryLine(skills: SkillsStepResult): string {
   const label = pc.yellow("Skills");
   if (skills.outcome === "failure" || skills.forcedManual) {
     const why = skills.noRunner
-      ? "neither npx nor pnpm is on PATH, see the instructions above"
+      ? "no package runner found, see the instructions above"
       : skills.forcedManual
         ? "offline, see the instructions above"
         : "see the error above";
@@ -188,7 +189,7 @@ export async function runSkillsStep(args: {
 
   let skillsMethod: SkillsMethod;
 
-  // npx when it is on PATH, else pnpm dlx (#1206), else null: nothing to run.
+  // npx when it is on PATH, else pnpm dlx, bunx or yarn dlx (#1206), else null.
   const runner = resolveSkillsRunner();
   const label = runner?.label ?? "npx";
   const online = await isOnline();
@@ -196,10 +197,8 @@ export async function runSkillsStep(args: {
   const skillsCliReady = runner !== null && (online || offlineWithCache);
 
   if (runner === null) {
-    p.log.warn(
-      pc.yellow("Neither npx nor pnpm is on PATH. ") +
-        "Automatic skills installation requires one of them."
-    );
+    p.log.warn(noSkillsRunnerHelp("argent init"));
+    p.log.info("Until then, you can copy the skills by hand:");
   } else if (!skillsCliReady) {
     p.log.warn(
       pc.yellow("You appear to be offline. ") +

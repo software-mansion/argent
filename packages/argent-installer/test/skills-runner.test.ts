@@ -15,7 +15,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { isSkillsCliCached, resolveSkillsRunner, skillsCommand } from "../src/skills-runner.js";
+import {
+  isSkillsCliCached,
+  noSkillsRunnerHelp,
+  resolveSkillsRunner,
+  skillsCommand,
+} from "../src/skills-runner.js";
 import { withNpmForce } from "../src/utils.js";
 
 // Fake-executable fixtures live under per-test temp dirs on an injected PATH,
@@ -68,7 +73,51 @@ describe("resolveSkillsRunner", () => {
     expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["dlx", "skills", "add", "x"]);
   });
 
-  it("returns null when neither npx nor pnpm is on PATH", () => {
+  it("falls back to bunx when only Bun is on PATH", () => {
+    const bin = makeTmpDir();
+    writePosixExecutable(path.join(bin, "bunx"));
+    writePosixExecutable(path.join(bin, "bun"));
+
+    const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
+
+    expect(runner.kind).toBe("bun");
+    expect(runner.bin).toBe(path.join(bin, "bunx"));
+    expect(runner.label).toBe("bunx");
+    expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["skills", "add", "x"]);
+  });
+
+  it("uses `bun x` when Bun is on PATH without its bunx link", () => {
+    const bin = makeTmpDir();
+    writePosixExecutable(path.join(bin, "bun"));
+
+    const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
+
+    expect(runner.bin).toBe(path.join(bin, "bun"));
+    expect(runner.label).toBe("bun x");
+    expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["x", "skills", "add", "x"]);
+  });
+
+  it("uses `yarn dlx` for Yarn 2 and later", () => {
+    const bin = makeTmpDir();
+    writePosixExecutable(path.join(bin, "yarn"));
+    execFileSyncMock.mockReturnValueOnce("4.5.0\n");
+
+    const runner = resolveSkillsRunner({ PATH: bin }, "linux")!;
+
+    expect(runner.kind).toBe("yarn");
+    expect(runner.label).toBe("yarn dlx");
+    expect(runner.buildArgs(["skills", "add", "x"])).toEqual(["dlx", "skills", "add", "x"]);
+  });
+
+  it("skips Yarn 1, which has no dlx", () => {
+    const bin = makeTmpDir();
+    writePosixExecutable(path.join(bin, "yarn"));
+    execFileSyncMock.mockReturnValueOnce("1.22.22\n");
+
+    expect(resolveSkillsRunner({ PATH: bin }, "linux")).toBeNull();
+  });
+
+  it("returns null when no runner is on PATH", () => {
     // A bare `npx` would let cmd.exe pick up an npx.cmd from the working
     // directory, so there is no fallback runner.
     const bin = makeTmpDir();
@@ -272,5 +321,17 @@ describe("isSkillsCliCached", () => {
 
     expect(isSkillsCliCached(pnpmDlx, undefined, "linux")).toBe(false);
     expect(execFileSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("noSkillsRunnerHelp", () => {
+  it("names every runner checked, how to fix it and the command to rerun", () => {
+    const text = noSkillsRunnerHelp("argent update");
+
+    for (const runner of ["npx", "pnpm dlx", "bunx", "yarn dlx"]) {
+      expect(text).toContain(runner);
+    }
+    expect(text).toContain("npm (it comes with Node.js)");
+    expect(text).toContain("Then run argent update again.");
   });
 });

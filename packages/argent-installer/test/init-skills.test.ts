@@ -644,10 +644,11 @@ describe("runSkillsStep", () => {
 
       expect(spawnMock).not.toHaveBeenCalled();
       expect(result).toMatchObject({ method: "manual", forcedManual: true, noRunner: true });
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Neither npx nor pnpm is on PATH"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no package runner was found"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Then run argent init again."));
       expect(noteText()).toContain("cp -r");
       expect(noteText()).not.toContain("skills add");
-      expect(formatSkillsSummaryLine(result)).toMatch(/neither npx nor pnpm is on PATH/);
+      expect(formatSkillsSummaryLine(result)).toMatch(/no package runner found/);
     });
 
     it("offers the resolved runner's command in the manual instructions", async () => {

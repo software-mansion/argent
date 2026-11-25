@@ -10,7 +10,7 @@ import { npxChildEnv, withNpmForce } from "./utils.js";
 // `dlx`), and `label` is a copy-pasteable command prefix for logs and
 // manual-fallback hints (`${label} skills ...`).
 export interface SkillsRunner {
-  kind: "npx" | "pnpm";
+  kind: "npx" | "pnpm" | "bun" | "yarn";
   bin: string;
   buildArgs: (skillsArgs: string[]) => string[];
   label: string;
@@ -50,13 +50,36 @@ function findOnPath(bin: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platfo
   return null;
 }
 
+// The runners resolveSkillsRunner tries, in order, as shown to the user.
+const SKILLS_RUNNERS_CHECKED = ["npx", "pnpm dlx", "bunx", "yarn dlx (Yarn 2+)"] as const;
+
+const YARN_VERSION_TIMEOUT_MS = 3_000;
+
+// `yarn dlx` exists only from Yarn 2 on; Yarn 1 has no way to run a package
+// without installing it. Only reached when npx, pnpm and bun are all missing.
+function yarnSupportsDlx(bin: string, platform: NodeJS.Platform): boolean {
+  try {
+    const probe: SkillsRunner = { kind: "yarn", bin, buildArgs: (args) => args, label: "yarn" };
+    const command = skillsCommand(probe, ["--version"], platform);
+    const out = execFileSync(command.file, command.args, {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: YARN_VERSION_TIMEOUT_MS,
+      shell: command.shell,
+      encoding: "utf8",
+    });
+    const major = Number.parseInt(out.trim().split(".")[0] ?? "", 10);
+    return major >= 2;
+  } catch {
+    return false;
+  }
+}
+
 // Which CLI runs `skills` commands. npx stays preferred whenever it's on
-// PATH, so nothing changes for npm users. When Node is pnpm-managed and npm
-// (so npx) was never installed, `argent init`/`update` used to fail the
-// skills step with `spawn npx ENOENT` (#1206) — `pnpm dlx` runs the same
-// `skills` CLI without needing npm. With neither on PATH there is nothing
-// trusted to launch, so this returns null: a bare `npx` would let cmd.exe
-// pick up an `npx.cmd` from the working directory.
+// PATH, so nothing changes for npm users. Node can be installed without npm
+// (pnpm-managed Node, #1206), so the runners of pnpm, Bun and Yarn 2+ follow.
+// With none on PATH there is nothing trusted to launch, so this returns null:
+// a bare `npx` would let cmd.exe pick up an `npx.cmd` from the working
+// directory.
 export function resolveSkillsRunner(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform
@@ -67,11 +90,35 @@ export function resolveSkillsRunner(
   if (pnpm) {
     return { kind: "pnpm", bin: pnpm, buildArgs: (args) => ["dlx", ...args], label: "pnpm dlx" };
   }
+  const bunx = findOnPath("bunx", env, platform);
+  if (bunx) return { kind: "bun", bin: bunx, buildArgs: (args) => args, label: "bunx" };
+  const bun = findOnPath("bun", env, platform);
+  if (bun) return { kind: "bun", bin: bun, buildArgs: (args) => ["x", ...args], label: "bun x" };
+  const yarn = findOnPath("yarn", env, platform);
+  if (yarn && yarnSupportsDlx(yarn, platform)) {
+    return { kind: "yarn", bin: yarn, buildArgs: (args) => ["dlx", ...args], label: "yarn dlx" };
+  }
   return null;
 }
 
-// The error both callers report when resolveSkillsRunner found nothing.
-export const NO_SKILLS_RUNNER_MESSAGE = "neither npx nor pnpm is on PATH";
+// The short error both callers record when resolveSkillsRunner found nothing.
+export const NO_SKILLS_RUNNER_MESSAGE = "no package runner on PATH";
+
+// What the user sees when resolveSkillsRunner found nothing: what was checked,
+// how to fix it, and what to run afterwards. `rerun` is that command.
+export function noSkillsRunnerHelp(rerun: string): string {
+  return [
+    "Argent could not install skills automatically: no package runner was found on PATH.",
+    `Checked: ${SKILLS_RUNNERS_CHECKED.join(", ")}.`,
+    "",
+    "To fix this, install one of:",
+    "  - npm (it comes with Node.js): https://nodejs.org",
+    "  - pnpm: https://pnpm.io/installation",
+    "  - Bun: https://bun.sh",
+    "",
+    `Then run ${rerun} again.`,
+  ].join("\n");
+}
 
 export interface SkillsCommand {
   file: string;
