@@ -591,6 +591,8 @@ The script reads each value from `process.env`, for example `process.env.API_URL
 | 3     | The `env` of the `script` step                                                                   |
 | 4     | The values of the run: `argent e2e run --env NAME=value`, or the `env` argument of `e2e-execute` |
 
+On Windows, names do not depend on case. A layer that sets `api_url` replaces the `API_URL` of an earlier layer.
+
 A `run:` fragment can also have a top-level `env`. The `env` of the fragment sets only the names that the e2e tests above it in the `run:` chain do not set. Thus an e2e test can replace a value that a shared fragment expects. The `env` of a fragment applies to the steps of that fragment and to the fragments it runs, and ends with it.
 
 A `tool: e2e-execute` step starts a separate run. That run gets no values from the e2e test around it. Put the values in the `env` argument of the step.

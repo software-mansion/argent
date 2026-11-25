@@ -655,6 +655,45 @@ describe("flow script executor - a secret the two streams wrote between them", (
   }, 30_000);
 });
 
+describe("flow script executor - the run budget and a redacted log", () => {
+  it("cuts the redacted log to what the run budget holds, and charges what it returns", async () => {
+    const ws = workspace();
+    const secret: FlowScriptSecret = { name: "S", value: "S3CR3T" };
+    // Raw, both lines fit the 14 bytes left; redacted, each grows to 13 bytes.
+    const script = ws.write("budget.mjs", `console.log("S3CR3T");\nconsole.log("S3CR3T");`);
+    const budget: FlowScriptLogBudget = { remainingBytes: 14 };
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      secrets: [secret],
+      logBudget: budget,
+    });
+
+    expect(result.log).toBe("{{secret:S}}\n{{secret:S}}");
+    expect(result.log).not.toContain("S3CR3T");
+    expect(result.logTruncated).toBe(true);
+    expect(budget.remainingBytes).toBeLessThanOrEqual(0);
+  }, 30_000);
+
+  it("gives the run budget back the bytes redaction saved", async () => {
+    const ws = workspace();
+    const secret: FlowScriptSecret = { name: "S", value: "a-much-longer-secret-value" };
+    const script = ws.write("shrink.mjs", `process.stdout.write(process.env.V);`);
+    const budget: FlowScriptLogBudget = createScriptLogBudget();
+    const before = budget.remainingBytes;
+    const result = await executor().execute({
+      scriptPath: script,
+      projectRoot: ws.dir,
+      env: { V: secret.value },
+      secrets: [secret],
+      logBudget: budget,
+    });
+
+    expect(result.log).toBe("{{secret:S}}");
+    expect(budget.remainingBytes).toBe(before - Buffer.byteLength(result.log));
+  }, 30_000);
+});
+
 it("does not flag a whole log that only its last marker took past the limit", async () => {
   const ws = workspace();
   const secret: FlowScriptSecret = { name: "S", value: "S3CR3T" };

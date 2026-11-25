@@ -822,8 +822,10 @@ type Redact = SecretRedactor;
  * Matched on the log as written and on each stream's own text, because the
  * other stream's writes can land between two halves of a value; a position
  * either reading claims is redacted. The result is cut again, since a marker is
- * longer than the fragment it replaces. A marker the second cut lands in is
- * kept whole, past the limit by at most its own length.
+ * longer than the fragment it replaces, to the step's limit and to what the
+ * run's budget holds; the budget is then charged for the text returned. A
+ * marker the second cut lands in is kept whole, past the limit by at most its
+ * own length.
  */
 function redactedLog(
   capture: ScriptLogCapture,
@@ -832,6 +834,17 @@ function redactedLog(
   const { parts } = capture;
   const joined = parts.map((part) => part.text).join("");
   if (redact.names.size === 0) return { text: joined, truncated: capture.truncated };
+  const result = clampRedacted(capture, redact, joined);
+  capture.settle(Buffer.byteLength(result.text, "utf8"));
+  return result;
+}
+
+function clampRedacted(
+  capture: ScriptLogCapture,
+  redact: SecretRedactor,
+  joined: string
+): { text: string; truncated: boolean } {
+  const { parts } = capture;
   const owner = redact.claims(joined, { cut: capture.truncated });
   for (const stream of ["stdout", "stderr"] as const) {
     const own = parts.filter((part) => part.stream === stream);
@@ -852,10 +865,11 @@ function redactedLog(
   }
   const text = redact.render(joined, owner);
   const buffer = Buffer.from(text, "utf8");
-  if (buffer.length <= SCRIPT_STEP_LOG_LIMIT_BYTES) {
+  const limit = capture.renderLimit;
+  if (buffer.length <= limit) {
     return { text, truncated: capture.truncated };
   }
-  const cut = buffer.subarray(0, utf8SafeCut(buffer, SCRIPT_STEP_LOG_LIMIT_BYTES)).toString("utf8");
+  const cut = buffer.subarray(0, utf8SafeCut(buffer, limit)).toString("utf8");
   // Only a marker the redaction wrote: a script can print `{{secret:` itself.
   const open = text.lastIndexOf(SECRET_PLACEHOLDER_MARKER, cut.length - 1);
   const name = open === -1 ? undefined : MARKER_AT_RE.exec(text.slice(open))?.[1];
@@ -1176,6 +1190,32 @@ function probeTypeStripping(nodeOptions: readonly string[]): Promise<boolean | u
   });
 }
 
+/**
+ * Layers environment maps, a later one replacing the names an earlier one set.
+ * On Windows a name is case-insensitive, so `api_url` replaces `API_URL`
+ * rather than sitting beside it, where the child would get whichever spelling
+ * Node passes first.
+ */
+export function mergeScriptEnv(
+  ...layers: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const layer of layers) {
+    for (const [name, value] of Object.entries(layer ?? {})) setEnvName(env, name, value);
+  }
+  return env;
+}
+
+function setEnvName(env: NodeJS.ProcessEnv, name: string, value: string): void {
+  if (process.platform === "win32") {
+    const lower = name.toLowerCase();
+    for (const existing of Object.keys(env)) {
+      if (existing !== name && existing.toLowerCase() === lower) delete env[existing];
+    }
+  }
+  env[name] = value;
+}
+
 function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
   // Windows environment names are case-insensitive, so a host may surface any
   // of these under non-canonical casing; POSIX names are exact.
@@ -1221,7 +1261,7 @@ function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.Pr
           `(reserved names: ${reservedEnvNamesForMessage()}).`
       );
     }
-    env[name] = value;
+    setEnvName(env, name, value);
   }
 
   // Set last, so a caller cannot shadow it. The runner preload activates only
@@ -1405,7 +1445,7 @@ class ScriptLogCapture {
   private heapFatalTail = "";
 
   constructor(
-    stepLimitBytes: number,
+    private readonly stepLimitBytes: number,
     private readonly runBudget?: FlowScriptLogBudget
   ) {
     this.stepRemaining = stepLimitBytes;
@@ -1434,6 +1474,22 @@ class ScriptLogCapture {
 
   get truncated(): boolean {
     return this.truncatedFlag;
+  }
+
+  /** What the redacted log may take: the step's limit, and what the run budget holds. */
+  get renderLimit(): number {
+    const charged = this.stepLimitBytes - this.stepRemaining;
+    const runRemaining = this.runBudget
+      ? Math.max(0, this.runBudget.remainingBytes)
+      : Number.POSITIVE_INFINITY;
+    return Math.min(this.stepLimitBytes, charged + runRemaining);
+  }
+
+  /** Charges the run budget for the log as returned, in place of the raw bytes captured. */
+  settle(returnedBytes: number): void {
+    if (this.runBudget) {
+      this.runBudget.remainingBytes += this.stepLimitBytes - this.stepRemaining - returnedBytes;
+    }
   }
 
   get heapFatalSeen(): boolean {

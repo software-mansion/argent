@@ -56,7 +56,11 @@ import {
   windowsPathRefusal,
 } from "./flow-utils";
 import { resolveScriptEnv } from "./flow-script-step";
-import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
+import {
+  createScriptLogBudget,
+  mergeScriptEnv,
+  type FlowScriptLogBudget,
+} from "./script/flow-script-executor";
 import {
   ClientProjectAccess,
   HostProjectAccess,
@@ -1693,9 +1697,6 @@ Without a link, every step kind runs.`,
     async execute(_services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
-      // Before any step: a missing secret in the run's own values would fail
-      // every script step of the run the same way.
-      if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
         params,
         ctx?.fileInputs?.e2e_test_file,
@@ -1767,6 +1768,10 @@ Without a link, every step kind runs.`,
           error_kind: "validation",
         });
       }
+      // Before any step, and after the checks above, so a project_root they
+      // refuse is never searched for secret sources: a missing secret in the
+      // run's own values would fail every script step of the run the same way.
+      if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses. In client mode the seed is the root flow's CLIENT
@@ -2985,7 +2990,7 @@ async function execRunStep(
     fragment.steps,
     childScope(scope, {
       runStack: [...scope.runStack, { canonical, display }],
-      fileEnv: { ...fragment.env, ...scope.fileEnv },
+      fileEnv: mergeScriptEnv(fragment.env, scope.fileEnv),
       legacyPoints: flowFormatVersion(fragment) < 2,
     })
   );
@@ -3027,7 +3032,7 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
-  const env = { ...scope.fileEnv, ...step.env, ...state.runEnv };
+  const env = mergeScriptEnv(scope.fileEnv, step.env, state.runEnv);
   const { outcome } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,
