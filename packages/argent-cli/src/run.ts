@@ -4,6 +4,7 @@ import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
+  shouldAutoScreenshot,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
@@ -447,7 +448,7 @@ settled=false or debugger-status's not_connected.
       if (screenshot) {
         await saveImage(async () => writeImageFile(outPath, screenshot.data));
         console.log(`Wrote: ${outPath}`);
-      } else {
+      } else if (shouldAutoScreenshot(toolName, payload)) {
         console.error(`No screen was captured, so ${outPath} was not written.`);
       }
     }
