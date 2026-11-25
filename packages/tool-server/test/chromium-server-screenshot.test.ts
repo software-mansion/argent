@@ -120,14 +120,15 @@ describe("chromium-server/screenshot", () => {
     });
 
     it("averages any whole-number ratio, rounding to the nearest value", async () => {
-      // One 120 among eight 30s: (240 + 120) / 9 = 40.
+      // One pixel among eight 30s. Red: 274 / 9 = 30.44 rounds down to 30.
+      // Green: 275 / 9 = 30.56 rounds up to 31. Blue: (240 + 120) / 9 = 40 exactly.
       const shot = pngBase64(6, 3, (x, y) =>
-        x === 0 && y === 0 ? [120, 120, 120, 255] : [30, 30, 30, 255]
+        x === 0 && y === 0 ? [34, 35, 120, 255] : [30, 30, 30, 255]
       );
       const { cdp } = cdpWith(shot, { w: 2, h: 1, dpr: 3 });
       const out = PNG.sync.read(await capture(cdp));
       expect([out.width, out.height]).toEqual([2, 1]);
-      expect([...out.data.subarray(0, 4)]).toEqual([40, 40, 40, 255]);
+      expect([...out.data.subarray(0, 4)]).toEqual([30, 31, 40, 255]);
       expect([...out.data.subarray(4, 8)]).toEqual([30, 30, 30, 255]);
     });
 
