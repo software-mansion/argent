@@ -398,6 +398,8 @@ The step reports `fail` when the wait returns `success: false`. The failure reas
 | `hidden`  | No visible element matches the selector                          |
 | `text`    | The text of the element in `in` satisfies exactly one comparator |
 
+An `assert` can also check a value that a script returned. See [Check an output](#check-an-output).
+
 The `text` comparators:
 
 | Comparator | Match                           |
@@ -458,7 +460,7 @@ On HarmonyOS, the runner has no UI tree, so `idle` cannot run. The step errors i
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, an [`output` check](#check-an-output), or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
 
 ## Composition
 
@@ -520,7 +522,7 @@ Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-A `script` step needs no device. An e2e test of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the e2e test resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+A `script` step needs no device. An e2e test of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step, or a `when` step with a UI or a platform guard, beside it makes the e2e test resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
@@ -601,7 +603,7 @@ Each `env` map has these rules:
 
 - A name has letters, digits and `_`, and does not start with a digit.
 - A value is a string. Parsing rejects an unquoted number, `true` or `false`, because YAML changes the value. For example, YAML reads `0800` as the number 800. Write `PORT: "8080"`.
-- Argent rejects an `{{output:...}}` reference. Only `{{secret:NAME}}` placeholders resolve.
+- A value can hold an `{{output:...}}` reference. See [Script output](#script-output).
 - Some names control the process of the runner. A `script` step that sets one of them is errored when it runs. The names are `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `ELECTRON_RUN_AS_NODE` and `ARGENT_FLOW_SCRIPT_RUNNER`. The names `npm_config_node_options`, `npm_config_userconfig` and `npm_config_globalconfig` are also reserved, in each letter case and with `-` or `_`.
 
 Three recording tools write the `env` maps. Each tool checks the names and the values as parsing does. Each tool also checks that each `{{secret:NAME}}` placeholder resolves. When a check fails, the tool changes nothing.
@@ -636,6 +638,127 @@ Argent redacts each resolved secret in the log of the script, from stdout and st
 - Argent does not match other encodings, for example base64 or hex. Do not print a credential from a script.
 
 Argent does not redact a value without a placeholder. Put each credential in a placeholder, not in the e2e test file.
+
+### Script output
+
+```yaml
+steps:
+  - script: { path: ../../scripts/create-user.mjs }
+  - type: { into: { id: email }, text: "{{output:user.email}}" }
+  - tap: { id: "{{output:user.rowId}}" }
+  - assert: { output: user.role, equals: admin }
+  - script:
+      path: ../../scripts/delete-user.mjs
+      env: { USER_ID: "{{output:user.id}}" }
+```
+
+```js
+// scripts/create-user.mjs
+const response = await fetch(`${process.env.API_URL}/users`, { method: "POST" });
+output.user = await response.json();
+```
+
+A run has one output document. Each `script` step gets the document as the global `output`. When the script passes, the document becomes the value that the script leaves in `output`. A failed script does not change the document. Thus a script can read, change and delete the values of an earlier script. An assignment such as `output = { id: 1 }` replaces the whole document.
+
+The document is a JSON object of at most 1 MiB. The script step fails when the script leaves a value that JSON cannot hold, for example a function, a `Date` or `NaN`.
+
+A `run:` fragment uses the document of the run that runs it, so the steps after the fragment read the values of its scripts. A `tool: e2e-execute` step starts a separate run with an empty document. The values of that run do not come back. To give values to that run, put references in the `env` argument of the step.
+
+#### References
+
+| Form                          | Value                                                   |
+| ----------------------------- | ------------------------------------------------------- |
+| `{{output:PATH}}`             | The value at `PATH`                                     |
+| `{{output:PATH ?? FALLBACK}}` | The value at `PATH`, or `FALLBACK` when it has no value |
+
+`PATH` is keys and array indexes, joined by dots, for example `user.id` or `items.0.name`. A key has letters, digits, `_` and `-`, and does not start with a digit. An index is a number. Parsing rejects each other spelling that starts with `{{output:`, for example `{{output:items[0]}}` or a reference with two `??`.
+
+Put each value with a reference in quotes. YAML reads an unquoted `{{` as the start of a map.
+
+`PATH` has no value in these cases:
+
+- The key or the index does not exist.
+- A value on the path is not an object or a list.
+- The value is `null`.
+- The script that sets the value did not run, for example in a `when` block that was skipped.
+
+`FALLBACK` is a literal value:
+
+| `FALLBACK`                               | Value                                 |
+| ---------------------------------------- | ------------------------------------- |
+| A JSON number, `true`, `false` or `null` | That JSON value                       |
+| A JSON string in double quotes, `"3"`    | The string without the quotes         |
+| Other text                               | The text without the spaces around it |
+| No text, as in `{{output:user.id ?? }}`  | An empty string                       |
+
+A `FALLBACK` cannot contain `}}` or another reference.
+
+When `PATH` has no value and the reference has no `FALLBACK`, the step with the reference is errored, and Argent skips the later steps. The reason names the path and the keys at the level where the path stops.
+
+#### Fields that take a reference
+
+Argent resolves the references of a step when the step starts. The report of the step shows the resolved values.
+
+| Field                                                                             | Value                        |
+| --------------------------------------------------------------------------------- | ---------------------------- |
+| A `tool:` argument that is one reference only, for example `x: "{{output:pt.x}}"` | The value with its JSON type |
+| Other text in a `tool:` argument                                                  | Text                         |
+| A selector, its scopes included                                                   | Text                         |
+| The `text` of a `type` step                                                       | Text                         |
+| The `contains` or `equals` text of an `await`, `assert` or `when` condition       | Text                         |
+| An `env` value of each layer                                                      | Text                         |
+
+In text, a string stays as it is. A number or a boolean becomes the text that JSON writes, for example `3` or `true`. A list or an object in text makes the step errored. A selector field that resolves to an empty string also makes the step errored, because an empty selector can match any element.
+
+Parsing rejects a reference in these fields. Write a literal value in them:
+
+- An `echo` message
+- A `launch` value and a `run` path
+- The `cropOn` selector of a `snapshot`, because Argent keys the baseline by the selector
+- A `matches` regular expression
+- Each argument of a `tool: e2e-execute` step, except `env`
+
+#### Check an output
+
+```yaml
+- assert: { output: user.role, equals: admin }
+- assert: { output: user.id, exists: true }
+- when: { output: flags.onboarding, equals: "true" }
+  steps:
+    - tap: { text: Skip }
+```
+
+An `assert` or a `when` guard with `output` checks a value of the document. It takes a `PATH` without braces and exactly one test:
+
+| Test            | Holds when                                      |
+| --------------- | ----------------------------------------------- |
+| `exists: true`  | `PATH` has a value                              |
+| `exists: false` | `PATH` has no value                             |
+| `equals`        | The value is the same text. Letter case counts  |
+| `contains`      | The value contains the text. Letter case counts |
+| `matches`       | The JavaScript regex matches the value          |
+
+The check compares the value as text, so `equals: 3` holds for the number 3. A list or an object fails the check. The text to compare with can hold a reference, for example `equals: "{{output:expected.role}}"`. An `output` check needs no device. `await` has no `output` form, because the document does not change while a step waits.
+
+To compare a value with the screen, put a reference in a UI condition:
+
+```yaml
+- assert: { text: { in: { id: user-name }, equals: "{{output:user.name}}" } }
+```
+
+This comparison does not depend on letter case, as for each `text` condition.
+
+#### Secrets in output
+
+Argent redacts each resolved secret of the step from the output document, as in the log. The document holds `{{secret:NAME}}` in place of the value. A reference never resolves a secret. A step is errored when a resolved value contains `{{secret:`, or makes a placeholder with the text around it. Put each placeholder in the e2e test file.
+
+#### Record a script output
+
+`e2e-add-script` gives each script the document of the earlier scripts of the recording, as a replay does. The tool returns the document in `outputJson`. A reference in the `env` argument resolves against the same document.
+
+`e2e-add-step` runs the call with each reference resolved against the document. The tool records the call with the references as a `tool:` step, also for a call that the tool otherwise records as a directive, for example a tap. When a reference does not resolve, the tool runs nothing and records nothing.
+
+A change to the e2e test file during the recording does not change the document.
 
 ### Module type
 

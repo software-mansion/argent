@@ -2801,7 +2801,7 @@ async function execWhenStep(
   const index = state.reports.length;
   // The marker sits at the enclosing depth; the guarded steps one deeper —
   // whether they execute or report as skipped.
-  const marker = {
+  const unresolved = {
     index,
     kind: "when",
     e2eTest: scopeFlow(scope),
@@ -2814,11 +2814,12 @@ async function execWhenStep(
     step = resolveStepOutputs(authored, state.output);
   } catch (err) {
     if (!(err instanceof OutputReferenceError)) throw err;
-    pushReport(state, { ...marker, status: "error", reason: escapeInline(err.message) });
+    pushReport(state, { ...unresolved, status: "error", reason: escapeInline(err.message) });
     state.stopped = true;
     reportBlockSkipped(state, authored.steps, inner, "when guard errored");
     return;
   }
+  const marker = { ...unresolved, target: stepTarget(step) } as const;
   let label = describeWhenCondition(step.condition);
   const guardStartedAt = Date.now();
 
