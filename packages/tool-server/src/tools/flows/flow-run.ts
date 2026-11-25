@@ -1771,7 +1771,10 @@ Without a link, every step kind runs.`,
       // Before any step, and after the checks above, so a project_root they
       // refuse is never searched for secret sources: a missing secret in the
       // run's own values would fail every script step of the run the same way.
-      if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
+      // Merged first, as every step merges them: on Windows a name given twice
+      // in different casings reaches the script once.
+      const runEnv = mergeScriptEnv(params.env);
+      resolveScriptEnv(runEnv, params.project_root, ctx?.clientSecrets);
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses. In client mode the seed is the root flow's CLIENT
@@ -1945,7 +1948,7 @@ Without a link, every step kind runs.`,
         snapshotApps: new Map(),
         secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
-        runEnv: params.env ?? {},
+        runEnv,
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"

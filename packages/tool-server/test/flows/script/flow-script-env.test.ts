@@ -139,6 +139,28 @@ describe("where a script's environment values come from", () => {
     ]);
   });
 
+  it("does not resolve a run value on Windows that a later casing of its name replaced", async () => {
+    await write(
+      "scripts/print.mjs",
+      `console.log(JSON.stringify(Object.entries(process.env).filter(([n]) => n.toLowerCase() === "mode")));`
+    );
+    await write(".argent/e2e/mode.yaml", "steps:\n  - script: { path: ../../scripts/print.mjs }\n");
+
+    const real = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let result: FlowRunResult;
+    try {
+      result = await run("mode", {
+        env: { MODE: "{{secret:NOT_DEFINED_ANYWHERE_42}}", mode: "fast" },
+      });
+    } finally {
+      Object.defineProperty(process, "platform", { value: real, configurable: true });
+    }
+
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(result.steps[0]!.scriptLog!.trim())).toEqual([["mode", "fast"]]);
+  });
+
   it("refuses a run value with an invalid name in the e2e-execute schema", async () => {
     await write(".argent/e2e/any.yaml", "steps:\n  - echo: hi\n");
     const parsed = createRunFlowTool(registry).zodSchema!.safeParse({

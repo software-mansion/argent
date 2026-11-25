@@ -358,6 +358,10 @@ function parseEnvFlags(values: readonly string[]): Record<string, string> {
         `--env takes NAME=value with a name of letters, digits and _, not starting with a digit; got ${JSON.stringify(entry)}`
       );
     }
+    // Deleted first, so a repeated flag moves to the end: on Windows the server
+    // folds names case-insensitively in map order, and `--env MODE=a --env
+    // mode=b --env MODE=c` must end on the last flag given.
+    delete env[name];
     env[name] = entry.slice(eq + 1);
   }
   return env;
