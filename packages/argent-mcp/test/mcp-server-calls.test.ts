@@ -831,8 +831,8 @@ describe("startMcpServer screen capture after an interaction", () => {
 
   it("sends a cumulative diff against the last full tree when only a few lines change", async () => {
     const list = Array.from(
-      { length: 10 },
-      (_, i) => `  AXButton "Row ${i}" (0.000,0.${i}00,1.000,0.100)`
+      { length: 20 },
+      (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
     ).join("\n");
     describeText = list;
     const first = await tap();
@@ -845,8 +845,10 @@ describe("startMcpServer screen capture after an interaction", () => {
       [
         AUTO_DESCRIBE_HEADER,
         treeDiffHeader(id, "gesture-tap"),
-        '-   AXButton "Row 2" (0.000,0.200,1.000,0.100)',
-        '+   AXButton "Row 2" value="on" (0.000,0.200,1.000,0.100)',
+        '    AXButton "Row 1" (0.000,0.040,1.000,0.040)',
+        '-   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '    AXButton "Row 3" (0.000,0.120,1.000,0.040)',
       ].join("\n")
     );
     expect(loggedTrees().at(-1)).toMatchObject({ mode: "diff", identical: false, note: false });

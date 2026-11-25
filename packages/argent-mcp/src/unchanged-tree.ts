@@ -4,14 +4,18 @@
  * from, the last full tree (a wait, a toggle, typing into a field, a swipe at
  * the end of a list), and every full copy stays in context for the rest of the
  * session. An identical tree is replaced by a note; a slightly changed tree is
- * replaced by a cumulative `-` / `+` line diff against the last full tree.
+ * replaced by an order-preserving cumulative `-` / `+` line diff against the
+ * last full tree.
  *
  * The id is what makes both notes and diffs safe. This process cannot tell
  * which agent on the connection received a tree (a parent and its subagents
  * share one), nor whether a client still holds an old result. Every diff is
- * computed against one named full tree rather than chained across turns, so an
- * agent only ever applies one diff on top of the id it holds — and if it does
- * not find that id in its context, it knows to call `describe`.
+ * computed purely against one named full tree rather than chained across turns,
+ * so an agent only ever applies one diff on top of the id it holds — and if it
+ * does not find that id in its context, it knows to call `describe`. When a
+ * later tree reverts or drops lines from a prior diff (including returning to
+ * the base tree after a diff), we send a fresh full tree instead of expecting
+ * the agent to notice the silence or chaining off the previous turn.
  */
 
 import { randomInt } from "node:crypto";
@@ -40,18 +44,34 @@ export const UNCHANGED_MAX_AGE_MS = 5 * 60_000;
  */
 const MAX_DIFF_RATIO = 0.6;
 
+/** Upper bound on Myers edit distance before falling back to the full tree. */
+const MAX_EDIT_DISTANCE = 256;
+
+/** Unchanged lines shown before and after each diff hunk to disambiguate duplicates/order. */
+const CONTEXT_LINES = 1;
+
 type TreeRenderMode = "full" | "diff" | "unchanged";
+
+interface PriorDiffLines {
+  removed: string[];
+  added: string[];
+}
 
 interface SentTree {
   id: string;
   tree: string;
-  /** Most recent screen tree for this device, used to surface lines that revert back to `tree`. */
-  prevTree: string;
   /** The tool whose result carried the full tree. */
   tool: string;
   sentAt: number;
   /** Non-full results (notes or diffs) sent in place of this tree since. */
   shortResults: number;
+  /**
+   * Removed/added lines of the last diff emitted against `tree`, or `null` if
+   * no diff has been emitted since `tree` was sent in full. Used solely as a
+   * monotonicity guard: if a later step reverts or drops any of these lines
+   * (including returning to `tree` itself), we fall back to a fresh full tree.
+   */
+  priorDiff: PriorDiffLines | null;
 }
 
 interface AfterAction {
@@ -94,11 +114,7 @@ export function unchangedTreeNote(id: string, tool: string): string {
 
 /** Header line that introduces a cumulative diff against full tree `id`. */
 export function treeDiffHeader(id: string, tool: string): string {
-  return `Diff against \`${id}\` (\`${tool}\`) — all other lines match \`${id}\` (supersedes earlier diffs; - gone, + new; call \`describe\` if you lack \`${id}\`):`;
-}
-
-function nonBlankLines(tree: string): string[] {
-  return tree.split("\n").filter((line) => line.trim() !== "");
+  return `Diff against \`${id}\` (\`${tool}\`) — all other lines match \`${id}\` (- gone, + new; call \`describe\` if you lack \`${id}\`):`;
 }
 
 function countLines(lines: readonly string[]): Map<string, number> {
@@ -107,15 +123,17 @@ function countLines(lines: readonly string[]): Map<string, number> {
   return counts;
 }
 
-/** Lines of `lines` left after subtracting, per line value, as many as `other` holds. */
-function linesMissingFrom(lines: readonly string[], other: readonly string[]): string[] {
-  const remaining = countLines(other);
-  return lines.filter((line) => {
-    const left = remaining.get(line) ?? 0;
-    if (left === 0) return true;
-    remaining.set(line, left - 1);
-    return false;
-  });
+/** True when every line in `subset` appears at least as many times in `superset`. */
+function isMultisetSubset(subset: readonly string[], superset: readonly string[]): boolean {
+  if (subset.length === 0) return true;
+  if (subset.length > superset.length) return false;
+  const counts = countLines(superset);
+  for (const line of subset) {
+    const left = counts.get(line) ?? 0;
+    if (left === 0) return false;
+    counts.set(line, left - 1);
+  }
+  return true;
 }
 
 /**
@@ -135,50 +153,192 @@ function treeMetaSignature(tree: string): string {
   return meta.join("\n");
 }
 
+type EditOp = { kind: "eq" | "del" | "ins"; line: string };
+
 /**
- * Computes a `-` / `+` line diff from `base` to `next`, preserving tree order
- * and multiset counts for repeated lines. When `prev` (the tree from the
- * previous step) held diff lines against `base` that are no longer present in
- * `next` (e.g. a toggle reverted back to `base`'s state or a temporary error
- * banner disappeared), those changes are called out explicitly so smaller
- * models do not assume the prior diff still applies. Returns `null` when
- * metadata changed or when the diff exceeds `MAX_DIFF_RATIO` of `next`.
+ * Order-preserving shortest edit script (Myers O((n+m)*D)) bounded by `maxD`.
+ * Returns `null` when more than `maxD` single-line edits are needed.
+ */
+function myersDiff(a: readonly string[], b: readonly string[], maxD: number): EditOp[] | null {
+  const n = a.length;
+  const m = b.length;
+  const limit = Math.min(maxD, n + m);
+  const offset = limit;
+  const v = new Int32Array(2 * limit + 1);
+  const trace: Int32Array[] = [];
+
+  for (let d = 0; d <= limit; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      if (k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!)) {
+        x = v[offset + k + 1]!;
+      } else {
+        x = v[offset + k - 1]! + 1;
+      }
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[offset + k] = x;
+      if (x === n && y === m) {
+        const ops: EditOp[] = [];
+        let bx = n;
+        let by = m;
+        for (let step = d; step > 0; step--) {
+          const prevV = trace[step]!;
+          const bk = bx - by;
+          const prevK =
+            bk === -step || (bk !== step && prevV[offset + bk - 1]! < prevV[offset + bk + 1]!)
+              ? bk + 1
+              : bk - 1;
+          const prevX = prevV[offset + prevK]!;
+          const prevY = prevX - prevK;
+          while (bx > prevX && by > prevY) {
+            bx--;
+            by--;
+            ops.push({ kind: "eq", line: a[bx]! });
+          }
+          if (bx === prevX) {
+            by--;
+            ops.push({ kind: "ins", line: b[by]! });
+          } else {
+            bx--;
+            ops.push({ kind: "del", line: a[bx]! });
+          }
+        }
+        while (bx > 0 && by > 0) {
+          bx--;
+          by--;
+          ops.push({ kind: "eq", line: a[bx]! });
+        }
+        ops.reverse();
+        return ops;
+      }
+    }
+  }
+  return null;
+}
+
+function diffLines(before: readonly string[], after: readonly string[]): EditOp[] | null {
+  let prefix = 0;
+  const minLen = Math.min(before.length, after.length);
+  while (prefix < minLen && before[prefix] === after[prefix]) prefix++;
+
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  const midBefore = before.slice(prefix, before.length - suffix);
+  const midAfter = after.slice(prefix, after.length - suffix);
+  const midOps =
+    midBefore.length === 0 && midAfter.length === 0
+      ? []
+      : myersDiff(midBefore, midAfter, MAX_EDIT_DISTANCE);
+  if (midOps === null) return null;
+
+  const ops: EditOp[] = [];
+  for (let i = 0; i < prefix; i++) ops.push({ kind: "eq", line: before[i]! });
+  for (const op of midOps) ops.push(op);
+  for (let i = before.length - suffix; i < before.length; i++) {
+    ops.push({ kind: "eq", line: before[i]! });
+  }
+  return ops;
+}
+
+function renderHunks(ops: readonly EditOp[]): string[] {
+  const visible = new Uint8Array(ops.length);
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i]!.kind === "eq") continue;
+    const start = Math.max(0, i - CONTEXT_LINES);
+    const end = Math.min(ops.length - 1, i + CONTEXT_LINES);
+    for (let j = start; j <= end; j++) visible[j] = 1;
+  }
+
+  const out: string[] = [];
+  let inHunk = false;
+  let hadHunk = false;
+  for (let i = 0; i < ops.length; i++) {
+    if (!visible[i]) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk) {
+      if (hadHunk) out.push("...");
+      inHunk = true;
+      hadHunk = true;
+    }
+    const op = ops[i]!;
+    if (op.kind === "del") out.push(`- ${op.line}`);
+    else if (op.kind === "ins") out.push(`+ ${op.line}`);
+    else out.push(`  ${op.line}`);
+  }
+  return out;
+}
+
+function splitTreeLines(tree: string): string[] {
+  // Drop a single trailing newline so the last content line is not followed by a
+  // phantom empty line, while preserving interior blank lines and exact order.
+  const trimmed = tree.endsWith("\n") ? tree.slice(0, -1) : tree;
+  return trimmed.split("\n");
+}
+
+interface TreeDiffResult {
+  mode: "unchanged" | "diff";
+  text: string;
+  removed: string[];
+  added: string[];
+}
+
+function computeTreeDiff(
+  base: string,
+  next: string,
+  id: string,
+  tool: string
+): TreeDiffResult | null {
+  if (treeMetaSignature(base) !== treeMetaSignature(next)) return null;
+  if (base === next) {
+    return { mode: "unchanged", text: unchangedTreeNote(id, tool), removed: [], added: [] };
+  }
+  const before = splitTreeLines(base);
+  const after = splitTreeLines(next);
+  const ops = diffLines(before, after);
+  if (ops === null) return null;
+
+  const removed: string[] = [];
+  const added: string[] = [];
+  for (const op of ops) {
+    if (op.kind === "del") removed.push(op.line);
+    else if (op.kind === "ins") added.push(op.line);
+  }
+  if (removed.length === 0 && added.length === 0) {
+    // Only trailing-newline formatting differed (not line content or order).
+    return { mode: "unchanged", text: unchangedTreeNote(id, tool), removed, added };
+  }
+
+  const text = [treeDiffHeader(id, tool), ...renderHunks(ops)].join("\n");
+  if (text.length > Math.floor(next.length * MAX_DIFF_RATIO)) return null;
+  return { mode: "diff", text, removed, added };
+}
+
+/**
+ * Computes an order-preserving `-` / `+` line diff (with surrounding context)
+ * from `base` to `next`. Returns `null` when metadata changed, when line edits
+ * exceed the bound, or when the diff exceeds `MAX_DIFF_RATIO` of `next`.
  */
 export function formatTreeDiff(
   base: string,
   next: string,
   id: string,
-  tool: string,
-  prev: string = base
+  tool: string
 ): { mode: "unchanged" | "diff"; text: string } | null {
-  if (treeMetaSignature(base) !== treeMetaSignature(next)) return null;
-  const before = nonBlankLines(base);
-  const after = nonBlankLines(next);
-  const removed = linesMissingFrom(before, after);
-  const added = linesMissingFrom(after, before);
-  if (removed.length === 0 && added.length === 0) {
-    return { mode: "unchanged", text: unchangedTreeNote(id, tool) };
-  }
-  const lines = [
-    treeDiffHeader(id, tool),
-    ...removed.map((line) => `- ${line}`),
-    ...added.map((line) => `+ ${line}`),
-  ];
-  if (prev !== base) {
-    const prevLines = nonBlankLines(prev);
-    const prevAdded = linesMissingFrom(prevLines, before);
-    const prevRemoved = linesMissingFrom(before, prevLines);
-    const goneFromPriorDiff = linesMissingFrom(prevAdded, added);
-    const restoredToBase = linesMissingFrom(prevRemoved, removed);
-    if (goneFromPriorDiff.length > 0 || restoredToBase.length > 0) {
-      lines.push(`Also since previous step (- gone from prior diff, + restored to \`${id}\`):`);
-      for (const line of goneFromPriorDiff) lines.push(`- ${line}`);
-      for (const line of restoredToBase) lines.push(`+ ${line}`);
-    }
-  }
-  const text = lines.join("\n");
-  if (text.length > Math.floor(next.length * MAX_DIFF_RATIO)) return null;
-  return { mode: "diff", text };
+  const diff = computeTreeDiff(base, next, id, tool);
+  return diff ? { mode: diff.mode, text: diff.text } : null;
 }
 
 /** Tells the ids of this process from those of an earlier one in the same conversation. */
@@ -190,7 +350,7 @@ function randomTag(): string {
 
 /**
  * One per MCP session. It holds the last full tree per device, a few kB each.
- * An exact equality check runs first so identical trees skip splitting/diffing.
+ * An exact equality check runs first so identical trees skip diffing.
  */
 export function createTreeMemory(
   now: () => number = Date.now,
@@ -204,10 +364,10 @@ export function createTreeMemory(
     lastSent.set(udid, {
       id,
       tree,
-      prevTree: tree,
       tool: normalizeToolName(toolName),
       sentAt: now(),
       shortResults: 0,
+      priorDiff: null,
     });
     return id;
   };
@@ -224,25 +384,48 @@ export function createTreeMemory(
 
       if (canShorten) {
         if (identical) {
-          last.shortResults += 1;
-          last.prevTree = tree;
-          return {
-            text: unchangedTreeNote(last.id, last.tool),
-            mode: "unchanged",
-            identical: true,
-            note: true,
-          };
-        }
-        const diff = formatTreeDiff(last.tree, tree, last.id, last.tool, last.prevTree);
-        if (diff !== null) {
-          last.shortResults += 1;
-          last.prevTree = tree;
-          return {
-            text: diff.text,
-            mode: diff.mode,
-            identical: diff.mode === "unchanged",
-            note: diff.mode === "unchanged",
-          };
+          // Returning to the base tree after a diff is a revert (e.g. toggling
+          // a switch on then off): send the full tree instead of an unchanged
+          // note so the agent never assumes the earlier diff still applies.
+          if (last.priorDiff === null) {
+            last.shortResults += 1;
+            return {
+              text: unchangedTreeNote(last.id, last.tool),
+              mode: "unchanged",
+              identical: true,
+              note: true,
+            };
+          }
+        } else {
+          const diff = computeTreeDiff(last.tree, tree, last.id, last.tool);
+          if (diff !== null) {
+            if (diff.mode === "unchanged") {
+              if (last.priorDiff === null) {
+                last.shortResults += 1;
+                return {
+                  text: diff.text,
+                  mode: "unchanged",
+                  identical: true,
+                  note: true,
+                };
+              }
+            } else {
+              const monotonic =
+                last.priorDiff === null ||
+                (isMultisetSubset(last.priorDiff.removed, diff.removed) &&
+                  isMultisetSubset(last.priorDiff.added, diff.added));
+              if (monotonic) {
+                last.shortResults += 1;
+                last.priorDiff = { removed: diff.removed, added: diff.added };
+                return {
+                  text: diff.text,
+                  mode: "diff",
+                  identical: false,
+                  note: false,
+                };
+              }
+            }
+          }
         }
       }
 

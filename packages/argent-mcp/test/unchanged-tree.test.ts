@@ -17,7 +17,10 @@ const LONG_TREE = [
   "Mode: flat",
   "",
   "ROOT  AXApplication (0.000,0.000,1.000,1.000)",
-  ...Array.from({ length: 10 }, (_, i) => `  AXButton "Row ${i}" (0.000,0.${i}00,1.000,0.100)`),
+  ...Array.from(
+    { length: 20 },
+    (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
+  ),
 ].join("\n");
 const MINUTE = 60_000;
 
@@ -67,12 +70,14 @@ describe("createTreeMemory", () => {
       note: false,
       text: [
         treeDiffHeader("t-1", "gesture-tap"),
-        '-   AXButton "Row 2" (0.000,0.200,1.000,0.100)',
-        '+   AXButton "Row 2" value="on" (0.000,0.200,1.000,0.100)',
+        '    AXButton "Row 1" (0.000,0.040,1.000,0.040)',
+        '-   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '    AXButton "Row 3" (0.000,0.120,1.000,0.040)',
       ].join("\n"),
     });
 
-    // A second small edit diffs against the same full tree `t-1`, never chaining diffs.
+    // A second monotonic edit diffs against the same full tree `t-1`, never chaining diffs.
     const afterTwo = afterOne + '\n  AXStaticText "Saved" (0.100,0.900,0.200,0.050)';
     const second = trees.afterAction("u", afterTwo, "keyboard");
     expect(second).toEqual({
@@ -81,62 +86,67 @@ describe("createTreeMemory", () => {
       note: false,
       text: [
         treeDiffHeader("t-1", "gesture-tap"),
-        '-   AXButton "Row 2" (0.000,0.200,1.000,0.100)',
-        '+   AXButton "Row 2" value="on" (0.000,0.200,1.000,0.100)',
+        '    AXButton "Row 1" (0.000,0.040,1.000,0.040)',
+        '-   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '    AXButton "Row 3" (0.000,0.120,1.000,0.040)',
+        "...",
+        '    AXButton "Row 19" (0.000,0.760,1.000,0.040)',
         '+   AXStaticText "Saved" (0.100,0.900,0.200,0.050)',
       ].join("\n"),
     });
   });
 
-  it("calls out lines from a prior diff that reverted back to the base tree", () => {
-    const tallTree = [
-      "Source: ax-service",
-      "Mode: flat",
-      "",
-      "ROOT  AXApplication (0.000,0.000,1.000,1.000)",
-      ...Array.from(
-        { length: 20 },
-        (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
-      ),
-    ].join("\n");
+  it("falls back to a full tree when a prior diff reverts back to the base tree", () => {
     const { trees } = memoryWithClock();
-    trees.afterAction("u", tallTree, "describe");
+    trees.afterAction("u", LONG_TREE, "describe");
 
-    // Step 1: Row 2 changes from base.
-    const step1 = tallTree.replace('"Row 2"', '"Row 2" value="on"');
+    // Step 1: Row 2 changes from base -> diff.
+    const step1 = LONG_TREE.replace('"Row 2"', '"Row 2" value="on"');
     expect(trees.afterAction("u", step1, "gesture-tap").mode).toBe("diff");
 
-    // Step 2: Row 2 reverts back to base while Row 5 changes. Without calling out
-    // Row 2's reversion, smaller models often assume Row 2 is still `value="on"`.
-    const step2 = tallTree.replace('"Row 5"', '"Row 5" value="on"');
+    // Step 2: Row 2 reverts back to base while Row 5 changes -> fresh full tree (no chaining).
+    const step2 = LONG_TREE.replace('"Row 5"', '"Row 5" value="on"');
     const second = trees.afterAction("u", step2, "gesture-tap");
     expect(second).toEqual({
-      mode: "diff",
+      mode: "full",
       identical: false,
       note: false,
-      text: [
-        treeDiffHeader("t-1", "describe"),
-        '-   AXButton "Row 5" (0.000,0.200,1.000,0.040)',
-        '+   AXButton "Row 5" value="on" (0.000,0.200,1.000,0.040)',
-        "Also since previous step (- gone from prior diff, + restored to `t-1`):",
-        '-   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
-        '+   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
-      ].join("\n"),
+      text: full("t-2", step2),
+    });
+  });
+
+  it("sends a full tree when the screen returns to the base tree after a diff", () => {
+    const { trees } = memoryWithClock();
+    trees.afterAction("u", LONG_TREE, "describe");
+
+    const toggledOn = LONG_TREE.replace('"Row 2"', '"Row 2" value="on"');
+    expect(trees.afterAction("u", toggledOn, "gesture-tap").mode).toBe("diff");
+
+    // Toggling back off returns to LONG_TREE; sending a plain unchanged note
+    // would not tell the agent that the previous diff no longer applies.
+    const toggledOff = trees.afterAction("u", LONG_TREE, "gesture-tap");
+    expect(toggledOff).toEqual({
+      mode: "full",
+      identical: true,
+      note: false,
+      text: full("t-2", LONG_TREE),
     });
   });
 
   it("counts diffs and unchanged notes together toward the consecutive cap", () => {
     const { trees } = memoryWithClock();
     trees.afterAction("u", LONG_TREE, "gesture-tap");
-    const edited = LONG_TREE.replace('"Row 2"', '"Row 2" value="on"');
+    const edited1 = LONG_TREE.replace('"Row 2"', '"Row 2" value="on"');
+    const edited2 = edited1.replace('"Row 5"', '"Row 5" value="on"');
 
-    expect(trees.afterAction("u", edited, "gesture-tap").mode).toBe("diff");
-    expect(trees.afterAction("u", LONG_TREE, "gesture-tap").mode).toBe("unchanged");
-    expect(trees.afterAction("u", edited, "gesture-tap").mode).toBe("diff");
+    expect(trees.afterAction("u", LONG_TREE, "await-ui-element").mode).toBe("unchanged");
+    expect(trees.afterAction("u", edited1, "gesture-tap").mode).toBe("diff");
+    expect(trees.afterAction("u", edited2, "gesture-tap").mode).toBe("diff");
     // Fourth non-full result in a row refreshes the full tree under a new id.
-    const refreshed = trees.afterAction("u", edited, "gesture-tap");
+    const refreshed = trees.afterAction("u", edited2, "gesture-tap");
     expect(refreshed.mode).toBe("full");
-    expect(refreshed.text).toBe(full("t-2", edited));
+    expect(refreshed.text).toBe(full("t-2", edited2));
   });
 
   it("falls back to the full tree when most of the tree changed", () => {
@@ -316,23 +326,92 @@ describe("createTreeMemory", () => {
 });
 
 describe("formatTreeDiff", () => {
-  it("counts repeated lines by multiset multiplicity", () => {
+  it("never reports TV focus moves between identically named tiles as unchanged, and shows context", () => {
+    const shortBefore = [
+      "Row 1:",
+      "  Alpha",
+      "  Bravo",
+      "→ See all",
+      "Row 2:",
+      "  Charlie",
+      "  Delta",
+      "  See all",
+    ].join("\n");
+    const shortAfter = shortBefore
+      .replace("→ See all", "  See all")
+      .replace("  Delta\n  See all", "  Delta\n→ See all");
+    const { trees } = memoryWithClock();
+    trees.sent("tv", shortBefore, "describe");
+    // Even on a tiny 2-row TV tree, focus moving between two "See all" items must never collapse to unchanged.
+    expect(trees.afterAction("tv", shortAfter, "tv-remote")).toEqual({
+      mode: "full",
+      identical: false,
+      note: false,
+      text: full("t-2", shortAfter),
+    });
+
+    const longBefore = [
+      shortBefore,
+      ...Array.from(
+        { length: 12 },
+        (_, i) => `Row ${i + 3}:\n  Featured Episode ${i + 3} — Season 1\n  Trending Now ${i + 3}`
+      ),
+    ].join("\n");
+    const longAfter = longBefore
+      .replace("→ See all", "  See all")
+      .replace("  Delta\n  See all", "  Delta\n→ See all");
+
+    const diff = formatTreeDiff(longBefore, longAfter, "yf1-1", "describe");
+    expect(diff).toEqual({
+      mode: "diff",
+      text: [
+        treeDiffHeader("yf1-1", "describe"),
+        "    Bravo",
+        "- → See all",
+        "+   See all",
+        "  Row 2:",
+        "...",
+        "    Delta",
+        "-   See all",
+        "+ → See all",
+        "  Row 3:",
+      ].join("\n"),
+    });
+  });
+
+  it("detects pure line reordering such as swapped DOM siblings", () => {
+    const lines = Array.from(
+      { length: 20 },
+      (_, i) => `  button "Item ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
+    );
+    const before = lines.join("\n");
+    const swapped = [...lines];
+    [swapped[5], swapped[6]] = [swapped[6]!, swapped[5]!];
+    const after = swapped.join("\n");
+
+    const diff = formatTreeDiff(before, after, "c1-1", "describe");
+    expect(diff?.mode).toBe("diff");
+    expect(diff?.text).toContain('-   button "Item 5"');
+    expect(diff?.text).toContain('+   button "Item 5"');
+  });
+
+  it("counts repeated lines by multiset multiplicity with surrounding context", () => {
     const dup = "  AXImage (0.000,0.000,0.100,0.100)";
     const before = `${LONG_TREE}\n${dup}\n${dup}`;
     const after = `${LONG_TREE}\n${dup}`;
 
     expect(formatTreeDiff(before, after, "t-1", "gesture-tap")).toEqual({
       mode: "diff",
-      text: `${treeDiffHeader("t-1", "gesture-tap")}\n- ${dup}`,
+      text: `${treeDiffHeader("t-1", "gesture-tap")}\n  ${dup}\n- ${dup}`,
     });
     expect(formatTreeDiff(after, before, "t-1", "gesture-tap")).toEqual({
       mode: "diff",
-      text: `${treeDiffHeader("t-1", "gesture-tap")}\n+ ${dup}`,
+      text: `${treeDiffHeader("t-1", "gesture-tap")}\n  ${dup}\n+ ${dup}`,
     });
   });
 
-  it("treats blank-line-only differences as unchanged", () => {
-    expect(formatTreeDiff(LONG_TREE, `${LONG_TREE}\n\n`, "t-1", "gesture-tap")).toEqual({
+  it("treats a single trailing newline difference as unchanged", () => {
+    expect(formatTreeDiff(LONG_TREE, `${LONG_TREE}\n`, "t-1", "gesture-tap")).toEqual({
       mode: "unchanged",
       text: unchangedTreeNote("t-1", "gesture-tap"),
     });
