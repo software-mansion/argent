@@ -356,6 +356,15 @@ describe("boot-device Android — readOnly and port", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses a read-only emulator started outside argent without a port, told by its console listener", async () => {
+    world = [emulator("emulator-5554", { readOnly: true })];
+
+    const result = await boot({ readOnly: true });
+
+    expect(result).toMatchObject({ serial: "emulator-5554" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("leaves a read-only emulator pinned with -port to the calls that name its port", async () => {
     world = [emulator("emulator-5576", { readOnly: true, portArg: true })];
 
