@@ -165,7 +165,9 @@ class FakeTab {
       requestId,
       response: { status: 200, headers: { "Cache-Control": "no-store", ...headers } },
     });
-    for (const dataLength of chunks) this.emit("Network.dataReceived", { requestId, dataLength });
+    chunks.forEach((dataLength, i) =>
+      this.emit("Network.dataReceived", { requestId, dataLength, timestamp: 1 + (i + 1) / 100 })
+    );
   }
 }
 
@@ -421,7 +423,13 @@ describe("await-network-request", () => {
     tab.unread("chunked", "/v1/items?body=chunked", {}, [58]);
 
     const whole = await wait({ url: "body=whole" }, CHROMIUM);
-    expect(whole.match).toMatchObject({ id: "whole", status: 200, state: "complete" });
+    // Timed to its last byte, as Chrome times the loadingFinished of a body read later.
+    expect(whole.match).toMatchObject({
+      id: "whole",
+      status: 200,
+      state: "complete",
+      durationMs: 20,
+    });
     for (const id of ["part", "gzip", "chunked"]) {
       const open = await wait({ url: `body=${id}`, outcome: "any" }, CHROMIUM);
       expect(open.success).toBe(false);

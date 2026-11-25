@@ -161,6 +161,26 @@ describe("NetworkManager (recording)", () => {
     expect(net.get("done")?.finished).toBe(true);
   });
 
+  it("times a record that ends at the last byte of its declared body like its loadingFinished", () => {
+    emitRequest(f.events, { id: "unread", url: "https://x.test/unread" });
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "unread",
+      response: { status: 200, headers: { "Content-Length": "58" } },
+    });
+    f.events.emit("event", "Network.dataReceived", {
+      requestId: "unread",
+      dataLength: 30,
+      timestamp: 100.1,
+    });
+    f.events.emit("event", "Network.dataReceived", {
+      requestId: "unread",
+      dataLength: 28,
+      timestamp: 100.2,
+    });
+    expect(net.get("unread")).toMatchObject({ finished: true });
+    expect(net.get("unread")?.durationMs).toBeCloseTo(200);
+  });
+
   it("numbers the records in creation order, and requestsAfter lists the ones after a number", () => {
     emitRequest(f.events, { id: "a", url: "https://x.test/a" });
     emitRequest(f.events, { id: "b", url: "https://x.test/b" });
@@ -409,6 +429,35 @@ describe("view-network-request-details (chromium branch)", () => {
       expect(details.request.postData).toBe(postData);
     }
   });
+
+  it.each([
+    { kind: "every byte of it arrived", finished: true, body: '{"ok":true}' },
+    { kind: "some of it is still due", finished: false, body: undefined },
+  ])(
+    "reads a body Chrome keeps no copy of yet from its buffer only when $kind",
+    async ({ finished, body }) => {
+      // A no-store fetch() the page has not read: Chrome has the bytes but no body to give.
+      const record = rec({ requestId: "r4", status: 200, mimeType: "application/json", finished });
+      const send = vi.fn(async (method: string) => {
+        if (method === "Network.streamResourceContent") {
+          return { bufferedData: Buffer.from('{"ok":true}').toString("base64") };
+        }
+        throw new Error("No data found for resource with given identifier");
+      });
+      const services = {
+        chromium: { cdp: { send }, server: { network: { get: () => record } } },
+      } as never;
+
+      const details = (await networkRequestTool.execute(services, {
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        requestId: "r4",
+        includeBody: true,
+      })) as { response: { body?: string } };
+
+      expect(details.response.body).toBe(body);
+    }
+  );
 
   it("returns an error string when the requestId is unknown", async () => {
     const services = {

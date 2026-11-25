@@ -168,7 +168,13 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         if (rec && left !== undefined) {
           const after = left - (params.dataLength as number);
           bodyBytesLeft.set(rec, after);
-          if (after <= 0) rec.finished = true;
+          if (after <= 0 && !rec.finished) {
+            rec.finished = true;
+            // Chrome stamps the loadingFinished of a body read later with when its
+            // last byte arrived, so this is the duration it reports then.
+            const at = params.timestamp as number | undefined;
+            if (rec.startTs && at !== undefined) rec.durationMs = (at - rec.startTs) * 1000;
+          }
         }
         break;
       }
