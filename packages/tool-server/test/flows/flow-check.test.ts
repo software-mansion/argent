@@ -1,16 +1,46 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { ArtifactStore, Registry } from "@argent/registry";
+import { z } from "zod";
 import { resolveFileInputs } from "../../src/file-inputs";
 import { createCheckFlowTool } from "../../src/tools/flows/flow-check";
+import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
+import { createKeyboardTool } from "../../src/tools/keyboard";
+import { createTvRemoteTool } from "../../src/tools/tv-remote";
+
+vi.mock("../../src/utils/capability", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/capability")>();
+  return {
+    ...actual,
+    isFlagOffered: (flag: string) =>
+      flag.startsWith("test-") ? flag === "test-on" : actual.isFlagOffered(flag),
+  };
+});
+
+/** A tool that a test e2e test calls, behind a feature flag. */
+function flaggedTool(id: string, featureFlag: string) {
+  return {
+    id,
+    description: "",
+    zodSchema: z.object({}),
+    featureFlag,
+    services: () => ({}),
+    execute: async () => ({}),
+  };
+}
 
 describe("e2e-check", () => {
   let root: string;
   const registry = new Registry();
   registry.registerTool(gestureSwipeTool);
+  registry.registerTool(createKeyboardTool(registry));
+  registry.registerTool(createTvRemoteTool(registry));
+  registry.registerTool(createRunFlowTool(registry));
+  registry.registerTool(flaggedTool("flag-on-tool", "test-on"));
+  registry.registerTool(flaggedTool("flag-off-tool", "test-off"));
   const tool = createCheckFlowTool(registry);
   const swipe = "      fromX: 0.5\n      fromY: 0.5\n      toX: 0.5\n      toY: 0.2\n";
 
@@ -92,6 +122,17 @@ describe("e2e-check", () => {
     await write(
       "nests-name",
       `steps:\n  - tool: e2e-execute\n    args:\n      name: Saved\n      project_root: ${root}\n`
+    );
+    await write(
+      "steps",
+      "steps:\n  - tool: gesture-swpie\n  - tool: gesture-swipe\n    args:\n      fromX: left\n" +
+        "  - tool: keyboard\n  - tool: flag-on-tool\n  - tool: flag-off-tool\n" +
+        "  - script: { path: scripts/missing.mjs }\n"
+    );
+    await write("uses-frag", "steps:\n  - run: steps-frag.yaml\n");
+    await write(
+      "steps-frag",
+      "steps:\n  - echo: frag\n  - tool: keyboard\n    args:\n      udid: abc\n      text: 1234\n"
     );
     await write("scripted", "steps:\n  - script: { path: scripts/setup.mjs }\n");
   });
@@ -189,6 +230,74 @@ describe("e2e-check", () => {
       },
     ]);
   });
+
+  it("reports unknown tools, tools behind a flag that is off, refused arguments and missing scripts", async () => {
+    expect((await check("steps")).problems).toEqual([
+      { at: [{ step: 1 }], message: 'Tool "gesture-swpie" not found' },
+      {
+        at: [{ step: 2 }],
+        message: expect.stringContaining('Invalid params for tool "gesture-swipe": `fromX`'),
+      },
+      { at: [{ step: 5 }], message: 'Tool "flag-off-tool" not found' },
+      {
+        at: [{ step: 6 }],
+        message: `Script "scripts/missing.mjs" does not exist. Resolved path: ${path.join(e2eDir(), "scripts", "missing.mjs")}.`,
+      },
+    ]);
+  });
+
+  it("reports a refused tool argument in a run: fragment on the step that reaches it", async () => {
+    expect((await check("uses-frag")).problems).toEqual([
+      {
+        at: [{ step: 1, run: "steps-frag.yaml" }, { step: 2 }],
+        message: expect.stringContaining('Invalid params for tool "keyboard": `text`'),
+      },
+    ]);
+  });
+
+  it("names the nested test and the when: block on the way to a problem", async () => {
+    await write(
+      "levels",
+      `steps:\n  - tool: e2e-execute\n    args:\n      name: levels-nested\n      project_root: ${root}\n`
+    );
+    await write(
+      "levels-nested",
+      "steps:\n  - when: { platform: ios }\n    steps:\n      - echo: fine\n      - tool: gesture-swpie\n"
+    );
+
+    expect((await check("levels")).problems).toEqual([
+      {
+        at: [{ step: 1, e2e: "levels-nested" }, { step: 1, when: true }, { step: 2 }],
+        message: 'Tool "gesture-swpie" not found',
+      },
+    ]);
+  });
+
+  it("reports arguments that a tool's refinement refuses", async () => {
+    await write(
+      "two-sources",
+      `steps:\n  - tool: e2e-execute\n    args:\n      name: saved\n      e2e_test_path: ${path.join(e2eDir(), "saved.yaml")}\n      project_root: ${root}\n`
+    );
+
+    expect((await check("two-sources")).problems).toEqual([
+      {
+        at: [{ step: 1 }],
+        message: expect.stringContaining("Pass exactly one e2e test source"),
+      },
+    ]);
+  });
+
+  it.each(["up,down", '["up","down"]', " select "])(
+    "accepts the tv-remote button string %j that the tool converts",
+    async (button) => {
+      await write(
+        "tv",
+        `steps:\n  - tool: tv-remote\n    args:\n      button: ${JSON.stringify(button)}\n`
+      );
+
+      expect(await check("tv")).toEqual({ problems: [] });
+    }
+  );
 
   describe("over a link", () => {
     it("reports the refusal of a test that is not self-contained, as e2e-execute does", async () => {

@@ -1262,7 +1262,7 @@ export function displayFlowName(params: { name?: string; e2e_test_path?: string 
 }
 
 function toolSchemas(registry: Registry): ToolSchemaLookup {
-  return (tool) => registry.getTool(tool)?.inputSchema;
+  return (tool) => registry.getTool(tool);
 }
 
 /**
