@@ -300,6 +300,24 @@ describe("parseRunArgs", () => {
     ).toEqual({ A: "2", URL: "https://x.test/?q=a=b", EMPTY: "" });
   });
 
+  it("moves a repeated --env name to where it was last given", () => {
+    // The server folds names case-insensitively on Windows in this order, so
+    // the last flag has to come last.
+    const env = parseRunArgs([
+      "checkout.yaml",
+      "--env",
+      "MODE=one",
+      "--env",
+      "mode=two",
+      "--env",
+      "MODE=three",
+    ]).env;
+    expect(Object.entries(env!)).toEqual([
+      ["mode", "two"],
+      ["MODE", "three"],
+    ]);
+  });
+
   it.each(["NOEQUALS", "=value", "1A=x", "A-B=x", "__proto__=x"])("refuses --env %s", (entry) => {
     expect(() => parseRunArgs(["checkout.yaml", "--env", entry])).toThrow(/--env takes NAME=value/);
   });
