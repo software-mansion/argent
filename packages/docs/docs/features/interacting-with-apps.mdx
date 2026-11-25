@@ -72,7 +72,7 @@ If the agent knows several actions before the start, and there is nothing to exa
 
 ## Several agents on one machine
 
-All agents and scripts on one computer use the same tool-server. Each editor connection to Argent is a session. Subagents in one editor share the session of that editor. When a session uses a device, Argent gives the device to that session. A different session that tries to use the device gets an error, and the agent selects a different device. Argent frees the device when the session ends, or after 10 minutes without a call to the device. For a script, set `ARGENT_SESSION` to get the same protection.
+All agents and scripts on one computer use the same tool-server. Each editor connection to Argent is a session. Subagents in one editor share the session of that editor. When a session uses a device, Argent gives the device to that session. A different session that tries to use the device gets an error, and the agent selects a different device. Argent frees the device when the session ends, or after 10 minutes without a call to the device. For a script, set `ARGENT_SESSION` to get the same protection. The script frees its devices with `release-device`. Otherwise, Argent frees them 10 minutes after the last call. See [Device claims](/docs/reference/tools#device-claims).
 
 ## Example instructions
 
