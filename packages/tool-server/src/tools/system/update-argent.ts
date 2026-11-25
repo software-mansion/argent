@@ -121,7 +121,30 @@ export function isUpdatingAutomatically(version: string | null): boolean {
   return version !== null && automaticVersion === version;
 }
 
+const AUTOMATIC_UPDATE_IDLE_MS = 10 * 60_000;
+
+export interface ServerActivity {
+  lastActivityAt: () => number;
+  toolCallsInFlight: () => number;
+}
+
+let pendingAutomaticUpdate: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingAutomaticUpdate(): void {
+  if (pendingAutomaticUpdate) clearTimeout(pendingAutomaticUpdate);
+  pendingAutomaticUpdate = null;
+}
+
+function msUntilIdle(activity: ServerActivity): number {
+  if (activity.toolCallsInFlight() > 0) return AUTOMATIC_UPDATE_IDLE_MS;
+  return Math.max(0, activity.lastActivityAt() + AUTOMATIC_UPDATE_IDLE_MS - Date.now());
+}
+
 function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automatic = false): void {
+  if (!automatic) {
+    cancelPendingAutomaticUpdate();
+    automaticVersion = null;
+  }
   updateScheduled = true;
   // Let a manual update's MCP response reach the client before its server stops.
   setTimeout(() => {
@@ -151,7 +174,18 @@ function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automati
   }, 2000);
 }
 
-export function scheduleAutomaticUpdate(version: string): void {
+function installWhenIdle(version: string, cliEntry: string, activity: ServerActivity): void {
+  pendingAutomaticUpdate = null;
+  const waitMs = msUntilIdle(activity);
+  if (waitMs > 0) {
+    pendingAutomaticUpdate = setTimeout(() => installWhenIdle(version, cliEntry, activity), waitMs);
+    pendingAutomaticUpdate.unref();
+    return;
+  }
+  scheduleUpdater(["update", "--yes", "--global", "--version", version], cliEntry, true);
+}
+
+export function scheduleAutomaticUpdate(version: string, activity: ServerActivity): void {
   if (
     process.env.ARGENT_INSTALL_KIND !== "global" ||
     updateScheduled ||
@@ -162,8 +196,9 @@ export function scheduleAutomaticUpdate(version: string): void {
   // before writing, including for a launcher that guessed "global" from cwd.
   const cliEntry = resolveCliEntry();
   if (!cliEntry) return;
+  cancelPendingAutomaticUpdate();
   automaticVersion = version;
-  scheduleUpdater(["update", "--yes", "--global", "--version", version], cliEntry, true);
+  installWhenIdle(version, cliEntry, activity);
 }
 
 export const updateArgentTool: ToolDefinition<{

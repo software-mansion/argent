@@ -44,6 +44,12 @@ function stateWithUpdate(latestVersion = "99.0.0") {
   };
 }
 
+const TEN_MINUTES_MS = 10 * 60_000;
+
+function idleServer() {
+  return { lastActivityAt: () => Date.now() - TEN_MINUTES_MS, toolCallsInFlight: () => 0 };
+}
+
 function stateHeldByPolicy(latestVersion = "99.0.0") {
   return {
     updateAvailable: true,
@@ -149,8 +155,8 @@ describe("update-argent tool", () => {
   it("runs the bundled global updater and restores the reminder after a failed attempt", async () => {
     const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
     vi.mocked(fs.existsSync).mockReturnValueOnce(true);
-    scheduleAutomaticUpdate("99.0.0");
-    scheduleAutomaticUpdate("99.0.0");
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+    scheduleAutomaticUpdate("99.0.0", idleServer());
 
     expect(isUpdatingAutomatically("99.0.0")).toBe(true);
     vi.advanceTimersByTime(2000);
@@ -165,11 +171,53 @@ describe("update-argent tool", () => {
     expect(isUpdatingAutomatically("99.0.0")).toBe(false);
   });
 
+  it("waits for the server to be idle before installing automatically", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    let lastActivityAt = Date.now();
+    let toolCallsInFlight = 0;
+    scheduleAutomaticUpdate("99.0.0", {
+      lastActivityAt: () => lastActivityAt,
+      toolCallsInFlight: () => toolCallsInFlight,
+    });
+
+    vi.advanceTimersByTime(TEN_MINUTES_MS / 2);
+    lastActivityAt = Date.now();
+    vi.advanceTimersByTime(TEN_MINUTES_MS / 2 + 2000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    toolCallsInFlight = 1;
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    toolCallsInFlight = 0;
+    vi.advanceTimersByTime(2 * TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledWith(
+      process.execPath,
+      [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
+      expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
+    );
+  });
+
+  it("drops a pending automatic update when the user updates manually", async () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", {
+      lastActivityAt: () => Date.now(),
+      toolCallsInFlight: () => 0,
+    });
+
+    await updateArgentTool.execute({}, { target: "global" }, undefined);
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn.mock.calls[0]![2]!.env).not.toHaveProperty("ARGENT_AUTOMATIC_UPDATE");
+  });
+
   it.each(["local", undefined])("keeps a %s installation on the consent path", async (kind) => {
     if (kind) process.env.ARGENT_INSTALL_KIND = kind;
     else delete process.env.ARGENT_INSTALL_KIND;
     process.env.ARGENT_PROJECT_ROOT = stageDeclaringProject();
-    scheduleAutomaticUpdate("99.0.0");
+    scheduleAutomaticUpdate("99.0.0", idleServer());
     vi.advanceTimersByTime(2000);
     expect(mockSpawn).not.toHaveBeenCalled();
     const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");

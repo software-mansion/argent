@@ -443,7 +443,13 @@ export function start(): void {
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
-        updateChecker = startUpdateChecker({ onAutoUpdate: scheduleAutomaticUpdate });
+        const serverActivity = {
+          lastActivityAt: httpHandle.getLastActivityAt,
+          toolCallsInFlight: httpHandle.getToolCallsInFlight,
+        };
+        updateChecker = startUpdateChecker({
+          onAutoUpdate: (version) => scheduleAutomaticUpdate(version, serverActivity),
+        });
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
         const origin = formatOrigin(HOST, boundPort);
