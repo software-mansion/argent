@@ -10,8 +10,6 @@ import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../src/tools/debugger/debugger-log-registry";
 import { debuggerEvaluateTool } from "../src/tools/debugger/debugger-evaluate";
-import { networkLogsTool } from "../src/tools/network/network-logs";
-import { networkRequestTool } from "../src/tools/network/network-request";
 
 const SKILL_DIR = path.resolve(__dirname, "../../skills/skills/argent-metro-debugger");
 
@@ -26,8 +24,6 @@ const OVERVIEW_TOOLS: ToolDefinition<any, any>[] = [
   debuggerInspectElementTool,
   createDebuggerLogRegistryTool(registry),
   debuggerEvaluateTool,
-  networkLogsTool,
-  networkRequestTool,
 ];
 
 function schemaOf(tool: ToolDefinition<any, any>): {

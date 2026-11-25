@@ -41,7 +41,7 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             node_modules
@@ -56,7 +56,7 @@ jobs:
       # node_modules, and that cache misses tsconfig changes.
       - name: Save node_modules
         if: steps.node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             node_modules
@@ -110,7 +110,7 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             node_modules
@@ -123,7 +123,7 @@ jobs:
 
       - name: Save node_modules
         if: steps.node-modules.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             node_modules

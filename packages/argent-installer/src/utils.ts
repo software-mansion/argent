@@ -13,6 +13,8 @@ import {
   modify as modifyJsonc,
   parse as parseJsonc,
   type JSONPath,
+  type ParseError,
+  type ParseOptions,
 } from "jsonc-parser";
 import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
@@ -435,6 +437,40 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
     Record<string, unknown> | undefined;
   return parsed ?? {};
+}
+
+function tomlSyntaxErrorLine(raw: string): number | null {
+  try {
+    parseToml(raw);
+    return null;
+  } catch (err) {
+    return (err as { line?: number }).line ?? 1;
+  }
+}
+
+function yamlSyntaxErrorLine(raw: string): number | null {
+  const first = parseDocument(raw, { uniqueKeys: false }).errors[0];
+  return first ? (first.linePos?.[0].line ?? 1) : null;
+}
+
+export function findConfigSyntaxErrorLine(
+  filePath: string,
+  jsonOptions: ParseOptions
+): number | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  if (raw.trim() === "") return null;
+  if (filePath.endsWith(".toml")) return tomlSyntaxErrorLine(raw);
+  if (/\.ya?ml$/.test(filePath)) return yamlSyntaxErrorLine(raw);
+  const errors: ParseError[] = [];
+  parseJsonc(raw, errors, jsonOptions);
+  const first = errors[0];
+  return first ? raw.slice(0, first.offset).split("\n").length : null;
 }
 
 /**

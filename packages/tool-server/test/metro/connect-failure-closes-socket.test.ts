@@ -8,17 +8,14 @@ import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-connect-failure-home-");
 
-// The log writer is built after every CDP setup call, so a throw there is the latest failure.
-const logWriterFails = vi.hoisted(() => ({ value: false }));
-vi.mock("../../src/utils/debugger/log-file-writer", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/utils/debugger/log-file-writer")>();
+const resolverFails = vi.hoisted(() => ({ value: false }));
+vi.mock("../../src/utils/debugger/source-resolver", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/debugger/source-resolver")>();
   return {
     ...actual,
-    LogFileWriter: class extends actual.LogFileWriter {
-      constructor(port: number) {
-        if (logWriterFails.value) throw new Error("log writer failed");
-        super(port);
-      }
+    createSourceResolver: (...args: Parameters<typeof actual.createSourceResolver>) => {
+      if (resolverFails.value) throw new Error("source resolver failed");
+      return actual.createSourceResolver(...args);
     },
   };
 });
@@ -144,11 +141,11 @@ describe("debugger-connect failing partway", () => {
     rejected = null;
     title = "Hermes React Native";
     fusebox = false;
-    logWriterFails.value = true;
+    resolverFails.value = true;
     try {
-      expect(await connectAndCountOpenSockets("log writer failed")).toBe(0);
+      expect(await connectAndCountOpenSockets("source resolver failed")).toBe(0);
     } finally {
-      logWriterFails.value = false;
+      resolverFails.value = false;
     }
   });
 });

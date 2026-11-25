@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  debuggerServiceRef,
+  reapedDebuggerKind,
+} from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
 
@@ -45,16 +49,13 @@ Returns connection details and, after a crash, a note with the previous log path
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Take this device's breadcrumb: `debugger-log-registry` reads it only on
-    // an empty or not-connected read, so one left here outlives every read that
-    // finds entries and later pins an unrelated empty read on the old session.
-    // An explicit connect makes it wrong anyway — from here the capture is this
-    // session's.
+    // Take this device's breadcrumb: from an explicit connect on, the capture is
+    // this session's, so a later read must not blame the old session.
     //
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
     // breadcrumb just before the read that exists to report it.
-    const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
+    const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
       params.device_id,
       api.logicalDeviceId,
     ]);
