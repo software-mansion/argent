@@ -152,22 +152,35 @@ class FakeTab {
     if (finish) this.emit("Network.loadingFinished", { requestId, timestamp: 1.25 });
   }
   /**
-   * The tab gets a no-store 200 with `headers` and its body in `chunks` of decoded
-   * bytes, which the page never reads: Chrome then sends no Network.loadingFinished.
+   * The tab gets a 200 for a request of `type`, no-store unless `headers` say
+   * otherwise, and its body in `chunks` of decoded bytes, which the page does not
+   * read: Chrome then sends no Network.loadingFinished for a no-store fetch().
    */
-  unread(requestId: string, path: string, headers: Record<string, string>, chunks: number[]): void {
+  unread(
+    requestId: string,
+    path: string,
+    headers: Record<string, string>,
+    chunks: number[],
+    type = "Fetch"
+  ): void {
     this.emit("Network.requestWillBeSent", {
       requestId,
       request: { method: "GET", url: `${API}${path}` },
       timestamp: 1,
+      type,
     });
     this.emit("Network.responseReceived", {
       requestId,
+      type,
       response: { status: 200, headers: { "Cache-Control": "no-store", ...headers } },
     });
     chunks.forEach((dataLength, i) =>
       this.emit("Network.dataReceived", { requestId, dataLength, timestamp: 1 + (i + 1) / 100 })
     );
+  }
+  /** Chrome reports the end of the request's body. */
+  finish(requestId: string, timestamp: number): void {
+    this.emit("Network.loadingFinished", { requestId, timestamp });
   }
 }
 
@@ -421,6 +434,15 @@ describe("await-network-request", () => {
       [4096]
     );
     tab.unread("chunked", "/v1/items?body=chunked", {}, [58]);
+    // A Transfer-Encoding frames the body, so its Content-Length says nothing of it.
+    tab.unread(
+      "framed",
+      "/v1/items?body=framed",
+      { "Content-Length": "58", "Transfer-Encoding": "chunked" },
+      [58]
+    );
+    // Chrome reads the body of an XHR itself, and reports its end.
+    tab.unread("xhr", "/v1/items?body=xhr", { "Content-Length": "58" }, [58], "XHR");
 
     const whole = await wait({ url: "body=whole" }, CHROMIUM);
     // Timed to its last byte, as Chrome times the loadingFinished of a body read later.
@@ -430,11 +452,31 @@ describe("await-network-request", () => {
       state: "complete",
       durationMs: 20,
     });
-    for (const id of ["part", "gzip", "chunked"]) {
+    for (const id of ["part", "gzip", "chunked", "framed", "xhr"]) {
       const open = await wait({ url: `body=${id}`, outcome: "any" }, CHROMIUM);
       expect(open.success).toBe(false);
       expect(open.nearMisses?.[0]).toMatchObject({ id, state: "headers", mismatch: ["outcome"] });
     }
+  });
+
+  it("matches a cacheable Chromium fetch only at its loadingFinished, with its duration", async () => {
+    tab.network.startCapture();
+    await registry.resolveService(chromiumCdpRef(resolveDevice(CHROMIUM)).urn);
+    // Chrome reports the end of a cacheable body itself, a little after its last byte.
+    tab.unread(
+      "cached",
+      "/v1/items?body=cached",
+      { "Cache-Control": "max-age=60", "Content-Length": "58" },
+      [58]
+    );
+
+    const open = await wait({ url: "body=cached", outcome: "any" }, CHROMIUM);
+    expect(open.success).toBe(false);
+    expect(open.nearMisses?.[0]).toMatchObject({ id: "cached", state: "headers" });
+
+    tab.finish("cached", 1.05);
+    const done = await wait({ url: "body=cached" }, CHROMIUM);
+    expect(done.match).toMatchObject({ id: "cached", state: "complete", durationMs: 50 });
   });
 
   it("compares the URL as contains, equals or matches", () => {

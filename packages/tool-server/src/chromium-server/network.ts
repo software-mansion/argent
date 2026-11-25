@@ -27,7 +27,7 @@ export interface NetworkRequestRecord {
   encodedDataLength?: number;
   /**
    * The whole response was received: Network.loadingFinished arrived, or the
-   * page got every byte of the body that the response declared.
+   * page got every byte of a no-store fetch() body that the response declared.
    */
   finished?: boolean;
   failed?: boolean;
@@ -70,20 +70,26 @@ const shapesTraffic = (c: CdpNetworkConditions): boolean =>
   c.offline || c.latency > 0 || c.downloadThroughput >= 0 || c.uploadThroughput >= 0;
 
 /**
- * The length of the body as the page gets it, when the response declares one:
- * its Content-Length, unless a Content-Encoding makes the page get the body
- * decoded, in another length.
+ * The length of a body that Chrome may never report the end of, as the page gets it.
+ * Chrome sends loadingFinished for a no-store response only once the page reads its
+ * body. The length is the Content-Length, unless a Transfer-Encoding frames the body
+ * instead or a Content-Encoding makes the page get it decoded, in another length.
  */
-function declaredBodyLength(headers: Record<string, string> | undefined): number | undefined {
+function unreadBodyLength(headers: Record<string, string> | undefined): number | undefined {
   let length: string | undefined;
+  let noStore = false;
   for (const [name, value] of Object.entries(headers ?? {})) {
     const header = name.toLowerCase();
+    if (header === "transfer-encoding") return undefined;
     if (header === "content-encoding" && value.trim().toLowerCase() !== "identity") {
       return undefined;
     }
     if (header === "content-length") length = value.trim();
+    if (header === "cache-control") {
+      noStore ||= value.split(/[,\n]/).some((d) => d.trim().toLowerCase() === "no-store");
+    }
   }
-  return length !== undefined && /^\d+$/.test(length) ? Number(length) : undefined;
+  return noStore && length !== undefined && /^\d+$/.test(length) ? Number(length) : undefined;
 }
 
 export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
@@ -155,7 +161,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         if (resp.headers) rec.responseHeaders = { ...(rec.responseHeaders ?? {}), ...resp.headers };
         rec.fromCache = resp.fromDiskCache;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
-        const length = declaredBodyLength(resp.headers);
+        // Only a fetch(): Chrome reads the body of any other request itself.
+        const length = params.type === "Fetch" ? unreadBodyLength(resp.headers) : undefined;
         if (length !== undefined) bodyBytesLeft.set(rec, length);
         break;
       }

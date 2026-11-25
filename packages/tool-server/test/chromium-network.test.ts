@@ -161,11 +161,12 @@ describe("NetworkManager (recording)", () => {
     expect(net.get("done")?.finished).toBe(true);
   });
 
-  it("times a record that ends at the last byte of its declared body like its loadingFinished", () => {
-    emitRequest(f.events, { id: "unread", url: "https://x.test/unread" });
+  it("times a no-store fetch that ends at the last byte of its declared body like its loadingFinished", () => {
+    emitRequest(f.events, { id: "unread", url: "https://x.test/unread", type: "Fetch" });
     f.events.emit("event", "Network.responseReceived", {
       requestId: "unread",
-      response: { status: 200, headers: { "Content-Length": "58" } },
+      type: "Fetch",
+      response: { status: 200, headers: { "Cache-Control": "no-store", "Content-Length": "58" } },
     });
     f.events.emit("event", "Network.dataReceived", {
       requestId: "unread",
