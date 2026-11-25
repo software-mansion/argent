@@ -1210,7 +1210,8 @@ function coverReason(
  * Why a selector that matched nothing may be stale or covered; undefined when
  * nothing shows it. Off an iOS simulator only a cover the last read found
  * ({@link coverReason}) is looked for. A role the simulator tree never gives needs
- * no read. A miss on an `id` pays one more read of the accessibility tree,
+ * no read. A cover the last read found is looked for next, for every selector,
+ * an `id` too. A miss on an `id` it does not explain pays one more read of the accessibility tree,
  * hidden nodes included: the flow tree drops off-screen nodes, so only this
  * read can tell an id that is off the screen from one that is nowhere right
  * now. That still has two causes the read cannot tell apart, a transient
@@ -1233,12 +1234,12 @@ async function staleSelectorReason(
   if (role !== undefined) return role;
   const field = fieldTextReason(env, sel, missed);
   if (field !== undefined) return field;
+  const covered = coverReason(env, sel, missed, scrollTo);
+  if (covered !== undefined) return covered;
   // Every alternative must be an id: a bare string also tries its text, which
   // the read below does not look for.
   const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
-  if (!ids.every((id): id is string => id !== undefined)) {
-    return coverReason(env, sel, missed, scrollTo) ?? switchRoleReason(sel, missed);
-  }
+  if (!ids.every((id): id is string => id !== undefined)) return switchRoleReason(sel, missed);
   const read = await settleWithin(
     readIosSimulatorUiTree(env.registry, env.device),
     undefined,

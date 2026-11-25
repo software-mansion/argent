@@ -57,6 +57,7 @@ function axTree(cover: "app" | "system"): AXTreeResponse {
     {
       index: 13,
       parentIndex: 11,
+      identifier: "u-9-9",
       label: "u99",
       traits: ["button"],
       frame: frame(0.1, 1.4, 0.2, 0.05),
@@ -281,7 +282,7 @@ describe.concurrent("a miss on a target an in-app alert, sheet or popover covers
     expect(reason).toBe(plain('text="zz"'));
   }, 20_000);
 
-  it("keeps the id path's own text and its one extra read", async ({ expect }) => {
+  it("names the cover for an id selector, with no extra read", async ({ expect }) => {
     const sim = device({ ax: axTree("app") });
     const reason = await reasonOf(
       sim,
@@ -289,12 +290,40 @@ describe.concurrent("a miss on a target an in-app alert, sheet or popover covers
       tap({ identifier: "u-1-1" })
     );
 
-    expect(reason).toBe(
-      'no visible element matched selector id="u-1-1": the element with this id is covered by an ' +
-        "alert, sheet or popover. Dismiss it first, or add an await step for it to close."
-    );
-    expect(extraReads(sim)).toBe(1);
+    expect(reason).toBe(`no visible element matched selector id="u-1-1": ${IN_APP}`);
+    expect(extraReads(sim)).toBe(0);
   }, 20_000);
+
+  // Only the extra read sees an id that is off the screen, or nowhere.
+  it.for<[string, string, string, string]>([
+    [
+      "a covered id off the screen",
+      "e8",
+      "u-9-9",
+      "the element with this id is covered by an alert, sheet or popover. Dismiss it first",
+    ],
+    [
+      "an id that is nowhere",
+      "e9",
+      "nowhere",
+      "no element with this id is in the accessibility tree",
+    ],
+  ])(
+    "keeps the id path's own text and its one extra read for %s",
+    { timeout: 20_000 },
+    async ([, suffix, id, text], { expect }) => {
+      const sim = device({ ax: axTree("app") });
+      const reason = await reasonOf(
+        sim,
+        `00000000-0000-0000-0000-0000000000${suffix}`,
+        tap({ identifier: id })
+      );
+
+      expect(reason).toContain(`no visible element matched selector id="${id}"`);
+      expect(reason).toContain(text);
+      expect(extraReads(sim)).toBe(1);
+    }
+  );
 
   it("gives no text and no read to an unmet when guard", async ({ expect }) => {
     const sim = device({ ax: axTree("app") });
@@ -329,7 +358,7 @@ describe.concurrent("a miss on the app below a system alert", () => {
     );
 
     expect(reason).toBe(`no visible element matched selector id="u-1-1": ${SYSTEM}`);
-    expect(extraReads(sim)).toBe(1);
+    expect(extraReads(sim)).toBe(0);
   }, 20_000);
 });
 

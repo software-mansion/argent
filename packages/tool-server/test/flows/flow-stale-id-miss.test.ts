@@ -281,7 +281,8 @@ describe.concurrent("a selector miss on an id", () => {
 
     expect(reason).toContain("is covered by an alert, sheet or popover");
     expect(reason).not.toContain("if it is off-screen");
-    expect(extraReads(sim)).toBe(1);
+    // The step's own read holds the covered leaves: no extra read.
+    expect(extraReads(sim)).toBe(0);
   }, 20_000);
 
   it("keeps the scroll-to hint when the id is on a node off the screen", async ({ expect }) => {
