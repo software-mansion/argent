@@ -1141,6 +1141,13 @@ When Argent finds no e2e test and no invalid `suite.config.yaml` file, the array
 - The e2e test sets `executionPrerequisite`, and its leading `run:` chain reaches a `launch` step.
 - The tool-server is remote, and the e2e test is not self-contained. For example, the e2e test has a `script:` step.
 
+The command also checks the files that the steps of the e2e test reach, at all depths and also in `when:` blocks:
+
+- For a `run:` fragment, the command finds the problems that make the `run:` step fail before the fragment runs: a missing file, a file name with the wrong case, a cycle, too many nested runs, a file that is not valid, and the argument and TypeScript problems above.
+- For an e2e test that a `tool: e2e-execute` step runs, the command does all the checks of an e2e test. The command reads only an e2e test that the step names by an absolute `e2e_test_path`, or by `name` with an absolute `project_root`.
+
+The command reports the problems of a file that the e2e test reaches more than one time only one time. The command reports a problem in a file that the e2e test reaches on the step that reaches the file.
+
 The tool-server that the CLI uses does the check. Thus the check uses the tools and the Node.js of that tool-server. For a remote tool-server, the CLI sends the e2e test, its `run:` fragments and its nested e2e tests, as `argent e2e run` does.
 
 The command does not do the checks that depend on the target of a run:
@@ -1148,7 +1155,9 @@ The command does not do the checks that depend on the target of a run:
 - The checks that depend on `--device` or `--platform`. For example, a run with `--device chromium-cdp-<port>` accepts a leading launch that the command reports.
 - The `requires` block, the selectors, the apps and the snapshot baselines.
 
-Argent writes each problem on stderr as `<path>: <message>`. The message is the same message that `argent e2e run` gives. Then Argent prints a summary line on stdout.
+Argent writes each problem on stderr as `<path>: <position>: <message>`, or as `<path>: <message>` when the problem has no position. The message is the same message that `argent e2e run` gives. Then Argent prints a summary line on stdout.
+
+The position names the steps from the e2e test to the problem, for example `step 7 > run: login.yaml: step 2` or `step 4 > when: step 2`. Argent counts the steps as the file gives them, `echo` steps included.
 
 | Exit code | Meaning                                                                                                                                                    |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1158,11 +1167,21 @@ Argent writes each problem on stderr as `<path>: <message>`. The message is the 
 
 `argent e2e check --json` writes one document on stdout. The document holds `ok` and an `e2eTests` array with one entry. The entry holds `path`, `ok` and a `problems` array. Each problem holds these fields:
 
-| Field     | Description                                                              |
-| --------- | ------------------------------------------------------------------------ |
-| `file`    | The path of the e2e test                                                 |
-| `code`    | The error code that `argent e2e run` gives. Only when such a code exists |
-| `message` | The problem                                                              |
+| Field     | Description                                                                                                                                                                                                                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file`    | The path of the e2e test                                                                                                                                                                                                                                                                                         |
+| `at`      | The position of the problem, as a list with one entry for each level from the e2e test to the problem. See the next table. Not for a problem that keeps the e2e test from parsing. Not for the retired argument, TypeScript and leading launch problems of the e2e test itself: their message gives the location |
+| `code`    | The error code that `argent e2e run` gives. Only for a problem that has no position, and only when such a code exists                                                                                                                                                                                            |
+| `message` | The problem                                                                                                                                                                                                                                                                                                      |
+
+Each entry of `at` holds these fields:
+
+| Field  | Description                                                                                                       |
+| ------ | ----------------------------------------------------------------------------------------------------------------- |
+| `step` | The number of the step in its list, from 1. Argent counts the steps as the file gives them, `echo` steps included |
+| `run`  | The `run:` target of the step, as the file gives it. Only when the next entry is in that fragment                 |
+| `e2e`  | The name or the `e2e_test_path` of the `tool: e2e-execute` step. Only when the next entry is in that e2e test     |
+| `when` | `true`. Only when the next entry is in the `when:` block of the step                                              |
 
 ```json
 {

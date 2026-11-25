@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
@@ -9,6 +9,7 @@ import {
   E2E_DIRS,
   FAILURE_CODES,
   FailureError,
+  isUnexpandedPath,
   LEGACY_E2E_DIRS,
   e2eDirFor,
 } from "@argent/registry";
@@ -305,6 +306,72 @@ export function flowNameCasingError(
       error_kind: "validation",
     }
   );
+}
+
+/**
+ * The refusal of an `e2e_test_path` whose basename is not in its directory's listing
+ * as spelled. Thrown for the listing on this host (`resolveFlowSource` in flow-run.ts)
+ * and for the one on the client, which a linked run that composes reads from
+ * the root's wire (`clientRootCanonical` in flow-run.ts), so one call fails alike on
+ * both routes.
+ */
+export function flowPathCasingError(
+  clientPath: string,
+  spelling: Exclude<OnDiskSpelling, { state: "listed" }>
+): FailureError {
+  const suppliedBase = path.basename(clientPath);
+  // Hint the real spelling only when this same ladder would accept it (a
+  // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
+  // needs a rename.
+  const recovery =
+    spelling.state === "absent"
+      ? `Pass the basename exactly as it appears on disk.`
+      : spelling.addressable
+        ? `Pass e2e_test_path with the on-disk basename "${spelling.actual}".`
+        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — e2e test files must be lowercase .yaml.`;
+  return new FailureError(
+    `Invalid e2e_test_path "${clientPath}": the file must be named as it appears on disk — this ` +
+      `filesystem matched "${suppliedBase}" case-insensitively` +
+      (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
+      `, so the e2e test name (which keys the report and __baselines__/) would be one no ` +
+      `directory entry carries. ${recovery}`,
+    {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_path_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * The stats of a `tool:` step's file argument `target` on this host, or why it
+ * is not a readable file there.
+ */
+export async function hostFileArgumentStat(
+  toolId: string,
+  target: string,
+  filePath: string
+): Promise<{ stats: Stats } | { refusal: string }> {
+  const where = `"${escapeInline(filePath)}" (argument ${target} of ${toolId})`;
+  let st: Stats;
+  try {
+    st = await fs.stat(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      return { refusal: `cannot read ${where}: ${escapeInline(String(code ?? err))}` };
+    }
+    const relative =
+      path.isAbsolute(filePath) || path.win32.isAbsolute(filePath)
+        ? ""
+        : isUnexpandedPath(filePath)
+          ? `; nothing expands "~", variables, commands or URLs in a file argument, so pass the file's absolute path`
+          : `; a relative path is looked up in the tool server's working directory, not the e2e test's, so pass the file's absolute path`;
+    return { refusal: `there is no file at ${where}${relative}` };
+  }
+  if (!st.isFile()) return { refusal: `${where} is not a file` };
+  return { stats: st };
 }
 
 /**
@@ -2663,6 +2730,19 @@ type BlockDirectiveKind = (typeof BLOCK_DIRECTIVE_KEYS)[number];
 
 /** The step union those kinds select — what {@link isBlockStep} narrows to. */
 export type BlockStep = Extract<FlowStep, { kind: BlockDirectiveKind }>;
+
+/**
+ * One level of a step's position: its 1-based number in its list, as written
+ * (`echo` included), and what the step holds that the next level is in.
+ */
+export type StepLevel = { step: number; run?: string; e2e?: string } & Partial<
+  Record<BlockDirectiveKind, true>
+>;
+
+/** `at` with its last level marked as holding `holds`. */
+export function intoStep(at: StepLevel[], holds: Omit<StepLevel, "step">): StepLevel[] {
+  return [...at.slice(0, -1), { ...at[at.length - 1]!, ...holds }];
+}
 
 /**
  * Every step kind whose type carries a `steps` property, whatever its spelling:

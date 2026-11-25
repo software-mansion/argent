@@ -1,11 +1,8 @@
-import type { Stats } from "node:fs";
-import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import {
   canonicalToolId,
   FILE_INPUT_MARKER,
   isClientFileArgument,
-  isUnexpandedPath,
   nestedFlowTarget,
   toolStepFiles,
   type FileInputWire,
@@ -14,7 +11,7 @@ import {
   type ToolStepFile,
 } from "@argent/registry";
 import { FileInputError, resolveFileInputs } from "../../file-inputs";
-import { escapeInline, flowNameCasingError } from "./flow-utils";
+import { escapeInline, flowNameCasingError, hostFileArgumentStat } from "./flow-utils";
 import { ClientProjectAccess, resolveSavedTest, type ProjectAccess } from "./project-access";
 
 /** The stage each step kind an upload cannot carry is refused under. */
@@ -240,24 +237,9 @@ async function prepareHostFileArguments(
   if (fileArgs.length === 0) return { args, cleanup: async () => {} };
   const wrapped: Record<string, unknown> = { ...args };
   for (const file of fileArgs) {
-    const where = `"${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})`;
-    let st: Stats;
-    try {
-      st = await stat(file.path);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        throw new FileInputError(`cannot read ${where}: ${escapeInline(String(code ?? err))}`);
-      }
-      const relative =
-        path.isAbsolute(file.path) || path.win32.isAbsolute(file.path)
-          ? ""
-          : isUnexpandedPath(file.path)
-            ? `; nothing expands "~", variables, commands or URLs in a file argument, so pass the file's absolute path`
-            : `; a relative path is looked up in the tool server's working directory, not the e2e test's, so pass the file's absolute path`;
-      throw new FileInputError(`there is no file at ${where}${relative}`);
-    }
-    if (!st.isFile()) throw new FileInputError(`${where} is not a file`);
+    const checked = await hostFileArgumentStat(toolId, file.spec.target, file.path);
+    if ("refusal" in checked) throw new FileInputError(checked.refusal);
+    const st = checked.stats;
     const wire: FileInputWire = {
       [FILE_INPUT_MARKER]: true,
       path: file.path,

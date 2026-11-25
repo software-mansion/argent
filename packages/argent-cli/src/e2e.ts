@@ -237,10 +237,12 @@ Subcommands:
   check <test|test.yaml> [--json]
                              Check an e2e test without a device and without
                              running a step: parse it and apply the checks
-                             \`run\` makes before the first step. Prints each
-                             problem on stderr and exits 1 when it finds one.
+                             \`run\` makes before the first step, also to the
+                             run: fragments and e2e-execute tests its steps
+                             reach. Prints each problem on stderr and exits 1
+                             when it finds one.
                              --json prints { "ok", "e2eTests": [...] } instead,
-                             with path, ok and problems (file, code,
+                             with path, ok and problems (file, at, code,
                              message) per test
 
 Options (run):
@@ -1766,8 +1768,21 @@ const CHECK_TOOL_ID = "e2e-check";
 /** One problem `argent e2e check` reports; `code` is the failure code `argent e2e run` would give. */
 interface CheckProblem {
   file: string;
+  /** The steps from the test to the problem: each level's number, and what it holds (`run`, `e2e`, `when`). */
+  at?: ({ step: number } & Record<string, string | number | boolean>)[];
   code?: string;
   message: string;
+}
+
+/** `at` as text, for example `step 7 > run: login.yaml: step 2`. */
+function positionText(at: NonNullable<CheckProblem["at"]>): string {
+  return at
+    .map(({ step, ...holds }) => {
+      const [kind, value] = Object.entries(holds)[0] ?? [];
+      if (kind === undefined) return `step ${step}`;
+      return `step ${step} > ${kind}${value === true ? "" : `: ${value}`}`;
+    })
+    .join(": ");
 }
 
 const INVALID_SUITE_SIGNAL = {
@@ -2095,7 +2110,9 @@ async function e2eCheck(argv: string[], options: E2eCommandOptions): Promise<voi
     console.log(JSON.stringify({ ok, e2eTests: [{ path: suppliedPath, ok, problems }] }, null, 2));
   } else {
     for (const problem of problems) {
-      console.error(`${problem.file}: ${problem.message}`);
+      console.error(
+        `${problem.file}: ${problem.at === undefined ? "" : `${positionText(problem.at)}: `}${problem.message}`
+      );
     }
     console.log(
       problems.length === 0
