@@ -5,6 +5,7 @@ import {
   type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
+  type FlowCover,
 } from "../describe/contract";
 import { isBlindRead } from "../describe/blind-read";
 import {
@@ -135,12 +136,15 @@ export interface ActionEnv {
   treeOutage?: { proven?: { deviceId: string; error: Error } };
   /**
    * The tree of the run's most recent read that goes through
-   * {@link readFlowTree}, cleared by a read that fails or was cut short: a miss
-   * reason reads it instead of reading the device again. One holder per run,
-   * shared with nested `run:` flows like {@link ActionEnv.treeOutage}. Absent
-   * for a caller that builds an `ActionEnv` by hand.
+   * {@link readFlowTree}, with what that read found covering the app
+   * (`DescribeTreeData.cover`, read only with the tree). The tree is cleared
+   * by a read that fails or was cut short. A miss reason reads them instead of
+   * reading the device again. One
+   * holder per run, shared with nested `run:` flows like
+   * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
+   * `ActionEnv` by hand.
    */
-  lastRead?: { tree?: DescribeNode };
+  lastRead?: { tree?: DescribeNode; cover?: FlowCover };
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */
@@ -492,7 +496,10 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
     (data) => {
       if (env.treeOutage) env.treeOutage.proven = undefined;
       // A cut-short read cannot show that only a field holds a text.
-      if (env.lastRead) env.lastRead.tree = data.truncated ? undefined : data.tree;
+      if (env.lastRead) {
+        env.lastRead.tree = data.truncated ? undefined : data.tree;
+        env.lastRead.cover = data.cover;
+      }
       return data;
     },
     (err: unknown) => {
@@ -1114,9 +1121,55 @@ function unknownRoleReason(
   return `${missed}, and no element on an iOS simulator has the role "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
 }
 
+const COVERED_REMEDY = "Dismiss it first, or add an await step for it to close.";
+
+const PERMISSION_REMEDY =
+  "or grant the permission before the e2e test with the `settings-permissions` tool.";
+
+function systemAlertReason(missed: string): string {
+  return (
+    `${missed}: a system alert covers it. Add a step before this one that taps a button of the ` +
+    `alert, such as \`tap: { text: Allow }\`, ${PERMISSION_REMEDY}`
+  );
+}
+
 /**
- * Why a selector that matched nothing may be stale, on an iOS simulator only;
- * undefined when nothing shows it. A role the simulator tree never gives needs
+ * Why a selector misses when what it targets is under a cover, judged on the
+ * run's last read ({@link ActionEnv.lastRead}) with no new read; undefined when
+ * that read found no cover or the selector misses there for another reason.
+ *
+ * iOS simulator: the selector has no visible match in the tree, and has one
+ * once the leaves the read kept aside as covered join it. The cover is not
+ * named: the leaf after the covered ones is UIKit's dismiss region for every
+ * sheet and popover, and a covered SpringBoard card under a system alert.
+ *
+ * Android: the elements below a dialog are not in the tree at all, so any
+ * miss while one is on top gets the text. A full-screen in-app sheet looks
+ * like a screen, and gets none.
+ */
+function coverReason(env: ActionEnv, sel: FlowSelector, missed: string): string | undefined {
+  const tree = env.lastRead?.tree;
+  const cover = env.lastRead?.cover;
+  if (!tree || !cover) return undefined;
+  if (flowFindAll(tree, sel).some(isVisible)) return undefined;
+  if (cover.kind === "window") {
+    const below = "is on top of the app, and Android leaves the elements below it out of the tree";
+    return cover.system
+      ? `${missed}: a system dialog or sheet of ${cover.package} ${below}. Add a step before ` +
+          `this one that taps a button of it, ${PERMISSION_REMEDY}`
+      : `${missed}: a dialog ${below}. ${COVERED_REMEDY}`;
+  }
+  const withCovered = { ...tree, children: [...tree.children, ...cover.leaves] };
+  if (!flowFindAll(withCovered, sel).some(isVisible)) return undefined;
+  return cover.systemAlert
+    ? systemAlertReason(missed)
+    : `${missed}: it is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
+}
+
+/**
+ * Why a selector that matched nothing may be stale or covered; undefined when
+ * nothing shows it. Off an iOS simulator only a cover the last read found
+ * ({@link coverReason}) is looked for. A role the simulator tree never gives needs
  * no read. A miss on an `id` pays one more read of the accessibility tree,
  * hidden nodes included: the flow tree drops off-screen nodes, so only this
  * read can tell an id that is off the screen from one that is nowhere right
@@ -1136,15 +1189,17 @@ async function staleSelectorReason(
   missed = `no visible element matched selector ${describeSelector(sel)}`,
   ignoresKeys = false
 ): Promise<string | "aborted" | undefined> {
-  if (!isIosSimulatorEnv(env)) return undefined;
+  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, missed);
   const role = unknownRoleReason(env, sel, missed);
   if (role !== undefined) return role;
   const field = fieldTextReason(env, sel, missed);
   if (field !== undefined) return field;
   // Every alternative must be an id: a bare string also tries its text, which
-  // this check does not look for.
+  // the read below does not look for.
   const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
-  if (!ids.every((id): id is string => id !== undefined)) return switchRoleReason(sel, missed);
+  if (!ids.every((id): id is string => id !== undefined)) {
+    return coverReason(env, sel, missed) ?? switchRoleReason(sel, missed);
+  }
   const read = await settleWithin(
     readIosSimulatorUiTree(env.registry, env.device),
     undefined,
@@ -1188,10 +1243,8 @@ async function staleSelectorReason(
   }
   // The flow tree drops what an alert, sheet or popover covers.
   if (!uncovered) {
-    return (
-      `${missed}: the element with this id is covered by an alert, sheet or popover. Dismiss ` +
-      `it first, or add an await step for it to close.`
-    );
+    if (read.value.alertVisible === true) return systemAlertReason(missed);
+    return `${missed}: the element with this id is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
   }
   const wanted = sel.role?.toLowerCase();
   if (wanted !== undefined && carriers.every((n) => !n.role?.toLowerCase().includes(wanted))) {

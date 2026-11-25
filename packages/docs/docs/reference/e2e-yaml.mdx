@@ -209,12 +209,14 @@ On an iOS simulator, a version 1 e2e test resolves selectors on the native view 
 On an iOS simulator and on a physical iPhone, the runner and `describe` read one tree. Copy ids, text and roles from `describe`. On an iOS simulator, a toggle has the role `AXSwitch` in e2e tests, `describe`, `await-ui-element` and `ui-tree`. The runner tree on an iOS simulator has these differences:
 
 - The runner removes the elements that are scrolled or clipped out of view.
-- The runner removes the elements under a system alert.
+- The runner removes the elements under an alert, a sheet, a popover or a system alert. When one of these covers the target of a step, the reason of the failed step says that the target is covered.
 - The runner keeps the unlabeled scrolling containers that `describe` does not show.
 - The runner keeps the unlabeled containers that carry an id. `describe` does not show them.
 - A selector does not match a text field by the text in the field. `describe` shows that text as the field's `value`. After a step types `Paris`, `tap: { text: Paris }` taps the element that shows `Paris`, not the field. Select the field by its id, its label or its role. Select an empty field also by its placeholder. To check the text in the field, use a `text` condition on the field. The `into` of a `type` step can also select the field by the text in it.
 
 On Android and on Chromium, an id absent from `describe` can still resolve in an e2e test. Verify the id in a scratch fragment.
+
+On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. When a step does not find its target and such a window is on top, the reason of the failed step says that a dialog or a sheet is on top of the app. A full-screen sheet of the app looks like a screen, so the reason does not say this for it.
 
 ### On-screen keyboard
 

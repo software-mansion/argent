@@ -9,12 +9,18 @@ import {
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
-import { TYPE_INPUT_METHOD } from "../ui-tree/android";
+import {
+  isSystemDialogWindow,
+  startsAtTop,
+  TYPE_APPLICATION,
+  TYPE_INPUT_METHOD,
+} from "../ui-tree/android";
 import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
+  type FlowCover,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -180,17 +186,25 @@ export function adaptFullAndroidHierarchyToDescribeResult(
   screenW: number,
   screenH: number
 ): DescribeNode {
+  return adaptParsedHierarchy(parseDump(xml, screenW, screenH), screenW, screenH);
+}
+
+/** The parsed dump, or null when there is none or no screen to normalize against. */
+function parseDump(xml: string, screenW: number, screenH: number): ParsedXmlNode | null {
+  return screenW > 0 && screenH > 0 ? parseUiAutomatorXml(xml) : null;
+}
+
+function adaptParsedHierarchy(
+  root: ParsedXmlNode | null,
+  screenW: number,
+  screenH: number
+): DescribeNode {
   const children: DescribeNode[] = [];
-  if (screenW > 0 && screenH > 0) {
-    const root = parseUiAutomatorXml(xml);
-    if (root) {
-      for (const c of childNodes(root)) {
-        const first = children.length;
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
-        if (Number(c.attrs["window-type"]) === TYPE_INPUT_METHOD) {
-          for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
-        }
-      }
+  for (const c of root ? childNodes(root) : []) {
+    const first = children.length;
+    flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+    if (Number(c.attrs["window-type"]) === TYPE_INPUT_METHOD) {
+      for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
     }
   }
   return parseDescribeResult({
@@ -198,6 +212,41 @@ export function adaptFullAndroidHierarchyToDescribeResult(
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
+}
+
+/**
+ * The topmost application window of a dump, when it is one Android hides the
+ * app's window below (see `FlowCover`): a system dialog or sheet, or a window
+ * that starts below the top (`startsAtTop`: an app window a cutout or a side
+ * navigation bar insets in landscape is not a dialog). Undefined when the dump
+ * has no window list (the `active-window` capture, an older helper: no root
+ * has a `window-type`) or the topmost application window is the app's screen.
+ */
+function topWindowCover(
+  root: ParsedXmlNode | null,
+  screenW: number,
+  screenH: number
+): Extract<FlowCover, { kind: "window" }> | undefined {
+  // Roots are in z-order, topmost first. As `ui-tree`, a root with no package is passed over.
+  const top =
+    root &&
+    childNodes(root).find(
+      (c) => Number(c.attrs["window-type"]) === TYPE_APPLICATION && Boolean(c.attrs.package)
+    );
+  const pkg = top?.attrs.package;
+  if (!top || !pkg) return undefined;
+  const rect = parseUiAutomatorBounds(top.attrs.bounds ?? "");
+  // Unclipped, as `ui-tree` frames a window root.
+  const frame = rect
+    ? {
+        x: rect.x / screenW,
+        y: rect.y / screenH,
+        width: rect.w / screenW,
+        height: rect.h / screenH,
+      }
+    : undefined;
+  if (isSystemDialogWindow(pkg, frame)) return { kind: "window", system: true, package: pkg };
+  return startsAtTop(frame) ? undefined : { kind: "window", system: false, package: pkg };
 }
 
 /**
@@ -219,14 +268,19 @@ export async function queryAndroidFullHierarchy(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`the argent android helper is unavailable: ${msg}`, { cause: err });
   }
-  const [{ xml }, size] = await Promise.all([
+  const [{ xml, captureMode }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
     devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
     devtools.getScreenSize(),
   ]);
-  const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
+  const root = parseDump(xml, size.width, size.height);
+  const tree = adaptParsedHierarchy(root, size.width, size.height);
+  // No window list in this mode, so no window types (see `ui-tree`).
+  const cover =
+    captureMode === "active-window" ? undefined : topWindowCover(root, size.width, size.height);
   return {
     tree,
+    ...(cover ? { cover } : {}),
     source: "android-devtools",
     ...(size.width > 0 && size.height > 0
       ? { screen: { width: size.width, height: size.height } }
