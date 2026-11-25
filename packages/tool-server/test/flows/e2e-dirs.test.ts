@@ -314,7 +314,12 @@ describe("recording", () => {
       }
     );
 
-    expect(invokeTool).toHaveBeenCalledWith("e2e-execute", { name: "frag", project_root: root });
+    // Recorded as `run:`, so the nested run shares the recording's output document.
+    expect(invokeTool).toHaveBeenCalledWith(
+      "e2e-execute",
+      { name: "frag", project_root: root },
+      expect.objectContaining({ flowOutput: { doc: {} } })
+    );
     const yaml = await fs.readFile(e2e("rec.yaml"), "utf8");
     expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);
   });
@@ -382,7 +387,8 @@ describe("recording", () => {
 
       expect(invokeTool).toHaveBeenCalledWith(
         "e2e-execute",
-        expect.objectContaining({ name: "frag", project_root: root })
+        expect.objectContaining({ name: "frag", project_root: root }),
+        expect.objectContaining({ flowOutput: { doc: {} } })
       );
       const yaml = await fs.readFile(e2e("rec.yaml"), "utf8");
       expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);

@@ -13,7 +13,7 @@ import { SECRET_PLACEHOLDER_RE } from "@argent/configuration-core";
  * refused, so the syntax cannot grow into an expression language by accident.
  */
 
-export const OUTPUT_REFERENCE_MARKER = "{{output:";
+const OUTPUT_REFERENCE_MARKER = "{{output:";
 
 /** The values the script steps of one run returned. */
 export type FlowOutput = Record<string, unknown>;
@@ -133,7 +133,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type Lookup = { found: true; value: unknown } | { found: false; why: string };
 
 /** The value at `path`. Missing and null are both "not found". */
-export function lookupOutput(output: FlowOutput, path: string): Lookup {
+function lookupOutput(output: FlowOutput, path: string): Lookup {
   let node: unknown = output;
   let walked = "output";
   for (const segment of path.split(".")) {
