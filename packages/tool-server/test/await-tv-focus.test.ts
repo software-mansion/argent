@@ -155,6 +155,28 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(res.waitedMs).toBe(400);
   });
 
+  it("does not count a slow first read as time the screen held", async () => {
+    // The first read is blocked for 600 ms while the screen renders, so it shows
+    // a screen that appeared during it. That screen changes 420 ms after the read
+    // came back, so it never held for the 1000 ms window.
+    const changed = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
+    const start = Date.now();
+    let reads = 0;
+    const api = makeTvApi([SCREEN]);
+    api.describe = () => {
+      const ms = reads++ === 0 ? 600 : 10;
+      return new Promise((resolve) =>
+        setTimeout(() => resolve(Date.now() - start < 1020 ? SCREEN : changed), ms)
+      );
+    };
+
+    const res = await runIdle(api, { minStableMs: 1000, timeoutMs: 3000 });
+
+    expect(res.settled).toBe(true);
+    // Settled on the changed screen, once it held for 1000 ms.
+    expect(res.waitedMs).toBeGreaterThanOrEqual(2020);
+  });
+
   it("waits for the cursor to land when the keyboard closes", async () => {
     // Captured on tvOS 27: after `select` on the keyboard's `done`, `done` keeps
     // focus with nothing focusable for about 550 ms (three 200 ms polls), and

@@ -88,14 +88,16 @@ function treeSignature(root: DescribeNode): string {
 }
 
 /**
- * The wait before the next read while the screen holds, `leftMs` before a read
- * may start that can end the window. A read sent sooner can only see a change,
- * so when the window ends before the read after next, the next read waits for
- * its end. On the defaults (200 ms poll, 250 ms window) a read taking under
- * 50 ms otherwise starts short of the window and costs a third poll.
+ * The wait before the next read while the screen holds. `leftMs` is the time
+ * until the window ends and `readMs` is how long the last read took. A read that
+ * comes back before the window ends can only see a change. If a read as long as
+ * the last one would come back short of the window after the poll interval, and
+ * the window ends before the read after next, the next read waits until the
+ * window ends. On the defaults (200 ms poll, 250 ms window) a read taking under
+ * 50 ms otherwise comes back short of the window and costs a third poll.
  */
-function confirmWaitMs(leftMs: number, pollIntervalMs: number): number {
-  return leftMs > pollIntervalMs && leftMs <= 2 * pollIntervalMs ? leftMs : pollIntervalMs;
+function confirmWaitMs(leftMs: number, readMs: number, pollIntervalMs: number): number {
+  return leftMs > pollIntervalMs + readMs && leftMs <= 2 * pollIntervalMs ? leftMs : pollIntervalMs;
 }
 
 /**
@@ -263,21 +265,24 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
             stableSince = 0;
             return { done: false };
           }
-          // The window runs between the starts of the reads: the next one is
-          // sent after a wait, so its start is what the wait can place.
+          // The window starts when the read that showed the tree came back: a
+          // slow read may show a screen that appeared at its end.
           const signature = treeSignature(data.tree);
           if (signature !== stableSignature) {
             stableSignature = signature;
-            stableSince = startedMs;
+            stableSince = nowMs;
             if (minStableMs === 0) return { done: true, result: true };
           }
           const requiredMs =
             tvApi && !hasTvCursor(data)
               ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
               : minStableMs;
-          if (startedMs - stableSince >= requiredMs) return { done: true, result: true };
+          if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
           const leftMs = stableSince + requiredMs - nowMs;
-          return { done: false, waitMs: confirmWaitMs(leftMs, pollIntervalMs) };
+          return {
+            done: false,
+            waitMs: confirmWaitMs(leftMs, nowMs - startedMs, pollIntervalMs),
+          };
         },
       });
 
