@@ -226,7 +226,9 @@ const TYPE_SPLIT_SCREEN_DIVIDER = 5;
  * navigation bar insets in landscape is not a dialog) and is narrower than the
  * screen or reaches its bottom (a sheet). A window as wide as the screen that
  * ends well above its bottom is a landscape-only app the system letterboxes on
- * a portrait screen, centred, not a dialog. Undefined when the dump
+ * a portrait screen, centred, not a dialog. An app dialog that is as wide as
+ * the screen and centred (a `match_parent` custom dialog) reads the same way,
+ * so a miss under it keeps the plain scroll hint, as before. Undefined when the dump
  * has no window list (the `active-window` capture, an older helper: no root
  * has a `window-type`), the topmost application window is the app's screen, or
  * the screen shows apps side by side: split screen and freeform windows list a
