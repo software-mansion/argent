@@ -47,7 +47,7 @@ import {
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
-import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
+import { targetSimulators, untargetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 /** Booted alongside, but no tool has targeted it. */
@@ -323,6 +323,36 @@ describe("simulator-watcher with api-owned init failure state", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(calls).toBe(2);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops re-arming a simulator once a tool stopped its service", async () => {
+    let bootedUdids: string[] = [UDID];
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse(bootedUdids);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, resolveService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, UDID);
+      await ready;
+      expect(resolveService).toHaveBeenCalledTimes(1);
+
+      untargetSimulators(registry, UDID);
+      bootedUdids = [];
+      await vi.advanceTimersByTimeAsync(10_000);
+      bootedUdids = [UDID];
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(resolveService).toHaveBeenCalledTimes(1);
       stop();
     } finally {
       vi.useRealTimers();

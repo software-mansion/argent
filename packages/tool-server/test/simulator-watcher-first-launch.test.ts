@@ -71,7 +71,7 @@ import {
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { audioDir } from "../src/utils/ios-host";
 import { SimctlTimeoutError } from "../src/utils/simctl-exec";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
@@ -331,6 +331,29 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
 
     afterEach(async () => {
       await realRegistry.dispose();
+    });
+
+    it("arms a simulator a tool targets, and arms it again after it reboots", async () => {
+      const { ready, stop } = startSimulatorWatcher(realRegistry);
+      await ready;
+      await armSimulator(SIMULATOR.id);
+      const beforeReboot = await resolveLikeATool();
+      expectArmed(beforeReboot);
+
+      execSimctlMock.mockResolvedValue('{"devices":{}}');
+      await vi.advanceTimersByTimeAsync(10_000);
+      execSimctlMock.mockResolvedValue(BOOTED_LIST);
+      execFileMock.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(launchctlSetenvs()).toContainEqual([
+        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
+        beforeReboot.socketPath,
+      ]);
+      const afterReboot = await resolveLikeATool();
+      stop();
+
+      expect(afterReboot).not.toBe(beforeReboot);
+      expectArmed(afterReboot);
     });
 
     it("arms a service that was refused while the install was pending, counting no failure", async () => {

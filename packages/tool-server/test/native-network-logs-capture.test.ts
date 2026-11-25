@@ -298,7 +298,7 @@ describe("native-network-logs only reads iOS capture", () => {
   it("answers not started before any start, with no precheck, while the watcher's service runs", async () => {
     await withRegistry(async (registry) => {
       const ref = nativeDevtoolsRef(device);
-      // As the simulator watcher does for every booted simulator.
+      // As the simulator watcher does for every targeted simulator.
       const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
       const app = await connectApp(api.socketPath, BUNDLE);
       const precheckCalls = watchPrecheck(api);

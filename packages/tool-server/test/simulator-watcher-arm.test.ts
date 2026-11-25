@@ -57,7 +57,7 @@ afterEach(() => {
 });
 
 describe("armSimulator", () => {
-  it("arms only the simulator it is given, and settles once that attempt has", async () => {
+  it("resolves only the simulator it is given, and settles once that attempt has", async () => {
     vi.useFakeTimers();
     listsBooted();
     let finishInit!: () => void;

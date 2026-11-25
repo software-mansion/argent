@@ -61,8 +61,8 @@ type Params = z.infer<typeof zodSchema>;
 
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
-  // On iOS it first waits up to 15s for the simulator watcher's first poll, so a
-  // slow openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
+  // On iOS it first waits up to 15s for its simulator to be armed, so a slow
+  // openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
   longRunning: true,
   description: `Open a URL or URL scheme on the device.
 Use when navigating to a web page or deep-linking into an app. On Chromium, this navigates the primary renderer to the given URL; a URL that does not load a page, start a download or run as javascript:, such as tel:, mailto:, an unknown scheme or no scheme, fails there.

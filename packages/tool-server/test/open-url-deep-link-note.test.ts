@@ -36,12 +36,6 @@ vi.mock("../src/utils/sim-remote", async () => {
   return { ...actual, simctlOpenUrl: (...args: unknown[]) => simctlOpenUrlMock(...args) };
 });
 
-let arming: Promise<void> = Promise.resolve();
-const armSimulatorMock = vi.fn(() => arming);
-vi.mock("../src/utils/simulator-watcher", () => ({
-  armSimulator: (udid: string) => armSimulatorMock(udid),
-}));
-
 import { httpDeepLinkNote } from "../src/tools/open-url/deep-link-note";
 import { iosImpl } from "../src/tools/open-url/platforms/ios";
 import { androidImpl } from "../src/tools/open-url/platforms/android";
@@ -113,30 +107,6 @@ describe("open-url iOS handler surfaces the caveat only for web URLs", () => {
     const res = await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
     expect(res.opened).toBe(true);
     expect(res.note).toBeUndefined();
-  });
-});
-
-describe("open-url iOS handler and the simulator watcher", () => {
-  it("opens the URL only after its simulator is armed", async () => {
-    let settleArming!: () => void;
-    arming = new Promise<void>((resolve) => {
-      settleArming = resolve;
-    });
-
-    const opened = iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(armSimulatorMock).toHaveBeenCalledWith("SIM");
-    expect(execFileMock).not.toHaveBeenCalled();
-
-    settleArming();
-    await opened;
-    expect(execFileMock).toHaveBeenCalledWith("xcrun", [
-      "simctl",
-      "openurl",
-      "SIM",
-      "bluesky://profile/x",
-    ]);
-    arming = Promise.resolve();
   });
 });
 

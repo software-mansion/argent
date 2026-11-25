@@ -4,7 +4,6 @@ import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
-import { armSimulator } from "../../../utils/simulator-watcher";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 import { httpDeepLinkNote } from "../deep-link-note";
@@ -14,8 +13,6 @@ const execFileAsync = promisify(execFile);
 export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["xcrun"],
   handler: async (_services, params) => {
-    // The URL can cold-launch its app, which must not beat injection.
-    await armSimulator(params.udid);
     try {
       await execFileAsync(
         "xcrun",

@@ -56,7 +56,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
 import type { Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 /** The simulator a provider claims. */
@@ -345,6 +345,21 @@ describe("simulator-watcher against a provider's simulator", () => {
       expect(disposeService).toHaveBeenCalledWith(`NativeDevtools:${CLAIMED_UDID}`);
       /** Not ours any more, so it is not resolved a second time. */
       expect(resolvedUdids(resolveService).filter((udid) => udid === CLAIMED_UDID)).toHaveLength(1);
+    });
+
+    it("hands back an environment a tool call armed before any poll saw the simulator", async () => {
+      const { armed, publish, registry } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      await vi.runOnlyPendingTimersAsync();
+      await armSimulator(CLAIMED_UDID);
+      targetSimulators(registry, CLAIMED_UDID);
+
+      publish(["simctl", "ax-service"]);
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
     });
 
     /** Once handed over, later ticks leave the provider alone. */

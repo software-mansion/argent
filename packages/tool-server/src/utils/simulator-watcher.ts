@@ -28,11 +28,10 @@ let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
 
 /**
  * Arms native-devtools injection on a simulator a tool is about to drive, and so
- * makes the watcher keep it armed. Awaited by every tool call on a local iOS or
- * Apple TV simulator that can start an app without arming injection itself, so
- * the app does not start uninjected: the cross-platform tools, open-url, the
- * native profiler's malloc relaunch, and the simulator-server and tv-control
- * services every input goes through.
+ * makes the watcher keep it armed. Awaited before a tool can start an app on a
+ * local iOS or Apple TV simulator, so the app does not start uninjected: by the
+ * cross-platform tools, the native profiler's malloc relaunch, and the
+ * simulator-server and tv-control services every input goes through.
  * Settles after the attempt or {@link ARM_WAIT_MS}, at once when no watcher
  * runs, and never rejects.
  */
@@ -116,20 +115,35 @@ function withholdsNativeDevtools(udid: string): boolean {
   return claim !== undefined && !claim.capabilities.has("native-devtools");
 }
 
-async function armNow(registry: Registry, udid: string): Promise<void> {
+/**
+ * Tracked like a simulator the poll found, so a claim published after this still
+ * gets its environment handed back and a shutdown still drops the service.
+ */
+async function armNow(
+  registry: Registry,
+  udid: string,
+  trackedServices: Map<string, NativeDevtoolsApi>
+): Promise<void> {
   if (withholdsNativeDevtools(udid)) return;
-  const service = await resolveNativeDevtools(registry, udid);
-  await service?.ensureEnvReady().catch(() => {});
+  await initUdid(registry, udid, trackedServices);
+  await trackedServices
+    .get(udid)
+    ?.ensureEnvReady()
+    .catch(() => {});
 }
 
-async function armWithinCap(registry: Registry, udid: string): Promise<void> {
+async function armWithinCap(
+  registry: Registry,
+  udid: string,
+  trackedServices: Map<string, NativeDevtoolsApi>
+): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
   const cap = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, ARM_WAIT_MS);
     timer.unref();
   });
   try {
-    await Promise.race([armNow(registry, udid), cap]);
+    await Promise.race([armNow(registry, udid, trackedServices), cap]);
   } finally {
     clearTimeout(timer);
   }
@@ -142,10 +156,13 @@ export function startSimulatorWatcher(registry: Registry): {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
   /**
    * Simulators a tool has targeted: every one whose native-devtools service
-   * started. Only these are armed, and re-armed after a reboot, so a simulator
-   * another project or session drives keeps its own environment.
+   * started, until a tool such as stop-all-simulator-servers stops it. Only
+   * these are armed, and re-armed after a reboot, so a simulator another project
+   * or session drives keeps its own environment.
    */
   const targetedUdids = new Set<string>();
+  /** Services the watcher disposes because their simulator shut down, which stay targeted. */
+  const disposingAfterShutdown = new Set<string>();
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
@@ -288,8 +305,14 @@ export function startSimulatorWatcher(registry: Registry): {
   }
 
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
-    if (to !== ServiceState.RUNNING || !urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
-    targetedUdids.add(urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length));
+    if (!urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
+    const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length);
+    if (to === ServiceState.RUNNING) {
+      targetedUdids.add(udid);
+    } else if (to === ServiceState.IDLE && !disposingAfterShutdown.has(udid)) {
+      targetedUdids.delete(udid);
+      trackedServices.delete(udid);
+    }
   }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
@@ -349,12 +372,16 @@ export function startSimulatorWatcher(registry: Registry): {
     for (const udid of [...trackedServices.keys()]) {
       if (booted.has(udid)) continue;
       trackedServices.delete(udid);
-      registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
+      disposingAfterShutdown.add(udid);
+      registry
+        .disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`)
+        .catch(() => {})
+        .finally(() => disposingAfterShutdown.delete(udid));
     }
   }
 
   registry.events.on("serviceStateChange", noteTargeted);
-  armTarget = (udid) => armWithinCap(registry, udid);
+  armTarget = (udid) => armWithinCap(registry, udid, trackedServices);
 
   // Settles once the first poll has read the booted simulators, once the
   // bounded simctl call fails, or at once while Xcode's install is pending.
