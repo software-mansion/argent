@@ -9,6 +9,10 @@ vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
 }));
 
+vi.mock("../src/utils/release-build", () => ({
+  isReleaseBuild: vi.fn(() => true),
+}));
+
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(),
   isUpdateNoteSuppressed: vi.fn(() => false),
@@ -16,6 +20,7 @@ vi.mock("../src/utils/update-checker", () => ({
 
 import { spawn } from "node:child_process";
 import { getUpdateState, isUpdateNoteSuppressed } from "../src/utils/update-checker";
+import { isReleaseBuild } from "../src/utils/release-build";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -102,6 +107,7 @@ describe("update-argent tool", () => {
     mockSpawn.mockReturnValue(makeChild());
     mockGetUpdateState.mockReturnValue(stateWithUpdate());
     vi.mocked(isUpdateNoteSuppressed).mockReturnValue(false);
+    vi.mocked(isReleaseBuild).mockReturnValue(true);
     // Pin the running-install classification: the fallback cwd-walk would
     // otherwise pick up whatever repository the test process runs in.
     savedInstallKind = process.env.ARGENT_INSTALL_KIND;
@@ -199,6 +205,15 @@ describe("update-argent tool", () => {
       [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
       expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
     );
+  });
+
+  it("never replaces a build that was not published to npm", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    vi.mocked(isReleaseBuild).mockReturnValue(false);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("holds an automatic update while the user has postponed the update", () => {

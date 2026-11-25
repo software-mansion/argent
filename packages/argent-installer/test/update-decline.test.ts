@@ -416,6 +416,16 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
     expect(ownsGlobalInstall("bun", projDir)).toBe(false);
   });
 
+  it("treats a pnpm-linked checkout as a local build", () => {
+    const root = fs.realpathSync(pkgRoot);
+    const listing = (version: string) =>
+      JSON.stringify([{ dependencies: { "@swmansion/argent": { path: pkgRoot, version } } }]);
+    childProcessMock.execFileSync.mockReturnValue(listing("1.0.0"));
+    expect(ownsGlobalInstall("pnpm", root)).toBe(true);
+    childProcessMock.execFileSync.mockReturnValue(listing("link:../checkout"));
+    expect(ownsGlobalInstall("pnpm", root)).toBe(false);
+  });
+
   it("updates the global copy while leaving a local pin and project MCP entry intact", async () => {
     const manifest = JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } });
     const entry = JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
@@ -433,9 +443,14 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
     expect(killToolServerForInstallDir).not.toHaveBeenCalled();
   });
 
-  it.each(["other running copy", "other npm prefix", "release held by policy"])(
+  it.each(["other running copy", "other npm prefix", "release held by policy", "linked checkout"])(
     "falls back to asking for a %s",
     async (reason) => {
+      if (reason === "linked checkout") {
+        const checkout = path.join(tmpDir, "checkout");
+        fs.renameSync(pkgRoot, checkout);
+        fs.symlinkSync(checkout, pkgRoot);
+      }
       if (reason === "other running copy")
         vi.mocked(utils.resolvePackageRoot).mockReturnValue(projDir);
       if (reason === "other npm prefix") modules = path.join(tmpDir, "elsewhere");

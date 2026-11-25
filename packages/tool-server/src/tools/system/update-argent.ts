@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState, isUpdateNoteSuppressed } from "../../utils/update-checker";
+import { isReleaseBuild } from "../../utils/release-build";
 
 // dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
 // PATH, updates the SAME install serving this session and works in local
@@ -193,6 +194,7 @@ function installWhenReady(version: string, cliEntry: string, activity: ServerAct
 export function scheduleAutomaticUpdate(version: string, activity: ServerActivity): void {
   if (
     process.env.ARGENT_INSTALL_KIND !== "global" ||
+    !isReleaseBuild() ||
     updateScheduled ||
     isUpdatingAutomatically(version)
   )

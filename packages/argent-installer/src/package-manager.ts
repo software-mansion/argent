@@ -255,7 +255,14 @@ const globalLocationArgs: Record<PackageManager, string[]> = {
   bun: ["pm", "ls", "-g"],
 };
 
-/** A PATH shim alone cannot prove where an unattended global install would write. */
+function isRegistrySpec(spec: unknown): boolean {
+  return typeof spec === "string" && spec.length > 0 && !spec.includes(":") && !spec.includes("/");
+}
+
+/**
+ * A PATH shim alone cannot prove where an unattended global install would write,
+ * and a linked checkout must never be swapped for a release.
+ */
 export function ownsGlobalInstall(pm: PackageManager, runningRoot: string): boolean {
   try {
     const output = execFileSync(pm, globalLocationArgs[pm], {
@@ -266,9 +273,14 @@ export function ownsGlobalInstall(pm: PackageManager, runningRoot: string): bool
       timeout: 5000,
     }).trim();
     let pkg: string | undefined;
+    let localBuild: boolean;
     if (pm === "pnpm") {
-      const listings = JSON.parse(output) as { dependencies?: Record<string, { path: string }> }[];
-      pkg = listings[0]?.dependencies?.[PACKAGE_NAME]?.path;
+      const listings = JSON.parse(output) as {
+        dependencies?: Record<string, { path: string; version?: string }>;
+      }[];
+      const dependency = listings[0]?.dependencies?.[PACKAGE_NAME];
+      pkg = dependency?.path;
+      localBuild = !isRegistrySpec(dependency?.version);
     } else {
       // Yarn reports the global project directory. Bun prefixes its package
       // list with "<global project> node_modules (<count>)".
@@ -276,8 +288,9 @@ export function ownsGlobalInstall(pm: PackageManager, runningRoot: string): bool
       if (!dir || !path.isAbsolute(dir)) return false;
       pkg =
         pm === "npm" ? path.join(dir, PACKAGE_NAME) : path.join(dir, "node_modules", PACKAGE_NAME);
+      localBuild = fs.lstatSync(pkg).isSymbolicLink();
     }
-    return !!pkg && path.isAbsolute(pkg) && fs.realpathSync(pkg) === runningRoot;
+    return !localBuild && !!pkg && path.isAbsolute(pkg) && fs.realpathSync(pkg) === runningRoot;
   } catch {
     return false;
   }
