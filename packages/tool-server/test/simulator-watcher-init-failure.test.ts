@@ -384,4 +384,28 @@ describe("simulator-watcher with api-owned init failure state", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps the service of an armed simulator that no poll lists, as in a provider's own set", async () => {
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse([UDID]);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, disposeService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(OTHER_UDID);
+      targetSimulators(registry, OTHER_UDID);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(disposeService).not.toHaveBeenCalled();
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

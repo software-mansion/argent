@@ -84,12 +84,6 @@ async function getBootedUdids(signal: AbortSignal): Promise<Set<string>> {
   return new Set(perSet.flatMap((r) => (r.status === "fulfilled" ? [...r.value] : [])));
 }
 
-/** A tool can name a simulator in lowercase, which `simctl list` never prints. */
-function isOtherSpellingOfBooted(udid: string, booted: Set<string>): boolean {
-  if (booted.has(udid)) return false;
-  return [...booted].some((bootedUdid) => bootedUdid.toUpperCase() === udid.toUpperCase());
-}
-
 async function initUdid(
   registry: Registry,
   udid: string,
@@ -169,6 +163,12 @@ export function startSimulatorWatcher(registry: Registry): {
   const targetedUdids = new Set<string>();
   /** Services the watcher itself disposes, whose simulators stay targeted. */
   const watcherDisposals = new Set<string>();
+  /**
+   * Every UDID a poll has listed as booted. Only these can be seen to shut
+   * down: a tool can arm a simulator the poll never lists, in a provider's own
+   * device set or under a lowercase spelling.
+   */
+  const seenBooted = new Set<string>();
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
@@ -267,8 +267,8 @@ export function startSimulatorWatcher(registry: Registry): {
    * Give a newly claimed simulator's devtools environment back to its provider.
    *
    * A provider that boots a simulator arms its own injection and then publishes
-   * the descriptor, so a tick landing in between finds an unclaimed simulator
-   * and arms over it. Once the claim appears the environment is the provider's
+   * the descriptor, so a tool call landing in between finds an unclaimed
+   * simulator and arms over it. Once the claim appears the environment is the provider's
    * business, whatever it granted/ `NATIVE_DEVTOOLS_IOS_CDP_SOCKET` names our
    * socket and launchd holds it for the rest of the boot, so the provider's own
    * agent would dial us rather than the provider.
@@ -311,7 +311,7 @@ export function startSimulatorWatcher(registry: Registry): {
     try {
       await registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
     } catch {
-      // Nothing cached under this id.
+      // Best-effort, like every other dispose here.
     } finally {
       watcherDisposals.delete(udid);
     }
@@ -333,11 +333,11 @@ export function startSimulatorWatcher(registry: Registry): {
   }
 
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
-    let allBooted: Set<string>;
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      allBooted = await getBootedUdids(stopController.signal);
+      const allBooted = await getBootedUdids(stopController.signal);
+      for (const udid of allBooted) seenBooted.add(udid);
       ({ ours: booted, claimed } = withoutForeignSimulators(onlyTargeted(allBooted)));
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
@@ -387,7 +387,7 @@ export function startSimulatorWatcher(registry: Registry): {
      * `handBackClaimed` above, which withdraws first.
      */
     for (const udid of [...trackedServices.keys()]) {
-      if (booted.has(udid) || isOtherSpellingOfBooted(udid, allBooted)) continue;
+      if (booted.has(udid) || !seenBooted.has(udid)) continue;
       trackedServices.delete(udid);
       void disposeAsWatcher(udid);
     }
