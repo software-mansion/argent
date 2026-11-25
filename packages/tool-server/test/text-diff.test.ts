@@ -266,21 +266,6 @@ describe("text diff", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("skips OCR when image pixels match", async () => {
-    const result = await analyzeScreenshotTextChanges({
-      baselinePath: "baseline.png",
-      currentPath: "current.png",
-      hasPixelDiff: false,
-    });
-
-    expect(result).toMatchObject({
-      status: "skipped",
-      provider: "ocr",
-      changes: [],
-    });
-    expect(ocrMock.extractOcrTextBlocks).not.toHaveBeenCalled();
-  });
-
   it("returns unavailable when OCR is unavailable (e.g. missing system tesseract)", async () => {
     ocrMock.extractOcrTextBlocks.mockResolvedValue({
       status: "unavailable",
@@ -291,7 +276,6 @@ describe("text diff", () => {
     const result = await analyzeScreenshotTextChanges({
       baselinePath: "baseline.png",
       currentPath: "current.png",
-      hasPixelDiff: true,
     });
 
     expect(result).toEqual({

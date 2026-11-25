@@ -1,63 +1,98 @@
 ---
 sidebar_position: 7
 sidebar_label: Visual regression
-title: Visual regression
-description: Argent compares two screenshots of the app. The agent tells you which areas and which text changed, and if the change is the one that you asked for.
+title: Visual regression testing
+description: Snapshot tests and screenshot tests for mobile apps. Argent compares the screen with a stored baseline in an e2e test, or compares two screenshots for the agent.
 sidebar_custom_props:
   icon: images
 ---
 
-Argent compares two screenshots of the app. The agent reads the result of the comparison. The agent tells you which areas of the screen changed, which text changed, and whether the change is the one that you asked for.
+Visual regression testing finds unwanted changes in the look of the app. Argent supports two types of checks:
 
-Use the comparison after a change to the layout, the spacing, the colors, the typography, the icons or the images. Also use it when a change can cause clipping, overflow or a different text rendering in a different part of the screen.
+- **Snapshot tests**: a `snapshot` step in an [e2e test](/docs/features/e2e) compares the screen with a stored baseline. The step runs in CI without an agent.
+- **Screenshot tests by the agent**: the agent compares two screenshots and tells you which areas and which text changed.
 
-## How a comparison works
+Use a visual check after a change to the layout, the spacing, the colors, the typography, the icons or the images.
 
-1. The agent brings the app to a known state and captures a baseline screenshot.
-2. You make the change, or the agent makes the interaction.
-3. The agent captures the screen again and compares the two screenshots.
-4. The agent reads the summary. The agent opens the diff image if the summary is not sufficient.
-5. The agent reports the result to you. The agent also reports a change that you did not ask for.
+## Quick start
 
-The agent can compare two saved screenshots, or one saved screenshot and a live capture of the device. The agent can also capture both sides live, before and after an interaction.
+1. Save this e2e test as `.argent/e2e/home.yaml`. Replace `com.example.app` with the app id of your app, and `home-screen` with an id or a text from its first screen.
 
-## What the comparison reports
+   ```yaml
+   steps:
+     - launch: com.example.app
+     - await: { visible: { id: home-screen } }
+     - snapshot: home
+   ```
 
-Argent does more than count different pixels. The summary contains three parts.
+2. Write the baseline from a known-good state of the app:
 
-| Part           | Content                                                                                            |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| Overall status | Unchanged or changed, and the percentage of pixels that are different                              |
-| Changed areas  | The position and size of each area that changed, and the direction of the color change in the area |
-| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color    |
+   ```bash
+   argent e2e run home --update-baselines
+   ```
 
-Argent reads the text of both screenshots with OCR. Thus the agent knows that the label "Save" became "Saved", or that a heading moved down by the height of one line. Argent also compares the shape and the stroke of the glyphs. Thus the agent sees a font change even when the words are the same.
+   When more than one device is booted, add `--platform ios` or `--device <id>`.
 
-Argent writes a diff image. The image marks the pixels that became brighter, the pixels that became darker, and the outline of each changed area. The agent shows you this image when you ask for it.
+3. Review the baseline in `.argent/e2e/__baselines__/home/` and commit it.
+4. Run the check. The command exits non-zero when the screen does not match the baseline:
 
-Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
+   ```bash
+   argent e2e run home
+   ```
+
+5. In CI, add `--output` to keep the baseline, current and diff images of each failed snapshot for an artifact upload:
+
+   ```bash
+   argent e2e run home --output e2e-artifacts
+   ```
 
 <a id="baselines-in-flows" />
 
 ## Baselines in e2e tests
 
-An [e2e test](/docs/features/e2e) can contain a snapshot step. The step fails when no baseline exists yet. Run the e2e test with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
+A `snapshot` step captures the screen and compares it with the baseline of the step.
 
-Thus you can keep visual checks in the repository and run them in CI.
+- The step fails when no baseline exists. Run the e2e test with `--update-baselines` to write the baselines.
+- The step fails when the difference is above a tolerance. You can set the tolerance for each step.
+- The step can compare one element only instead of the full screen.
+- Before the capture, the step waits until the screen stops changing.
+- Argent writes the diff image only when the step fails.
+- The step compares pixels only. It does not read the text with OCR.
 
-## Example instructions
+Ask the agent to add the step, for example: "Add a snapshot step to the checkout e2e test for the summary screen."
+
+## Comparisons by the agent
+
+The agent compares two screenshots with the `screenshot` and `screenshot-diff` tools. Each side is a saved screenshot or a live capture of the device. A typical sequence:
+
+1. The agent brings the app to a known state and captures a baseline screenshot.
+2. You make the change, or the agent does the interaction.
+3. The agent compares the live screen with the baseline.
+4. The agent reports the result. The report includes a change that you did not ask for.
+
+The summary of the comparison contains three parts:
+
+| Part           | Content                                                                                         |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| Overall status | Unchanged or changed, and the percentage of pixels that are different                           |
+| Changed areas  | The position and size of each area that changed, and the direction of the color change          |
+| Text changes   | Text that appeared, disappeared, moved, or changed its content, its font, its size or its color |
+
+When pixels differ, Argent reads the text of both screenshots with OCR. Thus the agent knows that the label "Save" became "Saved". Argent also writes a diff image that marks the brighter pixels, the darker pixels and each changed area.
+
+Example instructions:
 
 - "Capture a baseline of the settings screen. Then apply my change and compare."
-- "Compare the home screen before and after the tap on the filter button."
 - "I changed the font of the headings. Make sure that nothing else on the screen changed."
-- "Add a snapshot step to the checkout e2e test for the summary screen."
 
 ## Limits
 
-- The comparison needs two stable screens. Animation, a live clock, an advertisement or random data makes the comparison noisy. Stop the animation or wait for a stable state first.
-- The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
-- The two screenshots must come from the same device model, in the same orientation and at the same scale. Argent does not compare screenshots of different sizes.
-- The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
-- The comparison works on an iOS simulator, an Android emulator or device, a HarmonyOS device, or a [Mac app](/docs/features/mac-apps). It does not work on Chromium, Apple TV or Vega apps. On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host instead.
+- The comparison needs a stable screen. Animation, a live clock, advertisements or random data make the comparison noisy.
+- Both screenshots must come from the same device model, in the same orientation and at the same scale.
+- On a phone, Argent removes the status bar from the comparison of a full screen.
+- A visual check does not replace a check of the accessibility tree, the logs or the network record.
+- The `snapshot` step works on each platform where Argent captures screenshots, Chromium and Vega included.
+- Comparisons by the agent work on an iOS simulator, an Android emulator or device, a HarmonyOS device and a [Mac app](/docs/features/mac-apps). They do not work on Chromium, Apple TV or Vega apps.
+- On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host.
 
-Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.
+See [Snapshots](/docs/reference/e2e-yaml#snapshots) in the e2e YAML reference for the step options and the baseline keys. See the [tools reference](/docs/reference/tools) for `screenshot` and `screenshot-diff`.
