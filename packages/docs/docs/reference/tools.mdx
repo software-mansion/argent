@@ -324,20 +324,20 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server. These 
 
 ## JavaScript runtime debugging
 
-| Tool                           | Description                                                                                                                                        |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-connect`             | Connect to the JS runtime CDP debugger                                                                                                             |
-| `debugger-status`              | Report connection status and diagnostics                                                                                                           |
-| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium                                                                          |
-| `debugger-component-tree`      | List the React component names and testIDs on the current screen                                                                                   |
-| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate                                                                                       |
-| `debugger-log-registry`        | Summarize console logs captured from the app                                                                                                       |
-| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                                     |
-| `view-network-logs`            | List HTTP requests from the JavaScript runtime or the active Chromium tab                                                                          |
-| `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs` |
-| `network-capture-start`        | Start network capture or mark the start of a Chromium capture window                                                                               |
-| `network-capture-stop`         | Stop network capture or mark the end of a Chromium capture window                                                                                  |
-| `await-network-request`        | Wait for a matching request to finish in the current capture window                                                                                |
+| Tool                           | Description                                                                                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect`             | Connect to the JS runtime CDP debugger                                                                                                                                                                        |
+| `debugger-status`              | Report connection status and diagnostics                                                                                                                                                                      |
+| `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium                                                                                                                                     |
+| `debugger-component-tree`      | List the React component names and testIDs on the current screen                                                                                                                                              |
+| `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate                                                                                                                                                  |
+| `debugger-log-registry`        | Summarize console logs captured from the app                                                                                                                                                                  |
+| `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                                                                                                |
+| `view-network-logs`            | List HTTP requests from the JavaScript runtime or the active Chromium tab                                                                                                                                     |
+| `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-`, `android-` or `macos-` ID from `native-network-logs`; Chromium includes earlier redirect hops and their headers |
+| `network-capture-start`        | Start network capture or mark the start of a Chromium capture window                                                                                                                                          |
+| `network-capture-stop`         | Stop network capture or mark the end of a Chromium capture window                                                                                                                                             |
+| `await-network-request`        | Wait for a matching request to finish in the current capture window                                                                                                                                           |
 
 ### Network capture on iOS, Android and Mac apps
 

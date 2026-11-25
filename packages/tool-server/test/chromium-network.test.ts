@@ -139,6 +139,89 @@ describe("NetworkManager (recording)", () => {
     expect(net.get("late")).toBeUndefined();
   });
 
+  it("keeps redirect hops in the shared schema with per-hop headers", () => {
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "redirected",
+      request: {
+        method: "POST",
+        url: "https://x.test/authenticate",
+        headers: { "authorization": "Bearer secret", "x-hop": "first" },
+        postData: "password=secret",
+      },
+      type: "Document",
+      timestamp: 1,
+      wallTime: 1_700_000_000,
+    });
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "redirected",
+      type: "Document",
+      response: { status: 302, statusText: "Found", headers: { "content-type": "text/plain" } },
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "redirected",
+      request: {
+        method: "GET",
+        url: "https://x.test/login",
+        headers: { accept: "text/html" },
+      },
+      redirectResponse: {
+        status: 303,
+        statusText: "See Other",
+        headers: { "Location": "/login", "set-cookie": "session=secret" },
+      },
+      type: "Document",
+      timestamp: 2,
+      wallTime: 1_700_000_001,
+    });
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "redirected",
+      type: "Document",
+      response: { status: 200, statusText: "OK", headers: { "content-type": "text/html" } },
+    });
+
+    expect(net.get("redirected")).toMatchObject({
+      method: "GET",
+      url: "https://x.test/login",
+      requestHeaders: { accept: "text/html" },
+      responseHeaders: { "content-type": "text/html" },
+      redirects: [
+        {
+          method: "POST",
+          url: "https://x.test/authenticate",
+          status: 303,
+          statusText: "See Other",
+          requestHeaders: { "authorization": "Bearer secret", "x-hop": "first" },
+          headers: { "Location": "/login", "set-cookie": "session=secret" },
+        },
+      ],
+    });
+    expect(net.get("redirected")?.postData).toBeUndefined();
+    expect(net.get("redirected")?.startedDateTime).toBe(
+      new Date(1_700_000_000 * 1000).toISOString()
+    );
+  });
+
+  it("keeps a 307 request body that Chromium resends on the next hop", () => {
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "preserved",
+      request: { method: "POST", url: "https://x.test/old", postData: "a=1" },
+      timestamp: 1,
+    });
+    f.events.emit("event", "Network.requestWillBeSent", {
+      requestId: "preserved",
+      request: { method: "POST", url: "https://x.test/new", postData: "a=1" },
+      redirectResponse: { status: 307, statusText: "Temporary Redirect", headers: {} },
+      timestamp: 2,
+    });
+
+    expect(net.get("preserved")).toMatchObject({
+      method: "POST",
+      url: "https://x.test/new",
+      postData: "a=1",
+      redirects: [{ method: "POST", url: "https://x.test/old", status: 307 }],
+    });
+  });
+
   it("reports throttled only while the stored conditions shape traffic", async () => {
     expect(net.throttled()).toBe(false);
     await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
@@ -312,6 +395,55 @@ describe("view-network-logs (chromium branch)", () => {
 });
 
 describe("view-network-request-details (chromium branch)", () => {
+  it("returns the shared redirect shape and redacts each hop's headers", async () => {
+    const record = rec({
+      requestId: "redirected",
+      method: "GET",
+      url: "https://x.test/login",
+      requestHeaders: { accept: "text/html" },
+      redirects: [
+        {
+          method: "POST",
+          url: "https://x.test/authenticate",
+          status: 303,
+          statusText: "See Other",
+          requestHeaders: { "authorization": "Bearer secret", "x-hop": "first" },
+          headers: { "Location": "/login", "set-cookie": "session=secret" },
+        },
+      ],
+    });
+    const services = {
+      chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "redirected",
+      includeBody: false,
+    })) as {
+      redirects: Array<{
+        method: string;
+        url: string;
+        status: number;
+        statusText: string;
+        requestHeaders?: Record<string, string>;
+        responseHeaders?: Record<string, string>;
+      }>;
+    };
+
+    expect(details.redirects).toEqual([
+      {
+        method: "POST",
+        url: "https://x.test/authenticate",
+        status: 303,
+        statusText: "See Other",
+        requestHeaders: { "authorization": "[REDACTED]", "x-hop": "first" },
+        responseHeaders: { "Location": "/login", "set-cookie": "[REDACTED]" },
+      },
+    ]);
+  });
+
   it("returns redacted details + body via Network.getResponseBody", async () => {
     const record = rec({
       requestId: "r1",

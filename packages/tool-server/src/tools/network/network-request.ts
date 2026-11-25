@@ -233,6 +233,7 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+On Chromium, "redirects" lists each earlier hop with its method, URL, status, and available request and response headers. The request and response fields describe the final hop.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
 If a request is missing, the tool returns an error: list requests again. If capture is off, start it before reproducing the request. On Vega, a JS lookup can start capture. Use view-network-logs before triggering requests on Vega.
 IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
@@ -308,6 +309,18 @@ IDs from stopped capture still work. After a JavaScript reload, list requests ag
         errorText: rec.errorText,
         initiator: rec.initiator,
       };
+      if (rec.redirects) {
+        details.redirects = rec.redirects.map((hop) => ({
+          method: hop.method,
+          url: hop.url,
+          status: hop.status,
+          statusText: hop.statusText,
+          ...(hop.requestHeaders ? { requestHeaders: redactHeaders(hop.requestHeaders) } : {}),
+          ...(Object.keys(hop.headers).length > 0
+            ? { responseHeaders: redactHeaders(hop.headers) }
+            : {}),
+        }));
+      }
       if (rec.url) {
         details.request = {
           url: rec.url,
