@@ -27,7 +27,7 @@ import {
 } from "./flow-utils";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { InvalidToolInputError } from "../../utils/capability";
-import { utf8SafeCut } from "./script/flow-script-executor";
+import { mergeScriptEnv, utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
@@ -224,7 +224,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     //
     // The test's env: as it stands, under the step's own: what a replay
     // without run values gives the step.
-    const env: FlowEnv = { ...(await recordedFileEnv(session)), ...step.env };
+    const env: FlowEnv = mergeScriptEnv(await recordedFileEnv(session), step.env);
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
