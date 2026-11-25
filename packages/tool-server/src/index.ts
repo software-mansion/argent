@@ -20,6 +20,7 @@ import {
 import { createHttpApp } from "./http";
 import { attachRegistryEventLogger, createToolServerEventLog } from "./event-log";
 import { createRegistry } from "./utils/setup-registry";
+import { collectHostDepsReport } from "./utils/host-deps-report";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
@@ -594,6 +595,7 @@ function usageText(): string {
     "Commands:\n" +
     "  start                        Start the tool server\n" +
     "  -t, --get-available-tools    Print available tools as JSON and exit\n" +
+    "  --check-deps                 Print host toolchain status as JSON and exit\n" +
     "  -h, --help                   Show this menu\n"
   );
 }
@@ -610,6 +612,11 @@ if (require.main === module) {
     start();
   } else if (cmd === "-t" || cmd === "--get-available-tools") {
     writeAndExit(process.stdout, JSON.stringify(getAvailableTools(), null, 2) + "\n", 0);
+  } else if (cmd === "--check-deps") {
+    void collectHostDepsReport().then(
+      (report) => writeAndExit(process.stdout, JSON.stringify(report) + "\n", 0),
+      (err: unknown) => writeAndExit(process.stderr, `${String(err)}\n`, 1)
+    );
   } else if (cmd === "-h" || cmd === "--help") {
     writeAndExit(process.stdout, usageText(), 0);
   } else {

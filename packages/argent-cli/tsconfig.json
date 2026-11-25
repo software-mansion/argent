@@ -14,6 +14,7 @@
   "references": [
     { "path": "../configuration-core" },
     { "path": "../device-providers" },
+    { "path": "../argent-installer" },
     { "path": "../registry" },
     { "path": "../telemetry" },
     { "path": "../argent-tools-client" }

@@ -79,11 +79,10 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start network capture on iOS simulators and Android<flag:macos-apps> (also on Mac apps)</flag:macos-apps>. Use when you need to inspect traffic from an upcoming action or check a request with await-network-request. A new start keeps the log and begins a new window for the wait. Capture can slow the app.
-On Chromium, Argent connects if needed and marks the start of the wait window. The log records while connected.
-The JavaScript layer needs an app connected to Metro. After a reload or relaunch, start capture again once JavaScript loads and before triggering the request. Android native capture needs a debuggable build.<flag:macos-apps> For a supported React Native app launched from Xcode, use layer js and form udid as macos-app-<bundle id>. Native capture needs a supported build launched through Argent.</flag:macos-apps>
-Returns { status, layers }: check armed and reason for each requested layer. A pending native layer can become ready when Argent launches or reconnects to the app. On a device whose devtools agent Argent attached to, start native capture again after a relaunch.
-When every requested layer is unavailable, the call fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING.`,
+    description: `Start HTTP capture on iOS simulators, Android<flag:macos-apps>, Mac apps</flag:macos-apps> and Chromium. Call this before the action you want to inspect. Each start keeps existing requests and opens a new window for await-network-request. On Chromium, start attaches to the tab if needed and marks the window in its log.
+Returns each layer's readiness in armed. Follow reason if a layer is still waiting or unavailable. Native capture can arm when the app connects on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. On Android, it can attach when Argent launches the app. JS capture needs the app's Metro port. Start it again after a reload or relaunch.<flag:macos-apps> For a React Native Mac app launched from Xcode, select layer js. If the reason lists other targets for a Mac app, verify the app's Metro port and Debug build.</flag:macos-apps>
+Stop capture with network-capture-stop when you have the requests. Native capture can affect timing.
+Fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING when every requested layer is unavailable.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {

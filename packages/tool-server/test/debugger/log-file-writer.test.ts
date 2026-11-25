@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,6 +33,15 @@ describe("LogFileWriter", () => {
     const filePath = writer.getFilePath();
     expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+-p\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("gives writers created in the same millisecond on one port separate files", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1710000000000);
+    const writers = [new LogFileWriter(9999), new LogFileWriter(9999), new LogFileWriter(9999)];
+    now.mockRestore();
+    const paths = new Set([writer, ...writers].map((w) => w.getFilePath()));
+    for (const w of writers) w.close();
+    expect(paths.size).toBe(4);
   });
 
   it("writes entries as flat text lines", () => {
@@ -424,7 +433,7 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
     unwritableWriter.close();
   });
 
-  it("keeps no copy of a line it could not write", () => {
+  it("keeps only the bounded in-memory copy of a line it could not write", () => {
     unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
 
     expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
@@ -435,9 +444,9 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
       .flat();
     expect(retainedLines).toEqual([]);
 
-    // The entry itself is still accounted for, through the counts and clusters.
     expect(unwritableWriter.getStats().totalEntries).toBe(1);
     expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
+    expect(unwritableWriter.getRecent(1)[0].message).toBe("unreadable line");
   });
 });
 
