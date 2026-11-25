@@ -173,7 +173,7 @@ export async function armAudio(
 }
 
 /** Live view of one app's hook, parsed from its `st.<bundleId>` file. */
-interface AppAudioStatus {
+export interface AppAudioStatus {
   /** Contract version of the hook; 0 when the hook predates it. */
   proto: number;
   /** `dormant`: hook loaded, the app has not opened audio yet (no helper, no acknowledgements). */
