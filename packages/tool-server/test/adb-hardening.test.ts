@@ -30,7 +30,14 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { checkSnapshotLoadable, listAndroidDevices, listAvds, runAdb } from "../src/utils/adb";
+import {
+  adbExecOutBinary,
+  adbShellInput,
+  checkSnapshotLoadable,
+  listAndroidDevices,
+  listAvds,
+  runAdb,
+} from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -180,12 +187,12 @@ describe("listAvds noise filter (review #9)", () => {
 
 describe("windowsHide (Windows console-popup fix)", () => {
   /**
-   * Every adb/emulator spawn behind runAdb, listAvds and checkSnapshotLoadable
-   * must pass windowsHide: true. Without it, a console-subsystem binary
-   * (adb.exe, emulator.exe) spawned from the tool-server — a detached
-   * background process with no console of its own — gets a fresh popup
-   * console window on Windows for every call. The option is a documented
-   * no-op on macOS/Linux, so this is safe everywhere.
+   * Every adb/emulator spawn behind runAdb, adbExecOutBinary, adbShellInput,
+   * listAvds and checkSnapshotLoadable must pass windowsHide: true. Without it,
+   * a console-subsystem binary (adb.exe, emulator.exe) spawned from the
+   * tool-server — a detached background process with no console of its own —
+   * gets a fresh popup console window on Windows for every call. The option is
+   * a documented no-op on macOS/Linux, so this is safe everywhere.
    */
 
   it("runAdb passes windowsHide: true", async () => {
@@ -194,6 +201,27 @@ describe("windowsHide (Windows console-popup fix)", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "adb",
       ["devices"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("adbExecOutBinary passes windowsHide: true", async () => {
+    // Reaches runAdbBinary's own execFileAsync call, not runAdb's.
+    execFileMock.mockReturnValue({ stdout: Buffer.from(""), stderr: "" });
+    await adbExecOutBinary("emulator-5554", "screencap -p");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["-s", "emulator-5554", "exec-out", "screencap -p"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("adbShellInput passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await adbShellInput("emulator-5554", "date", "");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["-s", "emulator-5554", "shell", "date"],
       expect.objectContaining({ windowsHide: true })
     );
   });

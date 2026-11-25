@@ -300,6 +300,8 @@ export async function adbShellInput(
         killSignal: ADB_KILL_SIGNAL,
         maxBuffer: 64 * 1024 * 1024,
         encoding: "utf-8",
+        // See runAdb above — same popup-console fix, same no-op off Windows.
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err) {
