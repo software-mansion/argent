@@ -1213,6 +1213,8 @@ describe("output references", () => {
 
   it.each([
     ["an echo", 'echo: "created {{output:user.id}}"', "echo"],
+    ["a run path", 'run: "{{output:x}}/login.yaml"', "run"],
+    ["a tool arg key", 'tool: t\n    args: { "{{output:k}}": 1 }', "args.{{output:k}}"],
     [
       "a snapshot crop selector",
       'snapshot: { name: home, cropOn: { id: "{{output:row}}" } }',
@@ -1249,6 +1251,8 @@ describe("output references", () => {
     ["no closing braces", "{{output:a"],
     ["a bad quoted fallback", '{{output:a ?? "x}}'],
     ["an operator", "{{output:a + 1}}"],
+    ["an index with a leading zero", "{{output:items.01}}"],
+    ["a fallback number too large", "{{output:a ?? 1e999}}"],
   ])("refuses %s", (_label, ref) => {
     const message = rejection(`steps:\n  - tool: t\n    args: { v: '${ref}' }\n`);
     expect(message).toMatch(
@@ -1319,7 +1323,7 @@ describe("output checks", () => {
         "steps:",
         "  - assert: { output: user.role, equals: admin }",
         "  - assert: { output: items.0.id, exists: true }",
-        "  - assert: { output: count, equals: 3 }",
+        "  - assert: { output: count, equals: '3' }",
         "  - when: { output: flags.beta, contains: 'on' }",
         "    steps:",
         "      - echo: beta",
@@ -1359,11 +1363,10 @@ describe("output checks", () => {
     expect(() => parseFlow(`steps:\n  - ${step}\n`)).toThrow(pattern);
   });
 
-  it("needs no device and may come before the leading launch", () => {
-    const flow = parseFlow(
-      "steps:\n  - assert: { output: a, exists: false }\n  - launch: com.acme\n"
+  it("refuses an unquoted number, which YAML would rewrite", () => {
+    expect(() => parseFlow("steps:\n  - assert: { output: v, equals: 1.10 }\n")).toThrow(
+      /compares text: quote the value/
     );
-    expect(flow.steps[0]).toMatchObject({ kind: "output-check" });
   });
 });
 

@@ -21,7 +21,7 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
-  assertStepOutputReferences,
+  stepOutputReferenceProblem,
   holdsOutputReference,
   resolveStepOutputs,
   appIdForPlatform,
@@ -1627,15 +1627,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       const authored: FlowStep = { kind: "tool", name: command, args };
       const referencedArgs = holdsOutputReference(authored) ? args : undefined;
       if (referencedArgs) {
+        const problem = stepOutputReferenceProblem(authored);
+        if (problem)
+          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${problem}`);
         try {
-          assertStepOutputReferences(authored);
           args = resolveStepOutputs(authored, session.output ?? {}).args;
         } catch (err) {
-          if (!(err instanceof OutputReferenceError) && getFailureSignal(err) === undefined) {
-            throw err;
-          }
-          const reason = (err as Error).message.replace(/^Step 1 \(`tool`\): /, "");
-          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${reason}`);
+          if (!(err instanceof OutputReferenceError)) throw err;
+          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${err.message}`);
         }
       }
 
@@ -1654,6 +1653,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
       // the tapped element is gone by the time the tap returns.
       const isTap =
+        !referencedArgs &&
         command === "gesture-tap" &&
         params.delayMs === undefined &&
         typeof args.udid === "string" &&
@@ -1672,6 +1672,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // replay does: a file argument, or the flow a nested flow-execute names,
       // which finds its own files there too. The step is recorded from `args`,
       // which keep the client paths.
+      // A call that records as a `run:` step shares the recording's document,
+      // as the fragment shares the run's at replay. A copy, kept only if it
+      // does record as one.
+      const sharedOutput =
+        command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
+          ? { doc: structuredClone(session.output ?? {}) }
+          : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1691,6 +1698,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           // with no enclosing run, which marks it as nested: its refusals name
           // the flow it runs, and this call returns the baselines it writes.
           ...(nestedFromClient ? { flowStack: ctx?.flowStack ?? [] } : {}),
+          ...(sharedOutput ? { flowOutput: sharedOutput } : {}),
         });
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
@@ -1866,7 +1874,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = {
           kind: "tool",
           name: command,
-          args: stripDeviceKeys(referencedArgs),
+          args: withRecordedPanelKind(command, stripDeviceKeys(referencedArgs), toolResult),
           delayMs: params.delayMs,
         };
       } else if (captured?.selector) {
@@ -1904,6 +1912,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
+        if (sharedOutput) session.output = sharedOutput.doc;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the

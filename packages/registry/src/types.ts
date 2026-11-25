@@ -154,6 +154,13 @@ export interface InvokeToolOptions {
    * passes it on as it does {@link flowStack}. The HTTP route never sets it.
    */
   flowSecret?: { typed?: boolean };
+  /**
+   * Internal: the output document of a recording, which the recorder shares
+   * with an e2e test it runs to record as a `run:` step, so the scripts of
+   * that test read and set it as a replay's would. Only the call that sets it
+   * carries it: a sub-tool call never passes it on.
+   */
+  flowOutput?: { doc: Record<string, unknown> };
 }
 
 /**

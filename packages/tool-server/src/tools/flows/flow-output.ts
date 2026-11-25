@@ -1,4 +1,5 @@
 import { SECRET_PLACEHOLDER_RE } from "@argent/configuration-core";
+import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 
 /**
  * `{{output:PATH}}` and `{{output:PATH ?? FALLBACK}}` references to the values
@@ -18,7 +19,7 @@ export const OUTPUT_REFERENCE_MARKER = "{{output:";
 /** The values the script steps of one run returned. */
 export type FlowOutput = Record<string, unknown>;
 
-const SEGMENT = String.raw`(?:[A-Za-z_][A-Za-z0-9_-]*|\d+)`;
+const SEGMENT = String.raw`(?:[A-Za-z_][A-Za-z0-9_-]*|0|[1-9]\d*)`;
 const PATH_RE = new RegExp(`^${SEGMENT}(?:\\.${SEGMENT})*$`);
 const NUMBER_RE = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const MAX_LISTED_KEYS = 20;
@@ -36,7 +37,8 @@ interface OutputReference {
   /** As written, for messages. */
   source: string;
   path: string;
-  fallback?: { value: unknown };
+  /** `text` is what the fallback puts in text: a string, or the literal as written. */
+  fallback?: { value: unknown; text: string };
 }
 
 /** Why `text` holds a malformed reference, or undefined. */
@@ -63,25 +65,26 @@ function scan(text: string): OutputReference[] {
     }
     const source = text.slice(at, close + 2);
     const body = text.slice(at + OUTPUT_REFERENCE_MARKER.length, close);
-    const parts = body.split("??");
-    const path = parts[0]!.trim();
+    const split = body.indexOf("??");
+    const path = (split === -1 ? body : body.slice(0, split)).trim();
     if (!PATH_RE.test(path)) {
       throw new Error(`has an invalid reference ${JSON.stringify(source)}: ${GRAMMAR}`);
     }
-    if (parts.length > 2) {
-      throw new Error(
-        `has an invalid reference ${JSON.stringify(source)}: a reference takes one \`??\` fallback`
-      );
-    }
     const ref: OutputReference = { start: at, end: close + 2, source, path };
-    if (parts.length === 2) {
-      const literal = parts[1]!.trim();
+    if (split !== -1) {
+      const literal = body.slice(split + 2).trim();
+      if (!literal.startsWith('"') && literal.includes("??")) {
+        throw new Error(
+          `has an invalid reference ${JSON.stringify(source)}: a reference takes one \`??\` fallback`
+        );
+      }
       if (literal.includes("{{")) {
         throw new Error(
           `has an invalid reference ${JSON.stringify(source)}: a fallback is a literal value, not another reference`
         );
       }
-      ref.fallback = { value: parseFallback(literal, source) };
+      const value = parseFallback(literal, source);
+      ref.fallback = { value, text: typeof value === "string" ? value : literal };
     }
     refs.push(ref);
     at = text.indexOf(OUTPUT_REFERENCE_MARKER, close + 2);
@@ -98,7 +101,15 @@ function parseFallback(literal: string, source: string): unknown {
   if (literal === "true") return true;
   if (literal === "false") return false;
   if (literal === "null") return null;
-  if (NUMBER_RE.test(literal)) return Number(literal);
+  if (NUMBER_RE.test(literal)) {
+    const value = Number(literal);
+    if (!Number.isFinite(value)) {
+      throw new Error(
+        `has an invalid reference ${JSON.stringify(source)}: the fallback number is too large`
+      );
+    }
+    return value;
+  }
   if (literal.startsWith('"')) {
     let parsed: unknown;
     try {
@@ -117,12 +128,7 @@ function parseFallback(literal: string, source: string): unknown {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    [Object.prototype, null].includes(Object.getPrototypeOf(value))
-  );
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 type Lookup = { found: true; value: unknown } | { found: false; why: string };
@@ -171,10 +177,13 @@ function describe(value: unknown): string {
   return `a ${typeof value}`;
 }
 
-function resolveRef(ref: OutputReference, output: FlowOutput): unknown {
+function resolveRef(
+  ref: OutputReference,
+  output: FlowOutput
+): { found: true; value: unknown } | { found: false; fallback: { value: unknown; text: string } } {
   const hit = lookupOutput(output, ref.path);
-  if (hit.found) return hit.value;
-  if (ref.fallback) return ref.fallback.value;
+  if (hit.found) return hit;
+  if (ref.fallback) return { found: false, fallback: ref.fallback };
   throw new OutputReferenceError(`${ref.source} has no value: ${hit.why}`);
 }
 
@@ -182,7 +191,7 @@ function asText(value: unknown, ref: OutputReference): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   throw new OutputReferenceError(
-    `${ref.source} is ${Array.isArray(value) ? "a list" : value === null ? "null" : "an object"}, which ` +
+    `${ref.source} is ${Array.isArray(value) ? "a list" : "an object"}, which ` +
       "cannot be part of text: reference one of its values"
   );
 }
@@ -207,16 +216,14 @@ export function resolveOutputText(text: string, output: FlowOutput): string {
   const spans: Array<{ from: number; to: number; ref: OutputReference }> = [];
   for (const ref of refs) {
     resolved += text.slice(copied, ref.start);
-    const value = asText(resolveRef(ref, output), ref);
+    const hit = resolveRef(ref, output);
+    const value = hit.found ? asText(hit.value, ref) : hit.fallback.text;
     spans.push({ from: resolved.length, to: resolved.length + value.length, ref });
     resolved += value;
     copied = ref.end;
   }
   resolved += text.slice(copied);
-  for (const span of spans) {
-    if (resolved.slice(span.from, span.to).includes("{{secret:")) throw secretRefusal(span.ref);
-  }
-  for (const match of resolved.matchAll(new RegExp(SECRET_PLACEHOLDER_RE.source, "g"))) {
+  for (const match of resolved.matchAll(SECRET_PLACEHOLDER_RE)) {
     const from = match.index;
     const to = from + match[0].length;
     const span = spans.find((s) => s.from < to && s.to > from);
@@ -233,8 +240,9 @@ export function resolveOutputValue(text: string, output: FlowOutput): unknown {
   const refs = scan(text);
   const only = refs.length === 1 ? refs[0]! : undefined;
   if (!only || only.start !== 0 || only.end !== text.length) return resolveOutputText(text, output);
-  const value = resolveRef(only, output);
-  if (JSON.stringify(value).includes("{{secret:")) throw secretRefusal(only);
+  const hit = resolveRef(only, output);
+  const value = hit.found ? hit.value : hit.fallback.value;
+  if (JSON.stringify(value).includes(SECRET_PLACEHOLDER_MARKER)) throw secretRefusal(only);
   return structuredClone(value);
 }
 

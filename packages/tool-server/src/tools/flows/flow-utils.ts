@@ -2997,8 +2997,8 @@ export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | unde
 
 /**
  * `{ output: PATH, exists|equals|contains|matches: … }`, the body of an
- * `assert:` or a `when:` guard. A number or boolean to compare with is read as
- * its text, since the check compares text.
+ * `assert:` or a `when:` guard. The value to compare with is quoted text, as
+ * an env value is: YAML would read `1.10` as 1.1.
  */
 function parseOutputCheck(b: Record<string, unknown>, kind: "assert" | "when"): OutputCheck {
   const entry = { [kind]: b };
@@ -3020,7 +3020,13 @@ function parseOutputCheck(b: Record<string, unknown>, kind: "assert" | "when"): 
       badEntry(entry, `${kind} output \`exists\` takes true or false`);
     return { path, test, expected: value };
   }
-  const expected = typeof value === "number" || typeof value === "boolean" ? String(value) : value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    badEntry(
+      entry,
+      `${kind} output \`${test}\` compares text: quote the value, e.g. \`${test}: "${value}"\``
+    );
+  }
+  const expected = value;
   if (typeof expected !== "string" || (expected === "" && test !== "equals")) {
     badEntry(entry, `${kind} output \`${test}\` needs a non-empty string`);
   }
@@ -3446,8 +3452,13 @@ interface StepField {
   set?: (value: unknown) => void;
   /** A `tool:` argument: a whole-value reference keeps its JSON type. */
   typed?: boolean;
-  /** A selector field: an empty resolved value would match more than it names. */
-  selector?: boolean;
+  /**
+   * What the parser asks of the field as written, asked again of the resolved
+   * value: `visible` for a selector, which an empty or blank value would let
+   * match any element, `nonEmpty` for text a check compares with or a step
+   * types.
+   */
+  required?: "visible" | "nonEmpty";
 }
 
 /** A selector's own string leaves, addressed by their YAML spellings. */
@@ -3457,7 +3468,7 @@ function* selectorFields(sel: FlowSelector, where: string): Generator<StepField>
       where: `${where}.text`,
       value: sel.text,
       set: (v) => (sel.text = v as string),
-      selector: true,
+      required: "visible",
     };
   }
   // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
@@ -3468,7 +3479,7 @@ function* selectorFields(sel: FlowSelector, where: string): Generator<StepField>
       where: `${where}.id`,
       value: sel.identifier,
       set: (v) => (sel.identifier = v as string),
-      selector: true,
+      required: "visible",
     };
   }
   if (sel.role !== undefined) {
@@ -3476,7 +3487,7 @@ function* selectorFields(sel: FlowSelector, where: string): Generator<StepField>
       where: `${where}.role`,
       value: sel.role,
       set: (v) => (sel.role = v as string),
-      selector: true,
+      required: "visible",
     };
   }
   for (const relation of SELECTOR_RELATIONS) {
@@ -3495,7 +3506,7 @@ function* selectorFields(sel: FlowSelector, where: string): Generator<StepField>
  * must be yielded twice, while a node that contains itself is dropped at the
  * point it closes the loop.
  *
- * `settable` is false under the arguments of `e2e-execute` other than `env`:
+ * `set` is absent under the arguments of `e2e-execute` other than `env`:
  * which test a nested run starts, and from where, is checked before the run
  * and must be spelled in the file.
  */
@@ -3503,10 +3514,11 @@ function* argFields(
   value: unknown,
   where: string,
   set: ((value: unknown) => void) | undefined,
+  typed = true,
   seen: Set<object> = new Set()
 ): Generator<StepField> {
   if (typeof value === "string") {
-    yield { where, value, ...(set ? { set, typed: true } : {}) };
+    yield { where, value, ...(set ? { set, typed } : {}) };
     return;
   }
   if (value === null || typeof value !== "object") return;
@@ -3515,7 +3527,13 @@ function* argFields(
   const settable = set !== undefined;
   if (Array.isArray(value)) {
     for (const [i, item] of value.entries()) {
-      yield* argFields(item, `${where}[${i}]`, settable ? (v) => (value[i] = v) : undefined, seen);
+      yield* argFields(
+        item,
+        `${where}[${i}]`,
+        settable ? (v) => (value[i] = v) : undefined,
+        typed,
+        seen
+      );
     }
   } else if (value instanceof Map) {
     // `%YAML 1.1` + `!!omap` materializes a real Map, whose entries
@@ -3525,20 +3543,24 @@ function* argFields(
         item,
         `${where}.${String(key)}`,
         settable ? (v) => value.set(key, v) : undefined,
+        typed,
         seen
       );
     }
   } else if (value instanceof Set) {
     // `!!set` members ARE the values, so they carry no key of their own and the
     // path stays the container's.
-    for (const item of value) yield* argFields(item, where, undefined, seen);
+    for (const item of value) yield* argFields(item, where, undefined, typed, seen);
   } else {
     const record = value as Record<string, unknown>;
     for (const [key, item] of Object.entries(record)) {
+      // A key is spelled in the file: only values resolve.
+      if (holdsOutputMarker(key)) yield { where: `${where}.${key}`, value: key };
       yield* argFields(
         item,
         `${where}.${key}`,
         settable ? (v) => (record[key] = v) : undefined,
+        typed,
         seen
       );
     }
@@ -3551,9 +3573,10 @@ function* toolArgFields(step: Extract<FlowStep, { kind: "tool" }>): Generator<St
     yield* argFields(step.args, "args", () => {});
     return;
   }
+  // An env value is text, as in a script step; `env: "{{output:map}}"` names a whole map.
   for (const [key, item] of Object.entries(step.args)) {
     const settable = key === "env" ? (v: unknown) => (step.args[key] = v) : undefined;
-    yield* argFields(item, `args.${key}`, settable);
+    yield* argFields(item, `args.${key}`, settable, typeof item === "string");
   }
 }
 
@@ -3595,7 +3618,9 @@ function* conditionFields(
     yield {
       where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
       value: cond.expectedText,
-      ...(cond.textMatch === "matches" ? {} : { set: (v) => (cond.expectedText = v as string) }),
+      ...(cond.textMatch === "matches"
+        ? {}
+        : { set: (v) => (cond.expectedText = v as string), required: "nonEmpty" as const }),
     };
   }
 }
@@ -3606,6 +3631,7 @@ function* outputCheckFields(kind: string, check: OutputCheck): Generator<StepFie
     where: `${kind}.${check.test}`,
     value: check.expected,
     ...(check.test === "matches" ? {} : { set: (v) => (check.expected = v as string) }),
+    ...(check.test === "contains" ? { required: "nonEmpty" as const } : {}),
   };
 }
 
@@ -3622,7 +3648,12 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       return;
     case "type":
       yield* selectorFields(step.into, "type.into");
-      yield { where: "type.text", value: step.text, set: (v) => (step.text = v as string) };
+      yield {
+        where: "type.text",
+        value: step.text,
+        set: (v) => (step.text = v as string),
+        required: "nonEmpty",
+      };
       return;
     case "await":
     case "assert":
@@ -3671,9 +3702,6 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
         }
       }
       return;
-    // A script's env values resolve when the step runs, merged across the
-    // layers (see `resolveStepOutputs`'s caller), and parse through
-    // `flowEnvProblem`.
     // Which app and which test a step starts are spelled in the file.
     case "launch":
       yield* argFields(step.app, "launch", undefined);
@@ -3681,6 +3709,8 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
     case "run":
       yield { where: "run", value: step.flow };
       return;
+    // A script's env values resolve when the step runs, merged across the
+    // layers (`runFlowScriptStep`), and parse through `flowEnvProblem`.
     case "script":
     case "idle":
     case "wait":
@@ -3728,10 +3758,13 @@ export function resolveStepOutputs<S extends FlowStep>(step: S, output: FlowOutp
     const value = field.typed
       ? resolveOutputValue(field.value, output)
       : resolveOutputText(field.value, output);
-    if (field.selector && value === "") {
+    if (field.required === "visible" && !hasVisibleText(value as string)) {
       throw new OutputReferenceError(
-        `\`${field.where}\` resolved to an empty value, which would match any element`
+        `\`${field.where}\` resolved to ${JSON.stringify(value)}, which has no visible text and would match any element`
       );
+    }
+    if (field.required === "nonEmpty" && value === "") {
+      throw new OutputReferenceError(`\`${field.where}\` resolved to an empty value`);
     }
     field.set(value);
   }
@@ -3739,45 +3772,43 @@ export function resolveStepOutputs<S extends FlowStep>(step: S, output: FlowOutp
 }
 
 /**
- * {@link validateFlow}'s check of output references, for a step a recorder is
- * about to run: refused before it runs, not when it is written.
+ * Why a field of the step's own body holds a reference it cannot, or
+ * undefined. A recorder asks it of a call before the call runs.
  */
-export function assertStepOutputReferences(step: FlowStep): void {
-  assertOutputReferences([step]);
+export function stepOutputReferenceProblem(step: FlowStep): string | undefined {
+  for (const field of outputReferenceFields(step)) {
+    if (!holdsOutputMarker(field.value)) continue;
+    const locator = field.altWhere
+      ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+      : `\`${field.where}\``;
+    if (field.set) {
+      const problem = outputReferenceProblem(field.value);
+      if (problem) return `${locator} ${problem}`;
+      continue;
+    }
+    const rendered =
+      field.value.length > MAX_ENTRY_RENDER_CHARS
+        ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
+        : field.value;
+    return (
+      `${locator} takes no {{output:...}} reference. ` +
+      `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`
+    );
+  }
+  return undefined;
 }
 
 function assertOutputReferences(steps: FlowStep[], trail: number[] = []): void {
   steps.forEach((step, i) => {
     const at = [...trail, i + 1];
-    for (const field of outputReferenceFields(step)) {
-      if (!holdsOutputMarker(field.value)) continue;
-      const locator = field.altWhere
-        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
-        : `\`${field.where}\``;
-      const signal = {
+    const problem = stepOutputReferenceProblem(step);
+    if (problem) {
+      throw new FailureError(`Step ${at.join(".")} (\`${step.kind}\`): ${problem}`, {
         error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
         failure_stage: "flow_output_reference",
         failure_area: "tool_server",
         error_kind: "validation",
-      } as const;
-      if (field.set) {
-        const problem = outputReferenceProblem(field.value);
-        if (problem)
-          throw new FailureError(
-            `Step ${at.join(".")} (\`${step.kind}\`): ${locator} ${problem}`,
-            signal
-          );
-        continue;
-      }
-      const rendered =
-        field.value.length > MAX_ENTRY_RENDER_CHARS
-          ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
-          : field.value;
-      throw new FailureError(
-        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} takes no {{output:...}} reference. ` +
-          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
-        signal
-      );
+      });
     }
     const inner = blockSteps(step);
     if (inner) assertOutputReferences(inner, at);

@@ -449,11 +449,10 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
  * Whether any step in a flow acts on a device - each block header's own
  * classification OR, via {@link blockSteps}, the steps it actually CONTAINS.
  *
- * The child walk answers nothing today: `when`, the only block kind, classifies
- * device-requiring in {@link stepRequiresDevice}. It is what makes a future
- * block kind safe to classify `false` — a flow that is only such a block would
- * otherwise resolve device-free and hard-stop on the first device step in its
- * body.
+ * The child walk is what decides a `when` block whose guard checks a script's
+ * output, which {@link stepRequiresDevice} classifies `false`: a flow that is
+ * only such a block would otherwise resolve device-free and hard-stop on the
+ * first device step in its body.
  */
 export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boolean {
   return steps.some(

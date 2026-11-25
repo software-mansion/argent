@@ -1169,9 +1169,10 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   /**
    * What the run's script steps returned: each gets it as `output`, and what
    * it leaves there replaces it. `run:` fragments share it; a `tool:
-   * e2e-execute` step is a separate run with its own.
+   * e2e-execute` step is a separate run with its own. A holder, so a recorder
+   * can share its own (`ToolContext.flowOutput`).
    */
-  output: FlowOutput;
+  output: { doc: FlowOutput };
   scriptLogBudget: FlowScriptLogBudget;
   /**
    * The last native network capture note this run reported for each app (see
@@ -1957,7 +1958,7 @@ Without a link, every step kind runs.`,
         secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
         runEnv,
-        output: {},
+        output: ctx?.flowOutput ?? { doc: {} },
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
@@ -2680,7 +2681,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     }
     let leaf: typeof step;
     try {
-      leaf = resolveStepOutputs(step, state.output);
+      leaf = resolveStepOutputs(step, state.output.doc);
     } catch (err) {
       if (!(err instanceof OutputReferenceError)) throw err;
       pushReport(state, {
@@ -2811,7 +2812,7 @@ async function execWhenStep(
   const inner = childScope(scope);
   let step: typeof authored;
   try {
-    step = resolveStepOutputs(authored, state.output);
+    step = resolveStepOutputs(authored, state.output.doc);
   } catch (err) {
     if (!(err instanceof OutputReferenceError)) throw err;
     pushReport(state, { ...unresolved, status: "error", reason: escapeInline(err.message) });
@@ -2825,7 +2826,7 @@ async function execWhenStep(
 
   let met: boolean;
   if (step.condition.kind === "output") {
-    const check = evaluateOutputCheck(step.condition.check, state.output);
+    const check = evaluateOutputCheck(step.condition.check, state.output.doc);
     label += `: ${escapeInline(check.reason)}`;
     met = check.ok;
   } else if (step.condition.kind === "platform") {
@@ -3081,12 +3082,12 @@ async function runScriptStep(
     step,
     projectRoot: state.projectRoot,
     env,
-    output: state.output,
+    output: state.output.doc,
     ...(state.ctx?.clientSecrets ? { clientSecrets: state.ctx.clientSecrets } : {}),
     logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });
-  if (outcome.status === "pass" && result?.output) state.output = result.output;
+  if (outcome.status === "pass" && result?.output) state.output.doc = result.output;
   return outcome.reason === undefined
     ? outcome
     : { ...outcome, reason: oneLineReason(outcome.reason) };
@@ -3433,7 +3434,7 @@ async function execLeafStep(
     }
 
     case "output-check": {
-      const check = evaluateOutputCheck(step.check, state.output);
+      const check = evaluateOutputCheck(step.check, state.output.doc);
       return { ...base, status: check.ok ? "pass" : "fail", reason: escapeInline(check.reason) };
     }
 
