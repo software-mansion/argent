@@ -141,7 +141,7 @@ describe("macOS describe adapter: projection of the probe app", () => {
     const { text } = await describeFixture();
     expect(text).toContain("Source: macos-devtools");
     expect(text).toContain("Mode: nested");
-    expect(text).toContain("fractions of the app window, title bar included, grown to hold");
+    expect(text).toContain("app window (title bar + overhanging sheets/alerts/menus");
     expect(text).toContain("gesture-tap / gesture-drag / gesture-scroll");
     expect(text).not.toContain("gesture-pinch");
     // Nested: a row's text is indented under its row.

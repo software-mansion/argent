@@ -292,7 +292,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices, or the logicalDeviceId used to start an iOS or Android capture on shared Metro<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
+      "Device ID from list-devices. For iOS simulators and Android, use logicalDeviceId if capture started with it<flag:macos-apps>. For a Mac app, keep the Mac app id macos-app-<bundle id> on shared Metro and for builds started outside Argent</flag:macos-apps>."
     ),
   // `.default` covers only an omitted param, and `z.coerce.number()` reads null as 0, so
   // null would return the oldest page. Agents send null for "not set": read it as "latest".
@@ -302,21 +302,16 @@ const zodSchema = z.object({
     .default("latest")
     .transform((value) => value ?? "latest")
     .describe(
-      'Page index (0-based) or "latest" for the most recent page. Each page contains up to 50 entries.'
+      'Zero-based page index. "latest" and null select the newest page. Each page contains up to 50 entries.'
     ),
 });
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `Retrieve captured network (HTTP) requests from the running app.
-Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
-A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
-Pass an entry's requestId to view-network-request-details for full details.
-On React Native, lists XMLHttpRequest (including axios), React Native fetch, Expo fetch, and requests from libraries such as react-native-fetch-api that call React Native's network module in a Metro development build.
-For JavaScript capture on iOS and Android<flag:macos-apps> (and on Mac apps)</flag:macos-apps>, use network-capture-start before triggering requests and after a reload. On Vega, the first read starts capture. Read again after a reload to resume capture.<flag:macos-apps> Use native-network-logs for native URLSession traffic on Mac apps. Both logs can show the same fetch request.</flag:macos-apps>
-On Chromium, lists all request types for the active tab.
-Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
-Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
+  description: `List captured HTTP requests from React Native JavaScript or the active Chromium tab. Use when you need to find a request or compare several calls. For native traffic, use native-network-logs.
+Returns a paginated list with request IDs, status, size and timing. Pass an ID to view-network-request-details for headers and bodies.
+On iOS simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and Android, call network-capture-start before the action and again after a reload. On Vega, read this log before the action and again after a reload to resume capture. Chromium records while Argent is attached to the page.
+Fails if the Chromium target is unreachable. A read can also fail if Argent cannot reach the debugger for an existing JS capture. If the tool returns a capture message in place of a list, follow it before retrying.`,
   zodSchema,
   readOnly: true,
   interaction: {
