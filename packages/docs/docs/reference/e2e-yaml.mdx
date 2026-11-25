@@ -708,7 +708,16 @@ Argent resolves the references of a step when the step starts. The report of the
 | The `contains` or `equals` text of an `await`, `assert` or `when` condition       | Text                         |
 | An `env` value of each layer                                                      | Text                         |
 
-In text, a string stays as it is. A number or a boolean becomes the text that JSON writes, for example `3` or `true`. A list or an object in text makes the step errored. A selector field that resolves to an empty string also makes the step errored, because an empty selector can match any element.
+A number stays a number in a `tool:` argument that is one reference. A tool that needs text for that argument rejects the number, for example the `text` of `keyboard`. Make the script return a string for such an argument.
+
+In text, a string stays as it is. A number or a boolean becomes the text that JSON writes, for example `3` or `true`. A `FALLBACK` in text is the text that the file writes, for example `1.10`. A list or an object in text makes the step errored.
+
+These values also make the step errored:
+
+- A selector field without a visible character, because such a selector can match any element
+- An empty `contains` text, or an empty `text` of a `type` step, because the parser rejects the same value in the file
+
+The `env` argument of a `tool: e2e-execute` step is an `env` map, so each value resolves as text. An `env` argument that is one reference, for example `env: "{{output:nested.env}}"`, gives the whole map.
 
 Parsing rejects a reference in these fields. Write a literal value in them:
 
@@ -738,7 +747,7 @@ An `assert` or a `when` guard with `output` checks a value of the document. It t
 | `contains`      | The value contains the text. Letter case counts |
 | `matches`       | The JavaScript regex matches the value          |
 
-The check compares the value as text, so `equals: 3` holds for the number 3. A list or an object fails the check. The text to compare with can hold a reference, for example `equals: "{{output:expected.role}}"`. An `output` check needs no device. `await` has no `output` form, because the document does not change while a step waits.
+The check compares the value as text, so `equals: "3"` holds for the number 3. Parsing rejects an unquoted number or boolean, because YAML changes the value. For example, YAML reads `1.10` as 1.1. A list or an object fails the check. The text to compare with can hold a reference, for example `equals: "{{output:expected.role}}"`. An `output` check needs no device. `await` has no `output` form, because the document does not change while a step waits.
 
 To compare a value with the screen, put a reference in a UI condition:
 
@@ -756,7 +765,9 @@ Argent redacts each resolved secret of the step from the output document, as in 
 
 `e2e-add-script` gives each script the document of the earlier scripts of the recording, as a replay does. The tool returns the document in `outputJson`. A reference in the `env` argument resolves against the same document.
 
-`e2e-add-step` runs the call with each reference resolved against the document. The tool records the call with the references as a `tool:` step, also for a call that the tool otherwise records as a directive, for example a tap. When a reference does not resolve, the tool runs nothing and records nothing.
+`e2e-add-step` runs the call with each reference resolved against the document. The tool records the call with the references as a `tool:` step, also for a call that the tool otherwise records as a directive, for example a tap. When a reference does not resolve, the tool runs nothing and records nothing. An `e2e-execute` call that the tool records as a `run:` step uses the document of the recording, as a fragment does in a replay.
+
+Record one script at a time. Two `e2e-add-script` calls at the same time each start from the same document, and the document then holds the values of only one of them.
 
 A change to the e2e test file during the recording does not change the document.
 
