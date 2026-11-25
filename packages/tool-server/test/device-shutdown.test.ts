@@ -43,8 +43,9 @@ function execFails(message: string) {
 }
 
 // Every shutdown spawn must be bounded, and SIGKILL-reaped: a wedged adb
-// daemon ignores execFile's default SIGTERM.
-const boundedExec = { timeout: 30_000, killSignal: "SIGKILL" };
+// daemon ignores execFile's default SIGTERM. It must also pass windowsHide,
+// so adb.exe pops no console window on Windows.
+const boundedExec = { timeout: 30_000, killSignal: "SIGKILL", windowsHide: true };
 
 beforeEach(() => {
   execFileMock.mockReset();

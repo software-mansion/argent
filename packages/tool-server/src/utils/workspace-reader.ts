@@ -87,15 +87,23 @@ async function listDir(path: string): Promise<string[] | null> {
 
 const COMMAND_TIMEOUT_MS = 3_000;
 
+/** The command's trimmed stdout without its leading "v", or null when it fails or times out. */
 function runVersionCommand(cmd: string, args: string[], cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = execFile(cmd, args, { cwd, timeout: COMMAND_TIMEOUT_MS }, (err, stdout) => {
-      if (err) {
-        resolve(null);
-        return;
+    // node and bun are console-subsystem binaries: without windowsHide each
+    // probe pops a console window on Windows.
+    const child = execFile(
+      cmd,
+      args,
+      { cwd, timeout: COMMAND_TIMEOUT_MS, windowsHide: true },
+      (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
+        }
+        resolve(stdout.trim().replace(/^v/, ""));
       }
-      resolve(stdout.trim().replace(/^v/, ""));
-    });
+    );
     child.on("error", () => resolve(null));
   });
 }

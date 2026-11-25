@@ -93,6 +93,10 @@ export const EMULATOR_NOT_FOUND =
   "that is the `DevEco-Studio.app` bundle, or the `Contents` directory inside it). " +
   "Then retry.";
 
+/**
+ * Resolves with output whatever the exit code; rejects when the binary is
+ * missing, cannot run, or times out.
+ */
 export async function runHarmonyEmulator(
   args: string[],
   timeoutMs = EMULATOR_TIMEOUT_MS
@@ -112,6 +116,8 @@ export async function runHarmonyEmulator(
       timeout: timeoutMs,
       killSignal: EMULATOR_KILL_SIGNAL,
       maxBuffer: 8 * 1024 * 1024,
+      // Same console-popup fix as runHdc; no-op off Windows.
+      windowsHide: true,
     });
     return { stdout, stderr };
   } catch (err) {

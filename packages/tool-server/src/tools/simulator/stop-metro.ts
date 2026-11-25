@@ -135,6 +135,9 @@ function listeningPids(port: number): number[] {
       // `netstat -ano` dumps every socket on the host; Node's default 1 MiB
       // can overflow and fail the probe.
       maxBuffer: 16 * 1024 * 1024,
+      // `netstat.exe` is a console-subsystem binary: without windowsHide the
+      // probe pops a console window on Windows.
+      windowsHide: true,
     });
     return parseNetstatListeningPids(output, port);
   }
