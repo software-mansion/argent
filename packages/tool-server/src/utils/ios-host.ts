@@ -282,11 +282,14 @@ export function appendDyldInsertLibrary(currentValue: string, dylibPath: string)
   return [...kept, dylibPath].join(":");
 }
 
+/**
+ * The accessibility `defaults` keys an app reads when its process starts. iOS
+ * 26+ needs both for SwiftUI to populate the accessibility tree; without them
+ * UIAccessibility returns nil/0 for SwiftUI views.
+ */
+const APP_ACCESSIBILITY_FLAGS = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
+
 async function ensureAccessibilityEnabled(udid: string): Promise<void> {
-  // iOS 26+ needs both flags in the simulator's defaults for SwiftUI to populate
-  // the accessibility tree; without them UIAccessibility returns nil/0 for
-  // SwiftUI views.
-  const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
   /**
    * Only reached from {@linkcode setupNativeDevtoolsEnvLocal} and from a launch
    * that resolved the native-devtools service, so the native-devtools grant
@@ -294,7 +297,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
    */
   const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
   await Promise.all(
-    flags.map((flag) =>
+    APP_ACCESSIBILITY_FLAGS.map((flag) =>
       execFileAsync(
         "xcrun",
         [
@@ -701,15 +704,36 @@ const ACCESSIBILITY_DEFAULT_FLAGS = [
   "ApplicationAccessibilityEnabled",
 ];
 
-/** Routed through the remote generic spawn: `defaults` runs inside the cloud sim. */
+/**
+ * Routed through the remote generic spawn: `defaults` runs inside the cloud
+ * sim. `AutomationEnabled` stays with {@linkcode remoteIosHost.bootstrapAx}: an
+ * app needs only these two to start readable, and a launch should not set a
+ * flag that only the ax-service asks for.
+ *
+ * The spawn resolves whatever `defaults` exits with, so a write that failed
+ * inside the sim is turned into a rejection here, naming the flag.
+ */
 async function enableAppAccessibilityRemote(udid: string): Promise<void> {
-  await Promise.all(
-    ACCESSIBILITY_DEFAULT_FLAGS.map((flag) =>
-      simRemoteSpawn(udid, {
+  const writes = await Promise.allSettled(
+    APP_ACCESSIBILITY_FLAGS.map(async (flag) => {
+      const { exitCode, stderr } = await simRemoteSpawn(udid, {
         args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
-      })
-    )
+      });
+      if (exitCode !== undefined && exitCode !== 0) {
+        throw new Error(`defaults exited with ${exitCode}: ${stderr.trim() || "no stderr"}`);
+      }
+    })
   );
+  const failures = writes.flatMap((write, index) =>
+    write.status === "rejected"
+      ? [
+          `${APP_ACCESSIBILITY_FLAGS[index]}: ${
+            write.reason instanceof Error ? write.reason.message : String(write.reason)
+          }`,
+        ]
+      : []
+  );
+  if (failures.length > 0) throw new Error(failures.join("; "));
 }
 
 export const remoteIosHost: IosHost = {
@@ -733,9 +757,14 @@ export const remoteIosHost: IosHost = {
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
   enableAppAccessibility: enableAppAccessibilityRemote,
+  // Accessibility `defaults write`s routed through the remote generic spawn.
   // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
-    await enableAppAccessibilityRemote(udid);
+    for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
+      await simRemoteSpawn(udid, {
+        args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
+      });
+    }
     return { entitlementBypassActive: true };
   },
   spawnAxDaemon: spawnAxDaemonRemote,

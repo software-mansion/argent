@@ -10,6 +10,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 type Call = { cmd: string; args: readonly string[] };
 const calls: Call[] = [];
 let failDefaultsWrites = false;
+/** What `defaults` exits with inside a cloud simulator; `sim-remote spawn` itself still succeeds. */
+let remoteDefaultsExit = { code: 0, stderr: "" };
 /** While set, a defaults write does not answer until released. */
 let heldWrites: Array<() => void> | null = null;
 
@@ -33,7 +35,13 @@ vi.mock("node:child_process", async () => {
         return;
       }
       // `sim-remote spawn --json` answers with one JSON object; everything else ignores stdout.
-      const stdout = args.includes("--json") ? '{"exit_code":0,"stdout":"","stderr":""}' : "";
+      const stdout = args.includes("--json")
+        ? JSON.stringify({
+            exit_code: isDefaultsWrite(args) ? remoteDefaultsExit.code : 0,
+            stdout: "",
+            stderr: isDefaultsWrite(args) ? remoteDefaultsExit.stderr : "",
+          })
+        : "";
       const answer = () => callback(null, { stdout, stderr: "" });
       if (heldWrites && isDefaultsWrite(args)) heldWrites.push(answer);
       else answer();
@@ -68,18 +76,13 @@ const TOOLS = [
   ["restart-app", createRestartAppTool],
 ] as const;
 
+// The two flags an app reads at process start. `AutomationEnabled` is the
+// ax-service's to set: a launch that never uses it must not write it.
+const FLAGS = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
+
 const HOSTS = [
-  {
-    name: "local simulator",
-    udid: IOS_UDID,
-    // Local iPhone and iPad sims leave AutomationEnabled out (see clearAutomationEnabled).
-    flags: ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"],
-  },
-  {
-    name: "cloud simulator",
-    udid: REMOTE_UDID,
-    flags: ["AccessibilityEnabled", "ApplicationAccessibilityEnabled", "AutomationEnabled"],
-  },
+  { name: "local simulator", udid: IOS_UDID },
+  { name: "cloud simulator", udid: REMOTE_UDID },
 ] as const;
 
 async function run(createTool: (typeof TOOLS)[number][1], udid: string): Promise<unknown> {
@@ -104,6 +107,7 @@ const turns = async (count: number) => {
 beforeEach(() => {
   calls.length = 0;
   failDefaultsWrites = false;
+  remoteDefaultsExit = { code: 0, stderr: "" };
   heldWrites = null;
   __resetDepCacheForTests();
   __primeDepCacheForTests(["xcrun", "sim-remote"]);
@@ -111,11 +115,29 @@ beforeEach(() => {
 
 describe("launch-app / restart-app turn app accessibility on before the app process starts", () => {
   for (const [toolName, createTool] of TOOLS) {
+    it(`${toolName} on a cloud simulator reports a write that fails inside the simulator`, async () => {
+      remoteDefaultsExit = { code: 1, stderr: "Could not write domain com.apple.Accessibility\n" };
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const result = await run(createTool, REMOTE_UDID);
+        expect(result).toMatchObject({ bundleId: APP });
+        expect(launchIndex()).toBeGreaterThan(-1);
+        const warning = stderr.mock.calls.join("\n");
+        for (const flag of FLAGS) {
+          expect(warning).toContain(
+            `${flag}: defaults exited with 1: Could not write domain com.apple.Accessibility`
+          );
+        }
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
     for (const host of HOSTS) {
       it(`${toolName} on a ${host.name} writes the defaults before the launch`, async () => {
         await run(createTool, host.udid);
 
-        expect(writtenFlags()).toEqual([...host.flags].sort());
+        expect(writtenFlags()).toEqual(FLAGS);
         const launch = launchIndex();
         expect(launch).toBeGreaterThan(-1);
         const writes = calls
@@ -144,7 +166,7 @@ describe("launch-app / restart-app turn app accessibility on before the app proc
         heldWrites = [];
         const done = run(createTool, host.udid);
         await turns(10);
-        expect(heldWrites.length).toBe(host.flags.length);
+        expect(heldWrites.length).toBe(FLAGS.length);
         expect(launchIndex()).toBe(-1);
 
         for (const answer of heldWrites) answer();
