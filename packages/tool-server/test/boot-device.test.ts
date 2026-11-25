@@ -49,7 +49,6 @@ const scannedSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const clearAutomationEnabledOrWarnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
-const isEntitlementBypassActiveMock = vi.fn();
 
 let scanTimedOut = false;
 
@@ -65,7 +64,6 @@ vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
-  isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
 // The launch-crash record lives in the real ~/.argent; its own suite covers it.
@@ -120,7 +118,6 @@ describe("boot-device — iOS path", () => {
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
-    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -1148,7 +1145,6 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     scannedSimulatorsMock.mockReset().mockResolvedValue([]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
-    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
