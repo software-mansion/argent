@@ -251,6 +251,8 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
       let stableSignature: string | undefined;
       let stableSince = 0;
       let lastReadAt = 0;
+      // How much longer than the poll interval the wait after the last read was.
+      let lastExtraWaitMs = 0;
 
       const poll = await pollDescribeTree<true>({
         fetchTree: (budgetMs) => fetchTree(device, services, tvApi, androidIsTv, budgetMs),
@@ -259,6 +261,7 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
         signal: ctx?.signal,
         onSample: (data, nowMs, startedMs) => {
           lastReadAt = nowMs;
+          lastExtraWaitMs = 0;
           // An empty tree (blank/loading, or a degraded AX read) is not settled.
           if (data.tree.children.length === 0) {
             stableSignature = undefined;
@@ -279,20 +282,21 @@ Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutM
               : minStableMs;
           if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
           const leftMs = stableSince + requiredMs - nowMs;
-          return {
-            done: false,
-            waitMs: confirmWaitMs(leftMs, nowMs - startedMs, pollIntervalMs),
-          };
+          const waitMs = confirmWaitMs(leftMs, nowMs - startedMs, pollIntervalMs);
+          lastExtraWaitMs = waitMs - pollIntervalMs;
+          return { done: false, waitMs };
         },
       });
 
       const settled = poll.result === true;
       // The last read abandoned at the deadline is routine: the loop straddles it
       // on most timeouts. Only a gap wider than the polls explain is a hung
-      // reader; without this it reads like a screen that kept moving.
+      // reader; without this it reads like a screen that kept moving. A wait for
+      // the window's end is longer than a poll, so the gap can be longer too.
       const darkTailMs = Date.now() - lastReadAt;
       const hung =
-        lastReadAt > 0 && darkTailMs > Math.min(DARK_TAIL_POLLS * pollIntervalMs, DARK_TAIL_MAX_MS);
+        lastReadAt > 0 &&
+        darkTailMs > Math.min(DARK_TAIL_POLLS * pollIntervalMs, DARK_TAIL_MAX_MS) + lastExtraWaitMs;
       // On settled, only a stale read needs a caveat. On unsettled, only an empty
       // or failed read has a diagnosis: a populated tree that kept changing has
       // none, and some hints (Android TV's) are standing advice, not a reason.

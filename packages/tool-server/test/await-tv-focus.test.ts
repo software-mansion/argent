@@ -349,6 +349,20 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(res.note).toMatch(/stopped answering/);
   });
 
+  it("stays quiet when the deadline falls in the read after a long confirming wait", async () => {
+    // The 10 ms read waits 400 ms for the window's end, and the 30 ms read
+    // after it is still in flight at the deadline. The reader answered.
+    const api = makeTvApi([SCREEN]);
+    let reads = 0;
+    api.describe = () =>
+      new Promise((resolve) => setTimeout(resolve, reads++ === 0 ? 10 : 30, SCREEN));
+
+    const res = await runIdle(api, { timeoutMs: 420, minStableMs: 400 });
+
+    expect(res.settled).toBe(false);
+    expect(res.note).toBeUndefined();
+  });
+
   it("stays quiet on a moving screen whose last read merely straddled the deadline", async () => {
     const other = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
     const api = makeTvApi([SCREEN, other, SCREEN, other, SCREEN, other, SCREEN, other]);
