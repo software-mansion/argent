@@ -36,8 +36,7 @@
   // puts a package.json where the root `packages/*` glob matches it.
   "ignoreWorkspaces": ["packages/argent-private"],
 
-  // Host tools spawned by name, never npm packages. `skills` is the npm CLI
-  // that `npx` fetches on demand, deliberately not a dependency.
+  // Host tools spawned by name, never npm packages.
   "ignoreBinaries": [
     "ffmpeg",
     "ffprobe",
@@ -48,7 +47,6 @@
     "pgrep",
     "pkill",
     "plutil",
-    "skills",
     "tail",
     "xctrace",
   ],
