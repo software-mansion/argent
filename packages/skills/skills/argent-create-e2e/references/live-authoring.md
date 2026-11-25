@@ -146,12 +146,14 @@ A warning does not reject the step. If `e2e-finish-recording` reports dropped wa
 
 ### Network capture
 
-Record start, action, `await-network-request`, and stop through `e2e-add-step`. Put start after launch and the first-screen wait. A start before `launch:` makes the test a fragment. Use [Inspect network requests](../../argent-metro-debugger/SKILL.md#inspect-network-requests) for platform setup.
+On iOS simulators, Android, Mac apps, and Chromium, use `e2e-add-step` to record `network-capture-start`, the action, `await-network-request`, and `network-capture-stop` in that order. Put capture start after launch and the first-screen wait. A start before `launch:` makes the test a fragment. Use [Inspect network requests](../../argent-metro-debugger/SKILL.md#inspect-network-requests) for platform setup.
 
 - Keep the wait as a raw `tool:` step. A log listing can pass with an empty log. Match a part of the URL that contains no secret. On Android, capture can slow the app: start just before the action and stop right after the wait. When collecting several related requests, stop after the last check.
 - If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the missing start, then repeat and record the action and the wait. Replay only uses recorded steps.
 - If the recorder saves a failed wait, inspect `toolResult.nearMisses` for an `unmet` wait. Restore capture and repeat the action for `unreadable`. Record a new wait if cancelled. Remove superseded steps after `e2e-finish-recording`.
 - On replay, verify the relevant layer's `armed` and `reason` in the start and stop results. On Chromium, stop can report `armed: false` even when there was no window. If a failed step skips the stop, stop capture before replaying.
+
+On Vega, call `view-network-logs` before the action to start JavaScript capture. Read the log again after the action to inspect the requests. `await-network-request` is unavailable on Vega.
 
 A recorded `tool:` step keeps its `bundleId` on every platform. If app IDs differ, restrict the test with [`requires:`](e2e-yaml.md#file-shape-and-test-type) and record a test for each platform.
 
