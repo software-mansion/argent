@@ -18,7 +18,7 @@ import { injectDylib, proxyStart, proxyStop, setSimulatorEnv, simctlSpawn } from
  * the in ring topped up and writes the `input` file. It connects back to this process through a `sim-remote`
  * reverse tunnel and takes one command at a time:
  *
- *   TONE <hz> <amplitude>         CLIP <plays> <bytes> + float32 mono 48 kHz samples
+ *   TONE <hz> <amplitude>         FILE <plays> <bytes> + the original audio file, decoded in the simulator
  *   MIC                           STATUS -> the `st.<bundleId>` files with whether their pid is alive
  *
  * When the connection drops (tool-server exit, dispose) the helper removes the input it wrote and exits, which gives
@@ -82,6 +82,7 @@ class FeederLink {
     };
     socket.on("close", onClose);
     socket.on("error", onClose);
+    socket.resume(); // paused while the HELLO handshake handed it over
   }
 
   private async waitFor<T>(take: () => T | null, deadline: number): Promise<T> {
@@ -132,7 +133,15 @@ class FeederLink {
       const deadline = Date.now() + REPLY_TIMEOUT_MS;
       this.socket.write(line + "\n");
       if (payload) this.socket.write(payload);
-      const reply = await this.readLine(deadline);
+      let reply: string;
+      try {
+        reply = await this.readLine(deadline);
+      } catch (err) {
+        // A reply that comes after the timeout would answer the next command: drop the link instead. The feeder
+        // sees the disconnect and exits; the next call starts a new one.
+        this.drop();
+        throw err;
+      }
       if (!reply.startsWith("OK")) {
         throw failure(
           `The remote audio feeder refused ${line.split(" ")[0]}: ${reply}`,
@@ -141,16 +150,26 @@ class FeederLink {
         );
       }
       const rest = reply.slice(2).trim();
-      return then ? then(rest, deadline) : (rest as T);
+      if (!then) return rest as T;
+      try {
+        return await then(rest, deadline);
+      } catch (err) {
+        this.drop();
+        throw err;
+      }
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
     return result;
   }
 
-  async close(): Promise<void> {
+  private drop(): void {
     this.closed = true;
     this.socket.destroy();
+  }
+
+  async close(): Promise<void> {
+    this.drop();
     this.server.close();
     await proxyStop(this.udid, this.port);
   }
@@ -202,8 +221,9 @@ async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const port = (server.address() as net.AddressInfo).port;
+  let timer: NodeJS.Timeout | undefined;
   const connected = new Promise<net.Socket>((resolve, reject) => {
-    const timer = setTimeout(
+    timer = setTimeout(
       () => reject(failure("The remote audio feeder did not connect.", "audio_remote_link")),
       CONNECT_TIMEOUT_MS
     );
@@ -219,6 +239,8 @@ async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
           return;
         }
         clearTimeout(timer);
+        // Paused until FeederLink listens, so nothing after the HELLO is lost in between.
+        socket.pause();
         const rest = Buffer.from(hello.slice(nl + 1), "utf8");
         if (rest.length) socket.unshift(rest);
         resolve(socket);
@@ -226,6 +248,8 @@ async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
       socket.on("data", onData);
     });
   });
+  // Awaited only once the feeder is spawned: a failed spawn must not leave the timeout to reject unobserved.
+  connected.catch(() => {});
   try {
     await proxyStart(session.udid, port);
     await simctlSpawn(session.udid, {
@@ -238,6 +262,7 @@ async function ensureLink(session: RemoteAudioSession): Promise<FeederLink> {
     session.link = new FeederLink(socket, server, session.udid, port);
     return session.link;
   } catch (err) {
+    clearTimeout(timer);
     server.close();
     await proxyStop(session.udid, port);
     if (err instanceof FailureError) throw err;

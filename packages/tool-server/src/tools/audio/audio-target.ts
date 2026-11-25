@@ -43,6 +43,8 @@ function notBooted(message: string, kind: "not_found" | "validation"): FailureEr
 export async function resolveAudioDevice(toolId: string, udid: string): Promise<DeviceInfo> {
   const device = resolveDevice(udid);
   assertSupported(toolId, audioCapability, device);
+  // Only a local simulator needs xcrun: a remote one is driven through sim-remote, from any OS.
+  await ensureDeps([device.platform === "ios-remote" ? "sim-remote" : "xcrun"]);
   const simulator =
     device.platform === "ios-remote"
       ? await findRemoteSimulator(udid)
