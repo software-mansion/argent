@@ -1378,28 +1378,6 @@ async function blockersBesides(
 }
 
 /**
- * The first of `candidates` that a read-only emulator of `avdName`, launched
- * without `-port` by someone else, runs behind. Neither its command line nor
- * argent's record names its serial, so the process listening on each
- * candidate's console port tells. A candidate whose probe fails this time is
- * passed over: the boot then starts its own instance rather than take one it
- * cannot tell.
- */
-async function unpinnedReadOnlyInstance(
-  avdName: string,
-  candidates: AndroidDevice[]
-): Promise<AndroidDevice | undefined> {
-  const unpinned = ((await readEmulatorProcessesForAvd(avdName)) ?? []).filter(
-    (p) => p.readOnly && p.port === null
-  );
-  for (const d of candidates) {
-    const owners = await Promise.all(unpinned.map((p) => consoleOwnership(d.serial, p.pid)));
-    if (owners.includes("own")) return d;
-  }
-  return undefined;
-}
-
-/**
  * What a writable boot blocked by a writable instance can do. A boot with
  * `port` was refused because the instance runs elsewhere, so the call that
  * reaches it is named. A boot without `port` already takes any writable
@@ -1667,20 +1645,19 @@ async function bootAndroidImpl(
   let alreadyRunning = params.readOnly
     ? candidates.find((d) => instances.readOnly.has(d.serial))
     : (candidates.find((d) => !instances.readOnly.has(d.serial)) ?? candidates[0]);
-  if (params.readOnly && portSerial === null && !alreadyRunning) {
-    alreadyRunning = await unpinnedReadOnlyInstance(params.avdName, candidates);
-  }
-  if (params.readOnly && portSerial !== null && !alreadyRunning && candidates[0]) {
-    // This AVD runs on the requested port, launched in a way argent does not
-    // recognise as read-only (without `-port`, by someone else). With no
-    // writable instance of the AVD in the process table it is read-only. With
-    // no process of the AVD found at all, the table does not show how it was
-    // launched, so it cannot tell.
+  if (params.readOnly && !alreadyRunning && candidates[0]) {
+    // A running instance of this AVD that argent does not recognise as
+    // read-only: launched without `-port` by someone else, on the requested
+    // port or, for a boot without one, anywhere unpinned. With no writable
+    // instance of the AVD in the process table it is read-only. With no
+    // process of the AVD found at all, the table does not show how it was
+    // launched, so it cannot tell. A boot without `port` then goes on below:
+    // refused next to a writable instance, else starting its own.
     const processes = await readEmulatorProcessesForAvd(params.avdName);
     const known = processes !== null && processes.length > 0;
     if (known && processes.every((p) => p.readOnly)) {
       alreadyRunning = candidates[0];
-    } else if (!params.force) {
+    } else if (portSerial !== null && !params.force) {
       throw portInUseError(
         known
           ? `${portSerial} already runs AVD "${params.avdName}" writable. Pass \`force: true\` to ` +
@@ -1689,7 +1666,7 @@ async function bootAndroidImpl(
               `runs read-only: ${processes === null ? "the process list of this host is not available" : "its process is not in the process list"}. ` +
               `Use that emulator as it is, or pick another \`port\`.`
       );
-    } else {
+    } else if (portSerial !== null) {
       alreadyRunning = candidates[0];
     }
   }
