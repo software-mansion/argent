@@ -108,6 +108,37 @@ describe("where a script's environment values come from", () => {
     expect(JSON.parse(scripts[1]!.scriptLog!)).toEqual({ SHARED: "caller", OWN: null });
   });
 
+  it("lets each layer replace a name in other casing on Windows", async () => {
+    await write(
+      "scripts/print.mjs",
+      `console.log(JSON.stringify(Object.entries(process.env).filter(([n]) => ["api_url", "mode"].includes(n.toLowerCase())).sort()));`
+    );
+    await write(
+      "fragment.yaml",
+      "env: { Mode: fragment }\nsteps:\n  - script: { path: scripts/print.mjs, env: { api_url: step } }\n"
+    );
+    await write(
+      ".argent/e2e/layers.yaml",
+      "env: { API_URL: file, MODE: file }\nsteps:\n  - run: ../../fragment.yaml\n"
+    );
+
+    const real = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    let result: FlowRunResult;
+    try {
+      result = await run("layers", { env: { Api_Url: "run" } });
+    } finally {
+      Object.defineProperty(process, "platform", { value: real, configurable: true });
+    }
+
+    expect(result.ok).toBe(true);
+    const log = result.steps.find((step) => step.scriptLog)!.scriptLog!;
+    expect(JSON.parse(log.trim())).toEqual([
+      ["Api_Url", "run"],
+      ["MODE", "file"],
+    ]);
+  });
+
   it("refuses a run value with an invalid name in the e2e-execute schema", async () => {
     await write(".argent/e2e/any.yaml", "steps:\n  - echo: hi\n");
     const parsed = createRunFlowTool(registry).zodSchema!.safeParse({
@@ -255,6 +286,20 @@ describe("a secret in a script's environment", () => {
     await expect(fs.stat(path.join(root, "ran"))).rejects.toThrow();
   });
 
+  it("refuses an invalid project root before it looks for a run value's secret", async () => {
+    const call = createRunFlowTool(registry).execute({}, {
+      project_root: "relative/project",
+      name: "any",
+      env: { K: "{{secret:NOT_DEFINED_ANYWHERE_42}}" },
+    } as never);
+    const error = await call.then(
+      () => undefined,
+      (err: unknown) => err as Error
+    );
+    expect(error?.message).toMatch(/project_root/);
+    expect(error?.message).not.toContain("NOT_DEFINED_ANYWHERE_42");
+  });
+
   it("refuses the run before any step when a run value's secret is missing", async () => {
     await write(".argent/e2e/any.yaml", "steps:\n  - echo: hi\n");
     await expect(run("any", { env: { K: "{{secret:NOT_DEFINED_ANYWHERE_42}}" } })).rejects.toThrow(
@@ -278,6 +323,9 @@ describe("env in a test file", () => {
     ["a list", "env: [A]", /must be a map/],
     ["an output reference", 'env: { A: "{{output:x}}" }', /unsupported template/],
     ["a NUL in a value", 'env: { A: "x\\0" }', /NUL character/],
+    // Parsed to a Map and a Set, whose entries Object.entries never sees.
+    ["an ordered map", "env: !!omap [{ MODE: fast }]", /must be a map/],
+    ["a set", "env: !!set { MODE: null }", /must be a map/],
   ])("refuses %s at the top level", (_label, line, message) => {
     expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(message);
   });
@@ -286,5 +334,11 @@ describe("env in a test file", () => {
     expect(() => parseFlow("steps:\n  - script: { path: s.mjs, env: { ON: true } }\n")).toThrow(
       /script\.env has a non-string value for ON/
     );
+  });
+
+  it("refuses an ordered map as a step env", () => {
+    expect(() =>
+      parseFlow("steps:\n  - script: { path: s.mjs, env: !!omap [{ MODE: fast }] }\n")
+    ).toThrow(/script\.env must be a map/);
   });
 });

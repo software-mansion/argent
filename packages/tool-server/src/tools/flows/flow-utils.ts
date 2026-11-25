@@ -3217,7 +3217,13 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * something other than what the file shows.
  */
 export function flowEnvProblem(value: unknown): string | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  // A plain record only: a YAML `!!omap` or `!!set` parses to a Map or a Set,
+  // whose entries Object.entries would silently drop.
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
     return "must be a map of variable names to string values, e.g. `env: { API_URL: https://example.com }`";
   }
   for (const [name, entry] of Object.entries(value)) {
