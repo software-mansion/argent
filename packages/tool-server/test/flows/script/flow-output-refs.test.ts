@@ -237,7 +237,7 @@ describe("env layers other than a script step's", () => {
 
   it("refuses a reference in the run's env", async () => {
     await write(".argent/e2e/t.yaml", "steps:\n  - echo: hi\n");
-    const parsed = createRunFlowTool(registry).zodSchema.safeParse({
+    const parsed = createRunFlowTool(registry).zodSchema!.safeParse({
       project_root: root,
       name: "t",
       env: { USER_ID: "{{output:user.id}}" },

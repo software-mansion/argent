@@ -1261,9 +1261,9 @@ describe("output references", () => {
   });
 
   it("refuses a malformed reference in an env value", () => {
-    expect(rejection("env: { A: '{{output:a[0]}}' }\nsteps:\n  - echo: hi\n")).toMatch(
-      /env A has an invalid reference/
-    );
+    expect(
+      rejection("steps:\n  - script: { path: a.mjs, env: { A: '{{output:a[0]}}' } }\n")
+    ).toMatch(/script\.env A has an invalid reference/);
   });
 
   it("carries the parser's own entry failure code", () => {
