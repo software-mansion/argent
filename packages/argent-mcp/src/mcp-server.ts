@@ -21,6 +21,7 @@ import {
 } from "@argent/telemetry";
 import {
   toMcpContent,
+  escapeControlChars,
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
@@ -299,7 +300,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         note: shown?.note ?? false,
       });
       if (shown === undefined) return [];
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${shown.text}` }];
+      const text = `${AUTO_DESCRIBE_HEADER}\n${escapeControlChars(shown.text)}`;
+      return [{ type: "text" as const, text }];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -401,7 +403,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
               : undefined;
       let content: ContentBlock[];
       if (compactText !== undefined) {
-        content = [{ type: "text" as const, text: compactText }];
+        content = [{ type: "text" as const, text: escapeControlChars(compactText) }];
       } else if (
         toolId === "e2e-execute" &&
         result &&

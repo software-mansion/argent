@@ -49,6 +49,42 @@ describe("toMcpContent", () => {
     expect(await toMcpContent(undefined)).toEqual([{ type: "text", text: "null" }]);
   });
 
+  it("escapes control characters in a string result, except tab and newline", async () => {
+    const result = await toMcpContent(
+      "a\u0000b\u0007c\u000bd\u000ce\rf\u001b[31mg\u007fh\u0080i\u009b2Jj\u009fk\tl\nm"
+    );
+    expect(result).toEqual([
+      {
+        type: "text",
+        text: "a\\u0000b\\u0007c\\u000bd\\u000ce\\u000df\\u001b[31mg\\u007fh\\u0080i\\u009b2Jj\\u009fk\tl\nm",
+      },
+    ]);
+  });
+
+  it("leaves characters next to the control ranges alone", async () => {
+    const text = "a béc d​e";
+    expect(await toMcpContent(text)).toEqual([{ type: "text", text }]);
+  });
+
+  it("escapes control characters in an unwrapped multi-line field and in the JSON before it", async () => {
+    const value = {
+      description: 'button "Pay\u001b[8mnow"\ntext "a\u000bb\u000cc\u007fd"',
+      label: "x\u009by\u007fz",
+    };
+    const [block] = await toMcpContent(value);
+    const text = (block as { text: string }).text;
+    expect(text).toBe(
+      [
+        '{"label":"x\\u009by\\u007fz"}',
+        "",
+        "description:",
+        'button "Pay\\u001b[8mnow"',
+        'text "a\\u000bb\\u000cc\\u007fd"',
+      ].join("\n")
+    );
+    expect(JSON.parse(text.split("\n")[0]!)).toEqual({ label: value.label });
+  });
+
   it("unwraps top-level multi-line text fields after compact JSON metadata", async () => {
     const result = await toMcpContent({
       report: "# Report\n| Name | Ms |\n| `Row` | 12 |",

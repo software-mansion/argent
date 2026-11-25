@@ -234,7 +234,7 @@ async function startStub({
                 id: 1,
                 timestamp: "2026-11-25T08:00:00.000Z",
                 level: "error",
-                message: "Boom",
+                message: "\u001b[31mBoom\u001b[0m",
               },
             ],
           },
@@ -449,7 +449,7 @@ describe("startMcpServer tool calls", () => {
     );
   });
 
-  it("renders native-network-logs and debugger-log-registry in their short text forms", async () => {
+  it("renders native-network-logs and debugger-log-registry in their short text forms, with control characters escaped", async () => {
     const net = await client.callTool({ name: "native-network-logs", arguments: {} });
     expect(net.isError).toBeFalsy();
     expect(net.content).toHaveLength(1);
@@ -472,7 +472,7 @@ describe("startMcpServer tool calls", () => {
         "[x1] error #1 App.tsx:9 | Boom",
         "",
         "Recent entries (1, oldest first):",
-        "[L:1] 2026-11-25T08:00:00.000Z error | Boom",
+        "[L:1] 2026-11-25T08:00:00.000Z error | \\u001b[31mBoom\\u001b[0m",
       ].join("\n")
     );
   });
@@ -877,6 +877,16 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(text).toContain('"pressed"');
     expect(text).toContain("--- Screen after action ---");
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  it("escapes control characters in the element tree", async () => {
+    describeText = 'button "Pay\u001b[8mnow\u009b" (0.1,0.2,0.3,0.1)';
+
+    const result = await tap();
+
+    expect(lastText(result)).toBe(
+      fullTree(result, 'button "Pay\\u001b[8mnow\\u009b" (0.1,0.2,0.3,0.1)')
+    );
   });
 
   it("keeps describe's hint with the element tree", async () => {
