@@ -9,7 +9,6 @@ import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   SESSION_HEADER,
   canonicalToolId,
-  raiseSignalAgain,
   ensureToolsServer,
   getResolvedToolsUrl,
   getDeviceIdFromArgs,
@@ -52,6 +51,7 @@ import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
+import { releaseOnExit } from "./release-on-exit.js";
 import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
@@ -570,20 +570,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return release;
   }
 
-  const EXIT_SIGNALS = ["SIGTERM", "SIGINT"] as const;
-  function releaseThenRaise(signal: NodeJS.Signals): void {
-    void releaseSessionDevices().finally(() => {
-      for (const s of EXIT_SIGNALS) process.removeListener(s, releaseThenRaise);
-      raiseSignalAgain(signal);
-    });
-  }
-
   server.onclose = () => void releaseSessionDevices();
-  if (!options.transport) {
-    // The stdio transport does not close when the editor ends stdin.
-    process.stdin.on("close", () => void releaseSessionDevices());
-    for (const signal of EXIT_SIGNALS) process.on(signal, releaseThenRaise);
-  }
+  if (!options.transport) releaseOnExit(releaseSessionDevices);
 
   if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {

@@ -544,7 +544,7 @@ function failedRun(result: unknown): unknown {
 }
 
 function withSessionFromEnv(headers: Record<string, string>): Record<string, string> {
-  if (SESSION_HEADER in headers) return headers;
+  if (Object.keys(headers).some((name) => name.toLowerCase() === SESSION_HEADER)) return headers;
   const session = process.env.ARGENT_SESSION?.trim();
   if (!session) return headers;
   if (!isValidSession(session)) {
@@ -621,6 +621,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
     assertFiniteNumbers(args);
+    const callerHeaders = withSessionFromEnv(options.headers?.() ?? {});
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
@@ -716,7 +717,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
-      ...withSessionFromEnv(options.headers?.() ?? {}),
+      ...callerHeaders,
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to
       // 127.0.0.1 included, which nothing else in the request shows.
