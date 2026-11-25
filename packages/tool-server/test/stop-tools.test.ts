@@ -1249,6 +1249,16 @@ describe("stop-all-simulator-servers on a device of a device provider", () => {
     fs.rmSync(directory, { force: true, recursive: true });
   });
 
+  /**
+   * The native devtools of the claimed udid attached to the agent the provider
+   * lends.
+   */
+  function lendNativeDevtools(registry: Registry): void {
+    vi.mocked(registry.resolveService).mockImplementation(async (urn: string) =>
+      urn.startsWith(`NativeDevtools:${CLAIMED}`) ? { armsEnv: false } : {}
+    );
+  }
+
   // Both names of the device key one native devtools service by the udid, and
   // that service only attaches to the agent the provider lends.
   it.each([CLAIMED, EXT_ID])(
@@ -1260,6 +1270,7 @@ describe("stop-all-simulator-servers on a device of a device provider", () => {
         [`NativeDevtools:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
       ]);
       const registry = createMockRegistry(services);
+      lendNativeDevtools(registry);
       const tool = createStopAllSimulatorServersTool(registry);
 
       expect(await tool.execute!({}, { devices: [scope, MINE] })).toEqual({
@@ -1282,6 +1293,7 @@ describe("stop-all-simulator-servers on a device of a device provider", () => {
       [`NativeDevtools:${CLAIMED}:tcp`, { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
+    lendNativeDevtools(registry);
     const tool = createStopAllSimulatorServersTool(registry);
 
     expect(await tool.execute!({}, { devices: [EXT_ID] })).toEqual({
