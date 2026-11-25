@@ -11,10 +11,11 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(),
+  isUpdateNoteSuppressed: vi.fn(() => false),
 }));
 
 import { spawn } from "node:child_process";
-import { getUpdateState } from "../src/utils/update-checker";
+import { getUpdateState, isUpdateNoteSuppressed } from "../src/utils/update-checker";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -100,6 +101,7 @@ describe("update-argent tool", () => {
     vi.resetModules();
     mockSpawn.mockReturnValue(makeChild());
     mockGetUpdateState.mockReturnValue(stateWithUpdate());
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(false);
     // Pin the running-install classification: the fallback cwd-walk would
     // otherwise pick up whatever repository the test process runs in.
     savedInstallKind = process.env.ARGENT_INSTALL_KIND;
@@ -197,6 +199,19 @@ describe("update-argent tool", () => {
       [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
       expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
     );
+  });
+
+  it("holds an automatic update while the user has postponed the update", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(false);
+    vi.advanceTimersByTime(TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
   });
 
   it("drops a pending automatic update when the user updates manually", async () => {

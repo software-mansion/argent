@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getUpdateState } from "../../utils/update-checker";
+import { getUpdateState, isUpdateNoteSuppressed } from "../../utils/update-checker";
 
 // dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
 // PATH, updates the SAME install serving this session and works in local
@@ -135,8 +135,10 @@ function cancelPendingAutomaticUpdate(): void {
   pendingAutomaticUpdate = null;
 }
 
-function msUntilIdle(activity: ServerActivity): number {
-  if (activity.toolCallsInFlight() > 0) return AUTOMATIC_UPDATE_IDLE_MS;
+function msUntilInstall(activity: ServerActivity): number {
+  const postponedByUser = isUpdateNoteSuppressed();
+  const busy = activity.toolCallsInFlight() > 0;
+  if (postponedByUser || busy) return AUTOMATIC_UPDATE_IDLE_MS;
   return Math.max(0, activity.lastActivityAt() + AUTOMATIC_UPDATE_IDLE_MS - Date.now());
 }
 
@@ -174,11 +176,14 @@ function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automati
   }, 2000);
 }
 
-function installWhenIdle(version: string, cliEntry: string, activity: ServerActivity): void {
+function installWhenReady(version: string, cliEntry: string, activity: ServerActivity): void {
   pendingAutomaticUpdate = null;
-  const waitMs = msUntilIdle(activity);
+  const waitMs = msUntilInstall(activity);
   if (waitMs > 0) {
-    pendingAutomaticUpdate = setTimeout(() => installWhenIdle(version, cliEntry, activity), waitMs);
+    pendingAutomaticUpdate = setTimeout(
+      () => installWhenReady(version, cliEntry, activity),
+      waitMs
+    );
     pendingAutomaticUpdate.unref();
     return;
   }
@@ -198,7 +203,7 @@ export function scheduleAutomaticUpdate(version: string, activity: ServerActivit
   if (!cliEntry) return;
   cancelPendingAutomaticUpdate();
   automaticVersion = version;
-  installWhenIdle(version, cliEntry, activity);
+  installWhenReady(version, cliEntry, activity);
 }
 
 export const updateArgentTool: ToolDefinition<{
