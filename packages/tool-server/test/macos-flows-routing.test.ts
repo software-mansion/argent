@@ -22,6 +22,9 @@ vi.mock("../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { createFlowTestHarness, n, screen } from "./flows/harness";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 useMacosAppsFlag();
 

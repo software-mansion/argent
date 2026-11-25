@@ -2076,7 +2076,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       const node = findById(tree, id)!;
       return { label: node.label, value: node.value };
     };
-    expect(read("filled")).toEqual({ label: "Search", value: undefined });
+    // The typed text reads beside the placeholder, which stays the name.
+    expect(read("filled")).toEqual({ label: "Search", value: "abc" });
     expect(read("inert")).toEqual({ label: "Search", value: undefined });
     expect(read("hidden")).toEqual({ label: "Search", value: undefined });
     expect(read("blank-aria")).toEqual({ label: "Search", value: undefined });
@@ -2899,6 +2900,78 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("hunter2");
   });
 
+  it("reads a form control's current value beside its placeholder name, never a secret's", () => {
+    const area = Object.assign(
+      el({ tag: "textarea", text: "default", attrs: { id: "ta" }, rect: BOX }),
+      { value: "typed note", placeholder: "Notes" }
+    );
+    Object.setPrototypeOf(area, MockHTMLTextAreaElement.prototype);
+    const option = { label: "Large" };
+    // A secret field with no placeholder inside a <label>: its value never becomes a name.
+    const wrapped = (id: string, caption: string, autocomplete: string, value: string) => {
+      const field = inputEl({ type: "text", value, attrs: { id, autocomplete }, rect: BOX });
+      const label = el({
+        tag: "label",
+        rect: BOX,
+        attrs: { id: `${id}-label` },
+        children: [field],
+      }) as MockElement & Record<string, unknown>;
+      label.childNodes = [text(caption), field];
+      return label;
+    };
+    const { tree } = run([
+      wrapped("otp2", "Code ", "one-time-code", "554433"),
+      wrapped("card2", "Card ", "cc-number", "5500005555555559"),
+      el({ tag: "button", rect: BOX, attrs: { "id": "go", "aria-labelledby": "otp2-label" } }),
+      inputEl({ type: "text", value: "abc", placeholder: "Search", attrs: { id: "q" }, rect: BOX }),
+      inputEl({
+        type: "password",
+        value: "hunter2",
+        placeholder: "PIN",
+        attrs: { id: "pw" },
+        rect: BOX,
+      }),
+      // A one-time code and card details are as secret as a password.
+      inputEl({
+        type: "text",
+        value: "482913",
+        placeholder: "Code",
+        attrs: { id: "otp", autocomplete: "one-time-code" },
+        rect: BOX,
+      }),
+      inputEl({
+        type: "tel",
+        value: "4111111111111111",
+        placeholder: "Card number",
+        attrs: { id: "card", autocomplete: "billing CC-Number" },
+        rect: BOX,
+      }),
+      area,
+      Object.assign(el({ tag: "select", attrs: { id: "size" }, rect: BOX }), {
+        selectedOptions: [option],
+      }),
+    ]);
+    const read = (id: string) => {
+      const node = findById(tree, id)!;
+      return { label: node.label, value: node.value };
+    };
+    expect(read("q")).toEqual({ label: "Search", value: "abc" });
+    expect(read("pw")).toEqual({ label: "PIN", value: undefined });
+    expect(read("otp")).toEqual({ label: "Code", value: undefined });
+    expect(read("card")).toEqual({ label: "Card number", value: undefined });
+    // The live value, not the stale default the child text holds.
+    expect(read("ta")).toEqual({ label: "Notes", value: "typed note" });
+    expect(read("size").value).toBe("Large");
+    expect(read("otp2")).toEqual({ label: undefined, value: undefined });
+    expect(read("card2")).toEqual({ label: undefined, value: undefined });
+    expect(read("otp2-label").value).toBe("Code");
+    // Read into another element's name, a secret field shows bullets, as a password does.
+    expect(read("go").label).toBe("Code \u2022\u2022\u2022\u2022\u2022\u2022");
+    for (const secret of ["hunter2", "482913", "4111111111111111", "554433", "5500005555555559"]) {
+      expect(JSON.stringify(tree)).not.toContain(secret);
+    }
+  });
+
   it("still reads a non-password input's or textarea's value as its accessible name", () => {
     const { tree } = run([
       inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
@@ -2909,18 +2982,18 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, skips an aria-labelledby that names no element, reads an element's title, and reads a label once when its text is the same", () => {
+  it("reads a field's aria-label, aria-labelledby or placeholder and then its value, skips an aria-labelledby that names no element, reads an element's title, and reads a label once when its text is the same", () => {
     const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX });
+    const field = { type: "text", value: "abc", rect: BOX };
     const { tree } = run([
-      inputEl({ value: "abc", attrs: { "id": "aria", "aria-label": "Name" }, rect: BOX }),
-      inputEl({ value: "abc", attrs: { "id": "lb", "aria-labelledby": "lbl" }, rect: BOX }),
+      inputEl({ ...field, attrs: { "id": "aria", "aria-label": "Name" } }),
+      inputEl({ ...field, attrs: { "id": "lb", "aria-labelledby": "lbl" } }),
       labelEl,
-      inputEl({ value: "abc", placeholder: "Type here", attrs: { id: "ph" }, rect: BOX }),
+      inputEl({ ...field, placeholder: "Type here", attrs: { id: "ph" } }),
       inputEl({
-        value: "abc",
+        ...field,
         placeholder: "Search",
         attrs: { "id": "dangling", "aria-labelledby": "nope" },
-        rect: BOX,
       }),
       textareaEl({ value: "abc", placeholder: "Notes", attrs: { id: "ta-ph" }, rect: BOX }),
       inputEl({ attrs: { id: "titled", title: "Hint" }, rect: BOX }),
@@ -2931,17 +3004,16 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       el({ text: "Hello", attrs: { id: "tip", title: "Tip" }, rect: BOX }),
       el({ text: "Close", attrs: { "id": "same", "aria-label": "Close" }, rect: BOX }),
     ]);
-    expect(findById(tree, "aria")).toMatchObject({ label: "Name" });
-    expect(findById(tree, "lb")).toMatchObject({ label: "Email" });
-    expect(findById(tree, "ph")).toMatchObject({ label: "Type here" });
-    expect(findById(tree, "dangling")).toMatchObject({ label: "Search" });
-    expect(findById(tree, "ta-ph")).toMatchObject({ label: "Notes" });
+    expect(findById(tree, "aria")).toMatchObject({ label: "Name", value: "abc" });
+    expect(findById(tree, "lb")).toMatchObject({ label: "Email", value: "abc" });
+    expect(findById(tree, "ph")).toMatchObject({ label: "Type here", value: "abc" });
+    expect(findById(tree, "dangling")).toMatchObject({ label: "Search", value: "abc" });
+    expect(findById(tree, "ta-ph")).toMatchObject({ label: "Notes", value: "abc" });
     expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
     expect(findById(tree, "editor")).toMatchObject({ label: "Compose" });
     expect(findById(tree, "tip")).toMatchObject({ label: "Tip", value: "Hello" });
     expect(findById(tree, "same")).toMatchObject({ label: "Close" });
     expect(findById(tree, "same")?.value).toBeUndefined();
-    expect(JSON.stringify(tree)).not.toContain("abc");
   });
 
   // Documented in reference/e2e-yaml.mdx.
@@ -2977,7 +3049,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     }
   });
 
-  it("reads a textarea's default text as its value, which typing does not change", () => {
+  it("reads a textarea's typed text, never its default text, so a cleared one reads no text", () => {
     const { tree } = run([
       textareaEl({ text: "Draft", attrs: { id: "cleared" }, rect: BOX }),
       textareaEl({
@@ -2988,10 +3060,10 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         rect: BOX,
       }),
     ]);
-    expect(findById(tree, "cleared")).toMatchObject({ value: "Draft" });
-    expect(findById(tree, "cleared")!.label).toBeUndefined();
-    expect(findById(tree, "edited")).toMatchObject({ label: "Notes", value: "Draft" });
-    expect(JSON.stringify(tree)).not.toContain("Final");
+    const cleared = findById(tree, "cleared")!;
+    expect([cleared.label, cleared.value]).toEqual([undefined, undefined]);
+    expect(findById(tree, "edited")).toMatchObject({ label: "Notes", value: "Final" });
+    expect(JSON.stringify(tree)).not.toContain("Draft");
   });
 
   it("reads a checkbox, radio, range or color input's value and an img's alt before its title", () => {
@@ -5160,13 +5232,16 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   it("lets an open select's picker content escape its clips, but not its leading <button>", () => {
     const BELOW = (y: number) => ({ x: 1, y, w: 80, h: 20 });
     const select = (open: boolean, children: MockElement[]) =>
-      el({
-        tag: "select",
-        topLayer: open ? ":open" : undefined,
-        rect: { x: 1, y: 60, w: 80, h: 25 },
-        style: { display: "inline-block" },
-        children,
-      });
+      Object.assign(
+        el({
+          tag: "select",
+          topLayer: open ? ":open" : undefined,
+          rect: { x: 1, y: 60, w: 80, h: 25 },
+          style: { display: "inline-block" },
+          children,
+        }),
+        { selectedOptions: [] }
+      );
     const btn = (id: string, y: number) => el({ tag: "button", attrs: { id }, rect: BELOW(y) });
     const opt = (id: string, y: number) => el({ tag: "option", attrs: { id }, rect: BELOW(y) });
     const { tree } = run([

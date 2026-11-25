@@ -15,9 +15,15 @@
 # If you want a hard cap, set duration_ms here AND keep the stop signal as a
 # safety net (the perfetto daemon will exit either way).
 
+# DISCARD is load-bearing: with write_into_file, a DISCARD buffer stops taking
+# data once it has filled, even though its contents were already written to the
+# file. That caps the trace (about 130 MB for a busy app). RING_BUFFER, which
+# Perfetto recommends with write_into_file, lets the file grow for the whole
+# recording, past the 2 GiB the analyze path can read within a few minutes.
+# The config_write_into_file_discard health stat Perfetto reports is expected.
 buffers: {
   size_kb: 65536          # 64 MB — CPU samples + atrace slices
-  fill_policy: DISCARD    # ring-buffer once full; we want recency over completeness
+  fill_policy: DISCARD    # stop once full: keeps the start of the recording
 }
 buffers: {
   size_kb: 16384          # 16 MB — frame timeline + ANRs (sparser, smaller buffer)

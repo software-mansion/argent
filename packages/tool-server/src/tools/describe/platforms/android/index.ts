@@ -2,6 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../../../../utils/uiautomator-lock";
 import { resolveDevice } from "../../../../utils/device-info";
 import {
   getAndroidScreenSize,
@@ -13,6 +14,17 @@ import {
   androidDevtoolsRef,
   type AndroidDevtoolsApi,
 } from "../../../../blueprints/android-devtools";
+import {
+  androidChromeCdpRef,
+  type AndroidChromeCdpApi,
+} from "../../../../blueprints/android-chrome-cdp";
+import {
+  chromeContentRect,
+  chromeViewsIn,
+  findChromeTab,
+  mapWebTree,
+  type ChromeView,
+} from "./chrome-tab";
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
@@ -40,6 +52,12 @@ export async function describeAndroid(
   isTv?: boolean
 ): Promise<DescribeTreeData> {
   const hint = (isTv ?? (await isAndroidTv(serial))) ? ANDROID_TV_HINT : undefined;
+  const readTab = registry
+    ? async (pkg: string) =>
+        (
+          await registry.resolveService<AndroidChromeCdpApi>(androidChromeCdpRef(serial))
+        ).readVisibleTab(pkg)
+    : undefined;
 
   if (registry) {
     try {
@@ -50,12 +68,17 @@ export async function describeAndroid(
         devtools.getHierarchy(),
         devtools.getScreenSize(),
       ]);
-      const tree = await awaitWebViewPublished(
-        parseUiAutomatorDump(xml, size.width, size.height),
-        async () =>
-          parseUiAutomatorDump((await devtools.getHierarchy()).xml, size.width, size.height)
+      const capture = (x: string): Capture => ({
+        tree: parseUiAutomatorDump(x, size.width, size.height),
+        browser: chromeViewsIn(x, size),
+      });
+      const read = await awaitWebViewPublished(
+        capture(xml),
+        async () => capture((await devtools.getHierarchy()).xml),
+        size,
+        readTab
       );
-      return { tree, source: "android-devtools", hint };
+      return withTabHint(read, "android-devtools", hint);
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
       // shouldn't leak into the per-call result.
@@ -69,10 +92,33 @@ export async function describeAndroid(
   }
 
   const [size, raw] = await Promise.all([getAndroidScreenSize(serial), uiautomatorDump(serial)]);
-  const tree = await awaitWebViewPublished(parseDump(raw, size), async () =>
-    parseDump(await uiautomatorDump(serial), size)
+  const capture = (x: string): Capture => ({
+    tree: parseDump(x, size),
+    browser: chromeViewsIn(x, orientScreenSize(size, parseDumpRotation(x))),
+  });
+  const read = await awaitWebViewPublished(
+    capture(raw),
+    async () => capture(await uiautomatorDump(serial)),
+    orientScreenSize(size, parseDumpRotation(raw)),
+    readTab
   );
-  return { tree, source: "uiautomator", hint };
+  return withTabHint(read, "uiautomator", hint);
+}
+
+const CHROME_TAB_HINT =
+  "The web content of this Chrome tab comes from the page DOM over Chrome DevTools, not from accessibility: roles and labels follow the HTML.";
+
+function withTabHint(
+  read: { tree: DescribeNode; fromCdp: boolean; webHint?: string },
+  source: "android-devtools" | "uiautomator",
+  hint: string | undefined
+): DescribeTreeData {
+  if (!read.fromCdp) return { tree: read.tree, source, hint };
+  return {
+    tree: read.tree,
+    source: `${source}+cdp`,
+    hint: [hint, CHROME_TAB_HINT, read.webHint].filter(Boolean).join("\n"),
+  };
 }
 
 /**
@@ -85,18 +131,91 @@ export async function describeAndroid(
  */
 const WEBVIEW_PUBLISH_STEP_MS = 250;
 const WEBVIEW_PUBLISH_BUDGET_MS = 1_500;
+/** Cap on the DevTools read of a Chrome tab, from its start. */
+const CHROME_TAB_CDP_BUDGET_MS = 2_000;
 
+/** A parsed read, with the content views of the Chrome-family windows it holds. */
+interface Capture {
+  tree: DescribeNode;
+  browser: ChromeView[];
+}
+
+/**
+ * Chrome 158+ never publishes a regular tab while only UiAutomation is
+ * connected, so on a Chrome tab the page is read over DevTools alongside the
+ * re-reads, from the first read that shows the tab. A re-read that publishes
+ * wins; else the DevTools read fills the content view. Any failure there
+ * leaves the tree as the re-reads left it.
+ */
 async function awaitWebViewPublished(
-  first: DescribeNode,
-  read: () => Promise<DescribeNode>
-): Promise<DescribeNode> {
-  let tree = first;
-  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree);) {
-    await new Promise((r) => setTimeout(r, WEBVIEW_PUBLISH_STEP_MS));
+  first: Capture,
+  read: () => Promise<Capture>,
+  screen: { width: number; height: number },
+  readTab: AndroidChromeCdpApi["readVisibleTab"] | undefined
+): Promise<{ tree: DescribeNode; fromCdp: boolean; webHint?: string }> {
+  const unread = (c: Capture) =>
+    hasUnreadWebView(c.tree) || findChromeTab(c.tree, c.browser) !== undefined;
+  type Web = Awaited<ReturnType<AndroidChromeCdpApi["readVisibleTab"]>>;
+  let page: Promise<Web | undefined> | undefined;
+  // Settles only on a DevTools read with content, so a failed one never
+  // cuts the re-reads short.
+  let pageWon: Promise<{ web: Web }> | undefined;
+  const startPage = (c: Capture) => {
+    if (page || !readTab) return;
+    const tab = findChromeTab(c.tree, c.browser);
+    if (!tab) return;
+    let timer: NodeJS.Timeout | undefined;
+    page = Promise.race([
+      readTab(tab.pkg),
+      new Promise<undefined>((r) => {
+        timer = setTimeout(() => {
+          console.debug(
+            `[describe.android] Chrome tab DevTools read passed its ${CHROME_TAB_CDP_BUDGET_MS} ms budget`
+          );
+          r(undefined);
+        }, CHROME_TAB_CDP_BUDGET_MS);
+      }),
+    ])
+      .catch((err: unknown) => {
+        console.debug(`[describe.android] Chrome tab DevTools read failed: ${String(err)}`);
+        return undefined;
+      })
+      .finally(() => clearTimeout(timer));
+    pageWon = page.then((web) => (web ? { web } : new Promise<never>(() => undefined)));
+  };
+  const fill = (c: Capture, web: Web) => {
+    const now = findChromeTab(c.tree, c.browser);
+    const clip = now && chromeContentRect(now, web.viewport, screen);
+    if (!now || !clip) return undefined;
+    now.content.role = "WebView";
+    now.content.children = mapWebTree(web.tree, web.viewport, clip, screen);
+    return { tree: c.tree, fromCdp: true, webHint: web.hint };
+  };
+
+  let last = first;
+  startPage(first);
+  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && unread(last);) {
+    let step: NodeJS.Timeout | undefined;
+    const next = new Promise((r) => (step = setTimeout(r, WEBVIEW_PUBLISH_STEP_MS))).then(read);
     waited += WEBVIEW_PUBLISH_STEP_MS;
-    tree = await read();
+    const won = pageWon ? await Promise.race([next.then((c) => ({ c })), pageWon]) : undefined;
+    if (won && "web" in won) {
+      // The DevTools read landed mid-step: drop the step unless the page
+      // does not fit the tree, then keep re-reading without it.
+      const filled = fill(last, won.web);
+      if (filled) {
+        clearTimeout(step);
+        next.catch(() => undefined);
+        return filled;
+      }
+      pageWon = undefined;
+    }
+    last = won && "c" in won ? won.c : await next;
+    startPage(last);
   }
-  return tree;
+  if (!unread(last)) return { tree: last.tree, fromCdp: false };
+  const web = await page;
+  return (web && fill(last, web)) ?? { tree: last.tree, fromCdp: false };
 }
 
 async function uiautomatorDump(serial: string): Promise<string> {
@@ -108,13 +227,26 @@ async function uiautomatorDump(serial: string): Promise<string> {
   // wrappers, RN SVG sub-paths, bounds-less Compose containers) while keeping the
   // text, content-desc, clickable and resource-id the agent contract uses.
   // `;` rather than `&&` before `rm -f` so cleanup fires even when dump/cat fails.
-  const rawBuf = await adbExecOutBinary(
-    serial,
-    `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-    { timeoutMs: 20_000 }
+  const rawBuf = await withUiautomatorLock(serial, () =>
+    adbExecOutBinary(
+      serial,
+      `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+      { timeoutMs: 20_000 }
+    )
   );
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
+  const killed = trimmed.includes("<hierarchy")
+    ? undefined
+    : uiautomatorKilledMessage(trimmed.slice(0, 200), serial);
+  if (killed) {
+    throw new FailureError(killed, {
+      error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
+      failure_stage: "android_uiautomator_capture",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
+  }
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
     throw new FailureError(
       `uiautomator could not capture the screen: ${trimmed}. ` +

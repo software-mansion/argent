@@ -2,6 +2,7 @@
 sidebar_position: 7
 sidebar_label: Device providers
 title: Device providers
+description: Argent attaches to a simulator or an emulator that a different application already runs, for example an IDE extension. This page describes the provider contract.
 sidebar_custom_props:
   icon: plug
 ---
@@ -83,7 +84,9 @@ Argent ignores an unknown token. Thus a provider can declare a capability of a n
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
 
-On Android, native network capture needs only the `adb` token. With `adb`, `native-network-logs` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. Argent removes the port forward when the capture stops. A provider that withholds `adb` also withholds native network capture.
+JavaScript capture needs the `js-debugger` grant. On Android, [native network capture](/docs/reference/tools#native-network-capture-on-android) needs the `adb` token and a debuggable app.
+
+If Argent uses the provider's native devtools connection on iOS, the provider controls [native network capture](/docs/reference/tools#native-network-capture-on-ios-and-mac-apps).
 
 ### One grant, both names of the device
 

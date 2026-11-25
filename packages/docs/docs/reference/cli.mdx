@@ -2,6 +2,7 @@
 sidebar_position: 1
 sidebar_label: CLI
 title: CLI reference
+description: "Reference for the argent command-line tool: init, update, tools, run, e2e, config, secrets, telemetry and the other commands."
 sidebar_custom_props:
   icon: terminal
 ---
@@ -13,6 +14,7 @@ sidebar_custom_props:
 | `argent update`    | Pull the latest version and refresh workspace configuration. Acts on the present install; `--global` and `--local` select explicitly when both coexist.                                                                                                                     |
 | `argent uninstall` | Unregister the MCP server and uninstall the package. `--global` and `--local` choose which install is removed; non-interactive runs never remove a coexisting global install.                                                                                               |
 | `argent remove`    | Alias for `uninstall`                                                                                                                                                                                                                                                       |
+| `argent doctor`    | Check the install, the editor MCP entries, the skills and rules, and the Xcode and `adb` toolchains. It prints advice for each failed check (`--verbose` also lists the passed checks) and exits with code `1` on an error (`✖`), `0` when there are only warnings (`⚠`)    |
 | `argent mcp`       | Start an MCP server instance, used internally by the agent                                                                                                                                                                                                                  |
 | `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                                                                                       |
 | `argent run`       | Invoke a tool by name. The command exits with status 1 when the tool fails or when the result reports a failure (see [Tool-server API](/docs/reference/tool-server-api#failure-in-the-response))                                                                            |
@@ -35,6 +37,8 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
+
+After an update, the agent tells you the main changes once, on its first Argent tool call (`argent disable whats-new` turns this off).
 
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
 

@@ -6,8 +6,11 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
   KEPT_BODY_CHARS_BUDGET,
+  MACOS_CONNECTION_DROPPED,
   createIosNetworkRecords,
   findIosNativeRecord,
+  hasIosNetworkCapture,
+  lastIosRecordNumber,
   liveIosNetworkCaptureDevices,
   liveIosNetworkCaptures,
   registerIosNetworkCaptures,
@@ -508,6 +511,30 @@ describe("iOS native network records: folding", () => {
   });
 });
 
+describe("iOS native network records: while recording is off", () => {
+  it("records no new request, and still folds the events of one recorded before", () => {
+    let recording = true;
+    const store = createIosNetworkRecords(
+      () => ({ armed: true }),
+      fakeApp().link,
+      () => recording
+    );
+    const agent = agentOn(store);
+    agent.requestWillBeSent("open", "https://api.example.com/open");
+
+    recording = false;
+    agent.complete("new", "https://api.example.com/new");
+    agent.responseReceived("open", "https://api.example.com/open");
+    agent.loadingFinished("open", 2, 5);
+
+    expect(store.records(8081).map((r) => [r.layerId, r.state])).toEqual([["open", "complete"]]);
+
+    recording = true;
+    agent.requestWillBeSent("again", "https://api.example.com/again");
+    expect(store.records(8081).map((r) => r.layerId)).toEqual(["open", "again"]);
+  });
+});
+
 describe("iOS native network records: eviction", () => {
   it(`evicts the oldest record once a request past ${MAX_RECORDS} arrives`, () => {
     const store = newStore();
@@ -608,6 +635,20 @@ describe("iOS native network records: eviction", () => {
   });
 });
 
+describe("iOS native network records: the last record number", () => {
+  it("is the number of the last record issued by any store, so a later record numbers higher", () => {
+    const a = newStore();
+    const b = newStore();
+    agentOn(a).complete("a", "https://api.example.com/a");
+    const afterA = lastIosRecordNumber();
+    expect(idOf(a, "a")).toMatch(new RegExp(`-${afterA}$`));
+
+    agentOn(b).complete("b", "https://api.example.com/b");
+    expect(lastIosRecordNumber()).toBe(afterA + 1);
+    expect(idOf(b, "b")).toMatch(new RegExp(`-${afterA + 1}$`));
+  });
+});
+
 describe("iOS native network records: ids", () => {
   it("gives ids of the ios-native shape that stay unique across stores", () => {
     const a = newStore();
@@ -639,6 +680,7 @@ describe("iOS native network records: clear", () => {
       registerIosNetworkCaptures({
         udid: UDID,
         bundleIds: new Set(),
+        stoppedBundleIds: new Set(),
         stores: new Map([[BUNDLE, store]]),
       })
     );
@@ -667,6 +709,7 @@ describe("iOS native network records: clear", () => {
     const unregister = registerIosNetworkCaptures({
       udid: UDID,
       bundleIds: new Set(),
+      stoppedBundleIds: new Set(),
       stores: new Map([[BUNDLE, store]]),
     });
     try {
@@ -703,6 +746,41 @@ describe("iOS native network records: clear", () => {
       ["headers", "failed"],
     ]);
     expect(store.records(8081).some((r) => r.layerId === "done")).toBe(false);
+  });
+
+  it("lists the records a clear hid, an open one included, with includeHidden, still without Metro's traffic", () => {
+    const store = newStore();
+    const agent = agentOn(store);
+
+    agent.complete("done", "https://api.example.com/done");
+    agent.requestWillBeSent("open", "https://api.example.com/open");
+    agent.complete("metro", "http://localhost:8081/index.bundle?platform=ios");
+
+    store.clear();
+
+    expect(store.records(8081)).toEqual([]);
+    expect(
+      store.records(8081, { includeHidden: true }).map((r) => [r.request.url, r.state])
+    ).toEqual([
+      ["https://api.example.com/done", "complete"],
+      ["https://api.example.com/open", "pending"],
+    ]);
+    // The Metro request is held and hidden too; only the port filter leaves it out.
+    expect(store.records(9000, { includeHidden: true }).map((r) => r.layerId)).toEqual([
+      "done",
+      "open",
+      "metro",
+    ]);
+
+    agent.complete("after", "https://api.example.com/after");
+    expect(store.records(8081).map((r) => r.request.url)).toEqual([
+      "https://api.example.com/after",
+    ]);
+    expect(store.records(8081, { includeHidden: true }).map((r) => r.request.url)).toEqual([
+      "https://api.example.com/done",
+      "https://api.example.com/open",
+      "https://api.example.com/after",
+    ]);
   });
 });
 
@@ -903,6 +981,43 @@ describe("iOS native network records: connection closed", () => {
   });
 });
 
+describe("Mac app native network records: a request still running after a reconnect", () => {
+  /** A Mac app's connection comes back for the same process, so its number does too. */
+  function macStore() {
+    const store = createIosNetworkRecords(
+      () => ({ armed: true }),
+      fakeApp().link,
+      () => true,
+      "macos-native"
+    );
+    return { store, agent: agentOn(store, CONN) };
+  }
+  const recordOf = (store: IosNetworkRecordStore) => store.records(8081)[0]!;
+
+  it("takes the response of a request that failed at the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.responseReceived("long", "https://example.com/download");
+    expect(recordOf(store)).toMatchObject({ state: "headers", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
+  });
+
+  it("completes a request whose headers came before the drop, without the drop's error", () => {
+    const { store, agent } = macStore();
+    agent.requestWillBeSent("long", "https://example.com/download");
+    agent.responseReceived("long", "https://example.com/download");
+    store.connectionClosed(CONN, { superseded: false, running: true });
+    expect(recordOf(store)).toMatchObject({ state: "failed", errorText: MACOS_CONNECTION_DROPPED });
+
+    agent.loadingFinished("long", 2);
+    expect(recordOf(store)).toMatchObject({ state: "complete", response: { status: 200 } });
+    expect(recordOf(store)).not.toHaveProperty("errorText");
+  });
+});
+
 describe("iOS native network records: events that name no open request", () => {
   it("ignores events for a request it never saw start", () => {
     const store = newStore();
@@ -975,6 +1090,7 @@ describe("iOS native network capture lookups", () => {
     const unregister = registerIosNetworkCaptures({
       udid,
       bundleIds: new Set(bundleIds),
+      stoppedBundleIds: new Set(),
       stores: new Map(connected.map((bundleId) => [bundleId, newStore()])),
     });
     unregisters.push(unregister);
@@ -1010,6 +1126,33 @@ describe("iOS native network capture lookups", () => {
     expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
     expect(liveIosNetworkCaptureDevices("com.example.typo")).toEqual([]);
     expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([UDID]);
+  });
+
+  it("says some service has an app's capture started or stopped, until those services are unregistered", () => {
+    const empty = registerIosNetworkCaptures({
+      udid: UDID,
+      bundleIds: new Set(),
+      stoppedBundleIds: new Set(),
+      stores: new Map(),
+    });
+    unregisters.push(empty);
+    expect(hasIosNetworkCapture()).toBe(false);
+
+    const started = captureOn(UDID, [BUNDLE], []);
+    const stopped = registerIosNetworkCaptures({
+      udid: OTHER_UDID,
+      bundleIds: new Set(),
+      stoppedBundleIds: new Set([BUNDLE]),
+      stores: new Map(),
+    });
+    unregisters.push(stopped);
+    expect(hasIosNetworkCapture()).toBe(true);
+
+    started();
+    // A stopped app's records are still listed, so its ids still have a source.
+    expect(hasIosNetworkCapture()).toBe(true);
+    stopped();
+    expect(hasIosNetworkCapture()).toBe(false);
   });
 
   it("sorts and de-duplicates across services, and drops a service from both lookups once it is unregistered", () => {
