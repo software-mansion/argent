@@ -3,21 +3,43 @@ import { z } from "zod";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
-import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
+import {
+  jsCapture,
+  jsCapturePayload,
+  type NetworkInspectorApi,
+} from "../../blueprints/network-inspector";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { CDPClient } from "../../utils/debugger/cdp-client";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import {
   ANDROID_NATIVE_REQUEST_ID,
   findAndroidNativeRecord,
-  type AndroidNativeRecord,
-  type AndroidNetworkBody,
+  hasAndroidNetworkCapture,
 } from "../../blueprints/android-network-inspector";
+import {
+  IOS_NATIVE_REQUEST_ID,
+  MACOS_NATIVE_REQUEST_ID,
+  findIosNativeRecord,
+  hasIosNetworkCapture,
+} from "../../blueprints/ios-network-records";
+import { findMacosNativeRecord, hasMacosNetworkCapture } from "../../blueprints/macos-app";
+import type { NativeNetworkBody, NativeNetworkRecord } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
 import {
+  BINARY_BODY_TYPES,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
-import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { isRedirect, reasonPhrase } from "./network-logs";
+import { metroPortField } from "../../utils/debugger/metro-port";
+import {
+  isRedirect,
+  jsCaptureDebuggerRef,
+  jsReadPort,
+  jsCaptureForRead,
+  jsNoLog,
+  jsNotStarted,
+  reasonPhrase,
+} from "./network-logs";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -51,22 +73,41 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
-/** Every Android native ID starts with this, and so does a truncated or mistyped one. */
-const ANDROID_ID_PREFIX = "android-";
+/**
+ * Every native ID starts with its layer's prefix, and so does a truncated or
+ * mistyped one.
+ */
+const NATIVE_ID_PREFIXES = { android: "android-", ios: "ios-", macos: "macos-" } as const;
+type NativePlatform = keyof typeof NATIVE_ID_PREFIXES;
+
+function nativeIdPlatform(requestId: string): NativePlatform | undefined {
+  if (requestId.startsWith(NATIVE_ID_PREFIXES.android)) return "android";
+  if (requestId.startsWith(NATIVE_ID_PREFIXES.ios)) return "ios";
+  if (requestId.startsWith(NATIVE_ID_PREFIXES.macos)) return "macos";
+  return undefined;
+}
+
+/** Where each native layer's IDs come from, and what its records are called. */
+const NATIVE_LAYERS: Record<NativePlatform, { source: string; name: string }> = {
+  android: { source: "an Android device", name: "Android" },
+  ios: { source: "an iOS simulator", name: "iOS" },
+  macos: { source: "a Mac app", name: "Mac app" },
+};
 
 /** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
 /**
- * Bytes an encoded body of the Android native layer may decode to. A few
- * hundred bytes of br can decode to gigabytes, and the decode blocks the
- * tool-server while it runs.
+ * Bytes an encoded body of a native layer may decode to. A few hundred bytes
+ * of br can decode to gigabytes, and the decode blocks the tool-server while
+ * it runs.
  */
 const MAX_DECODED_BODY_BYTES = 16 * 1024 * 1024;
 
 /** Heads a body cut to `shown` chars; `fullSize` is the size of the whole body, with its unit. */
 function cutMarker(fullSize: string, mimeType?: string, shown = MAX_BODY_SIZE): string {
-  const mime = mimeType !== undefined ? `, MIME: ${mimeType}` : "";
+  // A body with no MIME type, as one the app sent with no Content-Type, names none.
+  const mime = mimeType ? `, MIME: ${mimeType}` : "";
   return `[TRUNCATED: first ${shown} chars shown, full size: ${fullSize}${mime}]`;
 }
 
@@ -136,7 +177,7 @@ interface NetworkRequestDetails {
     url: string;
     method: string;
     headers: Record<string, string>;
-    /** Android native layer: says what `headers` holds when it is not what went on the wire. */
+    /** Native layers: says what `headers` holds when it is not what went on the wire. */
     headersNote?: string;
     postData?: string;
   };
@@ -152,7 +193,7 @@ interface NetworkRequestDetails {
     responseHeaders?: Record<string, string>;
   }>;
   response?: {
-    /** Android native layer: the final URL, after any redirects. */
+    /** Native layers: the final URL, after any redirects. */
     url?: string;
     status: number;
     statusText: string;
@@ -172,11 +213,13 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect. An android- ID needs no debugger connection."
+      "Device id used to list the request<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
     ),
   requestId: z
     .string()
-    .describe("The requestId from view-network-logs, or an android- ID from native-network-logs."),
+    .describe(
+      "The requestId from view-network-logs, or a native ID (ios-, android-<flag:macos-apps> or macos-</flag:macos-apps>) from native-network-logs."
+    ),
   includeBody: z
     .boolean()
     .default(true)
@@ -188,10 +231,11 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Get full details of a specific network request by its requestId.
+  description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found.`,
+Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
+If a request is missing, the tool returns an error: list requests again. If capture is off, start it before reproducing the request. On Vega, a JS lookup can start capture. Use view-network-logs before triggering requests on Vega.
+IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -200,34 +244,52 @@ Returns an error message string if the requestId is not found.`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  capability: DEBUGGER_TOOL_CAPABILITY,
+  capability: { ...DEBUGGER_TOOL_CAPABILITY, macos: { app: true, catalyst: true } },
   services: (params): Record<string, ServiceRef> => {
     /**
-     * An android- ID names its record without the device, so it resolves
-     * whatever spelling of the device the caller passes: a Metro
+     * A native ID names its record without the device, so it
+     * resolves whatever spelling of the device the caller passes: a Metro
      * logicalDeviceId from a shared Metro, an ext: id, or one that classifies
      * as another platform, Chromium included. It needs no debugger either.
      * A Chromium request ID never has this shape.
      */
-    if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) return {};
+    if (isNativeRequestId(params.requestId)) return {};
     const device = resolveDevice(params.device_id);
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
     /**
-     * An android- ID in any other shape was not issued by the native layer, and
-     * the JS layer names its requests rn-net-<n>. No layer can hold it, so saying
-     * that needs no debugger. Chromium's IDs are opaque, so Chromium, above, still
-     * gets to answer for itself.
+     * A native ID prefix in any other shape was not issued by a native
+     * layer, and the JS layer names its requests rn-net-<n>. No layer can hold
+     * it, so saying that needs no debugger. Chromium's IDs are opaque, so
+     * Chromium, above, still gets to answer for itself.
      */
-    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) return {};
-    return {
-      inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
-    };
+    if (nativeIdPlatform(params.requestId)) return {};
+    const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
+    // JS capture starts on read for Vega, which network-capture-start does not cover.
+    if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
+    // A read never starts capture: before a start it reaches nothing in the app.
+    const capture = jsCapture(payload);
+    return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
   async execute(services, params) {
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
-      return androidNativeRequestDetails(params.requestId, params.includeBody, params.device_id);
+      const found = findAndroidNativeRecord(params.requestId);
+      return found
+        ? nativeRequestDetails(found.record, found.inspector, params.includeBody)
+        : nativeNotFound(params.requestId, params.device_id, "android");
+    }
+    if (IOS_NATIVE_REQUEST_ID.test(params.requestId)) {
+      const found = findIosNativeRecord(params.requestId);
+      return found
+        ? nativeRequestDetails(found.record, found.records, params.includeBody)
+        : nativeNotFound(params.requestId, params.device_id, "ios");
+    }
+    if (MACOS_NATIVE_REQUEST_ID.test(params.requestId)) {
+      const found = findMacosNativeRecord(params.requestId);
+      return found
+        ? nativeRequestDetails(found.record, found.records, params.includeBody)
+        : nativeNotFound(params.requestId, params.device_id, "macos");
     }
 
     const device = resolveDevice(params.device_id);
@@ -283,20 +345,39 @@ Returns an error message string if the requestId is not found.`,
       return details;
     }
 
-    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) {
-      return androidNativeNotFound(params.requestId, params.device_id);
+    const nativePlatform = nativeIdPlatform(params.requestId);
+    if (nativePlatform) return nativeNotFound(params.requestId, params.device_id, nativePlatform);
+
+    let cdp: CDPClient;
+    let noLog: string | undefined;
+    if (device.platform === "vega") {
+      const api = services.inspector as NetworkInspectorApi;
+      // Idempotent: the script no-ops if already installed.
+      await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+      cdp = api.cdp;
+    } else {
+      const port = jsReadPort(params);
+      const deviceId = canonicalDeviceId(params.device_id)!;
+      const dbg = services.debugger as JsRuntimeDebuggerApi | undefined;
+      const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
+      if (!dbg || !capture) {
+        return jsNotStarted(
+          deviceId,
+          port,
+          "list the requests with view-network-logs",
+          `Request ${params.requestId} not found. `
+        );
+      }
+      cdp = dbg.cdp;
+      noLog = `Request ${params.requestId} not found. ${jsNoLog(capture)}`;
     }
 
-    const api = services.inspector as NetworkInspectorApi;
-
-    // Idempotent: the script no-ops if already installed.
-    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
-
     const script = makeNetworkDetailReadScript(params.requestId);
-    const raw = await api.cdp.evaluate(script);
-    const data = JSON.parse(raw as string) as RawEntry | { error: string };
+    const raw = await cdp.evaluate(script);
+    const data = JSON.parse(raw as string) as RawEntry | { error: string; installed?: false };
 
     if ("error" in data) {
+      if (data.installed === false && noLog) return noLog;
       return `${data.error}. Use view-network-logs to list available requests.`;
     }
 
@@ -363,28 +444,56 @@ Returns an error message string if the requestId is not found.`,
   },
 };
 
-/**
- * The answer to an android- ID no inspector holds names a tool the caller's
- * device can list with: native-network-logs refuses Chromium and Vega. There it
- * also says where the ID came from, because view-network-logs never lists one.
- * An iOS-shaped ID keeps the native hint: it can be the logicalDeviceId of an
- * Android device on a shared Metro, and native-network-logs accepts it.
- */
-function androidNativeNotFound(requestId: string, deviceId: string): string {
-  const { platform } = resolveDevice(deviceId);
-  return platform === "chromium" || platform === "vega"
-    ? `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
-    : `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`;
+function isNativeRequestId(requestId: string): boolean {
+  return (
+    ANDROID_NATIVE_REQUEST_ID.test(requestId) ||
+    IOS_NATIVE_REQUEST_ID.test(requestId) ||
+    MACOS_NATIVE_REQUEST_ID.test(requestId)
+  );
 }
 
-async function androidNativeRequestDetails(
-  requestId: string,
-  includeBody: boolean,
-  deviceId: string
-): Promise<NetworkRequestDetails | string> {
-  const found = findAndroidNativeRecord(requestId);
-  if (!found) return androidNativeNotFound(requestId, deviceId);
-  const { inspector, record } = found;
+/**
+ * The answer to a native ID no layer holds names a tool the caller's device
+ * can list with: native-network-logs refuses Chromium and Vega, and on a Mac
+ * app it lists only that app's macos- IDs. There it also says where the ID
+ * came from, because view-network-logs never lists one. A
+ * device ID of another platform keeps the native hint: it can be the
+ * logicalDeviceId of a device on a shared Metro, and native-network-logs
+ * accepts it.
+ */
+function nativeNotFound(requestId: string, deviceId: string, layer: NativePlatform): string {
+  const { platform } = resolveDevice(deviceId);
+  const prefix = NATIVE_ID_PREFIXES[layer];
+  const { source, name } = NATIVE_LAYERS[layer];
+  if (platform === "chromium" || platform === "vega") {
+    return `Request ${requestId} not found. ${layer === "macos" ? "A" : "An"} ${prefix} ID comes from ${source}. Use view-network-logs to list this device's requests.`;
+  }
+  // A Mac app's native layer lists macos- IDs only: an ios- or android- ID is another device's.
+  if (platform === "macos" && layer !== "macos") {
+    return `Request ${requestId} not found. An ${prefix} ID comes from ${source}. Use native-network-logs or view-network-logs to list this Mac app's requests.`;
+  }
+  const captured =
+    layer === "android"
+      ? hasAndroidNetworkCapture()
+      : layer === "ios"
+        ? hasIosNetworkCapture()
+        : hasMacosNetworkCapture();
+  return captured
+    ? `Request ${requestId} not found. Use native-network-logs to list the requests the ${name} native layer recorded.`
+    : `Request ${requestId} not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.`;
+}
+
+/** The body reads of a native layer's store. */
+interface NativeBodies {
+  responseBody(id: string): Promise<NativeNetworkBody>;
+  requestPostData(id: string): Promise<NativeNetworkBody>;
+}
+
+async function nativeRequestDetails(
+  record: NativeNetworkRecord,
+  bodies: NativeBodies,
+  includeBody: boolean
+): Promise<NetworkRequestDetails> {
   const { wireHeaders } = record.request;
   /**
    * The body's headers come from the hop that carried it: the first one. A
@@ -403,7 +512,7 @@ async function androidNativeRequestDetails(
   const headersNote = requestHeadersNote(record);
   if (headersNote) request.headersNote = headersNote;
   if (record.request.hasPostData) {
-    request.postData = await readAndroidBody(() => inspector.requestPostData(record.id), {
+    request.postData = await readNativeBody(() => bodies.requestPostData(record.id), {
       contentType: requestHeader("content-type"),
       contentEncoding: requestHeader("content-encoding"),
       wholeSize: sizeInBytes(
@@ -446,10 +555,14 @@ async function androidNativeRequestDetails(
     };
     if (record.response.fromCache) resp.fromCache = true;
     if (includeBody) {
-      resp.body = await readAndroidBody(() => inspector.responseBody(record.id), {
+      resp.body = await readNativeBody(() => bodies.responseBody(record.id), {
         mimeType: record.response.mimeType,
         contentType: headerValue(record.response.headers, "content-type"),
-        contentEncoding: headerValue(record.response.headers, "content-encoding"),
+        // An iOS or Mac app response body is read decoded, so its Content-Encoding is not applied again.
+        contentEncoding:
+          record.layer === "ios-native" || record.layer === "macos-native"
+            ? ""
+            : headerValue(record.response.headers, "content-encoding"),
         wholeSize: sizeInBytes(record.encodedDataLength ?? NaN, "as the app received them"),
       });
     }
@@ -463,7 +576,7 @@ async function androidNativeRequestDetails(
  * Says what the request headers are when they are not simply what went on
  * the wire: without that, an absent Cookie or User-Agent reads as "not sent".
  */
-function requestHeadersNote(record: AndroidNativeRecord): string | undefined {
+function requestHeadersNote(record: NativeNetworkRecord): string | undefined {
   if (record.request.wireHeaders) {
     return record.redirects?.length
       ? "url and method are those of the request the app made. These headers were sent on the wire with the last request, to the final URL, after the hops in redirects."
@@ -475,67 +588,140 @@ function requestHeadersNote(record: AndroidNativeRecord): string | undefined {
   return "These are the headers the app set. The headers sent on the wire (such as Cookie and User-Agent) were not reported for this request.";
 }
 
-interface AndroidBodyFraming {
+interface NativeBodyFraming {
   /** The MIME type shown; defaults to the type in `contentType`. */
   mimeType?: string;
   /** The body's Content-Type header, which may name a charset. */
   contentType: string;
   contentEncoding: string;
-  /** The whole body's size, shown when the agent kept only its start. */
+  /**
+   * The whole body's size, shown when the agent kept only its start, and when
+   * an inline body is omitted as binary.
+   */
   wholeSize?: string;
 }
 
-async function readAndroidBody(
-  read: () => Promise<AndroidNetworkBody>,
-  framing: AndroidBodyFraming
+async function readNativeBody(
+  read: () => Promise<NativeNetworkBody>,
+  framing: NativeBodyFraming
 ): Promise<string> {
   const mimeType = framing.mimeType ?? framing.contentType.split(";")[0]!.trim();
-  let body: AndroidNetworkBody;
+  let body: NativeNetworkBody;
   try {
     body = await read();
   } catch (err) {
     return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
   }
   if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
-  if (!body.base64Encoded) {
+  // A request body that the upload cut has no known whole size.
+  if (body.incomplete) framing = { ...framing, wholeSize: undefined };
+  if (body.inlineChars !== undefined) {
+    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
+  }
+  const asSent = (): string => {
+    const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(body.body, mimeType, Buffer.byteLength(body.body), framing)
-      : truncateBody(body.body, mimeType);
-  }
-
-  const kept = Buffer.from(body.body, "base64");
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
+      : truncateBody(text, mimeType);
+  };
+  // A text body with no Content-Encoding reads as it came, with no copy of its bytes.
+  if (!body.base64Encoded && contentCodings(framing.contentEncoding).length === 0) return asSent();
+  // A body sent as text has the body's own bytes as UTF-8, so its Content-Encoding applies to them.
+  const kept = Buffer.from(body.body, body.base64Encoded ? "base64" : "utf8");
   const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
-  if (!bytes) {
-    return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
-  }
+  if (!bytes) return decodesTooLarge(framing);
+  if (!body.base64Encoded && bytes === kept) return asSent();
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
-      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length)}]`
+      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
       : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing)
+    ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
     : truncateBody(text, mimeType);
 }
 
 /**
- * A body the agent cut short: its own length is the cut's, so the size shown
- * is the whole body's, in bytes, when the record knows it.
+ * A body the agent sent as text, because its bytes are valid UTF-8. UTF-16
+ * bytes with no BOM often are. Its UTF-8 bytes are the body's own, so they
+ * decode in the declared charset, as the bytes of a base64 body do.
+ */
+function inDeclaredCharset(text: string, contentType: string, truncated: boolean): string {
+  if (namesUtf8(contentType)) return text;
+  return decodeText(Buffer.from(text, "utf8"), charsetOf(contentType), truncated) ?? text;
+}
+
+/** A Content-Type that names no charset, or UTF-8: a text body reads as the agent sent it. */
+function namesUtf8(contentType: string): boolean {
+  const charset = charsetOf(contentType);
+  return !charset || /^utf-?8$/i.test(charset);
+}
+
+/**
+ * A request body that came with the request, which the host holds. The agent
+ * sends a body this way only when it is UTF-8 text, so a body of a binary type
+ * is omitted by its type. Its bytes decode in the declared charset, as those of
+ * a body the agent gives by a read do. `truncated` says the host kept only the
+ * start of the body, which is `wholeChars` long when read as UTF-8.
+ */
+function inlineBody(
+  text: string,
+  wholeChars: number,
+  truncated: boolean,
+  mimeType: string,
+  framing: NativeBodyFraming
+): string {
+  if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
+    return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
+  }
+  // A body with no Content-Encoding reads as it came, with no copy of its bytes.
+  const sent = contentCodings(framing.contentEncoding).length ? Buffer.from(text, "utf8") : null;
+  const bytes = sent && decodeContent(sent, framing.contentEncoding, truncated);
+  if (sent && !bytes) return decodesTooLarge(framing);
+  const encoded = bytes && bytes !== sent ? bytes : null;
+  const decoded = encoded
+    ? decodeText(encoded, charsetOf(framing.contentType), truncated)
+    : inDeclaredCharset(text, framing.contentType, truncated);
+  if (decoded === null) {
+    const size = truncated ? (framing.wholeSize ?? "size unknown") : `${encoded!.length} bytes`;
+    return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
+  }
+  if (!truncated) return truncateBody(decoded, mimeType);
+  // In another charset, or under a Content-Encoding, the whole body has more chars than its kept start.
+  const fullSize =
+    !encoded && namesUtf8(framing.contentType)
+      ? `${wholeChars} chars`
+      : `more than ${decoded.length} chars`;
+  const shown = Math.min(decoded.length, MAX_BODY_SIZE);
+  return `${cutMarker(fullSize, mimeType, shown)}\n${decoded.slice(0, shown)}${decoded.length > shown ? "..." : ""}`;
+}
+
+function decodesTooLarge(framing: NativeBodyFraming): string {
+  return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
+}
+
+/**
+ * A body the agent cut short, or a request body that the upload cut: its own
+ * length is the cut's, so the size shown is the whole body's, in bytes, when
+ * the record knows it.
  */
 function cutByAgent(
   text: string,
   mimeType: string,
   keptBytes: number,
-  framing: AndroidBodyFraming
+  framing: NativeBodyFraming,
+  incomplete?: boolean
 ): string {
   const shown = Math.min(text.length, MAX_BODY_SIZE);
-  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes)}`;
+  const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
   return `${cutMarker(fullSize, mimeType, shown)}\n${text.slice(0, shown)}${text.length > shown ? "..." : ""}`;
 }
 
-function agentKept(keptBytes: number): string {
-  return `the agent kept only the first ${keptBytes} bytes`;
+function agentKept(keptBytes: number, incomplete?: boolean): string {
+  return incomplete
+    ? `the upload ended after the first ${keptBytes} bytes, before the app's body stream reached its end`
+    : `the agent kept only the first ${keptBytes} bytes`;
 }
 
 function sizeInBytes(bytes: number, how: string): string | undefined {
@@ -548,18 +734,22 @@ function sizeInBytes(bytes: number, how: string): string | undefined {
  * reads as it came; `null` means it decodes to more than the cap.
  */
 function decodeContent(bytes: Buffer, contentEncoding: string, truncated = false): Buffer | null {
-  const codings = contentEncoding
-    .split(",")
-    .map((coding) => coding.trim().toLowerCase())
-    .filter((coding) => coding !== "" && coding !== "identity");
   let decoded = bytes;
-  for (const coding of codings.reverse()) {
+  for (const coding of contentCodings(contentEncoding).reverse()) {
     const next = decodeOne(decoded, coding, truncated);
     if (next === null) return null;
     if (next === undefined) return bytes;
     decoded = next;
   }
   return decoded;
+}
+
+/** The codings a Content-Encoding names, in the order they were applied. */
+function contentCodings(contentEncoding: string): string[] {
+  return contentEncoding
+    .split(",")
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding !== "" && coding !== "identity");
 }
 
 function decodeOne(bytes: Buffer, coding: string, truncated: boolean): Buffer | null | undefined {

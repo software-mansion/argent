@@ -1,5 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
+import type { CDPClient } from "../../../utils/debugger/cdp-client";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 
 // `unknown`, not `validation`: these failures come from uncontrolled renderer
@@ -199,10 +200,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, NAME_MAX);
       // Chrome never names a text field by its value; describe does, so a filled one reads.
-      // Never fall through to a password input's value: with no aria label or
+      // Never fall through to a secret field's value: with no aria label or
       // placeholder (a floating/uncontrolled-label pattern) the typed secret
       // would become the node's label and reach every describe consumer.
-      if (el.value && !isPassword(el)) return el.value.slice(0, NAME_MAX);
+      if (el.value && !isSecretField(el)) return el.value.slice(0, NAME_MAX);
     }
     if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, NAME_MAX);
     // getAttribute, not el.title: a <form> with a control named "title" clobbers the
@@ -292,7 +293,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // An aria-labelledby target's text (text and CDATA) in the flat tree, read by a subset
   // of Chrome's accessible-name rules. A text field reads as its value, uncased (a
-  // password's as bullets), else its aria-label, title or placeholder. Another element
+  // secret's as bullets), else its aria-label, title or placeholder. Another element
   // reads as what a <select> shows, a range widget's value (a range input's too) or a
   // listbox's aria-selected options; else as its aria-label, an <img>'s or image input's
   // alt, an SVG element's <title> or a button input's value; else as its ::before, content
@@ -619,7 +620,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // What an element reads as in place of its content, or null: a text field's value (a
-  // password's as bullets), else its aria-label, title or placeholder; what a <select>
+  // secret's as bullets), else its aria-label, title or placeholder; what a <select>
   // shows; a range widget's value; else, unless it is a listbox with chosen options, its
   // alt text or a button input's value.
   function shownText(el, rendered, options) {
@@ -657,12 +658,32 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   function fieldText(el) {
-    return isPassword(el) ? "\\u2022".repeat(el.value.length) : el.value;
+    return isSecretField(el) ? "\\u2022".repeat(el.value.length) : el.value;
   }
 
   function buttonText(el) {
     const button = isHtml(el, "input") && /^(button|submit|reset|image)$/.test(el.type);
     return button && el.value ? el.value : null;
+  }
+
+  // What a text field (never a password, one-time code or card field) or a single-choice
+  // <select> holds now, or null for other elements.
+  function formValue(el) {
+    if (isTextField(el)) return isSecretField(el) ? "" : el.value;
+    if (!isHtml(el, "select") || el.multiple) return null;
+    const option = el.selectedOptions[0];
+    return option ? option.label : "";
+  }
+
+  // A password, one-time code or card field, whose typed value describe never reads out.
+  function isSecretField(el) {
+    return isPassword(el) || isSecretAutofill(el);
+  }
+
+  // An autocomplete token naming a one-time code or a card detail (cc-number, cc-csc, ...).
+  function isSecretAutofill(el) {
+    const tokens = (getAttr.call(el, "autocomplete") || "").toLowerCase().split(/\\s+/);
+    return tokens.some((t) => t === "one-time-code" || t.startsWith("cc-"));
   }
 
   function isTextField(el) {
@@ -2409,7 +2430,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (cut) cuts.push({ ...cut, node });
     }
     if (name) node.label = name;
-    if (text && text !== name) node.value = text.slice(0, 200);
+    // A form control shows its current value, not its child text; its name stays the label.
+    const field = invisibleSelf ? null : formValue(el);
+    const value = field !== null ? field : text;
+    if (value && value !== name) node.value = value.slice(0, 200);
     if (id) node.identifier = id;
     if (clickable) node.clickable = true;
     if (isDisabled(el)) node.disabled = true;
@@ -2461,7 +2485,15 @@ export async function describeChromium(
   limits: ChromiumWalkLimits = DEFAULT_WALK_LIMITS
 ): Promise<DescribeTreeData> {
   await api.refreshViewport();
-  const raw = (await api.cdp.send("Runtime.evaluate", {
+  return evaluateDescribeDom(api.cdp, limits);
+}
+
+/** Walks the DOM of the page `cdp` is attached to; Android's Chrome-tab fallback shares it. */
+export async function evaluateDescribeDom(
+  cdp: Pick<CDPClient, "send">,
+  limits: ChromiumWalkLimits = DEFAULT_WALK_LIMITS
+): Promise<DescribeTreeData> {
+  const raw = (await cdp.send("Runtime.evaluate", {
     expression: buildDescribeDomScript(limits),
     returnByValue: true,
   })) as {

@@ -511,7 +511,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   // Snapshotted at startup; the launcher generates it and passes it in via env
   // (see ensureToolsServer). Empty or absent ⇒ auth disabled (`--no-auth`,
-  // `npm run dev`), hence the one-shot stderr warning.
+  // `bun run dev`), hence the one-shot stderr warning.
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(

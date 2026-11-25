@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
 // plus a `send` spy that records commands.
@@ -136,6 +137,71 @@ describe("NetworkManager (recording)", () => {
     // After dispose, further events are ignored.
     emitRequest(f.events, { id: "late", url: "https://x.test/late", status: 200 });
     expect(net.get("late")).toBeUndefined();
+  });
+
+  it("reports throttled only while the stored conditions shape traffic", async () => {
+    expect(net.throttled()).toBe(false);
+    await net.setConditions(toCdpNetworkConditions({ latencyMs: 300 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ offline: true }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions({ downloadKbps: 500 }));
+    expect(net.throttled()).toBe(true);
+    await net.setConditions(toCdpNetworkConditions(null));
+    expect(net.throttled()).toBe(false);
+  });
+
+  it("marks a record finished only once Network.loadingFinished arrives", () => {
+    emitRequest(f.events, { id: "open", url: "https://x.test/open", status: 200 });
+    emitRequest(f.events, { id: "failed", url: "https://x.test/boom", failed: "net::ERR_FAILED" });
+    emitRequest(f.events, { id: "done", url: "https://x.test/done", finished: true });
+
+    expect(net.get("open")?.finished).toBeUndefined();
+    expect(net.get("failed")?.finished).toBeUndefined();
+    expect(net.get("done")?.finished).toBe(true);
+  });
+
+  it("numbers the records in creation order, and requestsAfter lists the ones after a number", () => {
+    emitRequest(f.events, { id: "a", url: "https://x.test/a" });
+    emitRequest(f.events, { id: "b", url: "https://x.test/b" });
+    // A later event of a record keeps its number.
+    emitRequest(f.events, { id: "a", url: "https://x.test/a", status: 200, finished: true });
+
+    const after = (n: number) =>
+      net.requestsAfter(n).map(({ seq, record }) => `${seq}:${record.requestId}`);
+    expect(after(0)).toEqual(["1:a", "2:b"]);
+    expect(after(1)).toEqual(["2:b"]);
+    expect(net.requestsAfter(0)[0]!.record).toBe(net.get("a"));
+  });
+
+  it("marks where a capture starts and where its stop ends, and keeps the mark after the stop", () => {
+    // No mark before a start, and a stop without a start marks nothing.
+    emitRequest(f.events, { id: "before", url: "https://x.test/before" });
+    expect(net.stopCapture()).toBeUndefined();
+    expect(net.captureMark()).toBeUndefined();
+
+    expect(net.startCapture()).toEqual({ lastSeq: 1 });
+    emitRequest(f.events, { id: "during", url: "https://x.test/during" });
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    emitRequest(f.events, { id: "after", url: "https://x.test/after" });
+    // A second stop keeps where the first one ended.
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    expect(net.captureMark()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+
+    // A new start begins a new mark, without an end.
+    expect(net.startCapture()).toEqual({ lastSeq: 3 });
+    expect(net.captureMark()).toEqual({ lastSeq: 3 });
+  });
+
+  it("drops an evicted record's number, so requestsAfter never lists it", () => {
+    // The store keeps 1000 records.
+    for (let i = 1; i <= 1001; i++) {
+      emitRequest(f.events, { id: `r${i}`, url: `https://x.test/${i}` });
+    }
+
+    const kept = net.requestsAfter(0);
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]).toMatchObject({ seq: 2, record: { requestId: "r2" } });
   });
 });
 
