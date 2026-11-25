@@ -1,5 +1,4 @@
 import { SECRET_PLACEHOLDER_RE } from "@argent/configuration-core";
-import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 
 /**
  * `{{output:PATH}}` and `{{output:PATH ?? FALLBACK}}` references to the values
@@ -242,7 +241,9 @@ export function resolveOutputValue(text: string, output: FlowOutput): unknown {
   if (!only || only.start !== 0 || only.end !== text.length) return resolveOutputText(text, output);
   const hit = resolveRef(only, output);
   const value = hit.found ? hit.value : hit.fallback.value;
-  if (JSON.stringify(value).includes(SECRET_PLACEHOLDER_MARKER)) throw secretRefusal(only);
+  if (new RegExp(SECRET_PLACEHOLDER_RE.source).test(JSON.stringify(value))) {
+    throw secretRefusal(only);
+  }
   return structuredClone(value);
 }
 

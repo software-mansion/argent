@@ -759,7 +759,7 @@ This comparison does not depend on letter case, as for each `text` condition.
 
 #### Secrets in output
 
-Argent redacts each resolved secret of the step from the output document, as in the log. The document holds `{{secret:NAME}}` in place of the value. A reference never resolves a secret. A step is errored when a resolved value contains `{{secret:`, or makes a placeholder with the text around it. Put each placeholder in the e2e test file.
+Argent redacts each resolved secret of the step from the output document, as in the log. The document holds `{{secret:NAME}}` in place of the value. A reference never resolves a secret. A step is errored when a resolved value holds a `{{secret:NAME}}` placeholder, or makes one with the text around it. Put each placeholder in the e2e test file.
 
 #### Record a script output
 

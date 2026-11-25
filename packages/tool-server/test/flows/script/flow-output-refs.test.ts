@@ -341,6 +341,49 @@ describe("recording with output", () => {
     expect(probed()).toEqual([7]);
   });
 
+  it("gives a nested run it keeps as a raw step an empty document, as its replay does", async () => {
+    await write("scripts/seed.mjs", "output.user = { id: 7 };");
+    const other = await fs.mkdtemp(path.join(os.tmpdir(), "flow-output-other-"));
+    try {
+      await fs.mkdir(path.join(other, ".argent/e2e"), { recursive: true });
+      await fs.writeFile(
+        path.join(other, "peek.mjs"),
+        'import fs from "node:fs"; fs.writeFileSync("PEEK", JSON.stringify(output));'
+      );
+      await fs.writeFile(
+        path.join(other, ".argent/e2e/peek.yaml"),
+        "steps:\n  - script: { path: ../../peek.mjs }\n"
+      );
+      const nested = {
+        ...registry,
+        invokeTool: vi.fn(async (id: string, args: unknown, options?: unknown) =>
+          id === "e2e-execute"
+            ? createRunFlowTool(nested).execute({}, args as never, options as never)
+            : invokeTool(id, args)
+        ),
+      } as unknown as Registry;
+      await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+      await flowAddScriptTool.execute(
+        {},
+        { name: "rec", project_root: root, path: "../../scripts/seed.mjs" }
+      );
+      const added = await createFlowAddStepTool(nested).execute(
+        {},
+        {
+          name: "rec",
+          project_root: root,
+          command: "e2e-execute",
+          args: JSON.stringify({ name: "peek", project_root: other }),
+        }
+      );
+
+      expect(added.recorded).toMatch(/^2\. tool: e2e-execute/);
+      expect(await fs.readFile(path.join(other, "PEEK"), "utf8")).toBe("{}");
+    } finally {
+      await fs.rm(other, { recursive: true, force: true });
+    }
+  });
+
   it("records a file-panel stub's panel kind with a reference too", async () => {
     const panels = {
       ...registry,

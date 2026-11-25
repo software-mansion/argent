@@ -1297,8 +1297,8 @@ async function rewriteSiblingFlowPath(
  * resolve beside the recording's real file — compared canonically, since those
  * two anchors reach it by different spellings — and that directory must list
  * `<name>.yaml` byte-for-byte. Every refusal keeps the raw step rather than
- * throwing: unlike the rewrite, this runs AFTER the nested flow ran on the
- * device, so a throw would discard the record of a step that already happened.
+ * throwing: unlike the rewrite, a refusal here is no reason to refuse the call,
+ * which a raw step records as well.
  * The raw step names the flow that ran by `name` and the caller's own
  * `project_root`. Without a link, a replay reads that flow on this host. Over a
  * link, a replay reads it from the files the client sends with the call, and
@@ -1672,13 +1672,18 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // replay does: a file argument, or the flow a nested flow-execute names,
       // which finds its own files there too. The step is recorded from `args`,
       // which keep the client paths.
-      // A call that records as a `run:` step shares the recording's document,
-      // as the fragment shares the run's at replay. A copy, kept only if it
-      // does record as one.
-      const sharedOutput =
+      // Running a fragment via flow-execute mid-recording is recorded as a
+      // `run:` composition directive rather than a raw, non-portable tool call.
+      // Decided before the call: a call that records as `run:` shares the
+      // recording's document, as the fragment shares the run's at replay, and
+      // one kept raw starts from an empty one, as its replay does.
+      const runTarget =
         command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
-          ? { doc: structuredClone(session.output ?? {}) }
+          ? await captureRunTarget(session, args, project)
           : undefined;
+      const sharedOutput = runTarget?.flow
+        ? { doc: structuredClone(session.output ?? {}) }
+        : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1806,13 +1811,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
         if (probed) waitWarning = { warning: probed, kind: "conversion" };
       }
-
-      // Running a fragment via flow-execute mid-recording is recorded as a
-      // `run:` composition directive rather than a raw, non-portable tool call.
-      const runTarget =
-        command === RUN_TARGET_COMMAND && params.delayMs === undefined
-          ? await captureRunTarget(session, args, project)
-          : undefined;
 
       // A recorded `restart-app` is captured as the portable `launch` directive
       // (same terminate-and-relaunch semantics, plus the runner's post-launch
