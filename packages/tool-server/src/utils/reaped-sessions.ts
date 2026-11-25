@@ -16,7 +16,8 @@
  */
 
 /** Scopes the key, so two kinds on one device can't collide. */
-type ReapedSessionKind = "screen-recording" | "native-profiler" | "js-runtime-debugger";
+type ReapedSessionKind =
+  "screen-recording" | "native-profiler" | "js-runtime-debugger" | `js-runtime-debugger:${number}`;
 
 interface ReapedSession {
   kind: ReapedSessionKind;

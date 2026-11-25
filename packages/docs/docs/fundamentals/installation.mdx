@@ -55,6 +55,25 @@ The MCP server gives the agent its usage guidance in the server instructions. Wh
   caption="The wizard detects your editors, then asks where the MCP server should live"
 />
 
+## Check the installation
+
+Run `argent doctor` when the agent cannot use Argent:
+
+```bash
+argent doctor
+```
+
+The command checks these items:
+
+- the `argent` command and the project install,
+- the Argent MCP entry of each editor,
+- the skills and rules,
+- Xcode and the Android SDK Platform Tools (`adb`).
+
+The command changes nothing. When all checks pass, it prints only the version line and one summary line. When a check fails, it prints a summary, then the failed checks with advice for each. Add `--verbose` to also list the passed checks.
+
+With a local install, run `npx argent doctor` in the project. With a global install, run `argent doctor` directly: under `npx`, the `PATH` check also finds the copy that `npx` started, which your editors may not find.
+
 ## Manual install
 
 ```bash

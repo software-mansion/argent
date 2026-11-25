@@ -185,6 +185,60 @@ async function startStub({
       if (req.method === "POST" && reqUrl === "/tools/list-devices") {
         return json(200, { data: DEVICES });
       }
+      if (req.method === "POST" && reqUrl === "/tools/native-network-logs") {
+        return json(200, {
+          data: {
+            status: "ok",
+            header: "ios-native: armed, 1 request (pid 42)",
+            armed: true,
+            count: 1,
+            total: 1,
+            requests: [
+              {
+                id: "ios-1",
+                method: "GET",
+                url: "https://api.example.com/health",
+                state: "complete",
+                status: 200,
+                mimeType: "application/json",
+                durationMs: 12,
+              },
+            ],
+          },
+        });
+      }
+      if (req.method === "POST" && reqUrl === "/tools/debugger-log-registry") {
+        return json(200, {
+          data: {
+            status: "connected",
+            file: "/tmp/argent-logs.log",
+            totalEntries: 1,
+            byLevel: { error: 1 },
+            fileSizeBytes: 128,
+            appName: "Demo",
+            deviceName: "iPhone 17",
+            clusters: [
+              {
+                message: "Boom",
+                count: 1,
+                level: "error",
+                firstId: 1,
+                lastId: 1,
+                sourceFile: "App.tsx",
+                sourceLine: 9,
+              },
+            ],
+            entries: [
+              {
+                id: 1,
+                timestamp: "2026-11-25T08:00:00.000Z",
+                level: "error",
+                message: "Boom",
+              },
+            ],
+          },
+        });
+      }
       // Both made while a profiler records on the device.
       if (req.method === "POST" && reqUrl === "/tools/gesture-tap") {
         return json(200, { data: { done: true }, profiling: true });
@@ -394,6 +448,34 @@ describe("startMcpServer tool calls", () => {
     );
   });
 
+  it("renders native-network-logs and debugger-log-registry in their short text forms", async () => {
+    const net = await client.callTool({ name: "native-network-logs", arguments: {} });
+    expect(net.isError).toBeFalsy();
+    expect(net.content).toHaveLength(1);
+    expect(textOf(net)).toBe(
+      [
+        "ios-native: armed, 1 request (pid 42)",
+        '{id: ios-1} "GET https://api.example.com/health" 200 application/json 12ms',
+      ].join("\n")
+    );
+
+    const logs = await client.callTool({ name: "debugger-log-registry", arguments: {} });
+    expect(logs.isError).toBeFalsy();
+    expect(logs.content).toHaveLength(1);
+    expect(textOf(logs)).toBe(
+      [
+        'JS console logs (connected): 1 entry (error=1) | app=Demo device="iPhone 17"',
+        "File: /tmp/argent-logs.log (128 B)",
+        "",
+        "Clusters (1):",
+        "[x1] error #1 App.tsx:9 | Boom",
+        "",
+        "Recent entries (1, oldest first):",
+        "[L:1] 2026-11-25T08:00:00.000Z error | Boom",
+      ].join("\n")
+    );
+  });
+
   it("uploads a tar-upload input and returns the tool result", async () => {
     const result = await client.callTool({
       name: "reinstall-app",
@@ -401,7 +483,7 @@ describe("startMcpServer tool calls", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"reinstalled": true');
+    expect(textOf(result)).toContain('"reinstalled":true');
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
     const posts = requests.filter((r) => r.url === "/tools/reinstall-app");
     expect(posts).toHaveLength(1);
@@ -480,7 +562,7 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
   });
 
   it("tells the agent what is new on the first call after an update, and only then", async () => {
@@ -760,13 +842,13 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.map((c) => (c.type === "image" ? "image" : c.text!.split("\n")[0]))).toEqual([
-      "{",
+      '{"tapped":true}',
       "--- Screen after action ---",
       "image",
       "Saved: /tmp/shot.png",
       "--- Elements after action (describe) ---",
     ]);
-    expect(content[0]!.text).toContain('"tapped": true');
+    expect(content[0]!.text).toContain('"tapped":true');
     expect(content.at(-1)!.text).toContain("button Done");
   });
 
@@ -841,7 +923,7 @@ describe("startMcpServer screen capture after an interaction", () => {
       c.type === "image" ? "image" : c.text!.split("\n")[0]
     );
     expect(blocks.slice(0, 3)).toEqual([
-      "{",
+      '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
       `Tree id: ${treeId(described)}`,
       "--- Screen after action ---",
     ]);
@@ -1001,7 +1083,7 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(result.isError).toBeFalsy();
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).not.toContain("--- Screen after action ---");
     expect(text).toContain("--- Elements after action (describe) ---");
   });
@@ -1035,7 +1117,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).toContain("--- Screen after action ---");
     expect(text).not.toContain(AUTO_DESCRIBE_HEADER);
   });
@@ -1297,7 +1379,7 @@ describe("startMcpServer with a local tool-server", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
     const calls = postsTo(second, "/tools/noted");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers.authorization).toBe("Bearer tok-2");

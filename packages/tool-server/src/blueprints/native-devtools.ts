@@ -318,7 +318,7 @@ const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["stat
  * Flow integration: a blocked precheck is a RESOLVED tool result, so a recorded
  * step that runs one of these tools would otherwise report `pass` for a call
  * that never reached its work. Mirrors `isDebuggerNotConnectedResult` and
- * `isUnmetUiWaitResult`.
+ * `isUnmetWaitResult`.
  *
  * Keyed on the tool id as well as the shape: the four status strings are
  * unremarkable words, and an unrelated tool that happens to answer

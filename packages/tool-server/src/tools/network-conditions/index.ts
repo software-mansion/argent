@@ -28,13 +28,12 @@ const capability: ToolCapability = {
 
 export const networkConditionsTool: ToolDefinition<NetworkConditionsParams, Result> = {
   id: "network-conditions",
-  description: `Throttle the network: add latency, limit download and upload speed, or go offline.
-Use to test loading states, timeouts, retries and offline handling. Each call replaces the previous conditions. Call it with no condition (only udid, plus bundleId on iOS) to remove the throttle.
-Returns { scope, conditions }. scope names what was shaped:
-- "app" on an iOS simulator: only the app named by bundleId, a non-Apple app with native devtools connected. Shapes its http/https URLSession requests, except WebSockets and requests to the Metro port (port). The server gets each request at once: Argent delays what the app receives. Argent applies the conditions again when the app restarts and reconnects; the app drops them when the tool-server stops. If status is restart_required, service_stale, connect_pending or init_failed, follow the message as for native-network-logs.
-- "device" on an Android emulator: Argent points the emulator's global HTTP proxy at its own proxy on the host, which adds latencyMs to every round trip (a new HTTPS connection pays it several times) and caps the total speed of http/https requests and WebSockets. Not shaped: the Metro port (port), raw sockets, UDP, QUIC, DNS, apps that ignore the system proxy (such as Flutter dart:io) and connections opened before the call until they close (restart the app to shape all of them). A localhost request without adb reverse fails with 502 while throttled. Fails when the emulator has a proxy Argent did not set. A reset or a tool-server stop removes the proxy; after a crash apps cannot connect until a reset. offline removes the proxy and turns Wi-Fi and mobile data off, and fails on an emulator that keeps a network (an Android TV emulator uses Ethernet); adb reverse ports stay reachable and an app that reaches Metro at 10.0.2.2 loses it. Any call other than offline turns both radios on when no network is up and fails if none comes up within 15 s.
-- "tab" on Chromium: requests of the active tab's page, not its workers, service workers or cross-site iframes. Argent applies the conditions again after a tab switch and before a tab opened by chromium-tabs loads.
-conditions is null after a reset. Fails on a physical iOS or Android device.`,
+  description: `Add latency, cap speed or simulate an offline connection. Use when testing loading states, retries or timeouts. Each call replaces the previous conditions. Omit the conditions to reset after the test.
+Returns the scope and applied conditions. A reset returns null for conditions.
+On a local iOS simulator, Argent shapes one app's intercepted HTTP traffic. While online, Argent forwards requests immediately and delays delivery to the app. Native devtools must be connected. WebSockets and the Metro port are exempt. Follow message if the result includes a status.
+On Android, Argent shapes traffic that uses the system proxy. Restart the app if existing connections bypass shaping. Throttling fails if the emulator has a proxy Argent did not set. Ethernet can prevent offline mode. Reset if a crash leaves the emulator unable to connect.
+On Chromium, Argent shapes the active page. Workers and cross-site iframes are outside its scope.
+Fails on physical devices and remote iOS simulators.`,
   zodSchema: networkConditionsZodSchema,
   searchHint: "network throttle latency slow offline bandwidth 3g conditions emulate",
   interaction: {
