@@ -116,6 +116,7 @@ afterEach(async () => {
   dropOnEnable = false;
   dropOnEvaluate = false;
   __resetReapedSessionsForTesting();
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -195,5 +196,55 @@ describe("JsRuntimeDebugger startup log capture", () => {
       `Before that: The log file with its 1 captured console entry is kept at ${crashed}`
     );
     expect(logFiles()).toHaveLength(2);
+  });
+
+  it("stops writing console frames once the log is closed on teardown", async () => {
+    const api = await connect();
+    const disconnect = api.cdp.disconnect.bind(api.cdp);
+    vi.spyOn(api.cdp, "disconnect").mockImplementation(async () => {
+      api.cdp.events.emit("consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "printed during close" }],
+        timestamp: 1710000000001,
+      });
+      await disconnect();
+    });
+    const stderr = vi.spyOn(process.stderr, "write");
+    await registry.dispose();
+    expect(stderr.mock.calls.flat().join("")).not.toContain("LogFileWriter is closed");
+  });
+
+  it("fails the connect when the socket drops while the console log server binds", async () => {
+    const listen = http.Server.prototype.listen;
+    const close = vi.spyOn(http.Server.prototype, "close");
+    vi.spyOn(http.Server.prototype, "listen").mockImplementationOnce(function (
+      this: http.Server,
+      ...args: Parameters<http.Server["listen"]>
+    ) {
+      const [ws] = wss.clients;
+      ws!.once("close", () => listen.apply(this, args));
+      ws!.close();
+      return this;
+    });
+    await expect(connect()).rejects.toThrow("CDP disconnected");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("names only the newest and the first crashed session across a crash loop", async () => {
+    const urn = `JsRuntimeDebugger:${mockPort}:${DEVICE}`;
+    const crashed: string[] = [];
+    await connect();
+    for (let i = 0; i < 4; i++) {
+      const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+      crashed.push(api.logWriter.getFilePath());
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() => expect(registry.getServiceState(urn)).not.toBe("RUNNING"));
+    }
+    const salvage = takeReapedSession(`js-runtime-debugger:${mockPort}`, DEVICE)?.salvage ?? "";
+    expect(salvage.split("Before that:")).toHaveLength(2);
+    expect(salvage).toContain(`is kept at ${crashed[3]}`);
+    expect(salvage).toContain(
+      `Before that: The log file with its 1 captured console entry is kept at ${crashed[0]}`
+    );
   });
 });
