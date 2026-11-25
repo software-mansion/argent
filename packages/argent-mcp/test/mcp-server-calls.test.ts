@@ -561,7 +561,7 @@ describe("startMcpServer tool calls", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toBe('a note\n{"ok":true}');
+    expect(result.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
   });
 
   it("tells the agent what is new on the first call after an update, and only then", async () => {
@@ -571,12 +571,15 @@ describe("startMcpServer tool calls", () => {
       const first = await client.callTool({ name: "noted", arguments: {} });
       const second = await client.callTool({ name: "noted", arguments: {} });
 
-      expect(textOf(first)).toMatch(
-        new RegExp(
-          `^a note\\n\\{"ok":true\\}\\nArgent was updated to v${version} before this session\\.`
-        )
-      );
-      expect(textOf(second)).not.toContain("Argent was updated");
+      expect(first.content).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `a note\n{"ok":true}\nArgent was updated to v${version} before this session.`
+          ),
+        },
+      ]);
+      expect(second.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
       expect(getWhatsNewSeenVersion()).toBe(version);
     } finally {
       setWhatsNewSeenVersion(version);
