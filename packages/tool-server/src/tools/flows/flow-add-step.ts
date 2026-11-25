@@ -133,6 +133,9 @@ function fallbackSourceWarning(
   if (platform === "macos" && hint?.includes(MACOS_LOCKED_HINT)) {
     return `selector captured while the Mac was locked (the ${source} tree, not ${expected}): a replay on an unlocked Mac reads the ${expected} tree, which may not match it`;
   }
+  if (source === "android-devtools+cdp" || source === "uiautomator+cdp") {
+    return `selector captured in a Chrome tab whose web content came from Chrome DevTools: replay reads the accessibility tree, where a selector on the web content will not resolve`;
+  }
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
 }
 

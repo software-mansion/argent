@@ -2066,7 +2066,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       const node = findById(tree, id)!;
       return { label: node.label, value: node.value };
     };
-    expect(read("filled")).toEqual({ label: "Search", value: undefined });
+    // The typed text reads beside the placeholder, which stays the name.
+    expect(read("filled")).toEqual({ label: "Search", value: "abc" });
     expect(read("inert")).toEqual({ label: "Search", value: undefined });
     expect(read("hidden")).toEqual({ label: "Search", value: undefined });
     expect(read("blank-aria")).toEqual({ label: "Search", value: undefined });
@@ -2887,6 +2888,78 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pw!.password).toBe(true);
     expect(pw!.label).toBeUndefined();
     expect(JSON.stringify(tree)).not.toContain("hunter2");
+  });
+
+  it("reads a form control's current value beside its placeholder name, never a secret's", () => {
+    const area = Object.assign(
+      el({ tag: "textarea", text: "default", attrs: { id: "ta" }, rect: BOX }),
+      { value: "typed note", placeholder: "Notes" }
+    );
+    Object.setPrototypeOf(area, MockHTMLTextAreaElement.prototype);
+    const option = { label: "Large" };
+    // A secret field with no placeholder inside a <label>: its value never becomes a name.
+    const wrapped = (id: string, caption: string, autocomplete: string, value: string) => {
+      const field = inputEl({ type: "text", value, attrs: { id, autocomplete }, rect: BOX });
+      const label = el({
+        tag: "label",
+        rect: BOX,
+        attrs: { id: `${id}-label` },
+        children: [field],
+      }) as MockElement & Record<string, unknown>;
+      label.childNodes = [text(caption), field];
+      return label;
+    };
+    const { tree } = run([
+      wrapped("otp2", "Code ", "one-time-code", "554433"),
+      wrapped("card2", "Card ", "cc-number", "5500005555555559"),
+      el({ tag: "button", rect: BOX, attrs: { "id": "go", "aria-labelledby": "otp2-label" } }),
+      inputEl({ type: "text", value: "abc", placeholder: "Search", attrs: { id: "q" }, rect: BOX }),
+      inputEl({
+        type: "password",
+        value: "hunter2",
+        placeholder: "PIN",
+        attrs: { id: "pw" },
+        rect: BOX,
+      }),
+      // A one-time code and card details are as secret as a password.
+      inputEl({
+        type: "text",
+        value: "482913",
+        placeholder: "Code",
+        attrs: { id: "otp", autocomplete: "one-time-code" },
+        rect: BOX,
+      }),
+      inputEl({
+        type: "tel",
+        value: "4111111111111111",
+        placeholder: "Card number",
+        attrs: { id: "card", autocomplete: "billing CC-Number" },
+        rect: BOX,
+      }),
+      area,
+      Object.assign(el({ tag: "select", attrs: { id: "size" }, rect: BOX }), {
+        selectedOptions: [option],
+      }),
+    ]);
+    const read = (id: string) => {
+      const node = findById(tree, id)!;
+      return { label: node.label, value: node.value };
+    };
+    expect(read("q")).toEqual({ label: "Search", value: "abc" });
+    expect(read("pw")).toEqual({ label: "PIN", value: undefined });
+    expect(read("otp")).toEqual({ label: "Code", value: undefined });
+    expect(read("card")).toEqual({ label: "Card number", value: undefined });
+    // The live value, not the stale default the child text holds.
+    expect(read("ta")).toEqual({ label: "Notes", value: "typed note" });
+    expect(read("size").value).toBe("Large");
+    expect(read("otp2")).toEqual({ label: undefined, value: undefined });
+    expect(read("card2")).toEqual({ label: undefined, value: undefined });
+    expect(read("otp2-label").value).toBe("Code");
+    // Read into another element's name, a secret field shows bullets, as a password does.
+    expect(read("go").label).toBe("Code \u2022\u2022\u2022\u2022\u2022\u2022");
+    for (const secret of ["hunter2", "482913", "4111111111111111", "554433", "5500005555555559"]) {
+      expect(JSON.stringify(tree)).not.toContain(secret);
+    }
   });
 
   it("still reads a non-password input's value as its accessible name", () => {
@@ -5043,13 +5116,16 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   it("lets an open select's picker content escape its clips, but not its leading <button>", () => {
     const BELOW = (y: number) => ({ x: 1, y, w: 80, h: 20 });
     const select = (open: boolean, children: MockElement[]) =>
-      el({
-        tag: "select",
-        topLayer: open ? ":open" : undefined,
-        rect: { x: 1, y: 60, w: 80, h: 25 },
-        style: { display: "inline-block" },
-        children,
-      });
+      Object.assign(
+        el({
+          tag: "select",
+          topLayer: open ? ":open" : undefined,
+          rect: { x: 1, y: 60, w: 80, h: 25 },
+          style: { display: "inline-block" },
+          children,
+        }),
+        { selectedOptions: [] }
+      );
     const btn = (id: string, y: number) => el({ tag: "button", attrs: { id }, rect: BELOW(y) });
     const opt = (id: string, y: number) => el({ tag: "option", attrs: { id }, rect: BELOW(y) });
     const { tree } = run([

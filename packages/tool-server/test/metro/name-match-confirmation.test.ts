@@ -2,7 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
-import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import {
+  jsRuntimeDebuggerBlueprint,
+  type JsRuntimeDebuggerApi,
+} from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { nameMatchedLogicalDeviceId } from "../../src/utils/debugger/device-name";
 import { scopeTempHome } from "../helpers/temp-home";
@@ -44,8 +47,21 @@ let wss: WebSocketServer;
 let mockPort: number;
 let registry: Registry;
 
+const runtimeEnabled = new WeakSet<WebSocket>();
+
 function handleCDPMessage(ws: WebSocket, raw: string, logicalDeviceId: string | null) {
   const { id, method } = JSON.parse(raw) as { id: number; method: string };
+  if (method === "Runtime.enable" && !runtimeEnabled.has(ws)) {
+    runtimeEnabled.add(ws);
+    const args = [{ type: "string", value: "printed at startup" }];
+    ws.send(
+      JSON.stringify({
+        method: "Runtime.consoleAPICalled",
+        params: { type: "log", args, executionContextId: 1, timestamp: 1 },
+      })
+    );
+  }
+  if (method === "Runtime.disable") runtimeEnabled.delete(ws);
   if (method === "Runtime.evaluate") {
     ws.send(JSON.stringify({ id, result: { result: { type: "string", value: logicalDeviceId } } }));
     return;
@@ -134,6 +150,18 @@ describe("a device matched by name", () => {
     expect(nameMatchedLogicalDeviceId("emulator-5554", mockPort)).toBe("logical-api35");
     // Pins are per Metro port.
     expect(nameMatchedLogicalDeviceId("emulator-5554", mockPort + 1)).toBeUndefined();
+  });
+
+  it("keeps the startup logs the runtime replays only once per enable", async () => {
+    deviceNameMatcher.mockResolvedValue(named(DEVICES[0]!.deviceName));
+    runsOn.set("logical-api35", ["emulator-5554"]);
+
+    await connect("emulator-5554");
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:emulator-5554`
+    );
+
+    expect(api.logWriter.getStats().totalEntries).toBe(1);
   });
 
   it("refuses a twin with the same name that runs on another device", async () => {

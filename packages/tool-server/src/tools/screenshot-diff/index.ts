@@ -105,9 +105,7 @@ const zodSchema = z
       .string()
       .min(1)
       .optional()
-      .describe(
-        "Directory where diff artifacts should be written (default: a temp directory). The diff images are returned in the result either way."
-      ),
+      .describe("Directory where diff artifacts should be written (default: a temp directory)."),
   })
   .strict();
 
@@ -121,7 +119,7 @@ Both images must have identical dimensions: save baselines with screenshot scale
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
 Physical iPhones: live captures are device-wide and need no registered app.
 <flag:macos-apps>Mac apps: a resized window fails as a dimension mismatch.
-</flag:macos-apps>Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
+</flag:macos-apps>Returns { summary }, plus diffPath and contextDiffPath when pixels differ. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
 Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable.`,
   zodSchema,

@@ -43,6 +43,8 @@ import {
 import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { listDevicesText } from "./list-devices-text.js";
+import { nativeNetworkLogsText } from "./native-network-logs-text.js";
+import { debuggerLogRegistryText } from "./debugger-log-registry-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -358,13 +360,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         signal: callSignal,
       };
 
-      const devicesText =
-        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
+      const toolId = canonicalToolId(params.name);
+      const compactText =
+        toolId === "list-devices"
+          ? listDevicesText(result)
+          : toolId === "native-network-logs"
+            ? nativeNetworkLogsText(result)
+            : toolId === "debugger-log-registry"
+              ? debuggerLogRegistryText(result)
+              : undefined;
       let content: ContentBlock[];
-      if (devicesText !== undefined) {
-        content = [{ type: "text" as const, text: devicesText }];
+      if (compactText !== undefined) {
+        content = [{ type: "text" as const, text: compactText }];
       } else if (
-        canonicalToolId(params.name) === "e2e-execute" &&
+        toolId === "e2e-execute" &&
         result &&
         typeof result === "object" &&
         ("e2eTest" in result || "flow" in result) &&

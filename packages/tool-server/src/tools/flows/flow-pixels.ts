@@ -16,7 +16,7 @@ import {
   httpScreenshot,
   resolveCapturePanel,
 } from "../../utils/simulator-client";
-import { settleWithin } from "../../utils/timing";
+import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { downscalePngInPlace, tvScreenshot } from "../screenshot";
 import type { ActionEnv } from "./flow-actions";
 
@@ -469,12 +469,21 @@ function captureAbortSignal(env: ActionEnv, budgetMs: number): AbortSignal {
  * effectively unreachable — the clip is built from the cached viewport, so a
  * resize does not change the captured dimensions until something refreshes it.
  */
-export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0): PixelChange {
+export function comparePixels(
+  a: PixelFrame,
+  b: PixelFrame,
+  maskTopFraction = 0,
+  maskBottomFraction = 0
+): PixelChange {
   if (a.width !== b.width || a.height !== b.height) return "moving";
   const maskedRows = Math.min(a.height, Math.floor(a.height * maskTopFraction));
-  const total = a.width * (a.height - maskedRows);
+  const maskedBottomRows = Math.min(
+    a.height - maskedRows,
+    Math.floor(a.height * maskBottomFraction)
+  );
+  const total = a.width * (a.height - maskedRows - maskedBottomRows);
   if (total <= 0) return "still";
-  const limit = Math.min(a.data.length, b.data.length);
+  const limit = Math.min(a.data.length, b.data.length, (a.height - maskedBottomRows) * a.width * 4);
   let changed = 0;
   for (let o = maskedRows * a.width * 4; o + 2 < limit; o += 4) {
     const dr = a.data[o] - b.data[o];
@@ -488,4 +497,71 @@ export function comparePixels(a: PixelFrame, b: PixelFrame, maskTopFraction = 0)
   );
   if (changed > motionThreshold) return "moving";
   return changed >= LOCALIZED_MOTION_MIN_PIXELS ? "localized" : "still";
+}
+
+const SNAPSHOT_SETTLE_POLL_MS = 100;
+const SNAPSHOT_SETTLE_TIMEOUT_MS = 3_000;
+
+// An app can take a few hundred milliseconds to start reacting to a step that
+// can change the screen (a tap, a launch), and longer on an Android emulator,
+// so two identical frames inside this window after one prove nothing.
+const SNAPSHOT_QUIET_AFTER_ACTION_MS = 300;
+const ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS = 400;
+
+// A caret- or spinner-sized change ends the settle once it has lasted this many
+// polls: a small control animating (a switch, a checkmark) finishes first, and a
+// caret or a spinner that never stops still lets the snapshot go ahead.
+const SNAPSHOT_LOCALIZED_POLLS = 3;
+
+// The home indicator (iOS) or gesture bar (Android) at the bottom of a phone
+// capture, which the system fades after an app comes to the front.
+const HOME_INDICATOR_MASK_FRACTION = 0.02;
+
+/**
+ * Whether a snapshot settles on captures rather than on the UI tree: on a local
+ * iOS simulator or an Android emulator, where a capture comes from the
+ * simulator-server stream and costs a few milliseconds. Everything else keeps
+ * the tree settle, physical phones included: a slow phone can deliver a touch
+ * to the app after the quiet window has ended.
+ */
+export async function settlesOnPixels(device: ActionEnv["device"]): Promise<boolean> {
+  if (device.platform === "android") return device.kind === "emulator";
+  if (device.platform !== "ios" || isIosPhysicalDevice(device)) return false;
+  return !(await isTvOsSimulator(device.id));
+}
+
+/**
+ * Wait until two captures one poll apart show the same screen, and a quiet
+ * window ({@link SNAPSHOT_QUIET_AFTER_ACTION_MS}) has passed since the run's
+ * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. `blind` means no
+ * two captures could be compared.
+ */
+export async function settleOnPixels(
+  env: ActionEnv
+): Promise<"still" | "moving" | "aborted" | "blind"> {
+  const deadline = Date.now() + SNAPSHOT_SETTLE_TIMEOUT_MS;
+  const quietAfter =
+    (env.lastActionAt ?? 0) +
+    (env.device.platform === "android"
+      ? ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS
+      : SNAPSHOT_QUIET_AFTER_ACTION_MS);
+  const maskTopFraction = await statusBarMaskFraction(env.device);
+  const maskBottomFraction = maskTopFraction > 0 ? HOME_INDICATOR_MASK_FRACTION : 0;
+  let previous = await capturePixelsWithin(env, deadline, true);
+  let compared = false;
+  let localizedPolls = 0;
+  while (Date.now() < deadline) {
+    if (!(await sleepOrAbort(SNAPSHOT_SETTLE_POLL_MS, env.signal))) return "aborted";
+    const frame = await capturePixelsWithin(env, deadline, false);
+    if (env.signal?.aborted) return "aborted";
+    if (previous && frame) {
+      compared = true;
+      const change = comparePixels(previous, frame, maskTopFraction, maskBottomFraction);
+      localizedPolls = change === "localized" ? localizedPolls + 1 : 0;
+      const settled = change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS;
+      if (settled && Date.now() >= quietAfter) return "still";
+    }
+    previous = frame;
+  }
+  return compared ? "moving" : "blind";
 }
