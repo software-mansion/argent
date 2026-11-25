@@ -196,6 +196,8 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 | `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
+On an iOS simulator, `describe` includes a visible notification banner over the foreground app when the accessibility service exposes it. The banner has the identifier `NotificationShortLookView`. Its label contains the notification text that iOS displays.
+
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.

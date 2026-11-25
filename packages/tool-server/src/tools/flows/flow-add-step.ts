@@ -63,7 +63,7 @@ import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
-import { resolveDevice } from "../../utils/device-info";
+import { isIosSimulator, resolveDevice } from "../../utils/device-info";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
@@ -205,7 +205,10 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       "question a selector asks: `native-find-views` matches `identifier`/`label`/`className` " +
       "EXACTLY and takes no substring `text` or `role`, and `native-full-hierarchy` takes no " +
       "matcher at all — it dumps the tree for you to read — " +
-      retargetRemedy("an `id`", condition)
+      retargetRemedy("an `id`", condition) +
+      (typeof udid === "string" && isIosSimulator(resolveDevice(udid))
+        ? ". When describe reports Source: ax-service, wrap the selector in `ax` to use that tree in the directive."
+        : "")
     );
   }
   if (platform === "android") {

@@ -260,6 +260,8 @@ interface DescribeIosParams {
 }
 
 interface DescribeIosOptions {
+  /** Keep an empty AX read on its own source for explicit AX selectors. */
+  axOnly?: boolean;
   // Pre-resolved tvOS verdict, so poll/retry callers don't re-shell `xcrun` each
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
@@ -445,7 +447,7 @@ async function readIos(
         : readFailureHint
       : deviceDegradedHint);
 
-  if (tree.children.length > 0) {
+  if (tree.children.length > 0 || options.axOnly) {
     return { tree, source: "ax-service", hint };
   }
 

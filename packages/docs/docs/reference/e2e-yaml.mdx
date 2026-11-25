@@ -169,7 +169,7 @@ A selector can scope its matches by the frames of other elements:
 
 ### Runner tree and discovery tree
 
-The runner resolves a selector against a different tree than the `describe` tool:
+The table shows the default tree for each platform.
 
 | Platform        | Runner tree                                                                               | `describe` tree            |
 | --------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
@@ -181,7 +181,20 @@ The runner resolves a selector against a different tree than the `describe` tool
 | Mac app         | The elements of the app tree that have an id, a label, a value, a clickable role or focus | The full app tree, nested  |
 | HarmonyOS       | None                                                                                      | `uitest` layout dump       |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, the default selector reads the role from the view class. The accessibility selector reads the role from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+
+### Accessibility selectors on iOS simulators
+
+Wrap a selector in `ax` to use the simulator accessibility tree. Use it with `tap`, `await`, `assert`, or a UI condition in `when`. Copy the identifier, text or role from `describe` when it reports `Source: ax-service`.
+
+```yaml
+- assert: { text: { in: { ax: { id: profile-name } }, contains: Ada } }
+- tap: { ax: { text: Confirm, role: Button } }
+- await: { visible: { ax: { text: { matches: "^Allow$" }, role: Button } } }
+- tap: { ax: { text: { matches: "^Allow$" }, role: Button } }
+```
+
+Use these selectors for SwiftUI controls, web page content, and system prompts that the accessibility service exposes. To tap a visible notification banner, use `tap: { ax: { id: NotificationShortLookView } }`. Add a `text` field to select a specific notification. Put any relational scope inside the wrapper. If the service fails or returns no elements, the step cannot confirm any condition, including `hidden`.
 
 ### Selectors on Mac apps
 
@@ -409,7 +422,7 @@ On Chromium, `matches` reads text in the letter case that the page shows. For ex
 
 `matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
 
-On an iOS simulator, a `text` check reads a text field as follows:
+With the default selector on an iOS simulator, a `text` check reads a text field as follows:
 
 - A text field reads as the text that it contains.
 - An empty text field reads as its placeholder.

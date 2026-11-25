@@ -60,6 +60,8 @@ A fragment declares its start state in a prerequisite. The prerequisite is a sen
 
 An e2e test can contain more than taps and text. A step can wait for an element, wait for the screen to settle, check a condition, take a screenshot and compare it to a baseline, run a different e2e test, or run a local script. See [Baselines in e2e tests](/docs/features/visual-regression#baselines-in-e2e-tests) for the screenshot comparison.
 
+On an iOS simulator, a step can use the accessibility tree to check a SwiftUI field, tap web content or answer a system prompt.
+
 An e2e test can [check that an action sends a request](/docs/features/network#wait-for-a-request). Start capture after launch and before the action. Wait for the request, then stop capture. Check start and stop results in the replay report to confirm the layer was ready or stopped. If a failed check skips the stop, ask the agent to stop capture before the next run. See [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
 Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test.

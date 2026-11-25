@@ -113,7 +113,8 @@ function twinOf(
  *
  * A tree that came with a quotable projection (see
  * `DescribeTreeData.quotableTree`) is quoted from it, so text that is withheld
- * was never part of what is assembled here. Every other tree is quoted as it
+ * was never part of what is assembled here. AX text fields also withhold their
+ * contents once a secret was typed. Every other tree is quoted as it
  * was read, with each secret value typed on the device named by its
  * placeholder.
  */
@@ -123,6 +124,9 @@ export function quotedText(
   node: DescribeNode,
   read: (node: DescribeNode) => string
 ): string {
+  if (data.source === "ax-service" && node.role === "AXTextField" && secretTypedOn(deviceId)) {
+    return WITHHELD_INPUT_TEXT;
+  }
   if (!data.quotableTree) return redactTypedSecrets(deviceId, read(node));
   const twin = twinOf(data.tree, data.quotableTree, node);
   return twin ? read(twin) : WITHHELD_INPUT_TEXT;

@@ -27,6 +27,8 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
+import { isIosSimulator } from "../../utils/device-info";
+import { describeIos } from "../describe/platforms/ios";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { quotedText } from "../../utils/typed-secrets";
 import {
@@ -115,6 +117,8 @@ export interface ActionEnv {
    * (see `fetchFlowTree`).
    */
   treeTarget?: FlowTreeTarget;
+  /** Scoped to a single explicit AX lookup. */
+  axOnly?: true;
   /**
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
@@ -398,7 +402,7 @@ export function probeWhenCondition(
  * reads as "every element".
  */
 function selectorAlternatives(sel: FlowSelector): Selector[] {
-  const { loose, any: _any, within, after, next, ...own } = sel;
+  const { ax: _ax, loose, any: _any, within, after, next, ...own } = sel;
   const scopes = { within, after, next };
   let alts: Selector[] =
     loose && own.text !== undefined ? [{ identifier: own.text }, { text: own.text }] : [own];
@@ -451,6 +455,15 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
   return proven && proven.deviceId === env.device.id ? proven.error : undefined;
 }
 
+function envForSelector(env: ActionEnv, selector?: FlowSelector): ActionEnv | DirectiveOutcome {
+  if (!selector?.ax) return env;
+  if (!isIosSimulator(env.device)) {
+    return { ok: false, indeterminate: true, reason: "An ax selector requires an iOS simulator." };
+  }
+  // A successful AX read (or an outage) says nothing about the app hierarchy.
+  return { ...env, axOnly: true, treeOutage: undefined };
+}
+
 /**
  * Every tree read a directive makes, so a read that comes back clears
  * {@link ActionEnv.treeOutage} whichever directive asked for it. `await`/
@@ -463,11 +476,17 @@ function provenTreeOutage(env: ActionEnv): Error | undefined {
  * that clears a verdict: it runs only after {@link waitForFrame} resolved a
  * frame, and the settle that took already cleared it.
  */
-function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
-  return fetchFlowTree(env.registry, env.device, env.treeTarget).then((data) => {
-    if (env.treeOutage) env.treeOutage.proven = undefined;
+async function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
+  if (env.axOnly) {
+    const data = await describeIos(env.registry, env.device, {}, { axOnly: true });
+    if (data.tree.children.length === 0) {
+      throw new Error(data.hint ?? "The iOS accessibility service returned no elements.");
+    }
     return data;
-  });
+  }
+  const data = await fetchFlowTree(env.registry, env.device, env.treeTarget);
+  if (env.treeOutage) env.treeOutage.proven = undefined;
+  return data;
 }
 
 /**
@@ -1207,7 +1226,9 @@ async function runTap(
   env: ActionEnv,
   target: Extract<DirectiveStep, { kind: "tap" }>
 ): Promise<DirectiveOutcome> {
-  const resolved = await resolveTargetPoint(env, target);
+  const source = envForSelector(env, target.selector);
+  if ("ok" in source) return source;
+  const resolved = await resolveTargetPoint(source, target);
   if ("fail" in resolved) return resolved.fail;
   const sent = await invokeOnDevice(env, "gesture-tap", {
     ...resolved.point,
@@ -1767,6 +1788,8 @@ async function waitForCondition(
   },
   timeoutMs: number
 ): Promise<DirectiveOutcome> {
+  const source = envForSelector(env, step.selector);
+  if ("ok" in source) return source;
   const deadline = Date.now() + timeoutMs;
 
   // The last TRUSTED read's matches.
@@ -1790,7 +1813,7 @@ async function waitForCondition(
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
     try {
-      const data = await readFlowTree(env);
+      const data = await readFlowTree(source);
       const matches = flowFindAll(data.tree, step.selector);
       fetchError = undefined;
       everMatched ||= matches.length > 0;

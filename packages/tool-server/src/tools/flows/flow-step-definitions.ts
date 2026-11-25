@@ -82,6 +82,7 @@ function selectorLabel(sel: FlowSelector): string {
   const parts: string[] = [];
   // The universal selector prints as CSS spells it, so a scope-only target
   // never renders as an empty label.
+  if (sel.ax) parts.push("ax");
   if (sel.any) parts.push("*");
   // A report target is one line and these values are free text out of the flow
   // file, so `escapeInline` keeps a newline or an escape byte in one from

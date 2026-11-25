@@ -81,13 +81,15 @@ On an iOS simulator, Android, and Chromium, an id absent from `describe` can sti
 
 For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element.
 
-**On an iOS simulator, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
+**On an iOS simulator, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later default runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
 
 Any raw `tool:` step ends the pin, because its effect on the screen is opaque to the runner, and reads auto-detect the frontmost app again until the next `launch:` re-pins. A tool that cannot change the foreground app leaves the launched id as an unpinned fallback, which takes the read only when auto-detection times out and the launched app vouches for itself with a probe of its own. `launch-app`, `restart-app`, `reinstall-app`, `open-url`, and `button` drop even that; `launch-app` and `restart-app` replace it with the app they just started, still unpinned. Nested `run:` fragments inherit both the pin and its clearing.
 
 So on an iOS simulator, recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
 
-**On an iOS simulator, never copy a `role` from `describe` into a YAML selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+**On an iOS simulator, copy a role from `describe` only into an explicit accessibility selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+
+For `tap`, `await`, `assert`, and UI guards in `when`, wrap the selector in `ax` to read the simulator accessibility service directly. Use this when `describe` reports `Source: ax-service` and shows a SwiftUI control, web content, or a system prompt. For example, `tap: { ax: { text: { matches: '^Allow$' }, role: Button } }` targets the permission button. An empty accessibility read fails the check, including `hidden`.
 
 When several nodes match, the directive decides:
 

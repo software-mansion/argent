@@ -702,6 +702,7 @@ export type GestureTarget = { selector: FlowSelector } | { x: number; y: number 
  * (see `selectorAlternatives`).
  */
 export type FlowSelector = Omit<Selector, "within" | "after" | "next"> & {
+  ax?: true;
   loose?: boolean;
   any?: boolean;
   within?: FlowSelector;
@@ -1002,15 +1003,16 @@ export function chromiumLaunchSpec(
  * `any: true` is the CSS `*` universal selector — no own constraint, so it is
  * accepted only alongside a relation, and never alongside `text`/`id`/`role`.
  */
-type YamlSelector =
+type YamlSelector = PlainYamlSelector | { ax: PlainYamlSelector };
+type PlainYamlSelector =
   | string
   | (Omit<Selector, "identifier" | "text" | "textMatches" | "within" | "after" | "next"> & {
       id?: string;
       any?: boolean;
       text?: string | { matches: string };
-      within?: YamlSelector;
-      after?: YamlSelector;
-      next?: YamlSelector;
+      within?: PlainYamlSelector;
+      after?: PlainYamlSelector;
+      next?: PlainYamlSelector;
     });
 
 /**
@@ -1136,6 +1138,14 @@ type YamlFlowFile = {
  * on screen.
  */
 export function selectorToYaml(sel: FlowSelector): YamlSelector {
+  if (sel.ax === true) {
+    const { ax: _ax, ...inner } = sel;
+    return { ax: plainSelectorToYaml(inner) };
+  }
+  return plainSelectorToYaml(sel);
+}
+
+function plainSelectorToYaml(sel: FlowSelector): PlainYamlSelector {
   // `parseSelector` accepts a closed key set, so anything else serializes into a
   // flow the parser refuses - or, on the bare-string path below, is lost silently.
   const unknown = Object.keys(sel).filter((key) => !WRITABLE_SELECTOR_KEYS.includes(key));
@@ -1252,13 +1262,13 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // recurses — each level keeps its own bare-string/map spelling.
   const { loose: _loose, any, identifier, textMatches, within, after, next, ...rest } = sel;
   const scopes = { within, after, next };
-  const out: Exclude<YamlSelector, string> = { ...rest };
+  const out: Exclude<PlainYamlSelector, string> = { ...rest };
   if (any) out.any = true;
   if (textMatches !== undefined) out.text = { matches: textMatches };
   if (identifier !== undefined) out.id = identifier;
   for (const relation of SELECTOR_RELATIONS) {
     const scope = scopes[relation];
-    if (scope !== undefined) out[relation] = selectorToYaml(scope);
+    if (scope !== undefined) out[relation] = plainSelectorToYaml(scope);
   }
   return out;
 }
@@ -1296,7 +1306,7 @@ export function escapeInline(value: string): string {
 export function describeSelector(s: FlowSelector): string {
   // Split off the non-string members before Object.entries so the remaining
   // values are all strings; the scopes render separately below.
-  const { loose: _loose, any, within, after, next, ...rest } = s;
+  const { ax, loose: _loose, any, within, after, next, ...rest } = s;
   const scopes = { within, after, next };
   const fields = Object.entries(rest)
     // `identifier` is spelled `id` in flow YAML — print the spelling the flow
@@ -1310,7 +1320,9 @@ export function describeSelector(s: FlowSelector): string {
     .join(" ");
   // The universal selector prints as CSS spells it, so a relation-only target
   // never renders as an empty string.
-  const parts = [any ? "*" : undefined, fields || undefined].filter((p) => p !== undefined);
+  const parts = [ax ? "ax" : undefined, any ? "*" : undefined, fields || undefined].filter(
+    (p) => p !== undefined
+  );
   // Each scope renders after the fields, parenthesized so a nested scope's own
   // fields can't be misread as the target's, and labelled with the YAML key.
   for (const relation of SELECTOR_RELATIONS) {
@@ -1373,7 +1385,10 @@ function textWaitToYaml(
 
 /** Sugar a gesture target (`tap`/`long-press`/`swipe`) for YAML output, rejecting
  * internal states that would serialize to a flow the parser cannot read back. */
-function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number }): YamlTarget {
+function targetToYaml(
+  step: { selector?: FlowSelector; x?: number; y?: number },
+  writeSelector: (selector: FlowSelector) => YamlSelector = plainSelectorToYaml
+): YamlTarget {
   const hasPointField = step.x !== undefined || step.y !== undefined;
   if (step.selector !== undefined) {
     if (hasPointField) {
@@ -1381,7 +1396,7 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
         "Cannot serialize e2e test gesture target: use a selector or x/y coordinates, not both"
       );
     }
-    return selectorToYaml(step.selector);
+    return writeSelector(step.selector);
   }
   if (typeof step.x !== "number" || typeof step.y !== "number") {
     throw new Error(
@@ -1607,7 +1622,7 @@ function toYamlStep(step: FlowStep): YamlStep {
     }
     case "tap": {
       // Parsing strips default options, so a plain tap serializes as just its target.
-      const target = targetToYaml(step);
+      const target = targetToYaml(step, selectorToYaml);
       if (step.times === undefined && step.button === undefined && step.modifiers === undefined) {
         return { tap: target };
       }
@@ -1670,7 +1685,7 @@ function toYamlStep(step: FlowStep): YamlStep {
     }
     case "type": {
       const body: { into: YamlSelector; text: string; submit?: boolean } = {
-        into: selectorToYaml(step.into),
+        into: plainSelectorToYaml(step.into),
         text: step.text,
       };
       // `submit` defaults to true; only serialize the explicit opt-out.
@@ -1700,7 +1715,7 @@ function toYamlStep(step: FlowStep): YamlStep {
     case "wait":
       return { wait: step.ms };
     case "scroll-to": {
-      const target = selectorToYaml(step.target);
+      const target = plainSelectorToYaml(step.target);
       // Sugar the common case back to a bare target: default direction, no container.
       if (typeof target === "string" && step.direction === "down" && !step.within) {
         return { "scroll-to": target };
@@ -1709,7 +1724,7 @@ function toYamlStep(step: FlowStep): YamlStep {
         "scroll-to": {
           target,
           direction: step.direction,
-          ...(step.within ? { within: selectorToYaml(step.within) } : {}),
+          ...(step.within ? { within: plainSelectorToYaml(step.within) } : {}),
         },
       };
     }
@@ -1717,14 +1732,14 @@ function toYamlStep(step: FlowStep): YamlStep {
       // Canonical spelling puts `on` before `scale` (key order is preserved).
       return {
         pinch: step.selector
-          ? { on: selectorToYaml(step.selector), scale: step.scale }
+          ? { on: plainSelectorToYaml(step.selector), scale: step.scale }
           : { scale: step.scale },
       };
     case "rotate":
       // Canonical key order puts `on` before `by` (key order is preserved).
       return {
         rotate: step.selector
-          ? { on: selectorToYaml(step.selector), by: step.by }
+          ? { on: plainSelectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
     case "fold": {
@@ -1747,7 +1762,7 @@ function toYamlStep(step: FlowStep): YamlStep {
         name: step.name,
       };
       if (step.maxMismatch !== undefined) body.maxMismatch = step.maxMismatch;
-      if (step.cropOn !== undefined) body.cropOn = selectorToYaml(step.cropOn);
+      if (step.cropOn !== undefined) body.cropOn = plainSelectorToYaml(step.cropOn);
       return { snapshot: body };
     }
     case "script": {
@@ -1911,7 +1926,7 @@ const SELECTOR_KEYS: readonly string[] = [
   ...SELECTOR_RELATIONS,
 ];
 
-// Every field of {@link FlowSelector}, kept exact by `Record`. Deliberately not
+// Every field inside a selector wrapper, kept exact by `Record`. Deliberately not
 // SELECTOR_KEYS: `id` is the YAML-only spelling of `identifier`, so an in-memory
 // selector carrying it is junk the match engine ignores.
 const WRITABLE_SELECTOR_KEYS = Object.keys({
@@ -1924,7 +1939,7 @@ const WRITABLE_SELECTOR_KEYS = Object.keys({
   within: true,
   after: true,
   next: true,
-} satisfies Record<keyof FlowSelector, true>);
+} satisfies Record<Exclude<keyof FlowSelector, "ax">, true>);
 
 /**
  * Total scopes one selector may carry, counted across its whole relation TREE
@@ -2172,14 +2187,18 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
     }
     return {
       condition: "text",
-      selector: parseSelector(tb.in, `${kind}.text.in`),
+      selector: parseAxOrDefaultSelector(tb.in, `${kind}.text.in`),
       expectedText: expected,
       textMatch,
       timeout,
     };
   }
 
-  return { condition, selector: parseSelector(b[condition], `${kind}.${condition}`), timeout };
+  return {
+    condition,
+    selector: parseAxOrDefaultSelector(b[condition], `${kind}.${condition}`),
+    timeout,
+  };
 }
 
 /**
@@ -2683,6 +2702,15 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
   );
 }
 
+/** The outer wrapper selects a tree for the whole lookup, including its scopes. */
+function parseAxOrDefaultSelector(raw: unknown, where: string): FlowSelector {
+  if (raw !== null && typeof raw === "object" && "ax" in raw) {
+    rejectUnknownKeys(raw, raw as Record<string, unknown>, ["ax"], where);
+    return { ...parseSelector(raw.ax, `${where}.ax`), ax: true };
+  }
+  return parseSelector(raw, where);
+}
+
 /**
  * Parse a gesture target (a `tap`/`long-press` body, its `on:` value, or a
  * swipe's `from:`/`to:`): a selector (bare string = loose, map = strict) or a
@@ -2691,7 +2719,7 @@ function hasSelectorField(obj: Record<string, unknown>): boolean {
  * map — so it is rejected loudly. Only the point-acting directives call this;
  * the observing directives take `parseSelector` directly.
  */
-function parseTarget(raw: unknown, where: string): GestureTarget {
+function parseTarget(raw: unknown, where: string, selectorParser = parseSelector): GestureTarget {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if (obj.x !== undefined || obj.y !== undefined) {
@@ -2716,7 +2744,7 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
       return { x: obj.x, y: obj.y };
     }
   }
-  return { selector: parseSelector(raw, where) };
+  return { selector: selectorParser(raw, where) };
 }
 
 /**
@@ -2759,7 +2787,10 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
         'tap with times, button or modifiers needs a target - e.g. tap: { on: "Photo", times: 2 }'
       );
     }
-    const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
+    const step: FlowStep = {
+      kind: "tap",
+      ...parseTarget(obj.on, "tap.on", parseAxOrDefaultSelector),
+    };
     const times = parseTapTimes(obj.times, entry);
     if (times !== undefined) step.times = times;
     const button = parseTapButton(obj.button, entry);
@@ -2769,7 +2800,7 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
     return step;
   }
 
-  return { kind: "tap", ...parseTarget(body, "tap") };
+  return { kind: "tap", ...parseTarget(body, "tap", parseAxOrDefaultSelector) };
 }
 
 /**
@@ -3307,6 +3338,7 @@ interface StepField {
  * asks for it.
  */
 function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
+  if (sel.ax) where += ".ax";
   if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
   // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
   if (patterns && sel.textMatches !== undefined) {
