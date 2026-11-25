@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState } from "../../utils/update-checker";
+import { isUpdateCheckDisabled } from "../../utils/update-check-env";
 
 // dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
 // PATH, updates the SAME install serving this session and works in local
@@ -120,6 +121,7 @@ export const updateArgentTool: ToolDefinition<{
   description:
     "Apply a pending Argent update. Call this only when the user has explicitly consented in this conversation to updating Argent, e.g. after an update notification reports a new version. Returns { message } with the update status, version info, and whether the tool server restarts. Fails if no update is available or an update is already in progress.",
   zodSchema,
+  hideWhen: isUpdateCheckDisabled,
   interaction: {
     startedMsg: () => `Updating Argent to ${getUpdateState().installableVersion ?? "latest"}`,
     completedMsg: () => `Updated Argent to ${getUpdateState().installableVersion ?? "latest"}`,

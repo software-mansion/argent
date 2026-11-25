@@ -8,6 +8,7 @@ import {
   fetchRegistryInfo,
   pickInstallableTarget,
 } from "@argent/update-core";
+import { isUpdateCheckDisabled } from "./update-check-env";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
@@ -146,6 +147,10 @@ export function startUpdateChecker(): { dispose(): void } {
   // Clear any leaked interval from a prior call.
   if (interval) {
     clearInterval(interval);
+  }
+
+  if (isUpdateCheckDisabled()) {
+    return { dispose() {} };
   }
 
   // Fire-and-forget initial check — don't block startup.

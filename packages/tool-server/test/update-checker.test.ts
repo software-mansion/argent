@@ -46,6 +46,7 @@ describe("update-checker", () => {
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", undefined);
 
     // Re-import after module reset so each test gets fresh state.
     const mod = await import("../src/utils/update-checker");
@@ -56,6 +57,7 @@ describe("update-checker", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("detects an available, installable update on startup", async () => {
@@ -256,6 +258,19 @@ describe("update-checker", () => {
 
     handle1.dispose();
     handle2.dispose();
+  });
+
+  it("never queries the registry when ARGENT_DISABLE_UPDATE_CHECK is set", async () => {
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", "1");
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+
+    const handle = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24 * 2);
+
+    expect(mockFetchRegistryInfo).not.toHaveBeenCalled();
+    expect(getUpdateState().updateInstallable).toBe(false);
+
+    handle.dispose();
   });
 });
 
