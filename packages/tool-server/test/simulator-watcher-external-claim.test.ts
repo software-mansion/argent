@@ -1,7 +1,7 @@
 /**
- * The watcher arms devtools injection on every booted simulator it finds, by
- * raw UDID and with no tool call behind it; the one caller that can walk past
- * a gate keyed on the `ext:` id.
+ * The watcher arms devtools injection on every booted simulator a tool has
+ * targeted, by raw UDID and with no tool call behind it after a reboot; the one
+ * caller that can walk past a gate keyed on the `ext:` id.
  *
  * The e2e device-provider tier runs under a sandbox `$HOME`, which hides the
  * default simulator set from the watcher, so this file is the only coverage.
@@ -57,6 +57,7 @@ import type { Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 /** The simulator a provider claims. */
 const CLAIMED_UDID = "11111111-1111-1111-1111-111111111111";
@@ -156,9 +157,16 @@ function makeRegistry(): {
 
   return {
     disposeService,
-    registry: { resolveService, disposeService } as unknown as Registry,
+    registry: watcherRegistry({ resolveService, disposeService }),
     resolveService,
   };
+}
+
+/** A watcher that both simulators have been targeted on. */
+function startTargetedWatcher(registry: Registry): ReturnType<typeof startSimulatorWatcher> {
+  const watcher = startSimulatorWatcher(registry);
+  targetSimulators(registry, CLAIMED_UDID, OWN_UDID);
+  return watcher;
 }
 
 /** The UDIDs the watcher asked the registry to resolve, in call order. */
@@ -198,7 +206,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl", "ax-service"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -209,7 +217,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -222,7 +230,7 @@ describe("simulator-watcher against a provider's simulator", () => {
 
     vi.useFakeTimers();
     try {
-      const { ready, stop } = startSimulatorWatcher(registry);
+      const { ready, stop } = startTargetedWatcher(registry);
       await ready;
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(10_000);
@@ -241,7 +249,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -286,7 +294,7 @@ describe("simulator-watcher against a provider's simulator", () => {
           publishDescriptor({ capabilities });
           published = true;
         },
-        registry: { resolveService, disposeService } as unknown as Registry,
+        registry: watcherRegistry({ resolveService, disposeService }),
         resolveService,
       };
     }
@@ -307,7 +315,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     it("hands the environment back and re-resolves when the claim grants native-devtools", async () => {
       const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
       expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
 
@@ -326,7 +334,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     it("hands the environment back and lets go when the claim withholds it", async () => {
       const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
 
       publish(["simctl", "ax-service"]);
@@ -343,7 +351,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     it("does not withdraw again on the ticks after the handoff", async () => {
       const { armed, publish, registry } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
 
       publish(["simctl", "native-devtools"]);
@@ -361,7 +369,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl"], pid: DEAD_PID });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -372,7 +380,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl"], pid: process.pid });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 

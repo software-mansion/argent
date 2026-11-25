@@ -448,6 +448,8 @@ On success, pass `match.id` to `view-network-request-details`. Use the same targ
 
 ## Native devtools
 
+On an iOS simulator, Argent loads its library into each app that starts after Argent arms the simulator. Argent arms a simulator at the first call that sends input to it, opens an app or a URL on it, or reads it with `describe` or a `native-*` tool. After a reboot of that simulator, Argent arms it again. Argent does not change a simulator that no call uses. Restart an app that started before Argent armed its simulator.
+
 On a Mac app, these tools read the app through the Argent library:
 
 - `native-describe-screen` reads the accessibility tree of the app, plus the views with an identifier that the tree does not contain. It does not take `skipClasses` or `skipClassPrefixes`.

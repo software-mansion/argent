@@ -34,7 +34,7 @@ import {
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
-import { firstSimulatorPoll } from "../utils/simulator-watcher";
+import { armSimulator } from "../utils/simulator-watcher";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -633,8 +633,8 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         );
       }
       // Input could open an app from the home screen, which must not launch
-      // before the watcher has armed native-devtools injection.
-      await Promise.all([clearAutomationEnabledOrWarn(device.id), firstSimulatorPoll()]);
+      // before native-devtools injection is armed.
+      await Promise.all([clearAutomationEnabledOrWarn(device.id), armSimulator(device.id)]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).

@@ -5,7 +5,7 @@ import type { NativeProfilerSessionApi } from "../../../../blueprints/native-pro
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
-import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
+import { armSimulator } from "../../../../utils/simulator-watcher";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
@@ -486,7 +486,7 @@ export async function startNativeProfilerIos(
     }
     const info = resolveAppForLaunch(params.device_id, params.app_process);
     // The relaunch below must not beat injection.
-    await firstSimulatorPoll();
+    await armSimulator(params.device_id);
     appProcess = info.CFBundleExecutable;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
     // Terminate any running instance so the env var is set from process start

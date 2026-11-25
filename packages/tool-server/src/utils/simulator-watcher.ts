@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
-import type { Registry } from "@argent/registry";
+import { ServiceState, type Registry } from "@argent/registry";
 import {
   NATIVE_DEVTOOLS_NAMESPACE,
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
-import { externalClaimForNativeId } from "./external-devices";
+import { externalClaimForAnyId, externalClaimForNativeId } from "./external-devices";
 import {
   configuredAdditionalDeviceSets,
   rememberDeviceSet,
@@ -19,25 +19,25 @@ const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
 const MAX_BACKOFF_TICKS = 29;
 
-/**
- * Cap on {@link firstSimulatorPoll}, from startup, so a tool call never waits on
- * the watcher for longer.
- */
-const FIRST_POLL_WAIT_MS = 15_000;
+/** Cap on {@link armSimulator}, so a tool call never waits on the arming for longer. */
+const ARM_WAIT_MS = 15_000;
 
-let firstPollSettled: Promise<void> = Promise.resolve();
+const NATIVE_DEVTOOLS_URN_PREFIX = `${NATIVE_DEVTOOLS_NAMESPACE}:`;
+
+let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
 
 /**
- * Settles once a poll has read the booted simulators and attempted injection for
- * each, once a tick finds Xcode's component install pending (no poll runs and
- * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
- * Settled when no watcher runs. Awaited by whatever can start an app without
- * arming injection itself, so the app does not start uninjected: open-url, the
+ * Arms native-devtools injection on a simulator a tool is about to drive, and so
+ * makes the watcher keep it armed. Awaited by every tool call on a local iOS or
+ * Apple TV simulator that can start an app without arming injection itself, so
+ * the app does not start uninjected: the cross-platform tools, open-url, the
  * native profiler's malloc relaunch, and the simulator-server and tv-control
- * services every input to a local iOS or Apple TV simulator goes through.
+ * services every input goes through.
+ * Settles after the attempt or {@link ARM_WAIT_MS}, at once when no watcher
+ * runs, and never rejects.
  */
-export function firstSimulatorPoll(): Promise<void> {
-  return firstPollSettled;
+export function armSimulator(udid: string): Promise<void> {
+  return armTarget(udid);
 }
 
 async function getBootedUdidsInSet(
@@ -90,15 +90,48 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
+  const service = await resolveNativeDevtools(registry, udid);
+  if (service) trackedServices.set(udid, service);
+}
+
+async function resolveNativeDevtools(
+  registry: Registry,
+  udid: string
+): Promise<NativeDevtoolsApi | null> {
   // tvOS sims are also platform "ios" (classified by UDID shape) and
   // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
   // slice.
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
-    const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
-    trackedServices.set(udid, service);
+    return await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch {
     // Factory tolerates env-init failure; a throw here is structural.
+    return null;
+  }
+}
+
+/** A provider supplied this simulator without the grant, so its injection is not ours to arm. */
+function withholdsNativeDevtools(udid: string): boolean {
+  const claim = externalClaimForAnyId(udid);
+  return claim !== undefined && !claim.capabilities.has("native-devtools");
+}
+
+async function armNow(registry: Registry, udid: string): Promise<void> {
+  if (withholdsNativeDevtools(udid)) return;
+  const service = await resolveNativeDevtools(registry, udid);
+  await service?.ensureEnvReady().catch(() => {});
+}
+
+async function armWithinCap(registry: Registry, udid: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ARM_WAIT_MS);
+    timer.unref();
+  });
+  try {
+    await Promise.race([armNow(registry, udid), cap]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -107,6 +140,12 @@ export function startSimulatorWatcher(registry: Registry): {
   ready: Promise<void>;
 } {
   const trackedServices = new Map<string, NativeDevtoolsApi>();
+  /**
+   * Simulators a tool has targeted: every one whose native-devtools service
+   * started. Only these are armed, and re-armed after a reboot, so a simulator
+   * another project or session drives keeps its own environment.
+   */
+  const targetedUdids = new Set<string>();
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
@@ -121,12 +160,6 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
-  let markArmed!: () => void;
-  const armed = new Promise<void>((resolve) => (markArmed = resolve));
-  firstPollSettled = Promise.race([
-    armed,
-    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
-  ]);
   /** Whether the current wait for Xcode's component install has been logged. */
   let firstLaunchReported = false;
 
@@ -143,7 +176,6 @@ export function startSimulatorWatcher(registry: Registry): {
     }
     consecutiveTimeouts = 0;
     ticksToSkip = 0;
-    markArmed();
     if (!firstLaunchReported) {
       firstLaunchReported = true;
       process.stderr.write(
@@ -251,12 +283,21 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
+  function onlyTargeted(booted: Set<string>): Set<string> {
+    return new Set([...booted].filter((udid) => targetedUdids.has(udid)));
+  }
+
+  function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
+    if (to !== ServiceState.RUNNING || !urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
+    targetedUdids.add(urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length));
+  }
+
   async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
       ({ ours: booted, claimed } = withoutForeignSimulators(
-        await getBootedUdids(stopController.signal)
+        onlyTargeted(await getBootedUdids(stopController.signal))
       ));
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
@@ -298,8 +339,7 @@ export function startSimulatorWatcher(registry: Registry): {
     }
 
     // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
-    const attempted = Promise.all(pendingAttempts).then(markArmed);
-    if (shouldBlockUntilSettled) await attempted;
+    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took
@@ -313,9 +353,11 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Settles once ensureEnv has been attempted for every simulator booted at
-  // start, once the bounded simctl call fails, or at once while Xcode's install
-  // is pending, when nothing is attempted.
+  registry.events.on("serviceStateChange", noteTargeted);
+  armTarget = (udid) => armWithinCap(registry, udid);
+
+  // Settles once the first poll has read the booted simulators, once the
+  // bounded simctl call fails, or at once while Xcode's install is pending.
   const ready = simctlWouldStartInstall() ? Promise.resolve() : poll(true);
 
   // A tick that lands while the previous poll is still running, or inside the
@@ -336,6 +378,8 @@ export function startSimulatorWatcher(registry: Registry): {
 
   return {
     stop: () => {
+      registry.events.off("serviceStateChange", noteTargeted);
+      armTarget = () => Promise.resolve();
       clearInterval(interval);
       stopController.abort();
     },

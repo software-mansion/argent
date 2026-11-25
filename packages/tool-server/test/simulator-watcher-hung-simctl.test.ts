@@ -24,14 +24,14 @@ vi.mock("../src/utils/ios-device-sets", async () => {
 });
 
 import * as os from "node:os";
-import type { Registry } from "@argent/registry";
 import { SimctlTimeoutError } from "../src/utils/simctl-exec";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { watcherRegistry } from "./helpers/watcher-registry";
 
-const registry = {
+const registry = watcherRegistry({
   resolveService: vi.fn(),
   disposeService: vi.fn(async () => {}),
-} as unknown as Registry;
+});
 
 let stderrWrites: string[];
 

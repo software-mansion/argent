@@ -12,7 +12,7 @@ import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
-import { firstSimulatorPoll } from "../utils/simulator-watcher";
+import { armSimulator } from "../utils/simulator-watcher";
 import { UnsupportedOperationError } from "../utils/capability";
 import type {
   TvControlApi,
@@ -273,8 +273,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     let disposed = false;
 
     // A select could open an app from the home screen, which must not launch
-    // before the watcher has armed native-devtools injection.
-    await Promise.all([ensureAutomationEnabled(udid), firstSimulatorPoll()]);
+    // before native-devtools injection is armed.
+    await Promise.all([ensureAutomationEnabled(udid), armSimulator(udid)]);
     // Daemons of a dead tool-server that had this pid would read as ready, then
     // unlink our sockets when they idle out.
     await Promise.all([reapDaemons(axSock), reapDaemons(hidSock)]);

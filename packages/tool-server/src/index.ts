@@ -433,9 +433,8 @@ export function start(): void {
   // Bind once the identity warm-up settles, so the accept path never pays for it.
   // Not on the watcher's first poll: on a cold CoreSimulatorService its
   // `simctl list` runs to its 10s timeout, which with process startup can pass
-  // the launcher's 15s ready timeout. What can start an iOS app either arms
-  // injection itself (launch-app, restart-app) or waits for that poll
-  // (firstSimulatorPoll).
+  // the launcher's 15s ready timeout. What can start an iOS app arms injection
+  // on its simulator itself (launch-app, restart-app, armSimulator).
   identityWarm
     .then(() => {
       if (shuttingDown) return;

@@ -73,8 +73,9 @@ import { audioDir } from "../src/utils/ios-host";
 import { SimctlTimeoutError } from "../src/utils/simctl-exec";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
+import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
-const registry = {} as unknown as Registry;
+const registry = watcherRegistry();
 
 const FAKE_APP = "/Applications/Xcode-beta.app";
 const realDeveloperDir = process.env.DEVELOPER_DIR;
@@ -253,10 +254,9 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
       })
     );
 
-    const { ready, stop } = startSimulatorWatcher({
-      resolveService,
-      disposeService,
-    } as unknown as Registry);
+    const watched = watcherRegistry({ resolveService, disposeService });
+    const { ready, stop } = startSimulatorWatcher(watched);
+    targetSimulators(watched, udid);
     await ready;
     expect(resolveService).toHaveBeenCalledTimes(1);
 
@@ -346,6 +346,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
 
       pending.value = false;
       const { ready, stop } = startSimulatorWatcher(realRegistry);
+      targetSimulators(realRegistry, SIMULATOR.id);
       await ready;
       await vi.advanceTimersByTimeAsync(10_000);
       stop();
@@ -386,6 +387,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
         return BOOTED_LIST;
       });
       const { ready, stop } = startSimulatorWatcher(realRegistry);
+      targetSimulators(realRegistry, SIMULATOR.id);
       await ready;
       const service = await resolveLikeATool();
       const ensureEnvReady = vi.spyOn(service, "ensureEnvReady");
@@ -413,10 +415,13 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
         ensureEnvReady,
         armsEnv: true,
       };
-      return startSimulatorWatcher({
+      const watched = watcherRegistry({
         resolveService: async () => service,
         disposeService: async () => {},
-      } as unknown as Registry);
+      } as unknown as Partial<Registry>);
+      const watcher = startSimulatorWatcher(watched);
+      targetSimulators(watched, SIMULATOR.id);
+      return watcher;
     }
 
     it("does not retry a service that has given up", async () => {
