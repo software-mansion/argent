@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -39,12 +40,20 @@ import {
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
+import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { listDevicesText } from "./list-devices-text.js";
+import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
+import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
+
+// These end their session whatever the client does, and their result is the only
+// reference to the file: a retry after a dropped result finds no session.
+const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
 
 export interface StartMcpServerOptions {
   /**
@@ -56,6 +65,29 @@ export interface StartMcpServerOptions {
   transport?: Transport;
   /** Cap of the post-action capture. Defaults to CAPTURE_TIMEOUT_MS; a test passes a short one. */
   captureTimeoutMs?: number;
+}
+
+/**
+ * Runs `work` with a signal that aborts at `signal` or after `ms`. Node 20 and
+ * 22 can collect an `AbortSignal.timeout()` that only `AbortSignal.any()`
+ * references, which then never fires; the timer here keeps its controller alive.
+ */
+async function withDeadline<T>(
+  signal: AbortSignal,
+  ms: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () =>
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+    ms
+  );
+  try {
+    return await work(AbortSignal.any([signal, deadline.signal]));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -71,7 +103,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
+  const whatsNewOn = whatsNewEnabled();
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
+  const trees = createTreeMemory();
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -155,19 +189,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * Lets the screen settle before capturing, bounded by the per-tool budget:
    * `await-screen-idle` polls the tree server-side and usually returns well
    * under the cap. If the call fails (e.g. a tool-server without that tool),
-   * falls back to sleeping out the rest of the budget. Resolves whether it
-   * settled.
+   * falls back to sleeping out the rest of the budget or until the call is
+   * cancelled. Resolves whether it settled.
    */
-  async function awaitScreenSettled(udid: string, toolName: string): Promise<boolean> {
+  async function awaitScreenSettled(
+    udid: string,
+    toolName: string,
+    signal: AbortSignal
+  ): Promise<boolean> {
     const maxWaitMs = getAutoScreenshotDelayMs(toolName);
     if (maxWaitMs === 0) return true;
     const started = Date.now();
     try {
-      const idle = await callTool(
-        "await-screen-idle",
-        { udid, timeoutMs: maxWaitMs },
-        // The tool bounds its poll to maxWaitMs; the rest covers its setup.
-        { signal: AbortSignal.timeout(maxWaitMs + captureTimeoutMs) }
+      // The tool bounds its poll to maxWaitMs; the rest covers its setup.
+      const idle = await withDeadline(signal, maxWaitMs + captureTimeoutMs, (s) =>
+        callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs }, { signal: s })
       );
       await spyLog({
         ts: new Date().toISOString(),
@@ -178,7 +214,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       });
       return (idle.result as { settled?: unknown } | null)?.settled === true;
     } catch {
-      await new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - started))));
+      await sleep(Math.max(0, maxWaitMs - (Date.now() - started)), undefined, { signal }).catch(
+        () => {}
+      );
       return false;
     }
   }
@@ -193,6 +231,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: udid,
+        signal,
       });
       if (!blocks.some((b) => b.type === "image")) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
@@ -205,7 +244,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * The element tree the agent would otherwise have to fetch with a `describe`
    * round-trip before its next tap. Measured on Sonnet over 70 runs: −21%
    * turns, −23% wall time, −17% cost at equal task success (see PR #958). The
-   * tree is a few hundred tokens per action.
+   * tree is a few hundred tokens per action. A tree identical to the last one
+   * sent for the device is replaced by a note (unchanged-tree.ts).
    */
   async function captureTreeBlocks(
     udid: string,
@@ -215,16 +255,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const desc = (d.result as { description?: unknown } | null)?.description;
+      const tree = describedTree(d.result);
+      const shown = tree === undefined ? undefined : trees.afterAction(udid, tree, toolName);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: tree?.length ?? 0,
+        // `identical` is the repeat rate; `note` is what the agent was spared.
+        identical: shown?.identical ?? false,
+        note: shown?.note ?? false,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
+      if (shown === undefined) return [];
+      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${shown.text}` }];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
@@ -237,6 +281,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
+  let whatsNewChecked = false;
+
+  function whatsNewBlocks(): ContentBlock[] {
+    if (!whatsNewOn || whatsNewChecked) return [];
+    whatsNewChecked = true;
+    try {
+      const note = takeWhatsNewNote(getInstalledVersion());
+      return note ? [{ type: "text" as const, text: note }] : [];
+    } catch {
+      return [];
+    }
+  }
+
   const server = new Server(
     { name: "argent", version: getInstalledVersion() },
     {
@@ -245,13 +302,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  server.setRequestHandler(ListToolsRequestSchema, async (_request, { signal }) => {
     try {
-      const tools = toMcpToolList(await fetchTools());
+      // The handshake precedes tools/list, so the client is known by now.
+      const keywordFacts = !showsSchemaKeywords(server.getClientVersion()?.name);
+      const tools = toMcpToolList(await fetchTools({ signal }), { keywordFacts });
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
+        keywordFacts,
       });
       return { tools };
     } catch (err) {
@@ -262,8 +322,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
     const t0 = Date.now();
+    const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
+      ? undefined
+      : signal;
+    // The device whose tree memory this call wrote to, if any.
+    let treeUdid: string | undefined;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -271,7 +336,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note, profiling } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note, profiling } = await callTool(
+        params.name,
+        params.arguments,
+        { signal: callSignal }
+      );
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -286,14 +355,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: getDeviceIdFromArgs(params.arguments),
+        signal: callSignal,
       };
 
+      const devicesText =
+        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
       let content: ContentBlock[];
-      if (
+      if (devicesText !== undefined) {
+        content = [{ type: "text" as const, text: devicesText }];
+      } else if (
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
-        "flow" in result &&
+        ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
@@ -304,8 +378,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      const wantScreenshot = autoScreenshotOn && shouldAutoScreenshot(params.name);
-      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name);
+      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+        // The agent now has this tree, so the next action's tree is compared
+        // with it. The id lets a later note name it.
+        const tree = describedTree(result);
+        if (tree !== undefined) {
+          treeUdid = udid;
+          const id = trees.sent(udid, tree, "describe");
+          content = [...content, { type: "text" as const, text: treeIdLine(id) }];
+        }
+      }
+      const wantScreenshot =
+        autoScreenshotOn && shouldAutoScreenshot(params.name, params.arguments);
+      const wantTree = autoDescribeOn && shouldAutoDescribe(params.name, params.arguments);
       if (udid && (wantScreenshot || wantTree) && containsSecretPlaceholder(params.arguments)) {
         // The tool-server typed the *resolved* secret; a screenshot of a
         // non-secure-entry field would hand the plaintext back to the model as
@@ -329,34 +414,47 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         // it. `describe` has already answered with the tree, so it needs no
         // pointer to itself.
         if (params.name !== "describe") {
-          await awaitScreenSettled(udid, params.name);
+          await awaitScreenSettled(udid, params.name, signal);
           content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
         }
       } else if (udid && (wantScreenshot || wantTree)) {
-        const screenSettled = await awaitScreenSettled(udid, params.name);
-        const signal = AbortSignal.timeout(captureTimeoutMs);
-        const screenshot = wantScreenshot
-          ? captureScreenshotBlocks(udid, signal)
-          : Promise.resolve([]);
-        // An unsettled screen can leave a tree read in flight, which a
-        // concurrent describe would reuse (physical iPhone).
-        if (!screenSettled) await screenshot;
-        const tree = wantTree ? captureTreeBlocks(udid, params.name, signal) : Promise.resolve([]);
-        content = [...content, ...(await screenshot), ...(await tree)];
+        const screenSettled = await awaitScreenSettled(udid, params.name, signal);
+        if (wantTree) treeUdid = udid;
+        const captured = await withDeadline(signal, captureTimeoutMs, async (captureSignal) => {
+          const screenshot = wantScreenshot
+            ? captureScreenshotBlocks(udid, captureSignal)
+            : Promise.resolve([]);
+          // An unsettled screen can leave a tree read in flight, which a
+          // concurrent describe would reuse (physical iPhone).
+          if (!screenSettled) await screenshot;
+          const tree = wantTree
+            ? captureTreeBlocks(udid, params.name, captureSignal)
+            : Promise.resolve([]);
+          return [...(await screenshot), ...(await tree)];
+        });
+        content = [...content, ...captured];
       }
 
       if (note) {
         content = [{ type: "text" as const, text: note }, ...content];
       }
+      content = [...content, ...whatsNewBlocks()];
+
+      // The client gave up on this call (an interrupt, its tool timeout), and
+      // the SDK drops the response. The agent never gets the tree recorded
+      // above, so a later note must not name it.
+      if (treeUdid !== undefined && signal.aborted) trees.forget(treeUdid);
 
       return { content };
     } catch (err) {
+      if (treeUdid !== undefined) trees.forget(treeUdid);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
         name: params.name,
         durationMs: Date.now() - t0,
         isError: true,
+        ...(signal.aborted ? { cancelled: true } : {}),
         error: String(err instanceof Error ? err.message : err),
       });
       return {

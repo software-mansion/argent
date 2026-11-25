@@ -13,7 +13,7 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-e2e` 
 
 - Before creating or changing an e2e test, read [Live authoring](references/live-authoring.md) completely.
 - When polishing, composing, or manually reviewing YAML, read [E2E YAML](references/e2e-yaml.md). For Vega, read its platform limits before recording remote or keyboard tools.
-- E2E tests run on physical iPhones (an iOS `list-devices` entry with kind `"device"`), but replay never auto-binds one, even when no simulator is booted: pass the phone's udid as `device` (CLI `--device`), and only a `connected` phone can run. `pinch`/`rotate` steps run there as two-finger gestures, in apps drawn in portrait. On hardware the runner tree is the `describe` tree: same ids and roles, no UIView hierarchy. See `argent-ios-device-interact` for the hardware contract.
+- E2E tests run on physical iPhones (an iOS `list-devices` entry with kind `"device"`), but replay never auto-binds one, even when no simulator is booted: pass the phone's udid as `device` (CLI `--device`), and only a `connected` phone can run. `pinch`/`rotate` steps need the app drawn in portrait. On hardware the runner tree is the `describe` tree: same ids and roles, no UIView hierarchy. See `argent-ios-device-interact` for the hardware contract.
 - On capture warnings, raw coordinates, unavailable trees, mistimed transitions, overlays, or replay failures, read [Reliability and recovery](references/reliability-and-recovery.md).
 
 ## Non-negotiable rules
@@ -39,6 +39,9 @@ During polish, use `within`, `after`, and `next` to disambiguate repeated elemen
 1. Choose the e2e test type:
    - **standalone:** the first step that is not `echo:` or `script:` is `launch:`. The test controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
+
+   When a test needs the state that an earlier test leaves, put both in a [suite](references/e2e-yaml.md#suites).
+
 2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
 

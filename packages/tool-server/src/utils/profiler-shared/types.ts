@@ -59,7 +59,22 @@ export interface UiHang {
   suspectedFunctions: string[];
   /** Top app call chains in the hang window, with sample counts. Empty on Android. */
   appCallChains: { chain: string[]; sampleCount: number }[];
+  /**
+   * xctrace only: the functions above that are in a library argent or Instruments
+   * loads into the app, with the label the report adds to their names.
+   */
+  toolingLabels?: Record<string, string>;
+  /**
+   * xctrace only: set when the hang's thread ran for less than 10% of the hang (its
+   * suspended part left out), so it mostly waited. How long it ran during the hang, in ms.
+   */
+  hangThreadRanMs?: number;
   severity: "RED" | "YELLOW";
+  /**
+   * Mac apps only: ms of the hang's span during which macOS held the app
+   * suspended, such as for a leak check. `durationMs` includes this time.
+   */
+  suspendedMs?: number;
   /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
   jankReason?: string;
   /** Android-only: main-thread state durations during this hang. */

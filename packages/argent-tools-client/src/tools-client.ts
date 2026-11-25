@@ -15,12 +15,16 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
+  flowYamlSource,
+  toolParamAliases,
 } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
+  callerPath,
   prepareFileInputs,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,
@@ -32,6 +36,7 @@ import {
   collectStepMembers,
   e2eShadowWarningFor,
   filesLogEnabled,
+  formerParamsForOlderServer,
   nameToE2ePathForOlderServer,
   stepForOlderServer,
 } from "./flow-files.js";
@@ -61,6 +66,12 @@ export interface ToolInvocationResult {
   profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
+  /**
+   * Reason for a failure reported with the result, such as a failed e2e test,
+   * an `await-ui-element` or `await-network-request` with `success: false`,
+   * or a baseline the client could not write.
+   */
+  failure?: string;
 }
 
 export interface CallToolOptions {
@@ -101,8 +112,9 @@ export interface CreateToolsClientOptions {
    * `meta.longRunning` is the tool's flag from the listing (false for GET
    * /tools), so the caller can disable its timeout. `meta.carriesUpload` is true
    * when the body names an upload: the tool-server consumes an upload on the
-   * first request that reaches it, so the caller must not abort or resend that
-   * request. POST /upload keeps the global fetch.
+   * first request that reaches it, so the caller must not time out or resend
+   * that request. `init.signal` is the call's `signal`, which the request must
+   * still follow. POST /upload keeps the global fetch.
    */
   fetchImpl?: (
     url: string,
@@ -111,7 +123,7 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of the client, without a trailing newline:
-   * the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
+   * the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
    * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
@@ -123,6 +135,14 @@ export interface CreateToolsClientOptions {
    * secrets is checked against.
    */
   headers?: () => Record<string, string>;
+  /**
+   * Refuse a relative `project_root` or `e2e_test_path` instead of resolving
+   * it against `process.cwd()`. For a client whose working directory need not
+   * be the project, such as the MCP server, which runs where the editor
+   * started it: a recording would be saved there, or a same-named test run
+   * from there, without any error.
+   */
+  refuseRelativeProjectPaths?: boolean;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -160,7 +180,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean; failure?: string } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -170,6 +190,7 @@ async function consumeToolStream(
       data?: unknown;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -182,6 +203,7 @@ async function consumeToolStream(
         data: msg.data,
         note: msg.note,
         ...(msg.profiling === true ? { profiling: true } : {}),
+        ...(typeof msg.failure === "string" ? { failure: msg.failure } : {}),
       };
     } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -243,6 +265,7 @@ async function consumeToolStream(
     data: final.data,
     note: final.note,
     ...(final.profiling ? { profiling: true } : {}),
+    ...(final.failure !== undefined ? { failure: final.failure } : {}),
   };
 }
 
@@ -278,7 +301,7 @@ function findTool(tools: readonly ToolMeta[], name: string): ToolMeta | null {
  * with the call, so a call the tool-server would refuse must not send them
  * first. Presence only: a present but invalid
  * value is the tool-server's call. A target that the client derives from other
- * arguments (`flow_file` from `name`) is left to the tool-server.
+ * arguments (`e2e_test_file` from `name`) is left to the tool-server.
  */
 function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
@@ -308,6 +331,47 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   });
   throw new ToolInvocationError(
     describeParamIssues({ issues } as unknown as Parameters<typeof describeParamIssues>[0], record)
+  );
+}
+
+/** Cap on the numbers one refusal names: an array of them follows the caller's input. */
+const MAX_NON_FINITE_ISSUES = 12;
+
+/**
+ * Refuses a call carrying a number that JSON cannot write. `JSON.stringify`
+ * sends Infinity and NaN as `null`, and a tool that coerces its number reads
+ * `null` as 0, so the tool would run on a value nobody passed. `1e999` in JSON
+ * input parses to Infinity, so a CLI `--args` payload or an MCP call can carry one.
+ */
+function assertFiniteNumbers(args: unknown): void {
+  const issues: { code: string; path: (string | number)[]; message: string }[] = [];
+  // A queue, not recursion, and each object once: a value nested too deep or
+  // in a cycle is left for `JSON.stringify` to refuse as it did before. A path
+  // is built only for a number that is refused, so the walk stays linear.
+  type Visit = { value: unknown; key: string | number; parent?: Visit };
+  const seen = new WeakSet<object>();
+  const pending: Visit[] = [{ value: args, key: "" }];
+  for (let i = 0; i < pending.length && issues.length < MAX_NON_FINITE_ISSUES; i++) {
+    const visit = pending[i]!;
+    const { value } = visit;
+    if (typeof value !== "object" || value === null || seen.has(value)) continue;
+    seen.add(value);
+    for (const [key, item] of Array.isArray(value) ? value.entries() : Object.entries(value)) {
+      if (typeof item === "object" && item !== null) {
+        pending.push({ value: item, key, parent: visit });
+      } else if (typeof item === "number" && !Number.isFinite(item)) {
+        const path = [key];
+        for (let at = visit; at.parent; at = at.parent) path.push(at.key);
+        path.reverse();
+        issues.push({ code: "invalid_type", path, message: `expected a number, got ${item}` });
+        if (issues.length === MAX_NON_FINITE_ISSUES) break;
+      }
+    }
+  }
+  if (issues.length === 0) return;
+  throw new ToolInvocationError(
+    describeParamIssues({ issues } as unknown as Parameters<typeof describeParamIssues>[0], args),
+    { errorKind: "validation", issues }
   );
 }
 
@@ -387,7 +451,8 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
       // run, not to this terminal.
       let parsed: unknown;
       try {
-        parsed = text === undefined ? undefined : parseYaml(text.trim(), { logLevel: "error" });
+        parsed =
+          text === undefined ? undefined : parseYaml(flowYamlSource(text), { logLevel: "error" });
       } catch {
         continue;
       }
@@ -434,6 +499,48 @@ export function secretsTransportRefusal(url: string): string | undefined {
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
 const FETCH_HEAD_BYTES = 256;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The advice each refused relative project path gets. */
+const PROJECT_PATH_ADVICE: Record<string, string> = {
+  project_root:
+    "Pass the absolute path to the project root directory - the same cwd the calling agent is working in.",
+  e2e_test_path: "Pass the absolute path to the e2e test file.",
+};
+
+/**
+ * Throws when `args` sets a relative project path that a file input of `meta`
+ * resolves, under its name or a former one (an older tool-server's).
+ */
+function assertAbsoluteProjectPaths(meta: ToolMeta | null, args: unknown): void {
+  if (!meta || !isRecord(args)) return;
+  const aliases = Object.entries(toolParamAliases(meta.name));
+  for (const [param, advice] of Object.entries(PROJECT_PATH_ADVICE)) {
+    const value = args[param];
+    if (typeof value !== "string" || callerPath(value) === value) continue;
+    const names = [param, ...aliases.filter(([, current]) => current === param).map(([f]) => f)];
+    if (!meta.fileInputs?.some((spec) => names.some((n) => spec.path.includes(`\${${n}}`)))) {
+      continue;
+    }
+    throw new Error(`${param} must be an absolute path (got "${value}"). ${advice}`);
+  }
+}
+
+/**
+ * `result` with its run marked failed: a run report's `ok`, or that of the
+ * run `e2e-add-step` recorded (`toolResult`).
+ */
+function failedRun(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+  if (result.ok === true) return { ...result, ok: false };
+  if (isRecord(result.toolResult) && result.toolResult.ok === true) {
+    return { ...result, toolResult: { ...result.toolResult, ok: false } };
+  }
+  return result;
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -467,7 +574,9 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     return { url, token };
   }
 
-  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+  async function fetchToolList(opts?: {
+    signal?: AbortSignal;
+  }): Promise<{ tools: ToolMeta[]; uploadFormats?: string[] }> {
     opts?.signal?.throwIfAborted();
     const { url, token } = await baseUrl();
     const res = await doFetch(
@@ -476,8 +585,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
-    const json = (await res.json()) as { tools: ToolMeta[] };
-    return json.tools;
+    return (await res.json()) as { tools: ToolMeta[]; uploadFormats?: string[] };
+  }
+
+  async function fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]> {
+    return (await fetchToolList(opts)).tools;
   }
 
   async function fetchTool(
@@ -494,18 +606,21 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   ): Promise<ToolInvocationResult> {
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
+    assertFiniteNumbers(args);
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    let finalArgs = args;
-    const tools = await fetchTools({ signal: opts?.signal });
+    let finalArgs = canonicalToolArgs(name, args);
+    const { tools, uploadFormats } = await fetchToolList({ signal: opts?.signal });
     const meta = findTool(tools, name);
+    if (options.refuseRelativeProjectPaths) assertAbsoluteProjectPaths(meta, finalArgs);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
     if (meta) {
-      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args);
+      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, finalArgs);
+      finalArgs = formerParamsForOlderServer(meta, finalArgs);
     }
     if (olderServer && canonicalToolId(meta.name) === "e2e-add-step") {
       finalArgs = await stepForOlderServer(finalArgs, (tool) => findTool(tools, tool)?.name);
@@ -514,11 +629,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const shadowWarning = await e2eShadowWarningFor(name, args);
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
+    let unwrittenBaselines: string[] = [];
     if (meta?.fileInputs?.length) {
       if (remote) assertRequiredPresent(meta, finalArgs);
       finalArgs = await prepareFileInputs(meta.fileInputs, finalArgs ?? {}, {
         includeContent: remote,
-        uploadEndpoint: remote ? { url, token } : undefined,
+        uploadEndpoint: remote ? { url, token, formats: uploadFormats } : undefined,
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
@@ -537,6 +653,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // not see is said in the result's `warning`, as it says one it sees.
     const settle = async (data: unknown): Promise<unknown> => {
       const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
+      unwrittenBaselines = applied.failed.map((f) => f.path);
       for (const { path: file, error } of applied.failed) {
         diagnose(`The baseline ${file} was not written on this client: ${error}`);
       }
@@ -544,11 +661,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         // A recorded flow YAML is written here too; only baselines are logged.
         for (const file of applied.written) {
           if (baselineDirs.includes(path.dirname(file))) {
-            diagnose(`[flow-files] baseline ${file}: written`);
+            diagnose(`[e2e-files] baseline ${file}: written`);
           }
         }
       }
-      const result = applied.result;
+      const result = applied.failed.length > 0 ? failedRun(applied.result) : applied.result;
       if (
         shadowWarning === undefined ||
         typeof result !== "object" ||
@@ -560,6 +677,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       }
       return { ...result, warning: shadowWarning };
     };
+
+    const unwrittenFailure = (): string | undefined =>
+      unwrittenBaselines.length > 0
+        ? `Baselines not written on this client: ${unwrittenBaselines.join(", ")}`
+        : undefined;
 
     // A call that sends a flow's closure runs that flow over a link, and its
     // progress lines keep the connection busy through a proxy's idle timeout.
@@ -644,11 +766,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         opts?.onProgress ?? (() => {}),
         opts?.signal
       );
+      const data = await settle(streamed.data);
+      const failure = streamed.failure ?? unwrittenFailure();
       return {
-        data: await settle(streamed.data),
+        data,
         note: streamed.note,
         outputHint: meta?.outputHint,
         ...(streamed.profiling ? { profiling: true } : {}),
+        ...(failure !== undefined ? { failure } : {}),
       };
     }
     let json: {
@@ -657,6 +782,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       message?: string;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -704,11 +830,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
+    const data = await settle(json.data);
+    const failure =
+      (typeof json.failure === "string" ? json.failure : undefined) ?? unwrittenFailure();
     return {
-      data: await settle(json.data),
+      data,
       note: json.note,
       outputHint: meta?.outputHint,
       ...(json.profiling === true ? { profiling: true } : {}),
+      ...(failure !== undefined ? { failure } : {}),
     };
   }
 

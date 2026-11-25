@@ -8,26 +8,32 @@ set -euo pipefail
 #
 #   - trace_processor.wasm     Google's prebuilt memory32 wasm
 #   - engine_bundle.node.js    Google's emscripten glue, one Node edit baked in
-#   - engine.mjs               @lynx-js/trace-processor's EngineBase decoder
 #   - LICENSE                  Perfetto license (compliance)
+#
+# Only these files are copied into place. The tarball may hold more (older
+# releases also carry an engine.mjs RPC decoder that argent no longer uses).
 #
 # Built and checksummed in argent-private CI, shipped as a single
 # trace-processor-wasm.tar.gz (+ .sha256) release asset. The blobs are unsigned,
-# so a sha256 mismatch is fatal: it means a corrupt or tampered download.
+# so a sha256 mismatch is fatal: it means a corrupt or incomplete download. The
+# checksum comes from the same release as the tarball, so it proves integrity
+# only: whoever can replace the tarball there can replace the checksum too.
 #
 # Usage: ./scripts/download-trace-processor.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to the
+#                newest argent-private main build (argent-main-<sha>, see
+#                scripts/resolve-main-binaries-tag.sh).
 #
 # Requires:
 #   - gh CLI, logged in with `gh auth login` (the repo is public, but the
 #     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
-TAG="${1:-argent-main}"
+TAG="${1:-$(bash "$(dirname "$0")/resolve-main-binaries-tag.sh")}"
 DEST="packages/native-devtools-android/assets/trace-processor"
 TARBALL="trace-processor-wasm.tar.gz"
 CHECKSUM="${TARBALL}.sha256"
-FILES=(trace_processor.wasm engine_bundle.node.js engine.mjs LICENSE)
+FILES=(trace_processor.wasm engine_bundle.node.js LICENSE)
 
 if command -v sha256sum &>/dev/null; then
   sha256() { sha256sum "$@"; }
@@ -66,17 +72,22 @@ if [[ -z "${EXPECTED}" || "${EXPECTED}" != "${ACTUAL}" ]]; then
 fi
 echo "sha256 OK (${TARBALL})"
 
-mkdir -p "${DEST}"
-tar -xzf "${TMP_DIR}/${TARBALL}" -C "${DEST}"
+EXTRACT_DIR="${TMP_DIR}/extract"
+mkdir -p "${EXTRACT_DIR}"
+tar -xzf "${TMP_DIR}/${TARBALL}" -C "${EXTRACT_DIR}"
 
 # Defense in depth: the tarball checksum already passed.
-( cd "${DEST}" && sha256 -c SHA256SUMS )
+( cd "${EXTRACT_DIR}" && sha256 -c SHA256SUMS )
 
+mkdir -p "${DEST}"
+# Drop files that an older download left behind.
+rm -f "${DEST}/engine.mjs" "${DEST}/SHA256SUMS"
 for f in "${FILES[@]}"; do
-  if [[ ! -f "${DEST}/${f}" ]]; then
-    echo "Error: expected artifact missing after extract: ${DEST}/${f}" >&2
+  if [[ ! -f "${EXTRACT_DIR}/${f}" ]]; then
+    echo "Error: expected artifact missing after extract: ${f}" >&2
     exit 1
   fi
+  cp "${EXTRACT_DIR}/${f}" "${DEST}/${f}"
 done
 
 echo "Downloaded + verified trace-processor WASM bundle to ${DEST}/"

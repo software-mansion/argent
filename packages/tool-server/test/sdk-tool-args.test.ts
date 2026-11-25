@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { TOOL_ID_ALIASES } from "@argent/registry";
+import { TOOL_ID_ALIASES, TOOL_PARAM_ALIASES } from "@argent/registry";
 import { renderSdkToolArgs, toType } from "../src/sdk-tool-args";
-import { EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { createRegistry, listToolDefinitions } from "../src/utils/setup-registry";
 
 describe("toType", () => {
   it("maps scalars, literals and arrays", () => {
@@ -55,9 +55,18 @@ describe("toType", () => {
 describe("renderSdkToolArgs", () => {
   const output = renderSdkToolArgs();
 
-  it("emits every tool", () => {
-    const aliases = Object.keys(TOOL_ID_ALIASES).length;
-    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT + aliases);
+  it("emits an argument type for every registered tool and alias", () => {
+    const source = ts.createSourceFile("sdk.ts", output, ts.ScriptTarget.Latest);
+    const args = source.statements.find(
+      (s): s is ts.InterfaceDeclaration =>
+        ts.isInterfaceDeclaration(s) && s.name.text === "ArgentToolArgs"
+    );
+    const ids = args?.members.map((m) =>
+      m.name && (ts.isStringLiteral(m.name) || ts.isIdentifier(m.name)) ? m.name.text : undefined
+    );
+    expect(ids?.sort()).toEqual(
+      [...listToolDefinitions(createRegistry()).keys(), ...Object.keys(TOOL_ID_ALIASES)].sort()
+    );
   });
 
   it("types each former tool id as the tool it names", () => {
@@ -65,6 +74,18 @@ describe("renderSdkToolArgs", () => {
       expect(output).toContain(
         `  /** @deprecated Renamed to \`${id}\`. */\n  "${alias}": ArgentToolArgs["${id}"];`
       );
+    }
+  });
+
+  it("types each former param name as the param it names", () => {
+    for (const [id, aliases] of Object.entries(TOOL_PARAM_ALIASES)) {
+      const block = output.slice(output.indexOf(`  "${id}": {`)).split("\n  };")[0]!;
+      for (const [former, current] of Object.entries(aliases)) {
+        expect(block, id).toContain(`    ${current}?: string;`);
+        expect(block, id).toContain(
+          `    /** @deprecated Renamed to \`${current}\`. */\n    ${former}?: string;`
+        );
+      }
     }
   });
 

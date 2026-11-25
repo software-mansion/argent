@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
+  recordsWithXctrace,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
@@ -18,12 +19,6 @@ import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const zodSchema = z.object({
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
-  ),
-});
-
 /**
  * Mirrors {@link IosStopResult}, but the file paths are artifact handles the
  * MCP client materializes locally instead of raw host paths.
@@ -31,7 +26,7 @@ const zodSchema = z.object({
 export interface IosStopArtifacts {
   /**
    * The Instruments `.trace` bundle: a directory, so a remote client downloads
-   * it as a gzipped tar while a local one uses it in place.
+   * it as a compressed tar while a local one uses it in place.
    */
   traceFile: ArtifactHandle;
   exportedFiles: Record<IosExportKey, ArtifactHandle | null>;
@@ -55,6 +50,7 @@ type StopResult = IosStopArtifacts | AndroidStopArtifacts;
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  macos: { app: true, catalyst: true },
 } as const;
 
 /**
@@ -93,8 +89,17 @@ function registerTrace(store: ArtifactStore, traceFile: string): Promise<Artifac
   return store.register({ hostPath: traceFile, kind: "native-profile-trace", archive: "tar.gz" });
 }
 
+const zodSchema = z.object({
+  device_id: metroDeviceIdParam(
+    "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
+  ),
+});
+
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
+  description: `End a native profiling session started by native-profiler-start and save the trace as a downloadable artifact.
+On iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, export CPU, hangs, and leaks XML from Instruments. Check warning and exportDiagnostics for partial or skipped exports. On Android, save the Perfetto .pftrace.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Stopping native profiler",
     completedMsg: ({ result }) => `Saved native profile ${result.traceFile.filename}`,
@@ -103,14 +108,6 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   capability,
   // Packaging plus the export passes routinely exceed the 30s MCP fetch timeout.
   longRunning: true,
-  description: `Stop native profiling and export trace data.
-iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks XML.
-Android: sends SIGTERM to the perfetto daemon, polls /proc/<pid>, then \`adb pull\`s the .pftrace.
-Call native-profiler-start first.
-Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
-Fails if no active native-profiler-start session exists for the given device_id.`,
-  zodSchema,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
@@ -120,10 +117,10 @@ Fails if no active native-profiler-start session exists for the given device_id.
     assertSupported("native-profiler-stop", capability, device);
 
     // Kept per branch rather than merged so the return type preserves the
-    // iOS/Android distinction: iOS always carries exportDiagnostics, Android
-    // never does. The artifact store is resolved only after a successful stop —
+    // xctrace/Android distinction: xctrace (iOS and macOS) always carries
+    // exportDiagnostics, Android never does. The artifact store is resolved only after a successful stop -
     // the "no active session" error path never needs it.
-    if (api.platform === "ios") {
+    if (recordsWithXctrace(api.platform)) {
       await ensureDeps(["xcrun"]);
       const ios: IosStopResult = await stopNativeProfilerIos(api);
       const artifacts = requireArtifacts(ctx);

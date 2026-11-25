@@ -23,6 +23,7 @@ ArgentRunner/
                                          button / shutdown
     ArgentRunnerSession+Gestures.swift   tap / longPress / drag / touchPaths / viewport
     ArgentRunnerSession+TextEntry.swift  type / keyboardReturn / keyboardDelete
+    ArgentRunnerSession+Quiescence.swift XCTest idle-wait skip + capped settle
     ArgentRunnerSession+Snapshot.swift   one-shot AX tree capture + flattening
     ArgentRunnerSession+Screenshot.swift inline base64 PNG
     RunnerProtocol.swift                 wire models (see PROTOCOL.md)
@@ -42,16 +43,20 @@ The TypeScript side (build orchestration, transport, command client) lives in
 
 1. The tool-server builds this project lazily with `xcodebuild
 build-for-testing` (signed with the user's team; see the environment
-   variables below) into `~/.argent/ios-device-runner/derived`, stamped with
-   a fingerprint of sources + Xcode + signing; a stamp mismatch (an Argent or
-   Xcode update, a team change) rebuilds in place.
+   variables below) into `~/.argent/ios-device-runner/derived/<team>`, one
+   directory per team, stamped with a fingerprint of sources + Xcode + signing;
+   a stamp mismatch (an Argent or Xcode update) rebuilds in place. Switching to
+   a team reuses that team's build when it is still current. The build passes
+   `SYMROOT`, `OBJROOT` and `SHARED_PRECOMPS_DIR`, so the Build Location in
+   Xcode's settings cannot move the products out of that directory.
 2. Per session it launches `xcodebuild test-without-building` detached;
    testmanagerd installs and starts the runner on the device. The runner
-   binds a system-assigned loopback port and logs it as
+   binds a system-assigned port on loopback (USB) or the CoreDevice tunnel address and logs it as
    `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
    the launch log before it sends the first command.
-3. Commands travel as one HTTP POST per command over usbmux (USB cable
-   only). `PROTOCOL.md` documents the contract.
+3. Commands travel as one HTTP POST per command over usbmux for USB devices,
+   or IPv6 TCP for connected CoreDevice network devices.
+   `PROTOCOL.md` documents the contract.
 
 ## Build-time configuration
 
@@ -62,9 +67,11 @@ The signing team resolves in two steps, and the environment variable wins:
   Apple ID and team) or at developer.apple.com/account under Membership.
 - When it is not set, the tool-server detects the team from the Mac's
   keychain: the Apple Development certificates name their team (and the
-  legacy iPhone Developer name is checked too), and with several teams the
-  one with the newest certificate wins. The detection result is memoized for
-  the tool-server process. With no certificate at all, the build fails with a
+  legacy iPhone Developer name is checked too). With several teams, the newest
+  one with a provisioning profile that lists the phone wins, and otherwise the
+  one with the newest certificate. The certificates found are memoized for
+  the tool-server process; profiles are read on every resolution, so a phone's
+  team can change once a build registers it. With no certificate at all, the build fails with a
   prompt to sign into Xcode and mint one (Manage Certificates > + > Apple
   Development).
 
@@ -82,7 +89,7 @@ Management.
 The Xcode project itself needs no locating either: it always sits next to the
 bundled tool-server. An npm install of `@swmansion/argent` ships these Swift
 sources there (the build step copies `ArgentRunner/` next to the bundle), and
-in the argent repo `npm run build` in `packages/argent` produces the same
+in the argent repo `bun run build` in `packages/argent` produces the same
 layout.
 `ARGENT_IOS_RUNNER_PROJECT` overrides the location for tool-server runs
 outside the bundle (ts-node, tests) or unusual layouts.

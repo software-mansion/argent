@@ -2,18 +2,23 @@
 
 One HTTP POST per command. The request body is a JSON object; the reply is a
 JSON **envelope**. Connections close after each exchange (`Connection:
-close`). The server listens on loopback on a system-assigned port and logs
+close`). The server listens on a system-assigned port and logs
 it once the listener is ready as `ARGENT_RUNNER_LISTENING port=N`; the
 tool-server reads that line from the xcodebuild launch log before it sends
 the first command, since nothing on the Mac can tell which device ports are
 free. Setting `ARGENT_RUNNER_PORT` in the runner's environment (xcodebuild
 forwards it from `TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process)
 pins the port instead; absent or `0` means system-assigned, which is also how
-a session run straight from Xcode comes up. The listener is reachable through
-usbmux (USB cable only); the forwarded stream terminates on the device's
-loopback, so a loopback bind covers the whole transport.
+a session run straight from Xcode comes up.
 
-The envelope is authoritative; the HTTP status is informational (200 for ok
+USB sessions bind to loopback and use usbmux. Network sessions bind only to the
+CoreDevice tunnel IPv6 address passed in `ARGENT_RUNNER_ADDRESS` (forwarded by
+Xcode from `TEST_RUNNER_ARGENT_RUNNER_ADDRESS`). The address must be in `fc00::/7`.
+Both transports use the same HTTP protocol without application-level authentication.
+Any process that can reach the runner endpoint can issue commands. Network access
+uses the private CoreDevice tunnel rather than a public device address.
+
+For dispatched commands, the envelope is authoritative; HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing
 layer, before command dispatch, still shaped as `INVALID_REQUEST` envelopes:
 400 when a finished header block lacks a usable Content-Length, and 413 when
@@ -86,9 +91,9 @@ launch, and launching is launch-app's job, never a command side effect):
   XCUICoordinate (public API; orientation-safe). `tap` runs `numberOfTaps`
   1 (default) as a tap and 2 as the native `doubleTap()`. Higher counts loop
   single taps on the device, and that loop is not one gesture: XCUICoordinate
-  has no N-tap API, each tap is its own synthesized event behind XCTest's
-  idle wait and an XPC round trip, hundreds of milliseconds apart, so the
-  taps land separately and do not trigger a multi-tap recognizer.
+  has no N-tap API, each tap is its own synthesized event and XPC round trip,
+  about 300 ms apart on a simulator, which a double-tap recognizer can still
+  pair.
   `drag` presses for `holdMs` at the start, moves at the velocity
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
@@ -213,6 +218,18 @@ Flat list in emission order; `parentIndex` links reconstruct the tree.
   `degraded`, `reasonCode: "node_cap"`). Depth is also capped: the raw walk
   stops at depth 100 and emission at depth 60; unlike the node cap,
   depth-dropped content does not mark the snapshot `degraded`.
+- Hosted view services: when `com.apple.SafariViewService` is in the
+  foreground (an `ASWebAuthenticationSession` or `SFSafariViewController`
+  sheet is up), its tree is added under the root as an `Application` node,
+  emitted before the app's own nodes and capped at 1000 of the 1500 nodes. On
+  iOS 26 the app's own tree no longer contains the sheet. The service is read
+  without activating it, so the screen and the registered target stay as they
+  are, and its frames are in the same viewport points. It is skipped when the
+  service is suspended or in the background (a suspended service blocks the
+  capture past the watchdog), when its tree is not the app's size (a sheet
+  still animating), and when the app's tree already holds the sheet's
+  `BrowserView` (iOS 18 and earlier). A failed hosted capture never fails the
+  snapshot.
 - `quality`: `{state: healthy|degraded, backend: "xctest", reason?,
 reasonCode?}`.
 
@@ -234,6 +251,18 @@ Every command runs under a runner-side main-thread watchdog budget
 under a larger transport window (default `RUNNER_COMMAND_TIMEOUT_MS`,
 runner-client.ts; overrides in runner-commands.ts: `GESTURE_TIMEOUT_MS` and
 the `type`/`snapshot` call sites).
+
+XCTest waits up to 60s before and after every synthesized event for the app
+to report idle, and a screen that never does (a paused
+`UIViewPropertyAnimator`, as expo-blur keeps) would stall each gesture for two
+minutes. `tap`, `longPress`, `drag` and the three typing commands skip those
+waits and instead wait at most 2s (`preEventSettleTimeout`,
+ArgentRunnerSession+Quiescence.swift) for the app to go idle before the event,
+so a command sent right after a navigation lands on the new screen.
+`touchPaths` sends its events straight to the daemon, so it neither waits nor
+settles. The skip is XCTest SPI; where any of it is missing, XCTest's own waits
+apply, and on a screen that never goes idle they outrun the gesture budget
+below.
 
 | Command class                            | Runner budget | Client window |
 | ---------------------------------------- | ------------- | ------------- |

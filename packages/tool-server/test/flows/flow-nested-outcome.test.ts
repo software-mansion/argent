@@ -62,7 +62,7 @@ async function run(tool: string, nestedResult: unknown) {
   const result = asRun(
     await createRunFlowTool(registry).execute(
       {},
-      { name: "outer", project_root: PROJECT_ROOT, flow_file: flowFile, device: "DEV" }
+      { name: "outer", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "DEV" }
     )
   );
   return { result, registry };
@@ -223,6 +223,19 @@ describe("the check is deliberately scoped to the two orchestrator tools", () =>
     expect(() => nestedOrchestratorOutcome("run-sequence", { steps: "nope" })).not.toThrow();
   });
 
+  it("names the unrun e2e test from e2eTest, or from flow when only that is sent", () => {
+    const notice = { notice: "has a prerequisite", executionPrerequisite: "" };
+    expect(
+      nestedOrchestratorOutcome("e2e-execute", { ...notice, e2eTest: "new", flow: "old" })?.reason
+    ).toMatch(/^e2e test "new" did not run/);
+    expect(nestedOrchestratorOutcome("e2e-execute", { ...notice, e2eTest: "new" })?.reason).toMatch(
+      /^e2e test "new" did not run/
+    );
+    expect(nestedOrchestratorOutcome("e2e-execute", { ...notice, flow: "old" })?.reason).toMatch(
+      /^e2e test "old" did not run/
+    );
+  });
+
   it("says which step failed even when the sub-report is partly malformed", () => {
     const out = nestedOrchestratorOutcome("flow-execute", {
       ok: false,
@@ -232,5 +245,36 @@ describe("the check is deliberately scoped to the two orchestrator tools", () =>
     // No tool and no reason on that entry — it still names the kind rather than
     // rendering "undefined".
     expect(out?.reason).toMatch(/assert: no reason given/);
+  });
+});
+
+describe("a failure carrying no message still says something after the colon", () => {
+  it.each(["", " \n "])("keeps a composed flow's fragment readable (reason %j)", (reason) => {
+    const out = nestedOrchestratorOutcome("flow-execute", {
+      flow: "login",
+      ok: false,
+      passed: 0,
+      failed: 1,
+      errored: 0,
+      steps: [{ index: 0, kind: "tool", tool: "gesture-tap", status: "fail", reason }],
+    });
+
+    expect(out?.status).toBe("fail");
+    expect(out?.reason).toBe(
+      'e2e test "login" failed: 0 passed, 1 failed, 0 errored (gesture-tap: no reason given)'
+    );
+  });
+
+  it("keeps a sequence's fragment readable", () => {
+    const out = nestedOrchestratorOutcome("run-sequence", {
+      completed: 0,
+      total: 1,
+      steps: [{ tool: "keyboard", error: " \n " }],
+    });
+
+    expect(out?.status).toBe("fail");
+    expect(out?.reason).toBe(
+      "run-sequence stopped at keyboard after 0 of 1 steps: no reason given"
+    );
   });
 });

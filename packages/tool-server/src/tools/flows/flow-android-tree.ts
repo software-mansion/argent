@@ -198,7 +198,8 @@ export function adaptFullAndroidHierarchyToDescribeResult(
  */
 export async function queryAndroidFullHierarchy(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  options: { waitForIdleMs?: number } = {}
 ): Promise<DescribeTreeData> {
   let devtools: AndroidDevtoolsApi;
   try {
@@ -210,7 +211,7 @@ export async function queryAndroidFullHierarchy(
   }
   const [{ xml }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
-    devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
+    devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true, ...options }),
     devtools.getScreenSize(),
   ]);
   const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);

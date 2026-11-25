@@ -17,6 +17,9 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -89,6 +92,21 @@ describe("run cancellation mid-directive", () => {
     // makes the run incomplete rather than a zero-step pass.
     expect(result.skipped).toBe(0);
     expect(result.ok).toBe(false);
+  });
+
+  it("reports an echo skipped by an abort on one line", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    currentFetch = () => ({ tree: screen([]), source: "native-devtools" });
+
+    await writeFlow("cancelled-narration", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "a\nb\u001b[31m" }],
+    });
+
+    const result = await run("cancelled-narration", mockRegistry([]), controller.signal);
+
+    expect(result.steps).toMatchObject([{ reason: "run aborted", message: "a\\nb\\u001b[31m" }]);
   });
 
   it("reports a tap cancelled during its auto-wait as a skip, not an offscreen failure", async () => {

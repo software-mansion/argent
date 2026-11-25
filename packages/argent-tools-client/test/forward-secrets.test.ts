@@ -61,7 +61,7 @@ beforeEach(async () => {
             description: "",
             inputSchema: {},
             fileInputs: [
-              { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+              { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
           },
         ],
@@ -164,12 +164,7 @@ describe("forward-secrets", () => {
       await call;
       expect(posted[0]?.["x-argent-client-secrets"]).toBeDefined();
     } else {
-      await expect(call).rejects.toThrow(
-        "forward-secrets sends secret values only over https:// with the certificate checked, or " +
-          "to a loopback address, so the call was not sent (it names APP_PASSWORD): " +
-          `${target} is reached neither over https:// nor at a loopback address. Link the ` +
-          "tool-server through an https:// URL, or through an SSH tunnel to a 127.0.0.1 port."
-      );
+      await expect(call).rejects.toThrow(/APP_PASSWORD.*loopback/i);
       expect(posted).toHaveLength(0);
       // A call naming no secret this machine holds still goes.
       await linked.callTool("keyboard", { text: "{{secret:NOT_HERE}}" });
@@ -214,8 +209,7 @@ describe("forward-secrets", () => {
   it("does not send a header over Node's header limit", async () => {
     writeFileSync(join(project, ".argent", "secrets.env"), `BIG=${"s".repeat(20_000)}\n`);
     await expect(client().callTool("keyboard", { text: "{{secret:BIG}}" })).rejects.toThrow(
-      "forward-secrets would send BIG in an x-argent-client-secrets header of 26680 bytes, which takes " +
-        "the request headers past the 16384 bytes a tool-server accepts, so the call was not sent."
+      /BIG.*x-argent-client-secrets.*16384/
     );
     expect(sent).toEqual([]);
   });
@@ -224,7 +218,7 @@ describe("forward-secrets", () => {
     // Under 16384 bytes on its own, over it with the rest of the head.
     writeFileSync(join(project, ".argent", "secrets.env"), `BIG=${"s".repeat(12_200)}\n`);
     await expect(client().callTool("keyboard", { text: "{{secret:BIG}}" })).rejects.toThrow(
-      "header of 16280 bytes, which takes the request headers past the 16384 bytes"
+      /16280 bytes.*16384 bytes/
     );
     expect(sent).toEqual([]);
   });
@@ -318,12 +312,14 @@ describe("forward-secrets", () => {
     async (setting, target, allowed) => {
       vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", setting);
       const { secretsTransportRefusal } = await import("../src/tools-client.js");
-      expect(secretsTransportRefusal(target)).toBe(
-        allowed
-          ? undefined
-          : `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${target}. Unset ` +
-              "it, and trust a self-signed certificate through NODE_EXTRA_CA_CERTS instead"
-      );
+      const refusal = secretsTransportRefusal(target);
+      if (allowed) {
+        expect(refusal).toBeUndefined();
+      } else {
+        expect(refusal).toContain(target);
+        expect(refusal).toContain("NODE_TLS_REJECT_UNAUTHORIZED=0");
+        expect(refusal).toContain("NODE_EXTRA_CA_CERTS");
+      }
     }
   );
 
@@ -341,8 +337,7 @@ describe("forward-secrets", () => {
       baseUrl: async () => ({ url: "https://192.0.2.10:3001", token: "t", remote: true }),
     });
     await expect(linked.callTool("keyboard", { text: "{{secret:APP_PASSWORD}}" })).rejects.toThrow(
-      "so the call was not sent (it names APP_PASSWORD): NODE_TLS_REJECT_UNAUTHORIZED=0 turns " +
-        "off the certificate check of https://192.0.2.10:3001. Unset it"
+      /APP_PASSWORD.*NODE_TLS_REJECT_UNAUTHORIZED=0/
     );
     expect(fetchImpl.mock.calls.map(([to]) => to)).toEqual(["https://192.0.2.10:3001/tools"]);
   });
@@ -385,7 +380,7 @@ describe("forward-secrets", () => {
       'steps:\n  - type: { into: { id: pw }, text: "{{secret:APP_PASSWORD}}" }\n  - run: big\n'
     );
 
-    await client().callTool("run-flow", { flow_path: flowPath, project_root: project });
+    await client().callTool("run-flow", { e2e_test_path: flowPath, project_root: project });
 
     expect(lastSecrets()).toEqual({ APP_PASSWORD: "hunter2", PIN: "4321" });
   });

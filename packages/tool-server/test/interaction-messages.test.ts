@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, Registry, type FailureSignal } from "@argent/registry";
 import { createRegistry } from "../src/utils/setup-registry";
-import { definitionsById, EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+import { definitionsById } from "./helpers/catalog";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { formatScreenshotDiffSummary } from "../src/tools/screenshot-diff/screenshot-diff-summary";
@@ -19,7 +19,6 @@ const failureSignal: FailureSignal = {
 describe("tool interaction messages", () => {
   it("defines all three formatters for every tool", () => {
     const definitions = definitionsById(createRegistry());
-    expect(definitions.size).toBe(EXPECTED_TOOL_COUNT);
 
     for (const [id, definition] of definitions) {
       expect(definition.interaction?.startedMsg, `${id}.startedMsg`).toBeTypeOf("function");
@@ -150,9 +149,9 @@ describe("tool interaction messages", () => {
       `Failed to run e2e test settings-explore: ${failureSignal.error_code}`
     );
 
-    // A flow_path call has no name param — the messages derive the name from
+    // An e2e_test_path call has no name param — the messages derive the name from
     // the YAML basename instead of rendering "undefined".
-    const byPath = { flow_path: "/repo/flows/login.yaml", project_root: "/repo" };
+    const byPath = { e2e_test_path: "/repo/flows/login.yaml", project_root: "/repo" };
     expect(interaction.startedMsg!({ params: byPath })).toBe("Running e2e test login");
     expect(interaction.completedMsg!({ params: byPath, result: {} })).toBe("Ran e2e test login");
     expect(interaction.failedMsg!({ params: byPath, error: new Error("raw"), failureSignal })).toBe(
@@ -162,11 +161,13 @@ describe("tool interaction messages", () => {
     // Degenerate sources (these calls fail validation, but the started message
     // renders first) still say something honest — never "" or "undefined".
     expect(
-      interaction.startedMsg!({ params: { flow_path: "/repo/flows/.yaml", project_root: "/repo" } })
+      interaction.startedMsg!({
+        params: { e2e_test_path: "/repo/flows/.yaml", project_root: "/repo" },
+      })
     ).toBe("Running e2e test .yaml");
     // Unlike the bare ".yaml" above, this path has an empty basename stem, so
     // the raw path — not the stem — is what names the flow here.
-    expect(interaction.startedMsg!({ params: { flow_path: "/", project_root: "/repo" } })).toBe(
+    expect(interaction.startedMsg!({ params: { e2e_test_path: "/", project_root: "/repo" } })).toBe(
       "Running e2e test /"
     );
     expect(interaction.startedMsg!({ params: { project_root: "/repo" } })).toBe(

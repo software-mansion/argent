@@ -7,7 +7,7 @@
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
 
-**[Argent](https://argent.swmansion.com)** 让你的 AI 助手直接操控 iOS 模拟器、Android 模拟器和真机、电视（Apple TV、Android TV、Fire TV）以及 Electron/Chromium 应用。点击按钮、分析页面性能、复现 Bug，全程无需离开命令行。
+**[Argent](https://argent.swmansion.com)** 是一套 MCP 服务器、CLI 和智能体技能，让 AI 编程智能体（Claude Code、Codex、Cursor 等）操控 iOS 模拟器、Android 模拟器和真机、电视（Apple TV、Android TV、Fire TV）、Electron/Chromium 应用以及原生 Mac 应用。点击按钮、分析页面性能、复现 Bug，全程无需离开命令行。
 
 ```bash
 npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest init

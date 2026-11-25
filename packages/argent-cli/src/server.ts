@@ -1,11 +1,12 @@
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir, networkInterfaces } from "node:os";
-import { spawn } from "node:child_process";
+import { constants, homedir, networkInterfaces } from "node:os";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   killToolServer,
   findFreePort,
+  resolveToolsServerNode,
   spawnToolsServer,
   buildToolsServerEnv,
   isToolsServerHealthy,
@@ -15,6 +16,7 @@ import {
   writeToolsServerState,
   writeToolsServerStateSync,
   clearToolsServerState,
+  stateFileForBundle,
   formatToolsServerUrl,
   formatLinkUrl,
   generateAuthToken,
@@ -101,10 +103,40 @@ function logsCmd(follow: boolean): void {
     process.stdout.write(fs.readFileSync(LOG_FILE, "utf8"));
     return;
   }
+  const cannotFollow = (err: Error) => {
+    console.error(
+      `argent server logs: cannot run \`tail\` to follow the log (${err.message}). ` +
+        "Run `argent server logs` without -f to print it."
+    );
+    process.exit(1);
+  };
   // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits
   // the way a terminal user expects.
-  const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  let child: ChildProcess;
+  try {
+    child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
+  } catch (err) {
+    // Only ENOENT, EACCES, EAGAIN, EMFILE and ENFILE arrive as `error`; Node
+    // throws the rest (e.g. ENOEXEC, ELOOP) from spawn() itself.
+    return cannotFollow(err as Error);
+  }
+  // A terminal's Ctrl-C or hangup signals our whole process group, tail
+  // included; a SIGTERM or SIGHUP sent to our pid alone would orphan it.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      try {
+        child.kill(signal);
+      } catch {
+        /* already gone */
+      }
+    });
+  }
+  // Mirror tail's exit; signal deaths use the conventional 128+signo code, as
+  // runForeground does.
+  child.on("exit", (code, signal) =>
+    process.exit(code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0))
+  );
+  child.on("error", cannotFollow);
 }
 
 interface StartFlags {
@@ -388,13 +420,27 @@ async function runForeground(
     token,
   });
 
-  const child = spawn("node", [paths.bundlePath, "start"], {
-    stdio: "inherit",
-    env,
-  });
+  const cannotStart = (err: unknown): never => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`argent server start: failed to spawn tool-server: ${message}`);
+    process.exit(1);
+  };
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(resolveToolsServerNode(), [paths.bundlePath, "start"], {
+      stdio: "inherit",
+      env,
+    });
+  } catch (err) {
+    // Some spawn failures (e.g. ENOEXEC, ELOOP) throw instead of emitting `error`.
+    return cannotStart(err);
+  }
 
   // The child has its own SIGINT/SIGTERM handlers that drain HTTP and dispose the
-  // registry, so forwarding lets a supervisor stop us cleanly.
+  // registry, so forwarding lets a supervisor stop us cleanly. SIGHUP is caught
+  // only to keep us alive to remove the state file. The child has no SIGHUP
+  // handler, so it dies as it would from the hangup itself: a graceful shutdown
+  // logging to a hung-up terminal spins on EIO and never exits.
   const forward = (signal: NodeJS.Signals) => () => {
     try {
       child.kill(signal);
@@ -404,8 +450,10 @@ async function runForeground(
   };
   const onInt = forward("SIGINT");
   const onTerm = forward("SIGTERM");
+  const onHup = forward("SIGHUP");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
+  process.on("SIGHUP", onHup);
 
   // Register state synchronously so a fast child exit (e.g. EADDRINUSE) cannot
   // race the write and leave a stale file pointing at a dead pid.
@@ -437,18 +485,24 @@ async function runForeground(
     const cleanup = () => {
       process.removeListener("SIGINT", onInt);
       process.removeListener("SIGTERM", onTerm);
+      process.removeListener("SIGHUP", onHup);
       if (stateWritten) {
-        clearToolsServerState(paths.bundlePath).catch(() => {
-          /* non-fatal */
-        });
+        // Only while it still names our child: an auto-spawn or another `server
+        // start` may have replaced it, and deleting theirs orphans that server.
+        const file = stateFileForBundle(paths.bundlePath);
+        try {
+          const cur = JSON.parse(fs.readFileSync(file, "utf8")) as { pid?: number };
+          if (cur.pid === childPid) fs.unlinkSync(file);
+        } catch {
+          /* gone, unreadable or unlink failed: the exit code must still mirror the child's */
+        }
       }
     };
     // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit`; report
     // them as a message rather than an unhandled stack trace.
     child.on("error", (err) => {
       cleanup();
-      console.error(`argent server start: failed to spawn tool-server: ${err.message}`);
-      process.exit(1);
+      cannotStart(err);
     });
     child.on("exit", (code, signal) => {
       cleanup();
@@ -460,16 +514,69 @@ async function runForeground(
 }
 
 function signalNumber(signal: NodeJS.Signals): number | null {
-  const map: Record<string, number> = { SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 };
-  return map[signal] ?? null;
+  return constants.signals[signal] ?? null;
+}
+
+const SUBCOMMAND_HELP = {
+  status: `Usage: argent server status [--json]
+
+Show the pid, port, and health of this install's tool-server.
+
+Flags:
+  --json                  Print machine-readable JSON.
+  --help, -h              Show this help.
+`,
+  stop: `Usage: argent server stop
+
+Terminate this install's tool-server.
+
+Flags:
+  --help, -h              Show this help.
+`,
+  logs: `Usage: argent server logs [-f]
+
+Print the tool-server log (${LOG_FILE}).
+
+Flags:
+  --follow, -f            Keep printing new lines until Ctrl-C.
+  --help, -h              Show this help.
+`,
+};
+
+const STATUS_OPTIONS = { json: { kind: "boolean" } } as const satisfies OptionSpecs;
+const STOP_OPTIONS = {} as const satisfies OptionSpecs;
+const LOGS_OPTIONS = { follow: { kind: "boolean", alias: "f" } } as const satisfies OptionSpecs;
+
+/** The parsed options, or null when `--help` printed the help. */
+function parseSubcommandArgs(
+  sub: keyof typeof SUBCOMMAND_HELP,
+  argv: string[],
+  specs: OptionSpecs
+): Record<string, string | boolean | undefined> | null {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(SUBCOMMAND_HELP[sub]);
+    return null;
+  }
+  try {
+    const { positionals, options } = parseCommandArgs(argv, specs);
+    if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    return options;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(`Error: ${err.message}\n`);
+    console.log(SUBCOMMAND_HELP[sub]);
+    process.exit(2);
+  }
 }
 
 function printServerHelp(): void {
   console.log(`Usage:
-  argent server start [flags]     Spawn a long-lived tool-server (see --help)
+  argent server start [flags]     Spawn a long-lived tool-server
   argent server status [--json]   Show tool-server pid, port, and health
   argent server stop              Terminate the running tool-server
   argent server logs [-f]         Print (or follow) the tool-server log
+
+Run \`argent server <subcommand> --help\` for its flags.
 `);
 }
 
@@ -477,20 +584,9 @@ export async function server(
   argv: string[],
   options?: { paths?: ToolsServerPaths }
 ): Promise<void> {
-  const sub = argv[0];
-  const json = argv.includes("--json");
-  const follow = argv.includes("-f") || argv.includes("--follow");
+  const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
-    printServerHelp();
-    return;
-  }
-
-  // `start` has its own flags and help. The rest act on a live server, so
-  // `--help` must short-circuit before `stop` kills it or `logs` dumps the file.
-  const rest = argv.slice(1);
-  const actsOnServer = sub === "status" || sub === "stop" || sub === "logs";
-  if (actsOnServer && (rest.includes("--help") || rest.includes("-h"))) {
     printServerHelp();
     return;
   }
@@ -499,17 +595,22 @@ export async function server(
     case "start":
       await startCmd(rest, options?.paths);
       return;
-    case "status":
-      await statusCmd(json, options?.paths);
+    case "status": {
+      const parsed = parseSubcommandArgs("status", rest, STATUS_OPTIONS);
+      if (parsed) await statusCmd(parsed.json === true, options?.paths);
       return;
+    }
     case "stop":
-      await stopCmd(options?.paths);
+      if (parseSubcommandArgs("stop", rest, STOP_OPTIONS)) await stopCmd(options?.paths);
       return;
-    case "logs":
-      logsCmd(follow);
+    case "logs": {
+      const parsed = parseSubcommandArgs("logs", rest, LOGS_OPTIONS);
+      if (parsed) logsCmd(parsed.follow === true);
       return;
+    }
     default:
-      console.error(`Unknown subcommand: server ${sub}`);
-      process.exit(1);
+      console.error(`Error: Unknown subcommand: server ${sub}\n`);
+      printServerHelp();
+      process.exit(2);
   }
 }
