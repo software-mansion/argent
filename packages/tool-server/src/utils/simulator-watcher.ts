@@ -120,10 +120,17 @@ async function resolveNativeDevtools(
 
 /**
  * Skips a provider's simulator: the provider owns its injection, and a tool that
- * needs native devtools there attaches through its own call.
+ * needs native devtools there attaches through its own call. A service that
+ * already runs gets another attempt, as one that failed while the simulator was
+ * shut down has no env; a new one makes its attempt in its factory.
  */
 async function armNow(registry: Registry, udid: string): Promise<void> {
   if (externalClaimForAnyId(udid)) return;
+  const running = await runningNativeDevtools(registry, udid);
+  if (running) {
+    await running.ensureEnvReady().catch(() => {});
+    return;
+  }
   await resolveNativeDevtools(registry, udid);
 }
 
@@ -338,10 +345,11 @@ export function startSimulatorWatcher(registry: Registry): {
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
     if (!urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
     const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length);
+    const key = udid.toUpperCase();
     if (to === ServiceState.RUNNING) {
-      targetedUdids.set(udid.toUpperCase(), udid);
+      if (!targetedUdids.has(key)) targetedUdids.set(key, udid);
     } else if (to === ServiceState.IDLE && !watcherDisposals.has(udid)) {
-      targetedUdids.delete(udid.toUpperCase());
+      if (targetedUdids.get(key) === udid) targetedUdids.delete(key);
       trackedServices.delete(udid);
     }
   }
@@ -417,7 +425,8 @@ export function startSimulatorWatcher(registry: Registry): {
     const key = udid.toUpperCase();
     const existing = armsInFlight.get(key);
     if (existing) return existing;
-    const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(key));
+    const spelling = targetedUdids.get(key) ?? udid;
+    const arming = armWithinCap(registry, spelling).finally(() => armsInFlight.delete(key));
     armsInFlight.set(key, arming);
     return arming;
   };

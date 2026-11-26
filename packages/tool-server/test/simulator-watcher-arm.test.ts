@@ -29,7 +29,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
   };
 });
 
-import type { DeviceInfo } from "@argent/registry";
+import { ServiceState, type DeviceInfo } from "@argent/registry";
 import { iosImpl as openUrlIos } from "../src/tools/open-url/platforms/ios";
 import { dispatchByPlatform } from "../src/utils/cross-platform-tool";
 import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
@@ -250,5 +250,55 @@ describe("ARGENT_SIMULATOR_WATCH_UDIDS", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
+  });
+});
+
+describe("an arm after the simulator's first service", () => {
+  const LETTERED = "ABCDEF01-2345-4678-9ABC-DEF012345678";
+
+  function listsLettered(): void {
+    simctlMock.mockReturnValue({
+      stdout: JSON.stringify({
+        devices: {
+          "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [{ udid: LETTERED, state: "Booted" }],
+        },
+      }),
+      stderr: "",
+    });
+  }
+
+  function runningUnder(udid: string) {
+    const ensureEnvReady = vi.fn(async () => {});
+    const resolveService = vi.fn(async (_urn: string) => ({
+      ensureEnvReady,
+      reverifyEnv: async () => {},
+      isEnvSetup: () => true,
+      getInitFailure: () => null,
+    }));
+    const disposeService = vi.fn(async () => {});
+    const getServiceState = (urn: string) =>
+      urn === `NativeDevtools:${udid}` ? ServiceState.RUNNING : ServiceState.IDLE;
+    const registry = watcherRegistry({ resolveService, disposeService, getServiceState });
+    return { registry, resolveService, disposeService, ensureEnvReady };
+  }
+
+  it("retries the running service instead of starting one under another spelling", async () => {
+    vi.useFakeTimers();
+    listsLettered();
+    const { registry, resolveService, disposeService, ensureEnvReady } = runningUnder(LETTERED);
+    const watcher = startSimulatorWatcher(registry);
+    stop = watcher.stop;
+    await watcher.ready;
+    targetSimulators(registry, LETTERED);
+
+    await armSimulator(LETTERED.toLowerCase());
+    targetSimulators(registry, LETTERED.toLowerCase());
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(new Set(resolveService.mock.calls.map(([urn]) => urn))).toEqual(
+      new Set([`NativeDevtools:${LETTERED}`])
+    );
+    expect(ensureEnvReady).toHaveBeenCalled();
+    expect(disposeService).not.toHaveBeenCalled();
   });
 });

@@ -664,8 +664,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
      * server on an in-use device this whole path exists to prevent.
      */
     const claim = externalClaimForAnyId(device.id);
-    let arming = Promise.resolve();
-
     if (claim) {
       return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
     }
@@ -674,6 +672,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       return buildRemoteInstance(device);
     }
 
+    let arming = Promise.resolve();
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
       // cannot drive the Apple TV focus engine: it accepts a touch and acks it
