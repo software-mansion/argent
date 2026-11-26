@@ -401,7 +401,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const warning = warningOf(result, "unmet");
     expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("stops the run there");
+    expect(warning).toContain("FAILS the step and the run");
     expect(warning).not.toContain("replays fine");
     // Nothing was compared, so nothing may blame a tree divergence.
     expect(warning).not.toContain("neither contains the other");

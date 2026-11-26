@@ -378,6 +378,12 @@ export interface RecordingSession {
    */
   stepWarnings?: Map<number, RecordedStepWarning>;
   /**
+   * The same verdicts for the steps recorded into `shutdown:`, by their 1-based
+   * number in that list. The finish attaches one only to the shutdown step it
+   * still anchors to.
+   */
+  shutdownStepWarnings?: Map<number, RecordedStepWarning>;
+  /**
    * How many verdicts this recording raised and then DROPPED, because a hand
    * edit moved the step each one judged (see {@link dropMovedWarnings}).
    *

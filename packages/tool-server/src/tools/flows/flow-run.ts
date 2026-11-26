@@ -2007,9 +2007,15 @@ Without a link, every step kind runs.`,
         };
         if (flow.shutdown) state.shutdownQueue.push({ steps: flow.shutdown, scope: rootScope });
         await execSteps(state, flow.steps, rootScope);
+        // A caller that shares its document (a recorder taking this test as a
+        // `run:` step) keeps it as the steps left it: a replay runs this
+        // shutdown at the end of the caller's test, after its later steps.
+        const caller = ctx?.flowOutput;
+        if (caller) state.output = { doc: caller.doc };
         // Before the teardown below: shutdown steps act on the device and the
         // app the run left, so a chromium instance the run owns must still be up.
         await execShutdown(state);
+        if (caller) caller.shutdownDoc = state.output.doc;
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
         // status-bar restore / chromium teardown lands after every step

@@ -8,7 +8,12 @@ import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
-import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import {
+  __resetRecordingsForTesting,
+  parseFlow,
+  serializeFlow,
+} from "../../src/tools/flows/flow-utils";
+import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 /** The recorders' `shutdown` param: the step goes to `shutdown:` and still runs now. */
 
@@ -230,5 +235,113 @@ describe("recording into shutdown:", () => {
 
     expect(out.message).toContain("no step was recorded");
     expect(out.stepCount).toBe(1);
+  });
+
+  it("keeps a recorded run: fragment's shutdown output away from the later steps", async () => {
+    // The nested run shares the recording's document; its shutdown writes
+    // what only the recording's shutdown steps may see.
+    const { registry } = mockRegistry();
+    (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _id: string,
+        _args: unknown,
+        opts?: { flowOutput?: { doc: object; shutdownDoc?: object } }
+      ) => {
+        opts!.flowOutput!.doc = { user: "u1" };
+        opts!.flowOutput!.shutdownDoc = { user: "u1", cleaned: "yes" };
+        return { ok: true, steps: [] };
+      }
+    );
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("frag.yaml"), "steps:\n  - echo: frag\n");
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "scripts", "check.mjs"),
+      'if (output.user !== "u1") throw new Error("no user");\nif (output.cleaned !== process.env.WANT) throw new Error("cleaned=" + output.cleaned);\n'
+    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+      }
+    );
+    const check = (want: string | undefined, shutdown?: boolean) =>
+      flowAddScriptTool.execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          path: "../../scripts/check.mjs",
+          env: want === undefined ? {} : { WANT: want },
+          ...(shutdown ? { shutdown } : {}),
+        }
+      );
+
+    expect((await check(undefined)).status).toBe("pass");
+    expect((await check("yes", true)).status).toBe("pass");
+  });
+
+  it("leaves a shared document as the steps left it, and the rest in shutdownDoc", async () => {
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(root, "scripts", "up.mjs"), "output.user = 'u1';\n");
+    await fs.writeFile(path.join(root, "scripts", "down.mjs"), "output.cleaned = true;\n");
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(
+      e2e("t.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "script", path: "../../scripts/up.mjs" }],
+        shutdown: [{ kind: "script", path: "../../scripts/down.mjs" }],
+      })
+    );
+    const { registry } = mockRegistry();
+    const shared: { doc: Record<string, unknown>; shutdownDoc?: Record<string, unknown> } = {
+      doc: {},
+    };
+
+    const result = await createRunFlowTool(registry).execute(
+      {},
+      { name: "t", project_root: root },
+      { flowOutput: shared } as never
+    );
+
+    expect((result as FlowRunResult).steps.map((s) => s.reason ?? s.status)).toEqual([
+      "pass",
+      "pass",
+    ]);
+    expect(shared.doc).toEqual({ user: "u1" });
+    expect(shared.shutdownDoc).toEqual({ user: "u1", cleaned: true });
+  });
+
+  it("repeats a failed wait recorded into shutdown: under its shutdown line at finish", async () => {
+    const { registry } = mockRegistry({
+      success: false,
+      elapsed: 1500,
+      note: "no element matched",
+    });
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await echo("main");
+
+    await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "await-ui-element",
+        args: JSON.stringify({ udid: "u", condition: "visible", selector: { text: "Bye" } }),
+        shutdown: true,
+      }
+    );
+    const finished = await flowFinishRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const at = finished.summary.findIndex((line) => line.startsWith("shutdown 1."));
+    expect(finished.summary[at + 1]).toMatch(
+      /^ {3}warning: recorded, but the wait itself never held/
+    );
+    expect(finished.message).toContain("1 step recorded a wait that did not pass");
   });
 });

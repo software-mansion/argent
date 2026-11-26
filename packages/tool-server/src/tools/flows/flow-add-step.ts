@@ -80,7 +80,7 @@ import {
 } from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { OutputReferenceError } from "./flow-output";
+import { OutputReferenceError, type FlowOutput } from "./flow-output";
 import { InvalidToolInputError } from "../../utils/capability";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
@@ -443,7 +443,7 @@ const SPELLING_CLAUSE =
 const UNMET_WAIT_WARNING =
   "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
   "returning success:false instead of failing, so the step was written to the e2e test anyway. At " +
-  "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
+  "replay an unmet wait FAILS the step and the run, so re-record it once the " +
   "condition can actually hold, and delete the failed step after `e2e-finish-recording` rather " +
   "than mid-recording: over a link the in-memory copy is authoritative and the next " +
   "append writes the step straight back, and without a link the recorder re-reads the file before " +
@@ -1706,9 +1706,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
           ? await captureRunTarget(session, args, project)
           : undefined;
-      const sharedOutput = runTarget?.flow
-        ? { doc: structuredClone(recordingOutput(session, block)) }
-        : undefined;
+      const sharedOutput: { doc: FlowOutput; shutdownDoc?: FlowOutput } | undefined =
+        runTarget?.flow ? { doc: structuredClone(recordingOutput(session, block)) } : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1980,8 +1979,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Only a recorded `run:` step keeps what its nested run returned, as a
       // replay would; a step that failed to append leaves the document as it was.
-      if (step.kind === "run" && sharedOutput)
-        keepRecordingOutput(session, block, sharedOutput.doc);
+      // The fragment's own shutdown ran in the call, after its steps. A replay
+      // runs it after the steps of this test, before this test's own shutdown,
+      // so what it returned reaches only the shutdown list.
+      if (step.kind === "run" && sharedOutput) {
+        const { doc, shutdownDoc = doc } = sharedOutput;
+        if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc);
+        else {
+          keepRecordingOutput(session, "steps", doc);
+          if (shutdownDoc !== doc) keepRecordingOutput(session, "shutdown", shutdownDoc);
+        }
+      }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by
@@ -1994,11 +2002,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
-      //
-      // Kept for `steps:` only: the verdicts are filed by the number of a step
-      // there, and the finish reads them against that list.
-      if (waitWarning && block === "steps") {
-        (session.stepWarnings ??= new Map()).set(stepCount, {
+      if (waitWarning) {
+        const verdicts =
+          block === "shutdown"
+            ? (session.shutdownStepWarnings ??= new Map())
+            : (session.stepWarnings ??= new Map());
+        verdicts.set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),
         });

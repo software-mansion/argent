@@ -158,9 +158,11 @@ export interface InvokeToolOptions {
    * Internal: the output document of a recording, which the recorder shares
    * with an e2e test it runs to record as a `run:` step, so the scripts of
    * that test read and set it as a replay's would. Only the call that sets it
-   * carries it: a sub-tool call never passes it on.
+   * carries it: a sub-tool call never passes it on. The run leaves `doc` as
+   * its steps left it, since a replay runs that test's `shutdown:` at its own
+   * end, and puts the document after its shutdown in `shutdownDoc`.
    */
-  flowOutput?: { doc: Record<string, unknown> };
+  flowOutput?: { doc: Record<string, unknown>; shutdownDoc?: Record<string, unknown> };
 }
 
 /**

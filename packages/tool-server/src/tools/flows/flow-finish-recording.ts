@@ -55,9 +55,9 @@ function attachStepWarnings(
  * answer, but reporting it as a pass is not: a recording where every wait
  * diverged would otherwise return the same payload as a clean one.
  */
-function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: number): string {
+function warningHeadline(warnings: Iterable<RecordedStepWarning>, discarded: number): string {
   const counts = { conversion: 0, wait: 0 };
-  for (const { kind } of warnings.values()) counts[kind] += 1;
+  for (const { kind } of warnings) counts[kind] += 1;
   const clauses: string[] = [];
   if (counts.conversion > 0) {
     clauses.push(
@@ -207,16 +207,35 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         // flow-step-definitions; keeping the order is what makes the next one
         // recoverable rather than fatal.
         const anchored = anchoredWarnings(session, flow.steps);
+        // A shutdown verdict stays only on the step it judged: a hand edit to
+        // `shutdown:` can move it, and no append re-checks that list.
+        const shutdownAnchored = new Map(
+          [...(session.shutdownStepWarnings ?? [])].filter(
+            ([n, verdict]) =>
+              flow.shutdown?.[n - 1] !== undefined &&
+              stepAnchor(flow.shutdown[n - 1]!) === verdict.step
+          )
+        );
         const summary = [
           ...attachStepWarnings(summarizeSteps(flow), anchored),
-          ...(flow.shutdown ?? []).map((step, i) => summarizeShutdownStep(step, i + 1)),
+          ...attachStepWarnings(
+            (flow.shutdown ?? []).map((step, i) => summarizeShutdownStep(step, i + 1)),
+            shutdownAnchored
+          ),
         ];
         // Everything raised, less what survived. `discardedWarnings` counts
         // what the appends threw away; `stepWarnings` what the finish still
         // held.
         const discarded =
-          (session.discardedWarnings ?? 0) + (session.stepWarnings?.size ?? 0) - anchored.size;
-        const headline = warningHeadline(anchored, discarded);
+          (session.discardedWarnings ?? 0) +
+          (session.stepWarnings?.size ?? 0) +
+          (session.shutdownStepWarnings?.size ?? 0) -
+          anchored.size -
+          shutdownAnchored.size;
+        const headline = warningHeadline(
+          [...anchored.values(), ...shutdownAnchored.values()],
+          discarded
+        );
         clearRecordingSession(session);
         return { filePath, flowFile, savedTo, flow, summary, headline };
       }
