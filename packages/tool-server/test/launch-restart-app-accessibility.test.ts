@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // the defaults back and relaunches it. So launch-app and restart-app write them
 // before every launch, on local and on cloud simulators.
 
-type Call = { cmd: string; args: readonly string[] };
+type Call = { cmd: string; args: readonly string[]; timeout?: number };
 const calls: Call[] = [];
 let failDefaultsWrites = false;
 /** What `defaults` exits with inside a cloud simulator; `sim-remote spawn` itself still succeeds. */
@@ -29,7 +29,9 @@ vi.mock("node:child_process", async () => {
       cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
-      calls.push({ cmd, args });
+      const timeout =
+        typeof opts === "object" ? (opts as { timeout?: number } | null)?.timeout : undefined;
+      calls.push({ cmd, args, timeout });
       if (failDefaultsWrites && isDefaultsWrite(args)) {
         callback(new Error("Invalid device or device pair"), { stdout: "", stderr: "" });
         return;
@@ -115,6 +117,15 @@ beforeEach(() => {
 
 describe("launch-app / restart-app turn app accessibility on before the app process starts", () => {
   for (const [toolName, createTool] of TOOLS) {
+    it(`${toolName} on a cloud simulator gives a write no longer than the launch waits for it`, async () => {
+      await run(createTool, REMOTE_UDID);
+
+      const writes = calls.filter(({ args }) => isDefaultsWrite(args));
+      expect(writes).toHaveLength(FLAGS.length);
+      // Past the 10 s the launch waits, a write would land after the app had started.
+      for (const { timeout } of writes) expect(timeout).toBeLessThanOrEqual(10_000);
+    });
+
     it(`${toolName} on a cloud simulator reports a write that fails inside the simulator`, async () => {
       remoteDefaultsExit = { code: 1, stderr: "Could not write domain com.apple.Accessibility\n" };
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -165,8 +176,10 @@ describe("launch-app / restart-app turn app accessibility on before the app proc
       it(`${toolName} on a ${host.name} does not launch while the write is in flight`, async () => {
         heldWrites = [];
         const done = run(createTool, host.udid);
+        const held = heldWrites;
+        await vi.waitFor(() => expect(held).toHaveLength(FLAGS.length));
+        // Room for a handler that does not wait for the writes to reach its launch.
         await turns(10);
-        expect(heldWrites.length).toBe(FLAGS.length);
         expect(launchIndex()).toBe(-1);
 
         for (const answer of heldWrites) answer();

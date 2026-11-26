@@ -697,11 +697,7 @@ export const localIosHost: IosHost = {
  * local iPhone and iPad sims leave it out to keep Full Keyboard Access working
  * ({@linkcode prepareLocalAxPrefs}).
  */
-const ACCESSIBILITY_DEFAULT_FLAGS = [
-  "AutomationEnabled",
-  "AccessibilityEnabled",
-  "ApplicationAccessibilityEnabled",
-];
+const ACCESSIBILITY_DEFAULT_FLAGS = ["AutomationEnabled", ...APP_ACCESSIBILITY_FLAGS];
 
 /**
  * Routed through the remote generic spawn: `defaults` runs inside the cloud
@@ -717,6 +713,8 @@ async function enableAppAccessibilityRemote(udid: string): Promise<void> {
     APP_ACCESSIBILITY_FLAGS.map(async (flag) => {
       const { exitCode, stderr } = await simRemoteSpawn(udid, {
         args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
+        // The launch waits no longer than this, so the write gets no longer either.
+        timeoutMs: APP_ACCESSIBILITY_WAIT_MS,
       });
       if (exitCode !== undefined && exitCode !== 0) {
         throw new Error(`defaults exited with ${exitCode}: ${stderr.trim() || "no stderr"}`);
@@ -776,9 +774,11 @@ export function pickIosHost(device: DeviceInfo): IosHost {
 }
 
 /**
- * How long a launch waits for {@linkcode enableAppAccessibilityBeforeLaunch}.
- * The write itself is given far longer on a cloud simulator, whose spawn
- * timeout allows for a binary upload.
+ * How long a launch waits for {@linkcode enableAppAccessibilityBeforeLaunch},
+ * and the budget of each write: a local spawn has the same 10 s, and a cloud
+ * write is given this in place of its spawn's 60 s. Stopping the local command
+ * does not prove the simulator dropped the write, so one that timed out can
+ * still land after the app has started.
  */
 const APP_ACCESSIBILITY_WAIT_MS = 10_000;
 
@@ -802,7 +802,8 @@ export async function enableAppAccessibilityBeforeLaunch(device: DeviceInfo): Pr
   const reason =
     settled.type === "error"
       ? settled.error
-      : `no answer within ${APP_ACCESSIBILITY_WAIT_MS / 1000}s`;
+      : `no answer within ${APP_ACCESSIBILITY_WAIT_MS / 1000}s, so the app starts without waiting ` +
+        `and the write may still land after it has started`;
   process.stderr.write(
     `[ios-host] could not turn app accessibility on for ${device.id}: ${reason}\n`
   );
