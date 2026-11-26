@@ -639,8 +639,8 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
-    // Resolving does not touch the timer: callers must call the api in the
-    // same tick as `resolveService`, before any other await.
+    // Resolving does not reset the timer: call the api right after
+    // `resolveService`, with no other await between.
     let inFlight = 0;
     let idleTimer: NodeJS.Timeout | undefined;
     const armIdleRelease = () => {
@@ -659,27 +659,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
 
     const request = <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
       tracked(async () => send<T>(await connected(), method, params));
-
-    const api: AndroidDevtoolsApi = {
-      isReady: () => ready && !disposed,
-      getHierarchy(getOpts: GetHierarchyOptions = {}) {
-        return request<HierarchyResult>("getHierarchy", {
-          waitForIdleMs: getOpts.waitForIdleMs ?? 500,
-          maxDepth: getOpts.maxDepth ?? 128,
-          maxNodes: getOpts.maxNodes ?? 5000,
-          clearCache: getOpts.clearCache ?? false,
-        });
-      },
-      getScreenSize() {
-        return request<{ width: number; height: number; rotation: number }>("getScreenSize");
-      },
-      ping() {
-        return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
-      },
-      setText(text: string, setOpts: { check?: boolean } = {}) {
-        return tracked(() => sendSetText(text, setOpts));
-      },
-    };
 
     async function sendSetText(text: string, setOpts: { check?: boolean }): Promise<SetTextResult> {
       // Outside the `try`: a reconnect that times out never sent the text,
@@ -719,6 +698,27 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         ...(result.singleLine === true ? { singleLine: true } : {}),
       };
     }
+
+    const api: AndroidDevtoolsApi = {
+      isReady: () => ready && !disposed,
+      getHierarchy(getOpts: GetHierarchyOptions = {}) {
+        return request<HierarchyResult>("getHierarchy", {
+          waitForIdleMs: getOpts.waitForIdleMs ?? 500,
+          maxDepth: getOpts.maxDepth ?? 128,
+          maxNodes: getOpts.maxNodes ?? 5000,
+          clearCache: getOpts.clearCache ?? false,
+        });
+      },
+      getScreenSize() {
+        return request<{ width: number; height: number; rotation: number }>("getScreenSize");
+      },
+      ping() {
+        return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
+      },
+      setText(text: string, setOpts: { check?: boolean } = {}) {
+        return tracked(() => sendSetText(text, setOpts));
+      },
+    };
 
     const instance: ServiceInstance<AndroidDevtoolsApi> = {
       api,

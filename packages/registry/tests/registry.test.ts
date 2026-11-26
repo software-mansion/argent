@@ -830,12 +830,39 @@ describe("Registry -- dispose during a self-release", () => {
     await registry.resolveService("Releasing:x");
 
     events.emit("terminated");
-    const disposing = registry.dispose();
-    await Promise.resolve();
+    let settled = false;
+    const disposing = registry.dispose().then(() => (settled = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
     releaseDispose();
     await disposing;
 
     expect(disposed).toBe(true);
+    expect(registry.getServiceState("Releasing:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("makes disposeService wait for the release", async () => {
+    const registry = new Registry();
+    let releaseDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => {
+      releaseDispose = resolve;
+    });
+    const events = new TypedEventEmitter<ServiceEvents>();
+    registry.registerBlueprint({
+      namespace: "Releasing",
+      getURN: (payload: string) => `Releasing:${payload}`,
+      factory: async () => ({ api: {}, dispose: () => disposeGate, events }),
+    });
+    await registry.resolveService("Releasing:x");
+
+    events.emit("terminated");
+    let settled = false;
+    const disposing = registry.disposeService("Releasing:x").then(() => (settled = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    releaseDispose();
+    await disposing;
+
     expect(registry.getServiceState("Releasing:x")).toBe(ServiceState.IDLE);
   });
 });

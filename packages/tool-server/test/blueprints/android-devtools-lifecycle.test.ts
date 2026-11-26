@@ -32,6 +32,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     spawn: () => {
+      log.push("spawn");
       proc = new FakeProc();
       setImmediate(() => proc.stdout.write("INSTRUMENTATION_STATUS: port=41000\n"));
       return proc;
@@ -544,9 +545,11 @@ describe("android-devtools idle release", () => {
     expect(registry.getServiceState(ref.urn)).toBe(ServiceState.TERMINATING);
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
 
-    expect(log.filter((entry) => entry === "shutdown" || entry === "exit")).toEqual([
+    expect(log.filter((entry) => ["spawn", "shutdown", "exit"].includes(entry))).toEqual([
+      "spawn",
       "shutdown",
       "exit",
+      "spawn",
     ]);
     expect(proc).not.toBe(released);
     await expect(api.ping()).resolves.toEqual({ ok: true });
