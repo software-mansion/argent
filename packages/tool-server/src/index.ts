@@ -37,6 +37,7 @@ import { shutdownOwnedDevices } from "./utils/device-shutdown";
 import { pauseJsCapturesOf } from "./blueprints/network-inspector";
 import { withCaptureSweep } from "./tools/network/network-capture";
 import { renderFlagGated } from "./utils/flag-gated-text";
+import { settleAgentReaps } from "./utils/android-agent-reap";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 /**
@@ -46,6 +47,10 @@ const PROCESS_TIMEOUT_MS = 5_000;
  * SIGTERM_GRACE_MS (6 s, this file's PROCESS_TIMEOUT_MS plus a buffer).
  */
 const EXIT_CAPTURE_WAIT_MS = 2_000;
+// Phone sessions reap their on-device screen-sharing agent in the background
+// after dispose (#1161). The exit waits for that, but stays inside the 6 s a
+// `server stop` gives before SIGKILL.
+const EXIT_AGENT_REAP_WAIT_MS = 3_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
@@ -368,6 +373,7 @@ export function start(): void {
         process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
       }
     });
+    await settleAgentReaps(EXIT_AGENT_REAP_WAIT_MS);
 
     try {
       await eventLog?.dispose();

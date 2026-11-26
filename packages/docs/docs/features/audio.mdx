@@ -37,7 +37,8 @@ A simulator that already has the hook keeps it until the simulator shuts down. A
 
 ## Limits
 
-- Argent supports iOS simulators on the same Mac as the tool server. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
+- Argent supports iOS simulators on the same Mac as the tool server and on Argent Cloud (`remote:`). Argent does not support tvOS simulators or physical iPhones.
+- On Argent Cloud a helper process in the simulator feeds the input. A hosted Mac has no microphone, so the hook adds an input to the app, and `source: "microphone"` gives silence.
 - Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
 - The tool server feeds the microphone input. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back. Argent keeps an input that a different tool server set after this one. If the tool server stops without a clean exit, the app hears silence until a new tool server connects to the simulator. The new tool server then gives the microphone back. It does not change the input of a different tool server that runs.
 - An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.

@@ -195,23 +195,39 @@ xcrun --sdk iphonesimulator clang \
   -o "${DEST_FILE_BS}"
 
 # The audio mock is its own dylib, inserted by the tool-server into every process of a locally armed simulator at
-# arming time (ios-audio-always-inserted, on by default; off, only once an audio tool is used). Local iOS only: no
-# tvOS or tcp variant.
-if [[ "$TRANSPORT" == "unix" ]]; then
-  echo "Building libArgentAudio.dylib..."
-  # CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
+# arming time (ios-audio-always-inserted, on by default; off, only once an audio tool is used). No tvOS variant. The
+# hook talks through files only, so the tcp set carries the same build for sim-remote simulators.
+echo "Building libArgentAudio.dylib..."
+# CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
+xcrun --sdk iphonesimulator clang \
+  -dynamiclib \
+  ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+  -isysroot "${SDK_PATH}" \
+  -mios-simulator-version-min=13.0 \
+  -arch arm64 \
+  -arch x86_64 \
+  -Wl,-U,_AudioDeviceCreateIOProcID \
+  -Wl,-U,_AudioObjectGetPropertyData \
+  -Wl,-U,_AudioObjectGetPropertyDataSize \
+  "${SRC_DIR}/ArgentAudio.c" \
+  -o "${DEST_FILE_AU}"
+
+# The remote audio mock's feeder: spawned by the tool-server inside a sim-remote simulator, where it feeds the ring
+# that libArgentAudio.dylib reads (the local tool-server feeds it itself). tcp only.
+DEST_FILE_FEEDER="${DEST_DIR}/argent-audio-feeder"
+if [[ "$TRANSPORT" == "tcp" ]]; then
+  echo "Building argent-audio-feeder..."
   xcrun --sdk iphonesimulator clang \
-    -dynamiclib \
     ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
     -isysroot "${SDK_PATH}" \
-    -mios-simulator-version-min=13.0 \
+    -target arm64-apple-ios15.0-simulator \
     -arch arm64 \
     -arch x86_64 \
-    -Wl,-U,_AudioDeviceCreateIOProcID \
-    -Wl,-U,_AudioObjectGetPropertyData \
-    -Wl,-U,_AudioObjectGetPropertyDataSize \
-    "${SRC_DIR}/ArgentAudio.c" \
-    -o "${DEST_FILE_AU}"
+    -O2 -Wall -Wextra \
+    -framework AudioToolbox \
+    -framework CoreFoundation \
+    "${SRC_DIR}/ArgentAudioFeeder.c" \
+    -o "${DEST_FILE_FEEDER}"
 fi
 
 echo "Building ax-service..."
@@ -377,9 +393,16 @@ if [[ "$MODE" == "release" ]]; then
     codesign --verify --verbose "${DEST_FILE_KB}"
     codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_BS}"
     codesign --verify --verbose "${DEST_FILE_BS}"
+    codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_AU}"
+    codesign --verify --verbose "${DEST_FILE_AU}"
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+      # simctl-spawned like ax-service: without its entitlements dyld scrubs DYLD_ROOT_PATH under the hardened runtime.
+      codesign --force --options runtime \
+        --entitlements "${SUBMODULE_DIR}/Sources/AXService/ax-service.entitlements" \
+        --sign "$IDENTITY" "${DEST_FILE_FEEDER}"
+      codesign --verify --verbose "${DEST_FILE_FEEDER}"
+    fi
     if [[ "$TRANSPORT" == "unix" ]]; then
-      codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_AU}"
-      codesign --verify --verbose "${DEST_FILE_AU}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE}"
       codesign --verify --verbose "${TVOS_DEST_FILE}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE_KB}"

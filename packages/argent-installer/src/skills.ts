@@ -16,12 +16,19 @@ import {
   listBundledSkills,
   npxChildEnv,
   removePath,
-  withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
 import { ALL_ADAPTERS, getManagedContentTargets } from "./mcp-configs.js";
+import {
+  NO_SKILLS_RUNNER_MESSAGE,
+  noSkillsRunnerHelp,
+  resolveSkillsRunner,
+  skillsCommand,
+} from "./skills-runner.js";
 
 type SkillScope = "project" | "global";
+
+const ARGENT_SKILL_NAME = /^argent-[a-z0-9-]+$/;
 
 interface SkillScopeResult {
   scope: SkillScope;
@@ -86,6 +93,8 @@ export function refreshArgentSkills(
   if (bundled.size === 0) return [];
   const results: SkillScopeResult[] = [];
   const primarySource = buildArgentSkillsSource(getInstalledVersion());
+  // Resolved once for the whole refresh — every scope's calls share it.
+  const runner = resolveSkillsRunner();
   // Project-scope `skills` commands act on their cwd, and this can run from a
   // detached updater that inherited the tool-server's editor-chosen cwd (often
   // `/` or `$HOME`) — pin every run to the project.
@@ -98,6 +107,11 @@ export function refreshArgentSkills(
     cwd: string;
     env: NodeJS.ProcessEnv;
   };
+  const runSkills = (skillsArgs: string[]): void => {
+    if (!runner) throw new Error(NO_SKILLS_RUNNER_MESSAGE);
+    const command = skillsCommand(runner, skillsArgs);
+    execFileSync(command.file, command.args, { ...execOpts, shell: command.shell });
+  };
 
   const specs = getScopeSpecs(projectRoot).filter(
     (spec) => scopes === "all" || spec.scope === "global"
@@ -106,7 +120,9 @@ export function refreshArgentSkills(
     const tracked = listArgentSkillsInLock(spec.lockPath);
     if (tracked.length === 0) continue;
 
-    const orphaned = tracked.filter((name) => !bundled.has(name));
+    // Lockfile names are project data and end up in the skills CLI's argv, so
+    // only names shaped like argent's own skills are pruned.
+    const orphaned = tracked.filter((name) => !bundled.has(name) && ARGENT_SKILL_NAME.test(name));
     const result: SkillScopeResult = {
       scope: spec.scope,
       synced: 0,
@@ -116,7 +132,7 @@ export function refreshArgentSkills(
     };
 
     try {
-      execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), execOpts);
+      runSkills(spec.buildAddArgs(primarySource));
       result.synced = bundled.size;
     } catch (primaryErr) {
       if (primarySource === SKILLS_DIR) {
@@ -124,7 +140,7 @@ export function refreshArgentSkills(
           primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
       } else {
         try {
-          execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), execOpts);
+          runSkills(spec.buildAddArgs(SKILLS_DIR));
           result.synced = bundled.size;
         } catch (fallbackErr) {
           result.syncError =
@@ -135,7 +151,7 @@ export function refreshArgentSkills(
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), execOpts);
+        runSkills([...spec.removeArgs, ...orphaned]);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);
@@ -261,7 +277,9 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
   const lines: string[] = [];
   for (const r of results) {
     const parts: string[] = [];
-    if (r.syncError) {
+    if (r.syncError === NO_SKILLS_RUNNER_MESSAGE) {
+      parts.push(`${pc.red("not synced")} ${pc.dim("(no package runner, see above)")}`);
+    } else if (r.syncError) {
       parts.push(`${pc.red("sync failed")} ${pc.dim(`(${r.syncError})`)}`);
     } else if (r.synced > 0) {
       parts.push(`synced ${r.synced}`);
@@ -301,6 +319,9 @@ export function reportSkillRefresh(
   scopes: SkillRefreshScopes = "all"
 ): void {
   const results = refreshArgentSkills(projectRoot, scopes);
+  if (results.some((r) => r.syncError === NO_SKILLS_RUNNER_MESSAGE)) {
+    p.log.warn(noSkillsRunnerHelp("argent update"));
+  }
   const summary = formatSkillRefreshSummary(results);
   if (summary) {
     p.note(summary, "Skills Updated");

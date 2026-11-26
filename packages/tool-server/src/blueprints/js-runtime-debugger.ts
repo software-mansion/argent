@@ -198,6 +198,9 @@ export interface JsRuntimeDebuggerApi {
   consoleSocketUrl: string;
 }
 
+const BEFORE_THAT = " Before that: ";
+const KEPT_AT = " is kept at ";
+
 function cdpDisconnectedError() {
   return new FailureError("CDP disconnected", {
     error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
@@ -391,7 +394,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
-    cdp.events.on("consoleAPICalled", (params) => {
+    const onConsoleAPI = (params: ConsoleAPICalledParams) => {
       const entry: ConsoleLogEntry = {
         id: nextLogId++,
         level: params.type,
@@ -412,7 +415,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         stackTrace: entry.stackTrace,
       });
       consoleEvents.emit("log", entry);
-    });
+    };
+    cdp.events.on("consoleAPICalled", onConsoleAPI);
 
     const logicalDeviceId = selected.target.reactNative?.logicalDeviceId;
 
@@ -423,6 +427,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * ids, since `forgetDeviceAlias` drops the only join between them.
      */
     const closeLog = ({ breadcrumb }: { breadcrumb: boolean }) => {
+      cdp.events.off("consoleAPICalled", onConsoleAPI);
       const captured = logWriter.getStats().totalEntries;
       const connectionLost = !cdp.isConnected();
       // Past a file-size limit or on a full disk the file can exist yet hold nothing.
@@ -435,18 +440,19 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           "This registry holds only what the runtime replayed or logged since, so earlier " +
           "entries may be missing.";
         const salvage = keepFile
-          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}. ` +
+          ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries}${KEPT_AT}${logWriter.getFilePath()}. ` +
             "If the app kept running, the current registry may repeat these entries, replayed by the runtime."
           : stored
             ? `The ${entries} went with it: the log file is deleted on teardown. ${since}`
             : `The ${entries} went with it: no log file held them. ${since}`;
         const kind = `js-runtime-debugger:${port}` as const;
         const ids = [deviceId, logicalDeviceId];
-        const earlier = takeReapedSessionAnyId(kind, ids)?.salvage;
+        const earlier = takeReapedSessionAnyId(kind, ids)?.salvage?.split(BEFORE_THAT);
+        const before = earlier?.findLast((note) => note.includes(KEPT_AT)) ?? earlier?.at(-1);
         recordReapedSession(
           kind,
           ids,
-          earlier ? `${salvage} Before that: ${earlier}` : salvage,
+          before ? `${salvage}${BEFORE_THAT}${before}` : salvage,
           connectionLost
         );
       }
@@ -514,11 +520,14 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
       await sourceMaps.waitForPending();
-      if (!cdp.isConnected()) throw cdpDisconnectedError();
 
       const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
       const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
+      if (!cdp.isConnected()) {
+        await consoleServer.close();
+        throw cdpDisconnectedError();
+      }
 
       const api: JsRuntimeDebuggerApi = {
         port,

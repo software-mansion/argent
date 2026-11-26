@@ -110,7 +110,15 @@ An emulator started with `-port` belongs to the boots that give that `port`:
 - With `force: true`, a boot stops an emulator only when no other emulator of the AVD would still block the boot. Otherwise it fails with `BOOT_ANDROID_READ_ONLY_CONFLICT` and stops nothing.
 - A read-only boot with `port` fails with `BOOT_ANDROID_PORT_IN_USE` when the AVD runs writable on that port. Add `force: true` to stop that emulator and boot it read-only.
 
-A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
+A read-only boot also reuses a read-only emulator that Argent did not start, under the rules above:
+
+- A boot with `port` reuses such an emulator on that port.
+- A boot without `port` reuses such an emulator started without `-port`.
+
+If the screenshot check fails on that external emulator during a boot without `port`, Argent reports an error and leaves the emulator running.
+Set `force: true` to replace it.
+
+The process list does not show the serial of an emulator started without `-port`. Argent takes that emulator as read-only when all the emulators of the AVD in the process list are read-only. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
 
 On Windows, Argent cannot read the command lines of the emulators. There:
 
@@ -196,6 +204,10 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 | `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
+On an Apple TV simulator, `await-screen-idle` checks focus during keyboard transitions. tvOS can still report the old control after the keyboard opens or closes.
+
+By default, `screenshot` captures an Apple TV simulator frame as JPEG and resizes it to PNG. Set `scale` explicitly to avoid JPEG compression. Use `scale: 1` for full-resolution comparisons.
+
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
@@ -264,20 +276,35 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 - Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
 - Argent does not send a capture call again after a timeout.
 
-Argent does not repeat an element tree that the agent already has. Each full element tree starts with a `Tree id` line. Argent compares the element tree with the last full element tree that the MCP server returned for the same device. That element tree comes from an earlier action or from a `describe` call. When the two are identical, the result contains a note in place of the element tree. The note gives the id of the full element tree and the tool that returned it. The screenshot is not affected.
+Argent does not repeat an element tree that the agent already has. Each full element tree starts with a `Tree id` line. Argent compares the element tree with the last full element tree that the MCP server returned for the same device. That element tree comes from an earlier action or from a `describe` call.
+
+- When the two are identical, the result contains a note in place of the element tree. The note gives the id of the full element tree and the tool that returned it.
+- When only a few lines change, the result contains a cumulative diff against that id: `-` lines for elements that are gone, and `+` lines for new elements. An element whose label, value, or frame changed appears as one `-` line and one `+` line.
 
 The note does not show that the action had no effect. The element tree does not contain all state. For example, text that the agent types in a field can be absent from it.
 
-All agents on one MCP connection share this comparison. An agent that does not have the element tree with the id in the note calls `describe`.
+All agents on one MCP connection share this comparison. An agent that does not have the element tree with the id in the note or diff calls `describe`.
 
 Argent sends the full element tree again in these cases:
 
-- The element tree or the hint of `describe` changed.
-- Argent sent the note 3 times in a row.
+- The diff is more than 60% of the length of the full element tree, for example on a new screen or after a scroll.
+- The `Hint`, `Source`, or `Mode` header line of `describe` changed.
+- Argent sent 3 short results (notes or diffs) in a row.
 - The last full element tree is more than 5 minutes old.
 - The client cancelled the call that returned the last full element tree.
 
 A `describe` call always returns the full element tree, with its `Tree id`. With the `disable-auto-describe` flag, a `describe` result has no `Tree id`.
+
+Argent applies the same comparison to automatic screenshots. Each full screenshot carries a `Screenshot id` line. Argent hashes the decoded pixel data of the PNG and compares it with the last full screenshot returned for the same device, from an earlier action or from a `screenshot` call with `includeImageInContext` enabled. When the pixels are identical, Argent sends a short note with that id and tool in place of the image.
+
+Argent sends the full screenshot again in these cases:
+
+- Any pixel or the image dimensions changed.
+- Argent sent the note 3 times in a row.
+- The last full screenshot is more than 5 minutes old.
+- The client cancelled the call that returned the last full screenshot.
+
+A `screenshot` call always returns the full image, with its `Screenshot id` (unless `includeImageInContext` is `false` or `disable-auto-screenshot` is on).
 
 Call `screenshot` or `describe` to read the screen again.
 
@@ -287,11 +314,11 @@ Call `screenshot` or `describe` to read the screen again.
 | ------------- | ----------------------------------------------------------------------------------------- |
 | `audio-input` | Choose what apps in an iOS simulator hear as microphone input: a file, a tone, or the mic |
 
-The audio tool needs an iOS simulator on the same Mac as the tool-server. These rules apply:
+The audio tool needs an iOS simulator on the same Mac as the tool-server or on Argent Cloud. These rules apply:
 
 - Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
 - The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first `audio-input` call. See [feature flags](/docs/reference/configuration#available-flags).
-- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- A tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
 - The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
 - Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
 
@@ -420,6 +447,8 @@ Call `network-capture-start`, trigger the request, then call `await-network-requ
 | `pollIntervalMs`   | Interval between reads in milliseconds. Default 400, range 50–5,000.                                                                       |
 
 The wait uses retained requests that started inside the latest capture window. Its JavaScript search requires that the start included JavaScript. A native layer already recording can also supply requests that started after the latest start. Clearing the native log listing leaves those records available to the wait. The wait can search a stopped window while the records remain available. For stopped JS capture, the wait needs an existing debugger connection. Requests that are still open or whose outcome Argent missed cannot match.
+
+On Chromium, Chrome reports the end of a `fetch()` response with `Cache-Control: no-store` only after the page reads its body. Argent marks such a request complete when the tab receives every byte that `Content-Length` declares. Thus the wait can match before the page reads the body, or when the page never reads it. `view-network-request-details` returns that body. A compressed response, a response with `Transfer-Encoding` or a response without `Content-Length` stays open until the page reads the body.
 
 With an active JavaScript window, the wait can reconnect to Metro and resume capture after a reload or relaunch. Repeat the action if it ran before capture resumed. If the window is missing (`NETWORK_CAPTURE_NOT_STARTED`), start capture and repeat the action.
 
@@ -649,6 +678,8 @@ All coordinates use the UI as the user sees it, also when the UI is landscape or
 - The coordinates of the gesture tools
 
 Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+On a local iOS simulator, `launch-app` and `restart-app` wait up to 5 seconds after launch for the accessibility service to report the app in front. If the wait times out, the next orientation reading or element tree can still describe the previous app.
 
 If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
