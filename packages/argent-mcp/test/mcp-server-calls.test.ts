@@ -508,6 +508,12 @@ describe("startMcpServer tool calls", () => {
     });
   });
 
+  it("sends no release for a connection that made no tool call", async () => {
+    await client.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(requests.some((r) => r.url === "/tools/release-device")).toBe(false);
+  });
+
   it("keeps uploading after the link is removed mid-session", async () => {
     vi.stubEnv("ARGENT_TOOLS_URL", "");
 

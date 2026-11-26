@@ -163,6 +163,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const sessionId = crypto.randomUUID();
+  let sessionCalledTools = false;
   let sessionEnded = false;
 
   function callerHeaders(): Record<string, string> {
@@ -375,6 +376,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
     const t0 = Date.now();
+    sessionCalledTools = true;
     const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
       ? undefined
       : signal;
@@ -573,6 +575,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   let release: Promise<unknown> | undefined;
   function releaseSessionDevices(): Promise<unknown> {
+    if (!sessionCalledTools) return Promise.resolve();
     release ??= fetch(`${TOOLS_URL}/tools/release-device`, {
       method: "POST",
       headers: { ...authHeader(), ...callerHeaders(), "Content-Type": "application/json" },
