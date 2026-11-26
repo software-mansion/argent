@@ -4,10 +4,10 @@ import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
+import { armSimulator } from "../../../utils/simulator-watcher";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 import { httpDeepLinkNote } from "../deep-link-note";
-import { armSimulator } from "../../../utils/simulator-watcher";
 
 const execFileAsync = promisify(execFile);
 

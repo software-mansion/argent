@@ -96,6 +96,14 @@ describe("getCachedSimulatorRuntimeKind — synchronous cache-only read", () => 
     expect(getCachedSimulatorRuntimeKind(PHONE_UDID)).toBe("mobile");
   });
 
+  it("runs one simctl list for concurrent lookups of a cold UDID", async () => {
+    mockSimctl();
+    const kinds = await Promise.all([1, 2, 3].map(() => getSimulatorRuntimeKind(TV_UDID)));
+    expect(kinds).toEqual(["tv", "tv", "tv"]);
+    const deviceLists = execFileMock.mock.calls.filter(([, args]) => args.includes("devices"));
+    expect(deviceLists).toHaveLength(1);
+  });
+
   it("stays undefined for an unknown UDID even after another device warms the cache", async () => {
     mockSimctl();
     await getSimulatorRuntimeKind(TV_UDID);

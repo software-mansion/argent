@@ -664,6 +664,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
      * server on an in-use device this whole path exists to prevent.
      */
     const claim = externalClaimForAnyId(device.id);
+
     if (claim) {
       return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
     }

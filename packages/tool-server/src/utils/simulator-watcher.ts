@@ -98,18 +98,18 @@ async function initUdid(
   await started?.reverifyEnv().catch(() => {});
 }
 
-function nativeDevtoolsUrn(udid: string): string {
-  return nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
+function simulatorNativeDevtoolsRef(udid: string) {
+  // tvOS sims are also platform "ios" (classified by UDID shape) and
+  // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
+  // slice.
+  return nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
 }
 
 async function resolveNativeDevtools(
   registry: Registry,
   udid: string
 ): Promise<NativeDevtoolsApi | null> {
-  // tvOS sims are also platform "ios" (classified by UDID shape) and
-  // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
-  // slice.
-  const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
+  const ndRef = simulatorNativeDevtoolsRef(udid);
   try {
     return await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch {
@@ -139,7 +139,7 @@ async function runningNativeDevtools(
   registry: Registry,
   udid: string
 ): Promise<NativeDevtoolsApi | null> {
-  const urn = nativeDevtoolsUrn(udid);
+  const urn = simulatorNativeDevtoolsRef(udid).urn;
   try {
     if (registry.getServiceState(urn) !== ServiceState.RUNNING) return null;
   } catch {
@@ -329,7 +329,7 @@ export function startSimulatorWatcher(registry: Registry): {
   async function disposeAsWatcher(udid: string): Promise<void> {
     watcherDisposals.add(udid);
     try {
-      await registry.disposeService(nativeDevtoolsUrn(udid));
+      await registry.disposeService(simulatorNativeDevtoolsRef(udid).urn);
     } catch {
       // Best-effort, like every other dispose here.
     } finally {

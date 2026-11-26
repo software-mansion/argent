@@ -121,33 +121,33 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
     const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
     expect(instance.api.getInitFailure()?.attempts).toBe(1);
 
-    // Phase 2: setenv hangs until we reject it — models the simctl-hang case
-    // the in-flight guard exists to handle.
-    let setenvCallCount = 0;
-    let rejectSetenv: ((err: Error) => void) | null = null;
+    // Phase 2: every spawn but getenv hangs until we reject it, which models
+    // the simctl-hang case the in-flight guard exists to handle.
+    const hanging: Array<(err: Error) => void> = [];
     execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
       if (cmd !== "xcrun") return { stdout: "", stderr: "" };
       if (args.includes("getenv")) return { stdout: "", stderr: "" };
-      setenvCallCount++;
       return new Promise<{ stdout: string; stderr: string }>((_resolve, reject) => {
-        rejectSetenv = reject;
+        hanging.push(reject);
       });
     });
 
     const p1 = instance.api.ensureEnvReady();
+    await new Promise<void>((r) => setImmediate(r));
+    const oneAttempt = hanging.length;
+    expect(oneAttempt).toBeGreaterThan(0);
+
     const p2 = instance.api.ensureEnvReady();
     const p3 = instance.api.ensureEnvReady();
-
     await new Promise<void>((r) => setImmediate(r));
-    expect(setenvCallCount).toBe(1);
+    expect(hanging.length).toBe(oneAttempt);
 
-    expect(rejectSetenv).not.toBeNull();
-    rejectSetenv!(new Error("simctl spawn failed: hang-mode timeout"));
+    for (const reject of hanging) reject(new Error("simctl spawn failed: hang-mode timeout"));
     const settled = await Promise.allSettled([p1, p2, p3]);
     expect(settled.every((r) => r.status === "rejected")).toBe(true);
 
     expect(instance.api.getInitFailure()?.attempts).toBe(2);
-    expect(setenvCallCount).toBe(1);
+    expect(hanging.length).toBe(oneAttempt);
 
     await instance.dispose();
   });

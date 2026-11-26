@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const pending: Array<{ args: readonly string[]; finish: (stdout: string) => void }> = [];
+const pending: Array<{
+  args: readonly string[];
+  finish: (stdout: string) => void;
+  fail: (err: Error) => void;
+}> = [];
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -10,7 +14,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
     _opts: unknown,
     cb: (err: Error | null, out: { stdout: string; stderr: string }) => void
   ) => {
-    pending.push({ args, finish: (stdout) => cb(null, { stdout, stderr: "" }) });
+    pending.push({
+      args,
+      finish: (stdout) => cb(null, { stdout, stderr: "" }),
+      fail: (err) => cb(err, { stdout: "", stderr: "" }),
+    });
   },
 }));
 
@@ -37,6 +45,7 @@ vi.mock("@argent/configuration-core", async (importOriginal) => ({
 import { localIosHost } from "../src/utils/ios-host";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
+const ENDPOINT = { transport: "unix", socketPath: "/tmp/argent-nd-test.sock" } as const;
 
 function issued(): string[] {
   return pending.map(({ args }) => args.slice(3).join(" "));
@@ -52,10 +61,7 @@ beforeEach(() => {
 
 describe("arming a local iOS simulator", () => {
   it("issues every independent spawn at once and writes DYLD_INSERT_LIBRARIES after reading it", async () => {
-    const armed = localIosHost.setupNativeDevtoolsEnv(UDID, {
-      transport: "unix",
-      socketPath: "/tmp/argent-nd-test.sock",
-    });
+    const armed = localIosHost.setupNativeDevtoolsEnv(UDID, ENDPOINT);
     await flush();
 
     expect(issued()).toEqual([
@@ -72,5 +78,26 @@ describe("arming a local iOS simulator", () => {
     expect(issued().at(-1)).toBe("launchctl setenv DYLD_INSERT_LIBRARIES /fake/bootstrap.dylib");
     pending.at(-1)!.finish("");
     await expect(armed).resolves.toBeUndefined();
+  });
+
+  it("fails only after the DYLD_INSERT_LIBRARIES write a failed step overlapped has finished", async () => {
+    let settled = false;
+    const armed = localIosHost.setupNativeDevtoolsEnv(UDID, ENDPOINT).finally(() => {
+      settled = true;
+    });
+    await flush();
+
+    pending[1]!.fail(new Error("endpoint setenv failed"));
+    await flush();
+    expect(settled).toBe(false);
+
+    pending[0]!.finish("");
+    for (const call of pending.slice(2)) call.finish("");
+    await flush();
+    expect(issued().at(-1)).toBe("launchctl setenv DYLD_INSERT_LIBRARIES /fake/bootstrap.dylib");
+    expect(settled).toBe(false);
+
+    pending.at(-1)!.finish("");
+    await expect(armed).rejects.toThrow("endpoint setenv failed");
   });
 });

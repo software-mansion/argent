@@ -316,13 +316,21 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
       killSignal: SIMCTL_KILL_SIGNAL,
     });
 
-  // Each step is its own `simctl spawn`, which costs a few hundred ms, and only
-  // the DYLD_INSERT_LIBRARIES write depends on a read.
-  await Promise.all([
+  await settleAllOrThrow([
     insertInjectionDylibs(udid, endpoint, nativeId, launchctl),
     setEndpointEnv(endpoint, launchctl),
     ensureAccessibilityEnabled(udid),
   ]);
+}
+
+/**
+ * Rejects with the first failure, but only once every step has settled, so no
+ * write lands after the caller has moved on, e.g. after a withdrawal.
+ */
+async function settleAllOrThrow(steps: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(steps);
+  const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failure) throw failure.reason;
 }
 
 type Launchctl = (args: string[]) => Promise<{ stdout: string }>;
@@ -333,14 +341,12 @@ async function insertInjectionDylibs(
   nativeId: string,
   launchctl: Launchctl
 ): Promise<void> {
-  // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
-  // the IOSSIMULATOR slice and native injection never connects.
-  // Read launchctl inside the simulator rather than `simctl getenv`: the latter
-  // silently truncates past 127 bytes, corrupting the colon-separated path list
-  // and accumulating stale entries on every pass.
   const [tvOs, bootstrapPath, result] = await Promise.all([
     isTvOsSimulator(udid),
     bootstrapPathFor(udid, endpoint),
+    // Read launchctl inside the simulator rather than `simctl getenv`: the latter
+    // silently truncates past 127 bytes, corrupting the colon-separated path list
+    // and accumulating stale entries on every pass.
     launchctl(["getenv", "DYLD_INSERT_LIBRARIES"]).catch((e) => ({
       stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "",
     })),
@@ -389,7 +395,9 @@ async function setAudioDirEnv(nativeId: string, launchctl: Launchctl): Promise<v
 /**
  * The bootstrap this simulator's injection uses, whichever build applies to it.
  * Arming and withdrawing must agree on it; withdrawing by a different path
- * would leave the armed one in place.
+ * would leave the armed one in place. tvOS simulators require a
+ * TVOSSIMULATOR-platform dylib: dyld silently skips the IOSSIMULATOR slice and
+ * native injection never connects.
  */
 async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<string> {
   if (await isTvOsSimulator(udid)) return bootstrapDylibPathTvos();
