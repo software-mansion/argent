@@ -160,9 +160,20 @@ export interface InvokeToolOptions {
    * that test read and set it as a replay's would. Only the call that sets it
    * carries it: a sub-tool call never passes it on. The run leaves `doc` as
    * its steps left it, since a replay runs that test's `shutdown:` at its own
-   * end, and puts the document after its shutdown in `shutdownDoc`.
+   * end, and puts the document after its shutdown in `shutdownDoc`. With
+   * `deferShutdown`, the run does not run its queued `shutdown:` blocks: it
+   * sets `deferredShutdown`, which runs them later, in the call it is given,
+   * against the document it is given, and returns their step reports.
    */
-  flowOutput?: { doc: Record<string, unknown>; shutdownDoc?: Record<string, unknown> };
+  flowOutput?: {
+    doc: Record<string, unknown>;
+    shutdownDoc?: Record<string, unknown>;
+    deferShutdown?: boolean;
+    deferredShutdown?: (
+      ctx: ToolContext | undefined,
+      output: { doc: Record<string, unknown> }
+    ) => Promise<object[]>;
+  };
 }
 
 /**

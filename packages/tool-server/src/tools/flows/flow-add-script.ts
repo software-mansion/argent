@@ -18,9 +18,12 @@ import {
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
+  fragmentShutdownNote,
+  type FragmentShutdownReport,
   keepRecordingOutput,
   recordedCount,
   recordingOutput,
+  runDeferredShutdown,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
@@ -57,6 +60,8 @@ interface FlowAddScriptResult {
   stepCount: number;
   recorded?: string;
   savedTo?: FlowSavedTo;
+  /** A shutdown call: the deferred shutdown of the recorded `run:` fragments, run before it. */
+  fragmentShutdown?: FragmentShutdownReport;
 }
 
 /**
@@ -164,7 +169,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now, and its output reaches only later shutdown steps. stepCount then counts the shutdown steps."
+      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now, and its output reaches only later shutdown steps. stepCount then counts the shutdown steps. The first such call first runs the shutdown: of the fragments recorded as run: steps, as a replay does; fragmentShutdown reports it."
     ),
 });
 
@@ -248,6 +253,9 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // The test's env: as it stands, under the step's own: what a replay
     // without run values gives the step.
     const env: FlowEnv = mergeScriptEnv(await recordedFileEnv(session), step.env);
+    // As in e2e-add-step: a replay runs the recorded fragments' shutdown first.
+    const fragmentShutdown =
+      block === "shutdown" ? await runDeferredShutdown(session, ctx) : undefined;
     const ranAgainst = recordingOutput(session, block);
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
@@ -259,7 +267,9 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
+    const shutdownNote = fragmentShutdownNote(fragmentShutdown);
     const common = {
+      ...(fragmentShutdown ? { fragmentShutdown } : {}),
       status: outcome.status,
       ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
       ...(outcome.scriptLog !== undefined ? { log: outcome.scriptLog } : {}),
@@ -338,7 +348,9 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message: `Added ${params.shutdown ? "shutdown " : ""}script step to "${params.name}" e2e test.`,
+      message:
+        `Added ${params.shutdown ? "shutdown " : ""}script step to "${params.name}" e2e test` +
+        (shutdownNote ? ` — ${shutdownNote}.` : "."),
       ...(rendered ?? {}),
       stepCount,
       recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),

@@ -613,7 +613,7 @@ describe("recording for a client released before the rename (legacyE2eDir)", () 
           project_root: CLIENT_ROOT,
           e2e_test_file: expect.objectContaining({ path: fragLegacy }),
         }),
-        expect.objectContaining({ flowOutput: { doc: {} } })
+        expect.objectContaining({ flowOutput: { doc: {}, deferShutdown: true } })
       );
     });
 

@@ -409,6 +409,14 @@ export interface RecordingSession {
    * step hand-deleted from the file set.
    */
   shutdownChanges?: Map<string, unknown>;
+  /**
+   * The `shutdown:` of each fragment recorded as a `run:` step in `steps:`, in
+   * recording order, not yet run. A replay runs them after the steps, newest
+   * first, before the test's own shutdown steps, so the recording runs them
+   * before its first shutdown call, or at the finish
+   * ({@link runDeferredShutdown}).
+   */
+  deferredShutdown?: NonNullable<NonNullable<ToolContext["flowOutput"]>["deferredShutdown"]>[];
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -5214,6 +5222,67 @@ export function keepRecordingOutput(
       changes.set(key, value);
     }
   }
+}
+
+/** What the deferred fragment shutdown did when a recording call ran it. */
+export interface FragmentShutdownReport {
+  /** No step failed or errored. */
+  ok: boolean;
+  /** The step reports, each with `shutdown: true`, newest fragment first. */
+  steps: object[];
+}
+
+/**
+ * Run the deferred `shutdown:` of the fragments recorded as `run:` steps
+ * ({@link RecordingSession.deferredShutdown}), newest first, in the call `ctx`,
+ * as a replay runs them before the test's own shutdown steps. Each block runs
+ * after one before it failed. What they return goes to the later shutdown
+ * calls only ({@link keepRecordingOutput}). Undefined when nothing was
+ * deferred.
+ */
+export async function runDeferredShutdown(
+  session: RecordingSession,
+  ctx: ToolContext | undefined
+): Promise<FragmentShutdownReport | undefined> {
+  const queued = session.deferredShutdown;
+  if (!queued?.length) return undefined;
+  // Taken before the first await, so a concurrent call cannot run it twice.
+  delete session.deferredShutdown;
+  const ranAgainst = recordingOutput(session, "shutdown");
+  const output = { doc: structuredClone(ranAgainst) };
+  const steps: object[] = [];
+  let thrown: { error: unknown } | undefined;
+  for (const run of queued.reverse()) {
+    try {
+      steps.push(...(await run(ctx, output)));
+    } catch (error) {
+      thrown ??= { error };
+    }
+  }
+  keepRecordingOutput(session, "shutdown", output.doc, ranAgainst);
+  if (thrown) throw thrown.error;
+  const failed = steps.some((s) => {
+    const status = (s as { status?: unknown }).status;
+    return status === "fail" || status === "error";
+  });
+  return { ok: !failed, steps };
+}
+
+/** The clause a recording call's message gives a {@link FragmentShutdownReport}. */
+export function fragmentShutdownNote(
+  report: FragmentShutdownReport | undefined
+): string | undefined {
+  if (!report) return undefined;
+  const failed = report.steps.filter((s) => {
+    const status = (s as { status?: unknown }).status;
+    return status === "fail" || status === "error";
+  }).length;
+  return (
+    `first ran the shutdown: of the fragments recorded as run: steps, as a replay does ` +
+    (failed === 0
+      ? `(${report.steps.length} ${report.steps.length === 1 ? "step" : "steps"})`
+      : `(${failed} of ${report.steps.length} steps failed; see fragmentShutdown)`)
+  );
 }
 
 /** How many steps `block` of a flow holds. */

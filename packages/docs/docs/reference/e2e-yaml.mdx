@@ -137,10 +137,11 @@ The `shutdown` steps do not change the shape of the e2e test. Only `steps` decid
 To record a `shutdown` step, give `shutdown: true` to `e2e-add-step`, `e2e-add-script` or `e2e-add-echo`. The tool then records the step in `shutdown`.
 
 - The tool runs the call at once, so the call cleans up the device and the data at once. Record the `shutdown` steps after the other steps.
-- When `e2e-add-step` records an `e2e-execute` call as a `run:` step in `steps`, the fragment runs as a separate run, and its `shutdown` runs at the end of the call. A replay runs that `shutdown` at the end of the e2e test. The message of the tool tells you this.
-- If a later step needs what the `shutdown` of that fragment undoes, such as a login or a test user, record the steps of the fragment one by one instead, and its cleanup with `shutdown: true`. After `e2e-finish-recording`, you can replace them with the `run:` step.
-- The `output` that a recorded `shutdown` step returns goes only to the later `shutdown` steps, because a replay runs the `shutdown` steps after the other steps.
-- The `output` that the `shutdown` of a fragment returns during the call goes to no later step when the `run:` step is in `steps`, although a replay gives it to the `shutdown` steps. When the `run:` step is in `shutdown`, it goes to the later `shutdown` steps.
+- When `e2e-add-step` records an `e2e-execute` call as a `run:` step in `steps`, the recording keeps the `shutdown` of the fragment for later, as a replay does. The later steps see what the fragment did, such as a login.
+- The first call with `shutdown: true` to `e2e-add-step` or `e2e-add-script` first runs the kept `shutdown` lists, from the last fragment to the first. If no such call comes, `e2e-finish-recording` runs them. The tool returns their steps in `fragmentShutdown` and says in its message when a step failed. When the call is cancelled, the tool skips them.
+- The `output` that a recorded `shutdown` step returns goes only to the later `shutdown` steps, because a replay runs the `shutdown` steps after the other steps. The same is true for the `shutdown` of a fragment.
+- When the `run:` step is in `shutdown`, the `shutdown` of the fragment runs at the end of the call, as in a replay.
+- The `shutdown` of a fragment runs at the end of the call when the files of the fragment came with the call over a link, or when the fragment started its own chromium app. The message of the tool then says so.
 
 ### Requirements
 

@@ -134,7 +134,7 @@ describe("recording into shutdown:", () => {
     expect(out.stepCount).toBe(1);
   });
 
-  it("says when a fragment recorded as run: already ran its shutdown", async () => {
+  it("says when a fragment recorded as run: could not keep its shutdown for later", async () => {
     await fs.mkdir(e2e(""), { recursive: true });
     await fs.writeFile(
       e2e("frag.yaml"),
@@ -162,7 +162,7 @@ describe("recording into shutdown:", () => {
 
     expect((await onDisk()).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
     expect(out.message).toMatch(
-      /frag\.yaml ran its shutdown: steps at the end of this call; a replay runs them at the end/
+      /frag\.yaml ran its shutdown: steps at the end of this call \(its files came with the call, or it started its own chromium app\); a replay runs them at the end/
     );
   });
 

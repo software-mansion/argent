@@ -16,6 +16,7 @@ import {
   type FileInputSpec,
   type OnDiskSpelling,
   type Registry,
+  type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
 import {
@@ -34,10 +35,13 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type FragmentShutdownReport,
   adoptRecordedFile,
+  fragmentShutdownNote,
   keepRecordingOutput,
   recordedCount,
   recordingOutput,
+  runDeferredShutdown,
   type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
@@ -81,7 +85,7 @@ import {
 } from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { OutputReferenceError, type FlowOutput } from "./flow-output";
+import { OutputReferenceError } from "./flow-output";
 import { InvalidToolInputError } from "../../utils/capability";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
@@ -1561,7 +1565,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The call still runs now. stepCount then counts the shutdown steps."
+      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The call still runs now. stepCount then counts the shutdown steps. The first such call first runs the shutdown: of the fragments recorded as run: steps, as a replay does; fragmentShutdown reports it."
     ),
 });
 
@@ -1573,6 +1577,8 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     stepCount: number;
     recorded?: string;
     savedTo: FlowSavedTo;
+    /** A shutdown call: the deferred shutdown of the recorded `run:` fragments, run before it. */
+    fragmentShutdown?: FragmentShutdownReport;
     /** Over a link: the baselines a nested run of the step wrote, which the client writes. */
     baselineWrites?: ClientFileDirective[];
   }
@@ -1660,6 +1666,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // recording's scripts returned, and the step keeps the references. It is
       // recorded as the raw tool step: a directive the call would convert to
       // (a captured tap selector, a `launch`) is built from resolved values.
+      // A replay runs the shutdown of the fragments recorded as `run:` steps
+      // before the test's own shutdown steps, so they run before this call and
+      // what they return reaches it.
+      const fragmentShutdown =
+        block === "shutdown" ? await runDeferredShutdown(session, ctx) : undefined;
+
       const authored: FlowStep = { kind: "tool", name: command, args };
       const referencedArgs = holdsOutputReference(authored) ? args : undefined;
       if (referencedArgs) {
@@ -1721,8 +1733,19 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? await captureRunTarget(session, args, project)
           : undefined;
       const ranAgainst = recordingOutput(session, block);
-      const sharedOutput: { doc: FlowOutput; shutdownDoc?: FlowOutput } | undefined =
-        runTarget?.flow ? { doc: structuredClone(ranAgainst) } : undefined;
+      // Recorded into `steps:`, the run keeps its fragment's shutdown for the
+      // recording to run where a replay does (runDeferredShutdown).
+      const sharedOutput: NonNullable<ToolContext["flowOutput"]> | undefined = runTarget?.flow
+        ? { doc: structuredClone(ranAgainst), deferShutdown: block === "steps" }
+        : undefined;
+      // A deferred shutdown whose `run:` step is not recorded runs now: a
+      // replay has no step to run it for.
+      const runUnrecordedShutdown = async (): Promise<void> => {
+        const run = sharedOutput?.deferredShutdown;
+        if (!run) return;
+        delete sharedOutput.deferredShutdown;
+        await run(ctx, { doc: sharedOutput.doc }).catch(() => undefined);
+      };
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1779,6 +1802,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       if (linked && command === RUN_TARGET_COMMAND) {
         const outcome = nestedOrchestratorOutcome(RUN_TARGET_COMMAND, toolResult);
         if (outcome) {
+          await runUnrecordedShutdown();
           throw new FailureError(
             outcome.status === "fail"
               ? `Cannot record this call: the nested e2e test did not pass (${outcome.reason}). A ` +
@@ -1973,6 +1997,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       try {
         ({ savedTo, stepCount } = await appendStepToFlow(session, step, block));
       } catch (err) {
+        await runUnrecordedShutdown();
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
         // A host-mode append re-parses the file, so the scan that checks
@@ -1994,14 +2019,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Only a recorded `run:` step keeps what its nested run returned, as a
       // replay would; a step that failed to append leaves the document as it was.
-      // The fragment's own shutdown ran in the call, after its steps. Recorded
-      // into `steps:`, what that shutdown returned is dropped: a replay hands it
-      // only to this test's shutdown, and keeping it apart would hide the
-      // output of the steps recorded after this one from the shutdown list.
+      // Recorded into `shutdown:`, the fragment's own shutdown ran in the call,
+      // right after its steps, as a replay runs it. Recorded into `steps:`, the
+      // recording keeps that shutdown for later (runDeferredShutdown).
       if (step.kind === "run" && sharedOutput) {
-        const { doc, shutdownDoc = doc } = sharedOutput;
+        const { doc, shutdownDoc = doc, deferredShutdown } = sharedOutput;
         if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc, ranAgainst);
         else keepRecordingOutput(session, "steps", doc, ranAgainst);
+        if (deferredShutdown) (session.deferredShutdown ??= []).push(deferredShutdown);
       }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
@@ -2027,20 +2052,22 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         project instanceof ClientProjectAccess && ctx?.flowStack === undefined
           ? project.baselineDirectives()
           : [];
-      // A fragment recorded as `run:` ran here as a run of its own, so its
-      // `shutdown:` already ran. A replay runs it at the end of the test, or,
-      // for a `run:` in shutdown, right after it, as here.
-      const fragmentShutdown =
+      // A fragment's shutdown is kept for later unless the run could not keep
+      // it (canDeferShutdown in flow-run.ts): then it ran in the call.
+      const ranShutdownNow =
         block === "steps" && step.kind === "run" && reportsShutdown(toolResult)
-          ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps. If a later step needs what that shutdown undid (a login, a test user), record the fragment's steps one by one instead, its cleanup with shutdown: true, and swap them for the run: line after e2e-finish-recording`
+          ? `${step.flow} ran its shutdown: steps at the end of this call (its files came with the call, or it started its own chromium app); a replay runs them at the end of the e2e test`
           : undefined;
-      const notes = [warning, fragmentShutdown].filter((n) => n !== undefined).join("; ");
+      const notes = [fragmentShutdownNote(fragmentShutdown), warning, ranShutdownNow]
+        .filter((n) => n !== undefined)
+        .join("; ");
       return {
         message: `${params.shutdown ? "Shutdown step" : "Step"} added to "${params.name}" e2e test${notes ? ` — ${notes}` : ""}`,
         toolResult,
         stepCount,
         recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),
         savedTo,
+        ...(fragmentShutdown ? { fragmentShutdown } : {}),
         ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };
     },
