@@ -103,7 +103,7 @@ function printToolHelp(meta: ToolMeta): void {
   console.log("  --<field>-json <json>  Pass a single field as JSON (objects/nested arrays)");
   console.log("  --json                 Print only the raw JSON result");
   console.log(
-    "  --out <path>           Save the image result, or the screen after an action (not with --json), to <path>"
+    "  --out <path>           Save the image result, or the screen after an action, to <path>"
   );
   console.log("  --help, -h             Show this help");
 }

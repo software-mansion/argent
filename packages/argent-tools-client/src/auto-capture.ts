@@ -227,7 +227,6 @@ export function describedTree(result: unknown): string | undefined {
   return `${hintLine}${description}`;
 }
 
-/** Calls a tool on the tool-server and resolves its result data. */
 export type CaptureToolCall = (
   name: string,
   args: Record<string, unknown>,
