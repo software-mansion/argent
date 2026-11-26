@@ -504,7 +504,7 @@ Start a stopped device with boot-device: an iOS simulator by 'udid', an Android 
 </flag:harmonyos>platform 'ios-remote' is an iOS simulator hosted on Argent Cloud, usable from Linux too (https://argent.swmansion.com/cloud/); drive it with the same tools by its 'remote:' udid. A 'deviceSet' simulator (e.g. from Radon IDE) runs headless.
 runtimeKind 'tv' marks a focus-driven TV target: use describe, tv-remote and keyboard, not gestures. 'foldable: true' marks a device the fold tool folds.
 Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-device with electronAppPath launches one.
-claim 'another session' marks a device another agent is driving: use a different one.
+claim 'another session' marks a device another Argent session is driving: use a different one.
 'notes' says which platform this machine cannot reach and what would change that; tell the user when their task needs that platform.`,
   zodSchema,
   alwaysLoad: true,

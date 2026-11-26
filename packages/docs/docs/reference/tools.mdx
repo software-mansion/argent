@@ -216,19 +216,20 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 
 ### Device claims
 
-One tool-server serves all MCP connections and CLI calls of an installation. A device claim prevents two sessions from using one device:
+A device claim prevents two sessions of one tool-server from using one device:
 
 - Each MCP connection is one session. Subagents that use the MCP connection of their editor share its session.
 - A CLI or SDK process is a session when `ARGENT_SESSION` is set. Processes with the same value share one session. This session is different from the session of an MCP connection.
 - A tool call that names a device claims the device for its session. `e2e-execute` without `device` claims the device that it selects.
 - A call from a different session to a claimed device fails with `DEVICE_IN_USE`. The error names the device and does not name the other session.
-- A call without a session claims no device and is never refused.
+- A call without a session claims no device and is never refused, also when it names a device.
 - `list-devices` adds `claim: "this session"` or `claim: "another session"` to a claimed device.
+- Each tool-server keeps its own claims. A session of a different tool-server, for example of another Argent installation, does not see them.
 
 A claim ends when one of these events occurs:
 
-- The session calls `release-device`. With `udid`, the call releases that device. Without `udid`, the call releases all devices of the session. A release of a device that the session does not hold does nothing.
-- The MCP connection closes, or the MCP server gets `SIGTERM` or `SIGINT`.
+- The session calls `release-device`. With `udid`, the call releases that device. Without `udid`, for example `argent run release-device`, the call releases all devices of the session. A device with a call of the session in progress stays claimed until that call ends. A release of a device that the session does not hold does nothing.
+- The MCP connection closes, or the MCP server gets `SIGTERM`, `SIGINT` or `SIGHUP`.
 - No call of the session to the device is in progress, and the last call ended more than 10 minutes ago. This also frees the device of an MCP server that was killed.
 
 A screen recording, a profiler session or a network capture between two calls does not count as a call. The claims are in the memory of the tool-server. A restart of the tool-server removes all claims.
