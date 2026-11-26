@@ -12,7 +12,6 @@ import {
   type FlowStep,
   type FlowSavedTo,
   type RecordedStepWarning,
-  type RecordingSession,
 } from "./flow-utils";
 import { stepAnchor, summarizeShutdownStep, summarizeSteps } from "./flow-step-definitions";
 
