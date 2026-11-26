@@ -1438,7 +1438,13 @@ describe("a restart that lands while a step is still running", () => {
     await addEcho(root, "alpha", "one");
     await addEcho(root, "alpha", "two");
 
-    await writeScript(root, "throw new Error('boom');");
+    const release = path.join(root, "release-script");
+    await writeScript(
+      root,
+      `import fs from "node:fs";
+while (!fs.existsSync(${JSON.stringify(release)})) await new Promise((r) => setTimeout(r, 10));
+throw new Error("boom");`
+    );
     const gate = openGate();
     const held = withFlowFileLock(root, "alpha", () => gate.promise);
     const restarting = start(root, "alpha");
@@ -1447,6 +1453,7 @@ describe("a restart that lands while a step is still running", () => {
     gate.open();
     await held;
     expect((await restarting).restarted).toBe(true);
+    await fs.writeFile(release, "");
 
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
