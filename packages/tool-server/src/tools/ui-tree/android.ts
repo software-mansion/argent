@@ -3,6 +3,7 @@ import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/an
 import {
   attrIsTrue,
   deriveUiAutomatorRole,
+  isUiAutomatorTextInputClass,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
 } from "../describe/platforms/android/uiautomator-parser";
@@ -66,9 +67,7 @@ function mapNode(
   const text = password || hintShowing ? "" : (a.text ?? "");
   const desc = a["content-desc"] ?? "";
   const rect = parseUiAutomatorBounds(a.bounds ?? "");
-  // Every EditText subclass, Compose fields too, reports an EditText class;
-  // `TextInputLayout`, the Material wrapper, must not match.
-  const textInput = type.endsWith("EditText") || type.endsWith("AutoCompleteTextView");
+  const textInput = isUiAutomatorTextInputClass(type);
   // isEditable() is false on a disabled field, which is still a text input.
   const editable = v2
     ? attrIsTrue(a, "editable") || (textInput && a.enabled === "false")

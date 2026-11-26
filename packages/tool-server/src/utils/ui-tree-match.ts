@@ -462,6 +462,22 @@ export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
 export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
 
 /**
+ * `matches` less each leaf with a borrowed label (an Android row that took the
+ * text of its title and summary) that holds another match with a label of its
+ * own: the title, not the row around it, is what a `text` check reads and what
+ * `next`/`after` count from. A `within` scope keeps the row, since a row as a
+ * scope is the point of it, and a tap already takes the smaller exact match.
+ */
+function preferOwnLabels(matches: DescribeNode[]): DescribeNode[] {
+  if (!matches.some((n) => n.borrowedLabel === true)) return matches;
+  return matches.filter(
+    (n) =>
+      n.borrowedLabel !== true ||
+      !matches.some((m) => m.borrowedLabel !== true && frameWithin(m.frame, n.frame))
+  );
+}
+
+/**
  * How each scope narrows a match set. `within` and `after` are per-node
  * predicates; `next` reduces the SET, which is why the order above applies it
  * last — `{ any: true, next: X, within: Y }` means "the first element inside Y
@@ -475,8 +491,8 @@ const RELATION_RESOLVERS: Record<
   (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
-  after: (matches, scope) => matches.filter(afterTester(scope)),
-  next: (matches, scope) => nearestAfter(matches, scope),
+  after: (matches, scope) => matches.filter(afterTester(preferOwnLabels(scope))),
+  next: (matches, scope) => nearestAfter(matches, preferOwnLabels(scope)),
 };
 
 /**
@@ -560,10 +576,15 @@ export function macFieldText(node: DescribeNode, macos: boolean): string | undef
 const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
 
 // The match a `text` check reads: the first visible one in reading order (the
-// first overall if none is visible). On a Mac app, not a text area around a
+// first overall if none is visible), not a row with a borrowed label around
+// another match (see `preferOwnLabels`). On a Mac app, not a text area around a
 // matching text: a web editor's value is the text of the paragraphs inside it,
 // so a selector for a paragraph's text reads that paragraph.
-export function textCheckTarget(matches: DescribeNode[], macos: boolean): DescribeNode | undefined {
+export function textCheckTarget(
+  candidates: DescribeNode[],
+  macos: boolean
+): DescribeNode | undefined {
+  const matches = preferOwnLabels(candidates);
   const read = macos
     ? matches.filter(
         (n) =>
