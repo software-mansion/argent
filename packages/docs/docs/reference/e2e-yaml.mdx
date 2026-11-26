@@ -728,7 +728,7 @@ Put each value with a reference in quotes. YAML reads an unquoted `{{` as the st
 
 A `FALLBACK` cannot contain `}}` or another reference.
 
-When `PATH` has no value and the reference has no `FALLBACK`, the step with the reference is errored, and Argent skips the later steps. The reason names the path and the keys at the level where the path stops.
+When `PATH` has no value and the reference has no `FALLBACK`, the step with the reference is errored, and Argent skips the later steps. In `shutdown`, the next `shutdown` step still runs. See [Shutdown](#shutdown). The reason names the path and the keys at the level where the path stops.
 
 #### Fields that take a reference
 
