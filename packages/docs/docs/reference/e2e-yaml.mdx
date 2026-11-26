@@ -318,6 +318,16 @@ A launch from another git worktree produces a warning, including builds in that 
 
 Use `tool` steps for `file-panel` and `menu-bar`. For prepared file answers, set `panelKind: open` or `panelKind: save` explicitly. Otherwise, a save can create the destination and cause a later replay to infer an open answer. Recording fills in `panelKind` automatically.
 
+Use a `tool: gesture-hover` step to move the pointer over a control. For example, hover over a row, then tap the delete button that shows on hover:
+
+```yaml
+- tool: gesture-hover
+  args: { x: 0.5, y: 0.32 }
+- tap: { id: delete-row }
+```
+
+See [Hover](/docs/reference/tools#hover) for the parameters and for when the hover ends.
+
 ### Swipe
 
 ```yaml

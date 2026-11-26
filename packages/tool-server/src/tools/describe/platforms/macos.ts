@@ -196,6 +196,11 @@ export interface MacosTreeRead {
   locked: boolean;
   /** The app's only window is minimized, so the read has no window. */
   minimized: boolean;
+  /**
+   * The user clicked, scrolled or pressed a key in the app while argent's
+   * pointer hovered, so that hover has ended.
+   */
+  pointerTakenOver: boolean;
   truncated: boolean;
   unreachableCount: number;
   /** One message per web view whose `Web.tree` failed; its content is missing. */
@@ -693,6 +698,7 @@ export async function readMacosTree(
     source: raw.source === "fallback" ? "macos-fallback" : "macos-devtools",
     locked: raw.locked === true,
     minimized: raw.minimized === true,
+    pointerTakenOver: raw.pointerTakenOver === true,
     truncated: raw.truncated === true,
     unreachableCount: finite(raw.unreachableCount) ?? 0,
     webErrors,
@@ -755,6 +761,9 @@ export const MACOS_LOCKED_HINT =
 export const MACOS_FALLBACK_HINT =
   "The app's accessibility tree is not available, so this tree comes from a fallback walk " +
   "that can miss elements a custom control draws and an open context menu.";
+export const MACOS_POINTER_TAKEN_OVER_HINT =
+  "The user took the mouse pointer back from argent's last hover, so the hover has ended. " +
+  "Hover again with gesture-hover if you need it.";
 export const MACOS_MINIMIZED_HINT =
   "The app window is minimized, so this tree is empty, and taps, key presses and screenshots fail. " +
   "To restore the window, choose it in the Window menu with menu-bar.";
@@ -791,6 +800,7 @@ export function macosTreeData(
   if (read.webErrors.length > 0) {
     hints.push(`Web content could not be read (${read.webErrors.join("; ")}).`);
   }
+  if (read.pointerTakenOver) hints.push(MACOS_POINTER_TAKEN_OVER_HINT);
   hints.push(...extraHints);
   const data: DescribeTreeData = { tree, source: read.source };
   if (hints.length > 0) data.hint = hints.join(" ");

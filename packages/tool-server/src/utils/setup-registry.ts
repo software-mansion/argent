@@ -35,6 +35,7 @@ import { createScreenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
 import { gestureScrollTool } from "../tools/gesture-scroll";
+import { gestureHoverTool } from "../tools/gesture-hover";
 import { gestureDragTool } from "../tools/gesture-drag";
 import { gestureCustomTool } from "../tools/gesture-custom";
 import { gesturePinchTool } from "../tools/gesture-pinch";
@@ -175,6 +176,7 @@ export function createRegistry(): Registry {
   registry.registerTool(chromiumStorageTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureScrollTool);
+  registry.registerTool(gestureHoverTool);
   registry.registerTool(gestureDragTool);
   registry.registerTool(gestureCustomTool);
   registry.registerTool(gesturePinchTool);

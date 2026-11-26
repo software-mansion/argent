@@ -1,6 +1,6 @@
 import { PNG } from "pngjs";
 import { FAILURE_CODES } from "@argent/registry";
-import type { DeviceInfo, Registry, ServiceRef } from "@argent/registry";
+import type { DeviceInfo, FailureError, Registry, ServiceRef } from "@argent/registry";
 import { macosAppRef, type MacosAppApi } from "../blueprints/macos-app";
 import { InvalidToolInputError, macosAppsUnavailableReason } from "./capability";
 import { assertMacosAppsEnabled, macosFailure } from "./macos-apps";
@@ -84,14 +84,20 @@ type MacosMouseEvent = {
   modifiers?: MacosModifier[];
 };
 
-export async function macosMouse(app: MacosAppApi, event: MacosMouseEvent): Promise<void> {
+/** Resolves with the library's reply. */
+export async function macosMouse<T = unknown>(
+  app: MacosAppApi,
+  event: MacosMouseEvent
+): Promise<T> {
   // An up runs even after its call timed out: a late release is better than a
   // press the app holds until the next click.
-  await app.call(
+  const reply = await app.call<T>(
     "Input.mouse",
     insideMaxEdges(event),
     event.type === "up" ? { runLate: true } : undefined
   );
+  rememberPointer(app, event);
+  return reply;
 }
 
 /**
@@ -107,10 +113,12 @@ export async function macosClick(
 ): Promise<void> {
   const modifiers = opts.modifiers?.length ? [...new Set(opts.modifiers)] : undefined;
   // Older libraries ignore modifiers. Check the move reply before pressing a button.
-  const moved = await app.call<{ modifiers?: unknown } | undefined>(
-    "Input.mouse",
-    insideMaxEdges({ type: "move", x, y, modifiers })
-  );
+  const moved = await macosMouse<{ modifiers?: unknown } | undefined>(app, {
+    type: "move",
+    x,
+    y,
+    modifiers,
+  });
   if (modifiers && !Array.isArray(moved?.modifiers)) {
     throw macosFailure(
       `The argent library running in ${app.bundleId} is older than this argent and cannot hold ` +
@@ -135,6 +143,111 @@ export async function macosScroll(
   event: { x: number; y: number; deltaX?: number; deltaY?: number }
 ): Promise<void> {
   await app.call("Input.scroll", insideMaxEdges(event));
+  rememberPointer(app, event);
+}
+
+// ── Hover ───────────────────────────────────────────────────────────────────
+
+/**
+ * Where argent's pointer is in each Mac app, after its last mouse, scroll or
+ * hover request, with the pid of the process that took it. The library's
+ * pointer follows those requests too, so a hover starts its path there.
+ */
+const lastPointers = new WeakMap<MacosAppApi, { pid: number; x: number; y: number }>();
+
+function rememberPointer(app: MacosAppApi, point: { x: number; y: number }): void {
+  const pid = app.handshake()?.pid;
+  if (pid === undefined) lastPointers.delete(app);
+  else lastPointers.set(app, { pid, x: point.x, y: point.y });
+}
+
+/** Unknown in a process argent has not moved the pointer in yet, such as a relaunched app. */
+function lastPointer(app: MacosAppApi): { x: number; y: number } | undefined {
+  const last = lastPointers.get(app);
+  return last && last.pid === app.handshake()?.pid ? last : undefined;
+}
+
+/** How long the pointer takes from its last point to the hover target, by default. */
+export const MACOS_HOVER_DURATION_MS = 150;
+/** One move per frame at 60 Hz, as a real mouse reports. */
+const HOVER_STEP_MS = 16;
+/**
+ * Wait after the last move of a hover or a leave. Hover effects animate in:
+ * AppKit's and SwiftUI's highlight and toolbar fades take about 0.2 to 0.25 s,
+ * and the tree read after the hover must see the end state.
+ */
+export const MACOS_HOVER_SETTLE_MS = 300;
+
+function hoverUnsupported(app: MacosAppApi, outcome: string): FailureError {
+  return macosFailure(
+    `The argent library running in ${app.bundleId} is older than this argent and cannot hover, ` +
+      `so ${outcome}. Restart the app with restart-app to load the current library, then ` +
+      `hover again.`,
+    FAILURE_CODES.MACOS_APP_LIBRARY_OUTDATED,
+    "macos_hover",
+    "unsupported"
+  );
+}
+
+/**
+ * Glides argent's pointer from its last point to (x, y) in one move per
+ * {@link HOVER_STEP_MS} over `durationMs`, the last one exactly at (x, y), so
+ * a menu that follows the route sees one. Without a last point, one move goes
+ * straight there. Then the settle wait. The pointer stays, hovering, until
+ * argent's next pointer request or the user's own input in the app.
+ */
+export async function macosHover(
+  app: MacosAppApi,
+  x: number,
+  y: number,
+  opts: { durationMs?: number; signal?: AbortSignal } = {}
+): Promise<void> {
+  const from = lastPointer(app);
+  const durationMs = opts.durationMs ?? MACOS_HOVER_DURATION_MS;
+  const steps =
+    from && (from.x !== x || from.y !== y)
+      ? Math.max(1, Math.round(durationMs / HOVER_STEP_MS))
+      : 1;
+  // No button is down, so a cancelled hover just stops where the pointer is.
+  const throwIfAborted = (sent: number) => {
+    if (!opts.signal?.aborted) return;
+    const err = new Error(`gesture-hover aborted - cancelled after ${sent} of ${steps} moves`);
+    err.name = "AbortError";
+    throw err;
+  };
+  for (let i = 1; i <= steps; i++) {
+    throwIfAborted(i - 1);
+    const point =
+      i === steps || !from
+        ? { x, y }
+        : { x: from.x + ((x - from.x) * i) / steps, y: from.y + ((y - from.y) * i) / steps };
+    const reply = await macosMouse<{ hover?: unknown } | undefined>(app, {
+      type: "move",
+      ...point,
+    });
+    // An older library moves the pointer without keeping a hover.
+    if (i === 1 && reply?.hover !== true) {
+      throw hoverUnsupported(app, "the pointer did not stay over the app");
+    }
+    if (i < steps) await sleep(HOVER_STEP_MS);
+  }
+  throwIfAborted(steps);
+  await sleep(MACOS_HOVER_SETTLE_MS);
+}
+
+/** Moves argent's pointer out of every view, which ends a hover, then the settle wait. */
+export async function macosHoverLeave(app: MacosAppApi): Promise<void> {
+  try {
+    await app.call("Input.mouse", { type: "leave" });
+  } catch (err) {
+    if (err instanceof Error && /type must be down, up or move/i.test(err.message)) {
+      throw hoverUnsupported(app, "nothing changed");
+    }
+    throw err;
+  }
+  // Out of the window: the next hover goes straight to its point.
+  lastPointers.delete(app);
+  await sleep(MACOS_HOVER_SETTLE_MS);
 }
 
 // ── Screenshot ──────────────────────────────────────────────────────────────
