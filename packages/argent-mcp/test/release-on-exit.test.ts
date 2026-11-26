@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { releaseOnExit } from "../src/release-on-exit.js";
 
-const SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
+const SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT", "SIGHUP"];
 let setAside: Array<[NodeJS.Signals, NodeJS.SignalsListener[]]>;
 let stdinClose: unknown[];
 
@@ -51,6 +51,15 @@ describe("releaseOnExit", () => {
     });
     process.emit("SIGINT", "SIGINT");
     await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(process.pid, "SIGINT"));
+  });
+
+  it("releases on SIGHUP before it raises the signal again", async () => {
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const release = vi.fn(async () => {});
+    releaseOnExit(release);
+    process.emit("SIGHUP", "SIGHUP");
+    expect(release).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(process.pid, "SIGHUP"));
   });
 
   it("releases when stdin closes", () => {

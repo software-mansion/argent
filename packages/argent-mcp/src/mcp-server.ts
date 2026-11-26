@@ -163,8 +163,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const sessionId = crypto.randomUUID();
+  let sessionEnded = false;
 
   function callerHeaders(): Record<string, string> {
+    if (sessionEnded) return aiClientHeaders();
     return { ...aiClientHeaders(), [SESSION_HEADER]: sessionId };
   }
 
@@ -577,6 +579,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       body: "{}",
       signal: AbortSignal.timeout(2_000),
     }).catch(() => {});
+    // Follow-up calls of a call still in flight would claim the device again.
+    sessionEnded = true;
     return release;
   }
 

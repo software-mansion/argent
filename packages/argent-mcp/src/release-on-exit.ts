@@ -1,6 +1,6 @@
 import { raiseSignal } from "@argent/tools-client";
 
-const EXIT_SIGNALS = ["SIGTERM", "SIGINT"] as const;
+const EXIT_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 
 /**
  * Runs `release` when the editor ends stdin or stops the process with a
