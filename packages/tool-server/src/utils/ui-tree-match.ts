@@ -469,10 +469,10 @@ function labelNotOwn(n: DescribeNode): boolean {
 
 /**
  * `matches` less each leaf that `givesWay` marks and that holds another match it
- * does not mark: the title, not the row around it, is what a `text` check reads
- * and what `next`/`after` count from. A `within` scope keeps the row, since a
- * row as a scope is the point of it, and a tap with a field already takes the
- * smaller exact match.
+ * does not mark: the title, not the row around it, is what a `text` check reads,
+ * what `next`/`after` count from and what `next` picks. A `within` scope keeps
+ * the row, since a row as a scope is the point of it, and a tap with a field
+ * already takes the smaller exact match.
  */
 function preferInner(
   matches: DescribeNode[],
@@ -499,7 +499,7 @@ const RELATION_RESOLVERS: Record<
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
   after: (matches, scope) => matches.filter(afterTester(preferInner(scope))),
-  next: (matches, scope) => nearestAfter(matches, preferInner(scope)),
+  next: (matches, scope) => nearestAfter(preferInner(matches), preferInner(scope)),
 };
 
 /**
@@ -1071,12 +1071,16 @@ export function deriveUniqueSelector(
   };
   for (const child of root.children) collect(child);
   // An anchor or container is named by its id or text, never by role alone,
-  // and never by an editable field's value: that is what was typed into it.
-  // Other values stay: a Chromium text element carries its text only as value.
+  // never by an editable field's value: that is what was typed into it, and
+  // never by a label it took from the views inside it: the title inside names
+  // the place, and the summary that comes with it changes. Other values stay:
+  // a Chromium text element carries its text only as value.
   const nameOf = (n: DescribeNode): Selector | undefined =>
-    ownSelectors(EDITABLE_ROLE.test(n.role) ? { ...n, value: undefined } : n).find(
-      (s) => s.role === undefined
-    );
+    ownSelectors({
+      ...n,
+      label: n.borrowedLabel === true ? undefined : n.label,
+      value: EDITABLE_ROLE.test(n.role) ? undefined : n.value,
+    }).find((s) => s.role === undefined);
 
   // Containers, tightest first; a container with the node's own frame is the
   // node again, not a scope.
@@ -1095,9 +1099,11 @@ export function deriveUniqueSelector(
   // Anchors: elements the node follows in reading order, nearest first, whose
   // own name resolves to exactly one place on screen. Labelled elements come
   // before id-only containers: a reader finds the anchor in `describe`, which
-  // prints the first and not the second.
+  // prints the first and not the second. A borrowed label is not the view's
+  // own, so a row named by it sorts with the id-only views it was before.
   const nf = node.frame;
-  const unlabelled = (n: DescribeNode): number => (ownSelectors(n).some((s) => s.text) ? 0 : 1);
+  const unlabelled = (n: DescribeNode): number =>
+    n.borrowedLabel !== true && ownSelectors(n).some((s) => s.text) ? 0 : 1;
   const anchors = others
     .filter((a) => followKind(nf, a.frame) !== "no")
     .map((a) => ({ a, d: distance(nf, a.frame), u: unlabelled(a) }))
@@ -1131,8 +1137,10 @@ function distance(a: DescribeFrame, b: DescribeFrame): number {
   return dy * 4 + dx;
 }
 
-// Does `selector` match `node` and nothing else visible on screen?
+// Does `selector` match `node` and nothing else visible on screen? A row that
+// took the node's text as its label does not count: as a `next` scope it gives
+// way to the node (see preferInner).
 function uniqueOnScreen(root: DescribeNode, selector: Selector, node: DescribeNode): boolean {
-  const visible = findAll(root, selector).filter(isVisible);
+  const visible = preferInner(findAll(root, selector).filter(isVisible));
   return visible.length === 1 && visible[0] === node;
 }

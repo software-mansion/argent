@@ -222,7 +222,7 @@ On Android, a view that the user can tap is an element of the runner tree. When 
 - The text of a button or a switch inside the view.
 - The text of a child that is not on the screen.
 
-Thus a label copied from `describe` can miss in an e2e test. A `text` selector matches a part of a label, so `{ role: LinearLayout, text: Network & internet }` selects the row. A `text` condition on the title of such a row reads the title, not the row. A `within` scope can be the row, for example `{ role: Switch, within: { text: Airplane mode } }`. An `any: true` selector takes an element inside the row, such as its title, not the row.
+Thus a label copied from `describe` can miss in an e2e test. A `text` selector matches a part of a label, so `{ role: LinearLayout, text: Network & internet }` selects the row. A `text` condition and a `next` scope on the title of such a row take the title, not the row. A `within` scope can be the row, for example `{ role: Switch, within: { text: Airplane mode } }`. An `any: true` selector takes an element inside the row, such as its title, not the row.
 
 On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. A step can then miss its target. The reason of the failed step says that a dialog or a sheet is on top of the app. A dialog of the app can hold a list that scrolls, with the target further down. The reason then also suggests a `scroll-to` step, or `within` on a `scroll-to` step. A full-screen sheet of the app looks like a screen, so the reason does not mention it. The same holds for apps side by side, in split screen or in freeform windows.
 

@@ -38,9 +38,10 @@ export interface DescribeNode {
   // only; the describe tool leaves it unset.
   typedValue?: boolean;
   // `label` is not the element's own: a clickable view with no label took the
-  // text of the views inside it, as `describe` does. A `text` check and a
-  // `next`/`after` anchor take a match inside it over it. Set by the Android
-  // flow adapter only; the describe tool leaves it unset.
+  // text of the views inside it, as `describe` does. A `text` check, a
+  // `next` pick and a `next`/`after` anchor take a match inside it over it, and
+  // the recorder never names a scope by it. Set by the Android flow adapter
+  // only; the describe tool leaves it unset.
   borrowedLabel?: boolean;
   // An element only because it takes a tap: the view has no id, label of its
   // own, role a selector names or focus (an Android row, a wrapper that closes

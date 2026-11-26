@@ -3,6 +3,7 @@ import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import {
   assertText,
+  deriveUniqueSelector,
   evaluateCondition,
   findAll,
   selectorToFrame,
@@ -606,6 +607,91 @@ const FILES_CARD = dump(`
   </node>
 </node>`);
 
+// Settings > Network & internet on API 34, icon frames left out. The two "Off"
+// summaries make the recorder look past the rows for an anchor.
+const SETTINGS_NETWORK_API34 = dump(`
+<node class="android.widget.ScrollView" resource-id="com.android.settings:id/content_parent" scrollable="true" bounds="[0,0][1080,2337]">
+  <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/app_bar" bounds="[0,0][1080,606]">
+    <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/collapsing_toolbar" content-desc="Network &amp; internet" bounds="[0,0][1080,606]">
+      <node class="android.view.ViewGroup" resource-id="com.android.settings:id/action_bar" bounds="[0,136][1080,283]">
+        <node class="android.widget.ImageButton" content-desc="Navigate up" clickable="true" bounds="[0,136][147,283]" />
+        <node class="android.view.View" bounds="[189,136][1080,283]" />
+      </node>
+    </node>
+  </node>
+  <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/content_frame" bounds="[0,606][1080,2337]">
+    <node class="android.widget.LinearLayout" bounds="[0,606][1080,2337]">
+      <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/main_content" bounds="[0,606][1080,2337]">
+        <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/container_material" bounds="[0,606][1080,2337]">
+          <node class="android.widget.FrameLayout" resource-id="android:id/list_container" bounds="[0,606][1080,2337]">
+            <node class="androidx.recyclerview.widget.RecyclerView" resource-id="com.android.settings:id/recycler_view" bounds="[0,606][1080,2337]">
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,606][1080,812]">
+                <node class="android.widget.RelativeLayout" bounds="[189,606][1038,812]">
+                  <node class="android.widget.TextView" text="Internet" resource-id="android:id/title" bounds="[189,648][369,719]" />
+                  <node class="android.widget.TextView" text="AndroidWifi" resource-id="android:id/summary" bounds="[189,719][381,770]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,812][1080,1018]">
+                <node class="android.widget.RelativeLayout" bounds="[189,812][1038,1018]">
+                  <node class="android.widget.TextView" text="Calls &amp; SMS" resource-id="android:id/title" bounds="[189,854][473,925]" />
+                  <node class="android.widget.TextView" text="T-Mobile" resource-id="android:id/summary" bounds="[189,925][329,976]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1018][1080,1224]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1018][1038,1224]">
+                  <node class="android.widget.TextView" text="SIMs" resource-id="android:id/title" bounds="[189,1060][307,1131]" />
+                  <node class="android.widget.TextView" text="T-Mobile" resource-id="android:id/summary" bounds="[189,1131][329,1182]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1224][1080,1379]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1224][850,1379]">
+                  <node class="android.widget.TextView" text="Airplane mode" resource-id="android:id/title" bounds="[189,1266][531,1337]" />
+                </node>
+                <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[850,1224][1038,1379]">
+                  <node class="android.widget.Switch" resource-id="android:id/switch_widget" bounds="[892,1238][1038,1364]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1379][1080,1585]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1379][1038,1585]">
+                  <node class="android.widget.TextView" text="Hotspot &amp; tethering" resource-id="android:id/title" bounds="[189,1421][646,1492]" />
+                  <node class="android.widget.TextView" text="Off" resource-id="android:id/summary" bounds="[189,1492][240,1543]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1585][1080,1791]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1585][1038,1791]">
+                  <node class="android.widget.TextView" text="Data Saver" resource-id="android:id/title" bounds="[189,1627][444,1698]" />
+                  <node class="android.widget.TextView" text="Off" resource-id="android:id/summary" bounds="[189,1698][240,1749]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1791][1080,1997]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1791][849,1997]">
+                  <node class="android.widget.TextView" text="VPN" resource-id="android:id/title" bounds="[189,1833][294,1904]" />
+                  <node class="android.widget.TextView" text="None" resource-id="android:id/summary" bounds="[189,1904][276,1955]" />
+                </node>
+                <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[849,1791][1038,1997]" />
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1997][1080,2152]">
+                <node class="android.widget.RelativeLayout" bounds="[63,1997][1038,2152]">
+                  <node class="android.widget.TextView" text="Mobile plan" resource-id="android:id/title" bounds="[63,2039][337,2110]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,2152][1080,2337]">
+                <node class="android.widget.RelativeLayout" bounds="[63,2152][1038,2337]">
+                  <node class="android.widget.TextView" text="Private DNS" resource-id="android:id/title" bounds="[63,2194][344,2265]" />
+                  <node class="android.widget.TextView" text="On" resource-id="android:id/summary" bounds="[63,2265][108,2316]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,2358][1080,2337]">
+                <node class="android.widget.RelativeLayout" bounds="[63,2358][1038,2337]" />
+              </node>
+            </node>
+          </node>
+        </node>
+      </node>
+    </node>
+  </node>
+</node>`);
+
 function leaves(tree: DescribeNode): DescribeNode[] {
   const out: DescribeNode[] = [];
   const walk = (n: DescribeNode) => {
@@ -864,6 +950,7 @@ describe("a view that can be tapped in the runner tree", () => {
     for (const selector of [
       { role: "StaticText", next: { text: "Connected devices" } },
       { next: { text: "Network & internet" } },
+      { text: "Connected devices", next: { text: "Network & internet" } },
       { role: "StaticText", after: { text: "Connected devices" } },
       { text: "Network & internet", after: { text: "Connected devices" } },
     ] as Selector[]) {
@@ -874,6 +961,51 @@ describe("a view that can be tapped in the runner tree", () => {
     expect(
       findAll(tree, { role: "StaticText", next: { text: "Connected devices" } }).map((n) => n.label)
     ).toEqual(["Bluetooth, pairing"]);
+    // `next` picks the title, not the row starting just above it.
+    const picked = findAll(tree, {
+      text: "Connected devices",
+      next: { text: "Network & internet" },
+    });
+    expect(evaluateCondition("text", "Connected devices", picked, "equals")).toBe(true);
+  });
+
+  it("leaves the recorder's `next` anchor on the title inside it", () => {
+    // Compose rows: a clickable view around the title, its switch beside it or
+    // inside it. The anchor is the title, never the row named by its title.
+    const pair = (title: string, y: number, inside: boolean): string => {
+      const text = `<node class="android.widget.TextView" text="${title}" bounds="[40,${y + 40}][400,${y + 110}]" />`;
+      const toggle = `<node class="android.widget.Switch" clickable="true" checkable="true" bounds="[900,${y + 30}][1040,${y + 120}]" />`;
+      const right = inside ? 1080 : 860;
+      const view = `<node class="android.view.View" clickable="true" bounds="[0,${y}][${right},${y + 150}]">${text}${inside ? toggle : ""}</node>`;
+      return inside ? view : view + toggle;
+    };
+    for (const inside of [false, true]) {
+      const tree = runnerTree(
+        dump(`<node class="android.widget.ScrollView" scrollable="true" bounds="[0,300][1080,2300]">
+${pair("Wi-Fi", 400, inside)}${pair("Bluetooth", 550, inside)}
+</node>`)
+      );
+      const toggle = leaves(tree).find((n) => n.role === "Switch")!;
+      const f = toggle.frame;
+      const point = { x: f.x + f.width / 2, y: f.y + f.height / 2 };
+      expect(deriveUniqueSelector(tree, toggle, point)).toEqual({
+        role: "Switch",
+        next: { text: "Wi-Fi" },
+      });
+    }
+  });
+
+  it("keeps the recorder's anchors to the views that were elements before", () => {
+    // Twelve anchors are tried, nearest first. The rows around the summary have
+    // no name of their own, and must not take the slots of the toolbar.
+    const tree = runnerTree(SETTINGS_NETWORK_API34);
+    const off = leaves(tree).find((n) => n.label === "Off")!;
+    const f = off.frame;
+    const point = { x: f.x + f.width / 2, y: f.y + f.height / 2 };
+    expect(deriveUniqueSelector(tree, off, point)).toEqual({
+      text: "Off",
+      next: { identifier: "com.android.settings:id/collapsing_toolbar" },
+    });
   });
 
   it("is a `within` scope that holds its switch", () => {
