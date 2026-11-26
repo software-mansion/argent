@@ -205,6 +205,49 @@ describe("running shutdown:", () => {
     expect(result.shutdownFailed).toBe(true);
   });
 
+  it("runs when the steps throw, and the run then fails with that error", async () => {
+    await writeFlow("t", {
+      steps: [probe("create-user"), probe("main")],
+      shutdown: [probe("delete-user")],
+    });
+    const { registry, calls } = mockRegistry();
+    let reports = 0;
+    const emitProgress = () => {
+      reports += 1;
+      if (reports === 1) throw new Error("progress consumer went away");
+    };
+
+    await expect(
+      createRunFlowTool(registry).execute({}, { name: "t", project_root: tmpDir }, {
+        emitProgress,
+      } as never)
+    ).rejects.toThrow("progress consumer went away");
+
+    expect(calls).toEqual(["create-user", "delete-user"]);
+  });
+
+  it("runs every shutdown entry when one throws, and fails with the first error", async () => {
+    await writeFlow("t", {
+      steps: [probe("main")],
+      shutdown: [probe("down-1"), probe("down-2"), probe("down-3")],
+    });
+    const { registry, calls } = mockRegistry();
+    let reports = 0;
+    const emitProgress = () => {
+      reports += 1;
+      if (reports === 2) throw new Error("first");
+      if (reports === 3) throw new Error("second");
+    };
+
+    await expect(
+      createRunFlowTool(registry).execute({}, { name: "t", project_root: tmpDir }, {
+        emitProgress,
+      } as never)
+    ).rejects.toThrow("first");
+
+    expect(calls).toEqual(["main", "down-1", "down-2", "down-3"]);
+  });
+
   it("is skipped when the run is cancelled", async () => {
     await writeFlow("t", { steps: [probe("a"), probe("b")], shutdown: [probe("z")] });
     const controller = new AbortController();

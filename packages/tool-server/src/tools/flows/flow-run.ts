@@ -2006,10 +2006,22 @@ Without a link, every step kind runs.`,
           legacyPoints: flowFormatVersion(flow) < 2,
         };
         if (flow.shutdown) state.shutdownQueue.push({ steps: flow.shutdown, scope: rootScope });
-        await execSteps(state, flow.steps, rootScope);
+        // A throw out of the steps (a progress consumer that throws, say) still
+        // runs the cleanup queued so far, and the run then fails with that error.
+        let thrown: { error: unknown } | undefined;
+        try {
+          await execSteps(state, flow.steps, rootScope);
+        } catch (error) {
+          thrown = { error };
+        }
         // Before the teardown below: shutdown steps act on the device and the
         // app the run left, so a chromium instance the run owns must still be up.
-        await execShutdown(state);
+        try {
+          await execShutdown(state);
+        } catch (error) {
+          thrown ??= { error };
+        }
+        if (thrown) throw thrown.error;
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
         // status-bar restore / chromium teardown lands after every step
@@ -2763,22 +2775,30 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
  */
 async function execShutdown(state: ExecState): Promise<void> {
   state.inShutdown = true;
-  await drainShutdown(state, 0);
+  const thrown: unknown[] = [];
+  await drainShutdown(state, 0, thrown);
+  // Every entry had its turn; the first throw fails the run.
+  if (thrown.length > 0) throw thrown[0];
 }
 
 /**
  * Run the queued blocks above `floor`, newest first. A `run:` entry in shutdown
  * queues its fragment's own shutdown, the newest block of all, so that block
- * runs before the next entry of the block that loaded it.
+ * runs before the next entry of the block that loaded it. An entry that throws
+ * goes to `thrown` and does not stop the next one.
  */
-async function drainShutdown(state: ExecState, floor: number): Promise<void> {
+async function drainShutdown(state: ExecState, floor: number, thrown: unknown[]): Promise<void> {
   while (state.shutdownQueue.length > floor) {
     const next = state.shutdownQueue.pop()!;
     for (const step of next.steps) {
       const queued = state.shutdownQueue.length;
       state.stopped = false;
-      await execSteps(state, [step], next.scope);
-      await drainShutdown(state, queued);
+      try {
+        await execSteps(state, [step], next.scope);
+      } catch (error) {
+        thrown.push(error);
+      }
+      await drainShutdown(state, queued, thrown);
     }
   }
 }
