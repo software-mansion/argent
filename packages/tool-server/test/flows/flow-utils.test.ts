@@ -1236,6 +1236,11 @@ describe("output references", () => {
       'tool: e2e-execute\n    args: { name: "{{output:x}}" }',
       "args.name",
     ],
+    [
+      "an arg key of a nested run",
+      'tool: e2e-execute\n    args: { name: login, "{{output:k}}": v }',
+      "args.{{output:k}}",
+    ],
   ])("refuses one in %s, naming the field", (_label, step, where) => {
     const message = rejection(`steps:\n  - ${step}\n`);
     expect(message).toContain(`\`${where}\``);

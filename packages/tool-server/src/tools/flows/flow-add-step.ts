@@ -1482,9 +1482,11 @@ function replayRefusal(
 function withRecordedPanelKind(
   command: string,
   args: Record<string, unknown>,
-  toolResult: unknown
+  toolResult: unknown,
+  // The action that ran: a recorded `action: "{{output:...}}"` is still a stub.
+  ranAction: unknown = args.action
 ): Record<string, unknown> {
-  if (command !== "file-panel" || args.action !== "stub" || args.panelKind !== undefined) {
+  if (command !== "file-panel" || ranAction !== "stub" || args.panelKind !== undefined) {
     return args;
   }
   const panelKind = (toolResult as { panelKind?: unknown } | null)?.panelKind;
@@ -1872,7 +1874,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = {
           kind: "tool",
           name: command,
-          args: withRecordedPanelKind(command, stripDeviceKeys(referencedArgs), toolResult),
+          args: withRecordedPanelKind(
+            command,
+            stripDeviceKeys(referencedArgs),
+            toolResult,
+            args.action
+          ),
           delayMs: params.delayMs,
         };
         warning = waitWarning?.warning;
@@ -1911,7 +1918,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
-        if (sharedOutput) session.output = sharedOutput.doc;
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
@@ -1948,6 +1954,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             `Fix the step named below. Check the call's changes before you retry. ${refused}`
         );
       }
+
+      // Only a recorded `run:` step keeps what its nested run returned, as a
+      // replay would; a step that failed to append leaves the document as it was.
+      if (step.kind === "run" && sharedOutput) session.output = sharedOutput.doc;
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by

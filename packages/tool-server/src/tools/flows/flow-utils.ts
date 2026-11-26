@@ -3589,6 +3589,7 @@ function* toolArgFields(step: Extract<FlowStep, { kind: "tool" }>): Generator<St
   }
   // An env value is text, as in a script step; `env: "{{output:map}}"` names a whole map.
   for (const [key, item] of Object.entries(step.args)) {
+    if (holdsOutputMarker(key)) yield { where: `args.${key}`, value: key };
     const settable = key === "env" ? (v: unknown) => (step.args[key] = v) : undefined;
     yield* argFields(item, `args.${key}`, settable, typeof item === "string");
   }

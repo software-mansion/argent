@@ -477,6 +477,76 @@ describe("recording with output", () => {
     expect(referenced.message).toBe(literal.message);
   });
 
+  it("keeps a nested run's document out of the recording when its step fails to append", async () => {
+    await write("scripts/seed.mjs", "output.user = { id: 7 };");
+    await write(".argent/e2e/seed.yaml", "steps:\n  - script: { path: ../../scripts/seed.mjs }\n");
+    const nested = {
+      ...registry,
+      invokeTool: vi.fn(async (id: string, args: unknown, options?: unknown) =>
+        id === "e2e-execute"
+          ? createRunFlowTool(nested).execute({}, args as never, options as never)
+          : invokeTool(id, args)
+      ),
+    } as unknown as Registry;
+    const addStep = createFlowAddStepTool(nested);
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    const file = path.join(root, ".argent/e2e/rec.yaml");
+    const recording = await fs.readFile(file, "utf8");
+
+    await fs.writeFile(file, "steps: [", "utf8");
+    await expect(
+      addStep.execute(
+        {},
+        {
+          name: "rec",
+          project_root: root,
+          command: "e2e-execute",
+          args: JSON.stringify({ name: "seed", project_root: root }),
+        }
+      )
+    ).rejects.toThrow();
+    await fs.writeFile(file, recording, "utf8");
+
+    await expect(
+      addStep.execute(
+        {},
+        {
+          name: "rec",
+          project_root: root,
+          command: "probe-tool",
+          args: '{"v":"{{output:user.id}}"}',
+        }
+      )
+    ).rejects.toThrow("Nothing ran and no step was recorded");
+  });
+
+  it("records a file-panel stub's panel kind when the action is a reference", async () => {
+    const panels = {
+      ...registry,
+      invokeTool: vi.fn(async () => ({ panelKind: "save" })),
+    } as unknown as Registry;
+    await write("scripts/seed.mjs", "output.action = 'stub';");
+    await flowStartRecordingTool.execute({}, { name: "rec", project_root: root });
+    await flowAddScriptTool.execute(
+      {},
+      { name: "rec", project_root: root, path: "../../scripts/seed.mjs" }
+    );
+    await createFlowAddStepTool(panels).execute(
+      {},
+      {
+        name: "rec",
+        project_root: root,
+        command: "file-panel",
+        args: '{"action":"{{output:action}}","paths":["/tmp/new.txt"]}',
+      }
+    );
+
+    const recorded = parseFlow(await fs.readFile(path.join(root, ".argent/e2e/rec.yaml"), "utf8"));
+    expect(recorded.steps[1]).toMatchObject({
+      args: { action: "{{output:action}}", panelKind: "save" },
+    });
+  });
+
   it("records a file-panel stub's panel kind with a reference too", async () => {
     const panels = {
       ...registry,
