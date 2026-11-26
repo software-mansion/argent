@@ -83,11 +83,12 @@ describe("connectCdp with no tab open", () => {
     const browser = await startWindowlessBrowser(true);
     browsers.push(browser);
 
-    const { cdp, target } = await connectCdp(browser.port);
+    const { cdp, target, openedBlank } = await connectCdp(browser.port);
     await cdp.disconnect();
 
     expect(browser.createdUrls).toEqual(["about:blank"]);
     expect(target.id).toBe("page0");
+    expect(openedBlank).toBe(true);
   });
 
   it("keeps the no-page error when the runtime cannot create a target", async () => {

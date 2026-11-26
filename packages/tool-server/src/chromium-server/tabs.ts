@@ -38,7 +38,7 @@ interface TabsManagerDeps {
   port: number;
   /** Target id the `cdp` client is connected to at construction (the initial active tab). */
   initialTargetId: string;
-  /** A blank tab Argent opened only to have a page; the first `open` closes it while it is still blank. */
+  /** Closed by the first `open` that leaves it inactive, unless something loaded in it. */
   placeholderTargetId?: string;
   /**
    * Called after the active tab changes (post-`reconnect`) so the server can
@@ -247,8 +247,8 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
 
   async function closePlaceholder(): Promise<void> {
     const targetId = placeholderTargetId;
-    placeholderTargetId = undefined;
     if (!targetId || targetId === activeTargetId) return;
+    placeholderTargetId = undefined;
     const placeholder = (await listTargets()).find((t) => t.id === targetId);
     if (!placeholder || !isBlank(placeholder.url)) return;
     await withBrowserClient((browser) => browser.send("Target.closeTarget", { targetId }));

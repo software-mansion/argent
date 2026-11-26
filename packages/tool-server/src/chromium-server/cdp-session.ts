@@ -194,7 +194,6 @@ export async function connectCdp(port: number): Promise<{
   cdp: CDPClient;
   wsUrl: string;
   target: CdpTarget;
-  /** True when no tab was open and Argent opened `target` as a blank tab. */
   openedBlank: boolean;
 }> {
   await ensureCdpReachable(port);
@@ -213,19 +212,23 @@ async function discoverOrOpenPage(
     return { target: await discoverPrimaryPage(port), openedBlank: false };
   } catch (err) {
     if (getFailureSignal(err)?.failure_stage !== "chromium_cdp_discover_page_none") throw err;
-    if (!(await openBlankPage(port))) throw err;
-    return { target: await discoverPrimaryPage(port), openedBlank: true };
+    const targetId = await openBlankPage(port);
+    const target = targetId && (await listPageTargets(port)).find((t) => t.id === targetId);
+    if (!target) throw err;
+    return { target, openedBlank: true };
   }
 }
 
-async function openBlankPage(port: number): Promise<boolean> {
+async function openBlankPage(port: number): Promise<string | null> {
   const browser = new CDPClient(await browserWebSocketUrl(port), { sendOrigin: false });
   await browser.connect();
   try {
-    await browser.send("Target.createTarget", { url: "about:blank" });
-    return true;
+    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as {
+      targetId: string;
+    };
+    return targetId;
   } catch {
-    return false;
+    return null;
   } finally {
     await browser.disconnect().catch(() => {});
   }

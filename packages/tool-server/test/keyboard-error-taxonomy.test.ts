@@ -111,6 +111,16 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     );
   });
 
+  it("chromium: control character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+    const impl = makeChromiumImpl(chromiumRegistry());
+    for (const text of ["a\x1bb", "\x00", "\x7f"]) {
+      await expectInvalidInput(
+        impl.handler({}, { udid: chromiumDevice.id, text }, chromiumDevice),
+        FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+      );
+    }
+  });
+
   it("vega: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
     await expectInvalidInput(injectVegaNamedKey("pageup"), FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED);
   });
@@ -128,8 +138,8 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
   });
 
   it("android: un-typeable character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
-    // Same granular bucket as the iOS un-typeable-character
-    // rejection above — not the generic TOOL_INPUT_INVALID (hubgan review).
+    // Same granular bucket as the iOS/chromium un-typeable-character
+    // rejections above — not the generic TOOL_INPUT_INVALID (hubgan review).
     // adbShell is never reached: the guard rejects before injection.
     await expectInvalidInput(
       injectAndroidText("emulator-5554", "café"),
