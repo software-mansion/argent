@@ -13,16 +13,10 @@ import {
 import { resolveScriptEnv } from "./flow-script-step";
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
-    ),
+  name: z.string().describe("Test name passed to e2e-start-recording."),
+  project_root: z.string().describe("Absolute project root passed to e2e-start-recording."),
   env: envRecordSchema(z.string().nullable()).describe(
-    'Names to set in the e2e test\'s top-level env:, e.g. { "API_URL": "https://api.example.com", "API_KEY": "{{secret:API_KEY}}" }. A null value removes the name. Names not listed keep their values.'
+    "Variable names to update. A null value removes that name. Omitted names keep their values. Use {{secret:NAME}} for credentials."
   ),
 });
 
@@ -31,9 +25,8 @@ export const flowSetEnvTool: ToolDefinition<
   { message: string; env: FlowEnv; savedTo: FlowSavedTo }
 > = {
   id: "e2e-set-env",
-  description: `Set or remove environment values in the top-level \`env:\` of the e2e test being recorded, named by \`name\` + \`project_root\`. Every \`script:\` step of the test receives them; a step's own \`env\` (e2e-add-script) and a run's \`env\` replace the same names.
-Use when a script step needs a base URL, a build number or a credential, before you record that step with e2e-add-script, which runs the script with these values. Write a credential as {{secret:NAME}}, never as its value.
-Returns { message, env, savedTo }: \`env\` is the whole map as the file now holds it, placeholders unresolved. Fails if the e2e test has no recording in progress, if a name or value is invalid (values must be strings), or if a {{secret:NAME}} is not defined; nothing is changed then.`,
+  description: `Set or remove script environment defaults in an active e2e recording. Use when several script steps need a shared value. Call this tool directly before e2e-add-script.
+Returns the updated env map with secret placeholders intact, plus savedTo. If the tool rejects an invalid value or missing secret, correct the input or define the secret and retry.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   interaction: {
