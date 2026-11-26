@@ -18,7 +18,9 @@ import {
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
+  keepRecordingOutput,
   recordedCount,
+  recordingOutput,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
@@ -162,7 +164,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now. stepCount then counts the shutdown steps."
+      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now, and its output reaches only later shutdown steps. stepCount then counts the shutdown steps."
     ),
 });
 
@@ -251,7 +253,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       step,
       projectRoot: params.project_root,
       env,
-      output: session.output ?? {},
+      output: recordingOutput(session, block),
       ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
@@ -331,7 +333,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
-    if (result?.output) session.output = result.output;
+    if (result?.output) keepRecordingOutput(session, block, result.output);
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,

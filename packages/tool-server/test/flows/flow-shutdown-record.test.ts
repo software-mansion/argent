@@ -159,4 +159,76 @@ describe("recording into shutdown:", () => {
       /frag\.yaml ran its shutdown: steps at the end of this call; a replay runs them at the end/
     );
   });
+
+  it("keeps what a shutdown script returns out of the later steps, as a replay does", async () => {
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "scripts", "down.mjs"),
+      'globalThis.output = { ...output, token: "from-shutdown" };\n'
+    );
+    await fs.writeFile(
+      path.join(root, "scripts", "main.mjs"),
+      'if (output.token) throw new Error("saw " + output.token);\nglobalThis.output = { ...output, main: 1 };\n'
+    );
+    await fs.writeFile(
+      path.join(root, "scripts", "down2.mjs"),
+      'if (output.token !== "from-shutdown") throw new Error("lost token");\n'
+    );
+    const add = (file: string, shutdown?: boolean) =>
+      flowAddScriptTool.execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          path: `../../scripts/${file}`,
+          ...(shutdown ? { shutdown } : {}),
+        }
+      );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    expect((await add("down.mjs", true)).status).toBe("pass");
+    expect((await add("main.mjs")).status).toBe("pass");
+    // A later shutdown step still sees what the earlier one returned.
+    expect((await add("down2.mjs", true)).status).toBe("pass");
+  });
+
+  it("does not claim a different order for a run: recorded into shutdown:", async () => {
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("frag.yaml"), "steps:\n  - echo: frag\nshutdown:\n  - echo: down\n");
+    const { registry } = mockRegistry({
+      ok: true,
+      steps: [{ kind: "echo", status: "pass", shutdown: true }],
+    });
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const out = (await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+        shutdown: true,
+      }
+    )) as { message: string };
+
+    expect((await onDisk()).shutdown).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+    expect(out.message).not.toContain("ran its shutdown");
+  });
+
+  it("counts the shutdown list when e2e-add-step records nothing", async () => {
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await echo("a");
+    await echo("b");
+    await echo("down", true);
+    const { registry } = mockRegistry();
+
+    const out = await createFlowAddStepTool(registry).execute(
+      {},
+      { name: "t", project_root: root, command: "e2e-add-echo", shutdown: true }
+    );
+
+    expect(out.message).toContain("no step was recorded");
+    expect(out.stepCount).toBe(1);
+  });
 });

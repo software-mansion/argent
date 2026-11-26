@@ -34,6 +34,9 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  keepRecordingOutput,
+  recordedCount,
+  recordingOutput,
   type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
@@ -892,21 +895,22 @@ async function captureTapSelector(
 }
 
 async function activeFlowState(
-  session: RecordingSession
+  session: RecordingSession,
+  block: RecordedBlock
 ): Promise<{ stepCount: number; note?: string }> {
   if (session.persist === "host") {
     try {
       session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
     } catch (err) {
       return {
-        stepCount: session.flow.steps.length,
+        stepCount: recordedCount(session.flow, block),
         note:
           `The persisted e2e test could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
           `the step count is from the last valid in-memory snapshot.`,
       };
     }
   }
-  return { stepCount: session.flow.steps.length };
+  return { stepCount: recordedCount(session.flow, block) };
 }
 
 /** Whether a nested run's report holds a step of a `shutdown:` block. */
@@ -920,14 +924,15 @@ function reportsShutdown(result: unknown): boolean {
 
 async function recordNothing(
   session: RecordingSession,
-  guidance: string
+  guidance: string,
+  block: RecordedBlock
 ): Promise<{
   message: string;
   toolResult: undefined;
   stepCount: number;
   savedTo: FlowSavedTo;
 }> {
-  const { stepCount, note } = await activeFlowState(session);
+  const { stepCount, note } = await activeFlowState(session, block);
   return {
     message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
     toolResult: undefined,
@@ -1600,7 +1605,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, command)
         ? NESTED_RECORDER_TOOLS[command]
         : undefined;
-      if (nested) return recordNothing(session, nested);
+      if (nested) return recordNothing(session, nested, block);
 
       let args: Record<string, unknown>;
       try {
@@ -1611,7 +1616,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         // table alone, so a real tool of that name still reports its own error.
         if (registry.getTool(params.command) === undefined) {
           const hint = directiveCommandHint(params.command);
-          if (hint) return recordNothing(session, hint);
+          if (hint) return recordNothing(session, hint, block);
         }
         throw err;
       }
@@ -1651,7 +1656,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         if (problem)
           throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${problem}`);
         try {
-          args = resolveStepOutputs(authored, session.output ?? {}).args;
+          args = resolveStepOutputs(authored, recordingOutput(session, block)).args;
         } catch (err) {
           if (!(err instanceof OutputReferenceError)) throw err;
           throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${err.message}`);
@@ -1702,7 +1707,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? await captureRunTarget(session, args, project)
           : undefined;
       const sharedOutput = runTarget?.flow
-        ? { doc: structuredClone(session.output ?? {}) }
+        ? { doc: structuredClone(recordingOutput(session, block)) }
         : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
@@ -1729,7 +1734,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         const hint = isToolNotFound(err, params.command)
           ? directiveCommandHint(params.command)
           : undefined;
-        if (hint) return recordNothing(session, hint);
+        if (hint) return recordNothing(session, hint, block);
 
         const reframed = describeNestedParamError(
           registry,
@@ -1975,7 +1980,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Only a recorded `run:` step keeps what its nested run returned, as a
       // replay would; a step that failed to append leaves the document as it was.
-      if (step.kind === "run" && sharedOutput) session.output = sharedOutput.doc;
+      if (step.kind === "run" && sharedOutput)
+        keepRecordingOutput(session, block, sharedOutput.doc);
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by
@@ -2003,9 +2009,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           ? project.baselineDirectives()
           : [];
       // A fragment recorded as `run:` ran here as a run of its own, so its
-      // `shutdown:` already ran. A replay runs it at the end of the test.
+      // `shutdown:` already ran. A replay runs it at the end of the test, or,
+      // for a `run:` in shutdown, right after it, as here.
       const fragmentShutdown =
-        step.kind === "run" && reportsShutdown(toolResult)
+        block === "steps" && step.kind === "run" && reportsShutdown(toolResult)
           ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps`
           : undefined;
       const notes = [warning, fragmentShutdown].filter((n) => n !== undefined).join("; ");

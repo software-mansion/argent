@@ -393,6 +393,12 @@ export interface RecordingSession {
    * does not change it.
    */
   output?: FlowOutput;
+  /**
+   * The document as the recorded `shutdown:` steps leave it. A replay runs them
+   * after every step, so what they return never reaches a step, and each one
+   * starts from {@link output} plus what the shutdown steps before it left.
+   */
+  shutdownOutput?: FlowOutput;
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -5145,6 +5151,21 @@ export async function appendStepToFlow(
       throw err;
     }
   });
+}
+
+/** The output document a call recorded into `block` runs against ({@link RecordingSession.shutdownOutput}). */
+export function recordingOutput(session: RecordingSession, block: RecordedBlock): FlowOutput {
+  return (block === "shutdown" ? (session.shutdownOutput ?? session.output) : session.output) ?? {};
+}
+
+/** Keep what a call recorded into `block` returned, for the calls recorded after it there. */
+export function keepRecordingOutput(
+  session: RecordingSession,
+  block: RecordedBlock,
+  doc: FlowOutput
+): void {
+  if (block === "shutdown") session.shutdownOutput = doc;
+  else session.output = doc;
 }
 
 /** How many steps `block` of a flow holds. */
