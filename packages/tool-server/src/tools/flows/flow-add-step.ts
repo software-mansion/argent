@@ -76,6 +76,7 @@ import {
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { waitForForegroundApp } from "./flow-launch-ready";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -810,16 +811,28 @@ async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  signal?: AbortSignal
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const data = await fetchFlowTree(
-      registry,
-      device,
-      launched ? { bundleId: launched, pinned: false } : undefined
-    );
+    const target = launched ? { bundleId: launched, pinned: false } : undefined;
+    let data: DescribeTreeData;
+    try {
+      data = await fetchFlowTree(registry, device, target);
+    } catch (err) {
+      // On an iOS simulator `restart-app` returns before the accessibility tree
+      // lists the app, so a tap sent right after it reads an empty tree, and the
+      // tap itself would land on no app. Replay's `launch:` waits for the app
+      // (`treeSourceGate`), so the tap after a recorded launch waits too.
+      const steps = session.flow.steps;
+      if (!launched || !isIosSimulator(device) || steps[steps.length - 1]?.kind !== "launch") {
+        throw err;
+      }
+      if ((await waitForForegroundApp(registry, device, launched, signal)) !== null) throw err;
+      data = await fetchFlowTree(registry, device, target);
+    }
     const { tree } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
@@ -1666,10 +1679,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          { x: args.x as number, y: args.y as number },
+          ctx?.signal
+        );
       }
 
       // Over a link the call reads its files from those the client sent, as a

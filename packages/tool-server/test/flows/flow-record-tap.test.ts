@@ -157,6 +157,73 @@ describe("flow-add-step tap capture targets the recorded launch", () => {
     expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toEqual({ bundleId: BUNDLE, pinned: false });
   });
 
+  it("waits for the relaunched app before reading the tree for the tap after the launch", async () => {
+    // On a hosted simulator `restart-app` returns while the accessibility tree
+    // still lists no app, so a tap sent at once read an empty tree and kept
+    // coordinates, and the tap itself landed on no app.
+    const order: string[] = [];
+    let axReads = 0;
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        order.push(id);
+        if (id === "gesture-tap") return { tapped: true };
+        if (id === "restart-app") return { restarted: true };
+        throw new Error(`Tool "${id}" not found`);
+      }),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+      resolveService: vi.fn(async () => ({
+        degraded: false,
+        tree: async () => {
+          axReads += 1;
+          order.push(`ax-read-${axReads}`);
+          const up = axReads >= 2;
+          return {
+            alertVisible: false,
+            nodes: up ? [{ index: 0, label: "App", bundleId: BUNDLE }] : [],
+            truncated: false,
+            ...(up ? { foregroundApp: BUNDLE } : {}),
+            interfaceOrientation: "portrait",
+            treeVersion: 3,
+          };
+        },
+      })),
+    } as unknown as Registry;
+    await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "restart-app",
+        args: JSON.stringify({ udid: DEVICE, bundleId: BUNDLE }),
+      }
+    );
+    const bump = n({ label: "Bump", frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.08 } });
+    let flowReads = 0;
+    currentTreeData = () => {
+      flowReads += 1;
+      if (flowReads === 1) throw new Error("the accessibility tree is empty");
+      return { tree: screen([bump]), source: "ax-service" };
+    };
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: E2E_FLOW,
+        project_root: tmpDir,
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.24 }),
+      }
+    );
+
+    expect(result.message).not.toContain("—");
+    const yaml = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${E2E_FLOW}.yaml`), "utf8");
+    expect(parseFlow(yaml).steps[1]).toEqual({
+      kind: "tap",
+      selector: { text: "Bump" },
+    });
+    expect(order).toEqual(["restart-app", "ax-read-1", "ax-read-2", "gesture-tap"]);
+  });
+
   it("passes nothing when the recording has captured no launch", async () => {
     setTree([]);
     vi.mocked(fetchFlowTree).mockClear();
