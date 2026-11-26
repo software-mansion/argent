@@ -366,6 +366,8 @@ After Argent finds a device by its name, the device ID stays bound to the app on
 
 Argent cuts each message in `entries` to 300 characters. The counts and the clusters do not change with these parameters. Argent stops the capture after 50,000 entries in one session.
 
+On Chromium, the log also contains the messages of the browser itself, such as `Failed to load resource` with the URL, and uncaught errors and unhandled promise rejections as `error` entries. Selecting a tab again does not add its earlier messages a second time.
+
 ### Network capture on iOS, Android and Mac apps
 
 Start capture before the action that sends the requests. Check the layer you need, then trigger the action and read its log or [wait for a matching request](#wait-for-a-request).
