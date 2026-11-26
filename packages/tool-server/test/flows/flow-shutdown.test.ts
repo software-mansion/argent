@@ -75,7 +75,7 @@ async function run(
       project_root: tmpDir,
       ...(opts.prerequisiteAcknowledged ? { prerequisiteAcknowledged: true } : {}),
     },
-    opts.signal ? { signal: opts.signal } : undefined
+    (opts.signal ? { signal: opts.signal } : undefined) as never
   );
   if (!("steps" in result)) throw new Error(`expected a run, got notice: ${result.notice}`);
   return result;
@@ -263,6 +263,19 @@ describe("running shutdown:", () => {
       ["first", "pass", undefined],
       ["t", "pass", undefined],
     ]);
+  });
+
+  it("runs the shutdown of a fragment that shutdown loads before the next entry", async () => {
+    await writeFlow("frag", { steps: [probe("frag-step")], shutdown: [probe("frag-down")] });
+    await writeFlow("t", {
+      steps: [probe("main")],
+      shutdown: [{ kind: "run", flow: "frag.yaml" }, probe("root-down-2")],
+    });
+    const { registry, calls } = mockRegistry();
+
+    await run(registry, "t");
+
+    expect(calls).toEqual(["main", "frag-step", "frag-down", "root-down-2"]);
   });
 
   it("queues a fragment's shutdown once per load", async () => {

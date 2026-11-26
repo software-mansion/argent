@@ -2763,10 +2763,22 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
  */
 async function execShutdown(state: ExecState): Promise<void> {
   state.inShutdown = true;
-  for (let next = state.shutdownQueue.pop(); next; next = state.shutdownQueue.pop()) {
+  await drainShutdown(state, 0);
+}
+
+/**
+ * Run the queued blocks above `floor`, newest first. A `run:` entry in shutdown
+ * queues its fragment's own shutdown, the newest block of all, so that block
+ * runs before the next entry of the block that loaded it.
+ */
+async function drainShutdown(state: ExecState, floor: number): Promise<void> {
+  while (state.shutdownQueue.length > floor) {
+    const next = state.shutdownQueue.pop()!;
     for (const step of next.steps) {
+      const queued = state.shutdownQueue.length;
       state.stopped = false;
       await execSteps(state, [step], next.scope);
+      await drainShutdown(state, queued);
     }
   }
 }

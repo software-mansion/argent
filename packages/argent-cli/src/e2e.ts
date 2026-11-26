@@ -378,7 +378,7 @@ function parseEnvFlags(values: readonly string[]): Record<string, string> {
  * Returns undefined when there is no message.
  */
 /** Printed once, above the first `shutdown:` step of a report. */
-export const SHUTDOWN_HEADER = "  shutdown:";
+const SHUTDOWN_HEADER = "  shutdown:";
 
 export function renderEchoLine(s: StepReport): string | undefined {
   if (!s.message) return undefined;
