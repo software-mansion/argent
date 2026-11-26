@@ -20,9 +20,7 @@ const zodSchema = z.object({
   shutdown: z
     .boolean()
     .optional()
-    .describe(
-      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. stepCount then counts the shutdown steps."
-    ),
+    .describe("Save the message in the shutdown list. stepCount counts shutdown entries."),
 });
 
 export const flowInsertEchoTool: ToolDefinition<

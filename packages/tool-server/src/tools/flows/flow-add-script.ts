@@ -162,13 +162,13 @@ const zodSchema = z.object({
   env: envRecordSchema(z.string())
     .optional()
     .describe(
-      'Environment values for this step only, recorded as the step\'s env:, e.g. { "API_KEY": "{{secret:API_KEY}}" }. They replace the same names from the e2e test\'s env: (set with e2e-set-env).'
+      "Environment overrides for this script. Argent uses them immediately and saves them on the step. Values can include {{secret:NAME}} or {{output:PATH}}."
     ),
   shutdown: z
     .boolean()
     .optional()
     .describe(
-      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now, and its output reaches only later shutdown steps. stepCount then counts the shutdown steps. The first such call first runs the shutdown: of the fragments recorded as run: steps, as a replay does; fragmentShutdown reports it."
+      "Save the script in the shutdown list. Pending fragment cleanup runs before the script. The script's output reaches only later shutdown steps. stepCount counts shutdown entries."
     ),
 });
 
@@ -177,7 +177,7 @@ export const flowAddScriptTool: ToolDefinition<
   FlowAddScriptResult
 > = deferredShutdownFirst({
   id: "e2e-add-script",
-  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. The script receives the e2e test's \`env:\` (see e2e-set-env) and this call's \`env\`, recorded as the step's own. It also gets \`output\`, what the recording's earlier scripts left there; what it leaves returns as \`outputJson\`, and later steps read it with \`{{output:PATH}}\`. For cleanup, such as deleting a test user, pass \`shutdown: true\`. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
+  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a script step. Use when the user requests a local script in an active recording. Call it where the script must run. A successful script updates the shared output and returns it as \`outputJson\`. Later steps can read it with \`{{output:PATH}}\`. Use \`shutdown: true\` for cleanup scripts. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before retrying. Record without a link (argent link or ARGENT_TOOLS_URL).`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],

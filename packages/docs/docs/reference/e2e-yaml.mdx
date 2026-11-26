@@ -92,56 +92,48 @@ When a step fails, Argent stops the e2e test and reports the later steps as skip
 
 ### Shutdown
 
+Use `shutdown` for cleanup that should run after `steps` pass or fail. The two lists accept the same directives. Only `steps` determines whether the file is a standalone e2e test or a fragment.
+
 ```yaml
 steps:
   - script: { path: scripts/create-user.mjs }
   - launch: com.example.app
   - tap: { id: login }
 shutdown:
-  - script:
-      path: scripts/delete-user.mjs
-      env: { USER_ID: "{{output:user.id ?? none}}" }
+  - when: { output: user.id, exists: true }
+    steps:
+      - script:
+          path: scripts/delete-user.mjs
+          env: { USER_ID: "{{output:user.id}}" }
 ```
 
-The `shutdown` list takes the same steps as `steps`. Argent runs the `shutdown` steps after the last step of `steps`. Use them to remove the data and the state that the e2e test made.
+The main steps can stop before they create the data to clean up. Guard cleanup with an output check, as above, or use a fallback the script can handle. See [References](#references).
 
-| Outcome of `steps`                                                                                 | `shutdown` steps                       |
-| -------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| All steps passed                                                                                   | Run                                    |
-| A step failed or errored                                                                           | Run                                    |
-| The run was cancelled, for example with Ctrl-C or an MCP cancel                                    | Skipped, with the reason `run aborted` |
-| Argent refused the run before the first step, for example a prerequisite notice or an invalid file | Not run and not reported               |
+Argent attempts each top-level shutdown entry even if an earlier entry fails. A `when:` block or `run:` fragment still stops its own steps at the first failure. Put cleanup steps that depend on one another in the same block.
 
-Argent runs each `shutdown` step, also after a `shutdown` step fails. A `when:` block or a `run:` fragment in `shutdown` stops at its first failure, as in `steps`. Put a chain of steps that depend on each other in one `when:` block. When the run is cancelled during `shutdown`, Argent skips the remaining `shutdown` steps.
+If Argent rejects the run before the first step, it does not run or report shutdown entries. Cancelling a run skips any remaining shutdown entries with the reason `run aborted`.
 
-The report puts the `shutdown` steps after the other steps, with `shutdown: true` on each one. The counts include them. A failed `shutdown` step fails the run and sets `shutdownFailed: true` on the report. `argent e2e run` prints `shutdown:` above the first `shutdown` step and `shutdown did not finish:` with the failed step. When a step of `steps` also failed, that step is still the first failure.
+#### Fragments with shutdown steps
 
-A `shutdown` step can reference an output that no step wrote, because the steps before it can stop early. A reference without a fallback then errors the step. Give each reference in `shutdown` a `??` fallback, or put the step in a `when: { output: <path>, exists: true }` block. See [References](#references).
+Argent queues a fragment's shutdown when a `run:` step loads it. At the end of the run, Argent processes queued fragments in reverse load order, then runs the test's own shutdown. If a shutdown entry itself loads a fragment, that fragment's cleanup runs before the next entry. A `tool: e2e-execute` step runs its shutdown as part of its separate run.
 
-A `run:` fragment can have its own `shutdown`. Argent queues it when the fragment loads, also when a step of the fragment fails. At the end of the run, Argent runs the queued `shutdown` lists from the last one queued to the first one, then the `shutdown` of the e2e test. A fragment that runs two times queues its `shutdown` two times. A `tool: e2e-execute` step is a separate run. Its `shutdown` runs when that run ends.
+Each load queues cleanup, and all loads share the same output object. If a fragment can run more than once, append each item ID to an output list. In the shutdown script, use `pop()` to clean up the most recent item first.
 
-A `shutdown` step reads the output of the run as it is when the step runs. A fragment that runs two times writes the same output two times, so both of its `shutdown` lists read what the second run wrote. To clean up after each run of a fragment, add each value to a list, and take the last value from the list in the `shutdown` of the fragment. The fragment that ran last cleans up first, so each `shutdown` takes the value of its own run.
+#### Find cleanup failures in the report
 
-```yaml
-# make-user.yaml
-steps:
-  # create-user.mjs: output.users = [...(output.users ?? []), user.id];
-  - script: { path: ../../scripts/create-user.mjs }
-shutdown:
-  # delete-last-user.mjs: const id = output.users.pop(); then delete user id
-  - script: { path: ../../scripts/delete-last-user.mjs }
-```
+Shutdown steps appear after the main steps in the report and count toward the totals. Each has `shutdown: true`. A failed cleanup fails the run and sets `shutdownFailed: true`. The CLI prints `shutdown did not finish:` and identifies the failed step. If a main step also failed, the report keeps it as the first failure.
 
-The `shutdown` steps do not change the shape of the e2e test. Only `steps` decides if the e2e test is standalone or a fragment.
+#### Record shutdown steps
 
-To record a `shutdown` step, give `shutdown: true` to `e2e-add-step`, `e2e-add-script` or `e2e-add-echo`. The tool then records the step in `shutdown`.
+Pass `shutdown: true` to `e2e-add-step`, `e2e-add-script`, or `e2e-add-echo`. Record the main steps first. Cleanup actions and scripts run during recording. They can change the device or remove test data.
 
-- The tool runs the call at once, so the call cleans up the device and the data at once. Record the `shutdown` steps after the other steps.
-- When `e2e-add-step` records an `e2e-execute` call as a `run:` step in `steps`, the recording keeps the `shutdown` of the fragment for later, as a replay does. The later steps see what the fragment did, such as a login.
-- The first call with `shutdown: true` to `e2e-add-step` or `e2e-add-script` first runs the kept `shutdown` lists, from the last fragment to the first. If no such call comes, `e2e-finish-recording` runs them. A restart with `e2e-start-recording` runs the kept lists of the discarded recording. The tool returns their steps in `fragmentShutdown`, and its message or its error says that they ran. When the call is cancelled, the tool keeps them, and a later `shutdown: true` call or `e2e-finish-recording` runs them. A cancelled `e2e-finish-recording` leaves the recording open.
-- The `output` that a recorded `shutdown` step returns goes only to the later `shutdown` steps, because a replay runs the `shutdown` steps after the other steps. The same is true for the `shutdown` of a fragment.
-- When the `run:` step is in `shutdown`, the `shutdown` of the fragment runs at the end of the call, as in a replay.
-- The `shutdown` of a fragment runs at the end of the call when the files of the fragment came with the call over a link, or when the fragment started its own chromium app. The message of the tool then says so.
+A shutdown script receives output from the main steps and earlier shutdown steps. It passes its changes only to later shutdown steps.
+
+A fragment recorded as a `run:` in the main list normally defers its cleanup. Later main steps can use the state the fragment created. Deferred cleanup runs in reverse order before the first `e2e-add-step` or `e2e-add-script` call with `shutdown: true`. If neither call occurs, `e2e-finish-recording` runs the cleanup. Restarting the recording also runs deferred cleanup from the recording it replaces.
+
+A fragment cleans up within its own call when you record it in the shutdown list, upload it over a link, or start a Chromium app that closes at the end of the call. Check the tool message for whether cleanup already ran.
+
+If cancellation interrupts deferred cleanup, the affected fragments stay queued for another shutdown call or for finish. If finish is cancelled while cleanup remains queued, the recording stays open. Check the tool result before retrying. Cleanup can run even if the tool then refuses the new step.
 
 ### Requirements
 
@@ -576,7 +568,7 @@ Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-A `script` step needs no device. An e2e test of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step, or a `when` step with a UI or a platform guard, beside it makes the e2e test resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+Scripts and output checks can run without a device. A test that calls a fragment with `run:` or uses a UI or platform guard still needs a target.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
@@ -625,206 +617,101 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 ### Environment values
 
+Set `env` in the e2e test file for defaults, or in a `script` step for values specific to that step. The script reads them from `process.env`.
+
 ```yaml
 env:
   API_URL: https://staging.example.com
-  ORDER_COUNT: "3"
 steps:
   - script:
       path: ../../scripts/seed-order.mjs
       env:
+        PORT: "8080"
         API_TOKEN: "{{secret:API_TOKEN}}"
-        DATABASE_URL: "postgres://app:{{secret:DB_PASS}}@localhost/app"
-  - launch: com.example.app
 ```
 
-The script reads each value from `process.env`, for example `process.env.API_URL`. Argent sets the environment of a `script` step from four layers. A later layer replaces only the names that it sets:
+For each name, Argent applies values in this order. The last value wins.
 
-| Order | Layer                                                                                            |
-| ----- | ------------------------------------------------------------------------------------------------ |
-| 1     | The allowlist above, with the values of the tool-server                                          |
-| 2     | The top-level `env` of the e2e test file                                                         |
-| 3     | The `env` of the `script` step                                                                   |
-| 4     | The values of the run: `argent e2e run --env NAME=value`, or the `env` argument of `e2e-execute` |
+1. The tool-server environment allowlist.
+2. The e2e test file's `env`.
+3. The script step's `env`.
+4. The run's `--env NAME=value` options or the `env` argument of `e2e-execute`.
 
-On Windows, names do not depend on case. A layer that sets `api_url` replaces the `API_URL` of an earlier layer.
+On Windows, variable names are case-insensitive.
 
-A `run:` fragment can also have a top-level `env`. The `env` of the fragment sets only the names that the e2e tests above it in the `run:` chain do not set. Thus an e2e test can replace a value that a shared fragment expects. The `env` of a fragment applies to the steps of that fragment and to the fragments it runs, and ends with it.
+A fragment called with `run:` inherits the caller's defaults. Its own `env` fills missing defaults for that fragment and any fragments it calls. A `tool: e2e-execute` step starts a separate run. Pass its overrides explicitly in the tool's `env` argument.
 
-A `tool: e2e-execute` step starts a separate run. That run gets no values from the e2e test around it. Put the values in the `env` argument of the step.
+Use names that match `[A-Za-z_][A-Za-z0-9_]*`, except `__proto__`. Quote YAML values such as `"8080"` or `"true"` to keep them as strings. Values cannot contain NUL characters. The script runner rejects reserved names such as `NODE_OPTIONS` and lists them in the error.
 
-Each `env` map has these rules:
+To pass a value from an earlier script, put an [output reference](#script-output) in the script step's `env`. File defaults and run overrides support `{{secret:NAME}}` as their only placeholder.
 
-- A name has letters, digits and `_`, and does not start with a digit.
-- A value is a string. Parsing rejects an unquoted number, `true` or `false`, because YAML changes the value. For example, YAML reads `0800` as the number 800. Write `PORT: "8080"`.
-- A value in the `env` of a `script` step can hold an `{{output:...}}` reference. See [Script output](#script-output). The other layers reject a reference, because their values reach each script, also the first one, which runs before a script returns a value.
-- Some names control the process of the runner. A `script` step that sets one of them is errored when it runs. The names are `NODE_OPTIONS`, `NODE_CHANNEL_FD`, `NODE_UNIQUE_ID`, `ELECTRON_RUN_AS_NODE` and `ARGENT_FLOW_SCRIPT_RUNNER`. The names `npm_config_node_options`, `npm_config_userconfig` and `npm_config_globalconfig` are also reserved, in each letter case and with `-` or `_`.
+#### Set values while recording
 
-Three recording tools write the `env` maps. Each tool checks the names and the values as parsing does. Each tool also checks that each `{{secret:NAME}}` placeholder resolves. When a check fails, the tool changes nothing.
+- Pass `env` to `e2e-start-recording` to set the file's defaults. Starting again under the same name replaces the file and its defaults.
+- Call `e2e-set-env` to update the defaults in an active recording. Use `null` to remove a name. If you remove the last name, Argent removes the top-level `env` key.
+- Pass `env` to `e2e-add-script` to override defaults for that step. Argent uses the values when it runs the script during recording and saves the overrides on the step.
 
-| Tool                  | Argument | Result                                                                                                                                                  |
-| --------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `e2e-start-recording` | `env`    | Writes the top-level `env` of the file                                                                                                                  |
-| `e2e-set-env`         | `env`    | Sets each name in the top-level `env`. A `null` value removes the name. The other names keep their values. Removing the last name removes the `env` key |
-| `e2e-add-script`      | `env`    | Writes the `env` of the `script` step                                                                                                                   |
-
-`e2e-start-recording` replaces the whole file, including the top-level `env`. To keep the `env` when you record an e2e test again, pass it in the `env` argument of the tool.
-
-`e2e-set-env` returns the whole top-level `env` of the file, with the placeholders not resolved.
-
-`e2e-add-script` runs the script with the top-level `env` of the file and the `env` argument of the call. The `env` argument replaces the same names. A replay without values of the run gives the step the same environment. Argent redacts the secrets in the log and the output that the tool returns. When a placeholder does not resolve, the script does not run and the tool records no step. When a change to the e2e test file makes it invalid, the script does not run either.
+Invalid input or an unresolved secret stops the call before it writes the environment values. If the recording file is invalid, fix it before retrying `e2e-add-script`. Argent checks the file before it runs the script.
 
 #### Secrets in environment values
 
-A value can hold a `{{secret:NAME}}` placeholder, alone or inside a longer value. The tool-server resolves the placeholder from the sources in [Secrets](/docs/reference/configuration#secrets). `<project-root>` is the `project_root` of the run. When no source defines the name, the result depends on the layer:
+Use `{{secret:NAME}}` for credentials. A placeholder can be the whole value or part of a longer string. Argent looks up the name using the run's project root. See [Secrets](/docs/reference/configuration#secrets).
 
-| Layer of the placeholder             | Result                                                  |
-| ------------------------------------ | ------------------------------------------------------- |
-| The `env` of the file or of the step | The `script` step is errored. The script does not start |
-| The values of the run                | The tool-server rejects the run before the first step   |
+If a secret is missing from the file or step environment, the script step errors before it starts. If a run override refers to a missing secret, Argent rejects the run before the first step.
 
-Argent redacts each resolved secret in the log of the script, from stdout and stderr, and in the message and the stack of a failure. Argent writes the placeholder `{{secret:NAME}}` in place of the value. These rules apply:
-
-- Argent replaces each piece of 6 or more characters of a secret. Thus Argent also replaces a secret that the log cuts, splits across lines or shows in part.
-- Argent replaces a secret of fewer than 6 characters only where the full value occurs.
-- A piece of 6 or more characters can also occur in text that is not the secret. For example, `postgres://` in a log line matches a database URL secret. Argent replaces that text too, so the log can show a placeholder where the script printed no secret.
-- Argent also matches the URL-encoded spelling and the JSON-escaped spelling of a secret.
-- Argent does not match other encodings, for example base64 or hex. Do not print a credential from a script.
-
-Argent does not redact a value without a placeholder. Put each credential in a placeholder, not in the e2e test file.
+Argent replaces resolved secrets with their placeholders in script logs and failure details. It matches raw, URL-encoded, and JSON-escaped forms. Argent also matches fragments of six or more characters. Unrelated text that matches a fragment can be redacted too. For shorter secrets, Argent matches the full value. Plain-text credentials and encodings such as base64 or hex can still appear in logs. Keep credentials out of script logs.
 
 ### Script output
+
+Scripts share one JSON object per run through the global `output`. A successful script can add, change, or delete values. Assigning to `output` replaces the object. A failed script leaves it unchanged. The object can hold up to 1 MiB of JSON data. Convert values such as a `Date` to strings before storing them.
+
+For example, a script that creates a user can save the ID as `output.user = { id: user.id }`. Later steps can check the ID and pass it to another script.
 
 ```yaml
 steps:
   - script: { path: ../../scripts/create-user.mjs }
-  - type: { into: { id: email }, text: "{{output:user.email}}" }
-  - tap: { id: "{{output:user.rowId}}" }
-  - assert: { output: user.role, equals: admin }
+  - assert: { output: user.id, exists: true }
   - script:
       path: ../../scripts/delete-user.mjs
       env: { USER_ID: "{{output:user.id}}" }
 ```
 
-```js
-// scripts/create-user.mjs
-const response = await fetch(`${process.env.API_URL}/users`, { method: "POST" });
-output.user = await response.json();
-```
-
-A run has one output document. Each `script` step gets the document as the global `output`. When the script passes, the document becomes the value that the script leaves in `output`. A failed script does not change the document. Thus a script can read, change and delete the values of an earlier script. An assignment such as `output = { id: 1 }` replaces the whole document.
-
-The document is a JSON object of at most 1 MiB. The script step fails when the script leaves a value that JSON cannot hold, for example a function, a `Date` or `NaN`.
-
-A `run:` fragment uses the document of the run that runs it, so the steps after the fragment read the values of its scripts. A `tool: e2e-execute` step starts a separate run with an empty document. The values of that run do not come back. To give values to that run, put references in the `env` argument of the step.
+A `run:` fragment shares its caller's output. A `tool: e2e-execute` step starts with an empty output object and keeps its results in that run. Pass inputs to it through its `env` argument.
 
 #### References
 
-| Form                          | Value                                                   |
-| ----------------------------- | ------------------------------------------------------- |
-| `{{output:PATH}}`             | The value at `PATH`                                     |
-| `{{output:PATH ?? FALLBACK}}` | The value at `PATH`, or `FALLBACK` when it has no value |
+Quote each YAML value containing `{{output:PATH}}`. Join keys and zero-based array indexes with dots, as in `items.0.name`. Start a key with an ASCII letter or underscore. The remaining characters can also include digits and hyphens.
 
-`PATH` is keys and array indexes, joined by dots, for example `user.id` or `items.0.name`. A key has letters, digits, `_` and `-`, and does not start with a digit. An index is a number. Parsing rejects each other spelling that starts with `{{output:`, for example `{{output:items[0]}}` or a reference with two `??`.
-
-Put each value with a reference in quotes. YAML reads an unquoted `{{` as the start of a map.
-
-`PATH` has no value in these cases:
-
-- The key or the index does not exist.
-- A value on the path is not an object or a list.
-- The value is `null`.
-- The script that sets the value did not run, for example in a `when` block that was skipped.
-
-`FALLBACK` is a literal value:
-
-| `FALLBACK`                               | Value                                 |
-| ---------------------------------------- | ------------------------------------- |
-| A JSON number, `true`, `false` or `null` | That JSON value                       |
-| A JSON string in double quotes, `"3"`    | The string without the quotes         |
-| Other text                               | The text without the spaces around it |
-| No text, as in `{{output:user.id ?? }}`  | An empty string                       |
-
-A `FALLBACK` cannot contain `}}` or another reference.
-
-When `PATH` has no value and the reference has no `FALLBACK`, the step with the reference is errored, and Argent skips the later steps. In `shutdown`, the next `shutdown` step still runs. See [Shutdown](#shutdown). The reason names the path and the keys at the level where the path stops.
+Argent resolves references when the step runs. A missing or `null` value causes a step error unless you supply a fallback, as in `{{output:user.role ?? guest}}`. The error identifies where the path stopped. Use a JSON number, boolean, `null`, double-quoted JSON string, or plain text as the fallback. An empty fallback produces an empty string. Keep templates and `}}` out of fallback values. If a reference fails in a top-level `shutdown` entry, the next entry still runs.
 
 #### Fields that take a reference
 
-Argent resolves the references of a step when the step starts. The report of the step shows the resolved values.
+Use references in tool arguments, selectors and their scopes, `type` text, `equals` or `contains` comparisons, and a script step's `env` values.
 
-| Field                                                                             | Value                        |
-| --------------------------------------------------------------------------------- | ---------------------------- |
-| A `tool:` argument that is one reference only, for example `x: "{{output:pt.x}}"` | The value with its JSON type |
-| Other text in a `tool:` argument                                                  | Text                         |
-| A selector, its scopes included                                                   | Text                         |
-| The `text` of a `type` step                                                       | Text                         |
-| The `contains` or `equals` text of an `await`, `assert` or `when` condition       | Text                         |
-| A value in the `env` of a `script` step                                           | Text                         |
+- When a tool argument is exactly one reference, Argent keeps its JSON type. Return a string from the script if the argument requires text. The `env` argument of `tool: e2e-execute` accepts a reference to a whole map or references in individual values.
+- In text fields, Argent converts numbers and booleans to text. A fallback uses its written form, so `1.10` remains `"1.10"`. Reference a scalar inside an object or list to use it as text.
+- After substitution, each selector value needs a visible character. The `type` text and `contains` value must be non-empty.
 
-A number stays a number in a `tool:` argument that is one reference. A tool that needs text for that argument rejects the number, for example the `text` of `keyboard`. Make the script return a string for such an argument.
-
-In text, a string stays as it is. A number or a boolean becomes the text that JSON writes, for example `3` or `true`. A `FALLBACK` in text is the text that the file writes, for example `1.10`. A list or an object in text makes the step errored.
-
-These values also make the step errored:
-
-- A selector field without a visible character, because such a selector can match any element
-- An empty `contains` text, or an empty `text` of a `type` step, because the parser rejects the same value in the file
-
-The `env` argument of a `tool: e2e-execute` step is an `env` map, so each value resolves as text. An `env` argument that is one reference, for example `env: "{{output:nested.env}}"`, gives the whole map.
-
-Parsing rejects a reference in these fields. Write a literal value in them:
-
-- An `echo` message
-- A `launch` value and a `run` path
-- The `cropOn` selector of a `snapshot`, because Argent keys the baseline by the selector
-- A `matches` regular expression
-- Each argument of a `tool: e2e-execute` step, except `env`
-- The top-level `env` of an e2e test or a fragment, the `env` of a run, and the values of `e2e-start-recording` and `e2e-set-env`
+Use literal values for `echo`, `launch`, `run`, `snapshot.cropOn`, and `matches` regular expressions. For `tool: e2e-execute`, only `env` accepts references.
 
 #### Check an output
 
-```yaml
-- assert: { output: user.role, equals: admin }
-- assert: { output: user.id, exists: true }
-- when: { output: flags.onboarding, equals: "true" }
-  steps:
-    - tap: { text: Skip }
-```
+Use `assert: { output: user.role, equals: admin }` to require a value, or use the same condition with `when` to guard a block. Write the path without braces and supply one comparator.
 
-An `assert` or a `when` guard with `output` checks a value of the document. It takes a `PATH` without braces and exactly one test:
+- `exists: true` requires a value. `exists: false` requires a missing or `null` value.
+- `equals`, `contains`, and `matches` compare strings, numbers, and booleans as case-sensitive text. Quote comparison values such as `"3"`. The `matches` comparator uses a JavaScript regular expression.
 
-| Test            | Holds when                                      |
-| --------------- | ----------------------------------------------- |
-| `exists: true`  | `PATH` has a value                              |
-| `exists: false` | `PATH` has no value                             |
-| `equals`        | The value is the same text. Letter case counts  |
-| `contains`      | The value contains the text. Letter case counts |
-| `matches`       | The JavaScript regex matches the value          |
-
-The check compares the value as text, so `equals: "3"` holds for the number 3. Parsing rejects an unquoted number or boolean, because YAML changes the value. For example, YAML reads `1.10` as 1.1. A list or an object fails the check. The text to compare with can hold a reference, for example `equals: "{{output:expected.role}}"`. An `output` check needs no device. `await` has no `output` form, because the document does not change while a step waits.
-
-To compare a value with the screen, put a reference in a UI condition:
-
-```yaml
-- assert: { text: { in: { id: user-name }, equals: "{{output:user.name}}" } }
-```
-
-This comparison does not depend on letter case, as for each `text` condition.
+Output checks need no device. To check the screen against a script value, use a UI assertion such as `assert: { text: { in: { id: user-name }, equals: "{{output:user.name}}" } }`. The UI comparison is case-insensitive.
 
 #### Secrets in output
 
-Argent redacts each resolved secret of the step from the output document, as in the log. The document holds `{{secret:NAME}}` in place of the value. A reference never resolves a secret. A step is errored when a resolved value holds a `{{secret:NAME}}` placeholder, or makes one with the text around it. Put each placeholder in the e2e test file.
+Argent redacts resolved secrets from output strings using the same rules as script logs. Object keys can still expose secrets. Argent errors if substituting an output reference would create a secret placeholder. Put secret placeholders directly in the e2e test file.
 
 #### Record a script output
 
-`e2e-add-script` gives each script the document of the earlier scripts of the recording, as a replay does. The tool returns the document in `outputJson`. A reference in the `env` argument resolves against the same document.
+Record scripts one at a time so each script sees the previous script's output. `e2e-add-script` returns the updated object in `outputJson` and resolves its `env` references against prior output. If `outputTruncated` is true, the response shows only part of the object. Later steps still have the full object.
 
-`e2e-add-step` runs the call with each reference resolved against the document. The tool records the call with the references as a `tool:` step, also for a call that the tool otherwise records as a directive, for example a tap. When a reference does not resolve, the tool runs nothing and records nothing. An `e2e-execute` call that the tool records as a `run:` step uses the document of the recording, as a fragment does in a replay.
-
-Record one script at a time. Two `e2e-add-script` calls at the same time each start from the same document, and the document then holds the values of only one of them.
-
-A change to the e2e test file during the recording does not change the document.
+`e2e-add-step` resolves references before running the call, then saves the original references in a `tool:` step. If a reference fails to resolve, the tool runs and records nothing. A call recorded as a `run:` fragment shares the recording's output. Editing the YAML during recording does not update the output object.
 
 ### Module type
 
@@ -975,17 +862,17 @@ When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires
 
 When Argent finds no e2e test and no invalid `suite.config.yaml` file in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
-| Option               | Description                                                                                                                                                                                                           |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                                                           |
-| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either                                            |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines`                                         |
-| `--env NAME=value`   | An environment value for each `script` step of the run. The value is the text after the first `=`. Repeat the option for more names. For one name, the last value wins. See [Environment values](#environment-values) |
-| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                                                                   |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                                                                     |
-| `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                                                         |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                                                                       |
-| `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                                                             |
+| Option               | Description                                                                                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                                     |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either                      |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines`                   |
+| `--env NAME=value`   | Override a script environment value for this run. The value starts after the first `=`. Repeat for more names. For one name, the last value wins. See [Environment values](#environment-values) |
+| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                                             |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                                               |
+| `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                                   |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                                                 |
+| `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                                       |
 
 ```bash
 argent e2e run checkout --platform ios

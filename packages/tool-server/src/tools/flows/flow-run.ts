@@ -1675,7 +1675,7 @@ const zodSchema = z
       .record(z.string(), z.string())
       .optional()
       .describe(
-        "Environment values for this run's script steps, e.g. { \"API_URL\": \"https://staging.example.com\" }. Each replaces the same name from the test file's env:, a fragment's env: and a step's env:. A value may hold {{secret:NAME}}, resolved on the tool-server and redacted from what the script prints."
+        "Script environment overrides for this run, including run: fragments. Names match [A-Za-z_][A-Za-z0-9_]*, except __proto__. Values can include {{secret:NAME}}. A missing secret rejects the run before any step."
       ),
   })
   .superRefine((params, ctx) => {
@@ -1709,9 +1709,9 @@ export function createRunFlowTool(
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
 exactly one e2e test source: name (under project_root) or e2e_test_path.
-Returns a per-step report: the first failure stops the run and the rest report as skipped. A \`shutdown:\`
-block then runs, pass or fail, unless the run was cancelled: its steps report \`shutdown: true\`, each runs
-even after one fails, and a failure sets \`shutdownFailed\` and fails the run.
+Returns a per-step report. A failure in the main steps skips the rest of that list. Shutdown entries
+then run independently, unless the run is cancelled. If a shutdown entry fails, the run fails and the
+report sets \`shutdownFailed\`. Shutdown steps report \`shutdown: true\`.
 Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
 snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
 the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,

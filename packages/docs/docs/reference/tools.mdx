@@ -1389,11 +1389,13 @@ The old `flow-*` names, for example `flow-execute`, still call these tools. See 
 | `e2e-add-step`         | Execute a tool call and record it as a step in the open recording          |
 | `e2e-add-echo`         | Record an echo step that prints a message during replay                    |
 | `e2e-add-script`       | Run a local JavaScript or TypeScript file and add it to the open recording |
-| `e2e-set-env`          | Set or remove the environment values of the open recording                 |
+| `e2e-set-env`          | Update script environment defaults in an active recording                  |
 | `e2e-finish-recording` | Finish the recording and write the e2e test to disk                        |
 | `e2e-execute`          | Run a saved e2e test                                                       |
 
-`e2e-add-step`, `e2e-add-echo` and `e2e-add-script` take `shutdown: true` to record the step in the `shutdown:` list of the e2e test. The tool still runs the call at once. `stepCount` then counts the `shutdown` steps. The `recorded` line of `e2e-add-step` and `e2e-add-script` then starts with `shutdown`. A script recorded in `shutdown` gets the `output` of the steps and of the earlier `shutdown` steps. What it returns goes only to the later `shutdown` steps. `e2e-finish-recording` lists the `shutdown` steps after the other steps and returns their number as `shutdownSteps`. A fragment that `e2e-add-step` records as a `run:` step in `steps` keeps its `shutdown` for later. The first `shutdown: true` call to `e2e-add-step` or `e2e-add-script` runs it first, or else `e2e-finish-recording` does. That tool returns its steps as `fragmentShutdown`. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
+When recording with `shutdown: true`, `stepCount` counts entries in the shutdown list. In `e2e-add-step` and `e2e-add-script`, `recorded` starts with `shutdown`. `e2e-finish-recording` reports the count as `shutdownSteps` when the list has entries. See [Record shutdown steps](/docs/reference/e2e-yaml#record-shutdown-steps).
+
+When a recording call runs deferred fragment cleanup, `fragmentShutdown` contains the step reports and an `ok` indicator. If the call returns an error after running cleanup, the error can report that cleanup already ran.
 
 ## Design variants
 
