@@ -129,9 +129,12 @@ export interface DescribeTreeData {
   hint?: string;
   // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
   stale?: boolean;
-  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // Part of the screen was not read (e.g. system dialogs outside the iOS app),
   // so an element's absence proves nothing; `hint` says why.
   partial?: boolean;
+  // Apple TV: the focused element is one the screen has left, as while the
+  // keyboard opens or closes. The cursor has not landed on this screen yet.
+  cursorNotLanded?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set

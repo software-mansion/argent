@@ -4,6 +4,7 @@ import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-serv
 import { axDaemonExitError } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi, NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { NON_INJECTABLE_NATIVE_WARNING } from "../src/blueprints/native-devtools";
+import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
 import { createDescribeTool } from "../src/tools/describe";
 import { describeIos, __resetBootCaveatStateForTests } from "../src/tools/describe/platforms/ios";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -91,6 +92,24 @@ function makeNativeDevtoolsApi(options: {
       },
   } as NativeDevtoolsApi;
 }
+
+const nativeTree = (bundleId: string) =>
+  makeNativeDevtoolsApi({
+    connectedBundleIds: [bundleId],
+    describeScreenResult: {
+      screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+      elements: [
+        {
+          frame: { x: 20, y: 150, width: 400, height: 44 },
+          tapPoint: { x: 220, y: 172 },
+          normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
+          normalizedTapPoint: { x: 0.5, y: 0.18 },
+          traits: ["button"],
+          label: "Go",
+        },
+      ],
+    },
+  });
 
 function makeMockRegistry(options: {
   axService?: AXServiceApi;
@@ -257,6 +276,7 @@ describe("describe tool", () => {
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("native-devtools");
     expect(result.description).toContain('"Hello World"');
+    expect(result.hint).toContain("omits system dialogs");
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -808,7 +828,7 @@ describe("describe tool", () => {
     const second = await tool.execute({}, { udid });
     const third = await tool.execute({}, { udid });
 
-    expect(first.hint).toMatch(/booted through argent/);
+    expect(first.hint).toContain("pre-boot accessibility settings");
     expect(second.hint).toBeUndefined();
     expect(third.hint).toBeUndefined();
     // Suppressing the caveat must not cost the caller the tree itself.
@@ -833,13 +853,17 @@ describe("describe tool", () => {
       makeMockRegistry({ axService: makeAXServiceApi(response, { degraded: false }) })
     );
 
-    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+    expect((await degradedTool().execute({}, { udid })).hint).toContain(
+      "pre-boot accessibility settings"
+    );
     expect((await degradedTool().execute({}, { udid })).hint).toBeUndefined();
     // Rebooted through argent: no caveat, and the device is no longer one the
     // caveat has been told about.
     expect((await healthyTool.execute({}, { udid })).hint).toBeUndefined();
     // Booted externally again — a state this session has not reported yet.
-    expect((await degradedTool().execute({}, { udid })).hint).toMatch(/booted through argent/);
+    expect((await degradedTool().execute({}, { udid })).hint).toContain(
+      "pre-boot accessibility settings"
+    );
   });
 
   it("tells each degraded device its own caveat", async () => {
@@ -862,8 +886,8 @@ describe("describe tool", () => {
     const first = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     const other = await tool.execute({}, { udid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB" });
 
-    expect(first.hint).toMatch(/booted through argent/);
-    expect(other.hint).toMatch(/booted through argent/);
+    expect(first.hint).toContain("pre-boot accessibility settings");
+    expect(other.hint).toContain("pre-boot accessibility settings");
   });
 
   it("repeats the blind-read caveat every call instead of deduping it", async () => {
@@ -927,6 +951,40 @@ describe("describe tool", () => {
     expect(second.hint).toEqual(first.hint);
   });
 
+  it("waits for an accessibility read to confirm a system dialog is hidden", async () => {
+    const ax = makeAXServiceApi({ alertVisible: false, elements: [] }, { degraded: true });
+    const bundleId = "com.example.app";
+    const registry = makeMockRegistry({ axService: ax, nativeDevtools: nativeTree(bundleId) });
+    const wait = createAwaitUiElementTool(registry);
+    const params = {
+      udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      bundleId,
+      selector: { text: "Allow Notifications" },
+      timeoutMs: 100,
+      pollIntervalMs: 10,
+    };
+
+    const hidden = await wait.execute({}, { ...params, condition: "hidden" });
+    expect(hidden).toMatchObject({ success: false, cause: "unreadable" });
+    expect(hidden.note).toContain("app-only tree");
+    expect(hidden.note).toContain("boot-device");
+    expect(
+      await wait.execute({}, { ...params, selector: { text: "Go" }, condition: "visible" })
+    ).toMatchObject({ success: true });
+
+    ax.describe = vi
+      .fn()
+      .mockResolvedValueOnce({ alertVisible: false, elements: [] })
+      .mockResolvedValue({
+        alertVisible: false,
+        elements: [{ label: "Home", traits: [], frame: { x: 0, y: 0, width: 1, height: 1 } }],
+      });
+    expect(await wait.execute({}, { ...params, condition: "hidden" })).toMatchObject({
+      success: true,
+    });
+    expect(ax.describe).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the caveat on every internal describeIos read, which the tool alone dedupes", async () => {
     // await-ui-element / flows / await-screen-idle poll describeIos directly and
     // fold the last read's hint into one terminal note. The per-device gate
@@ -955,7 +1013,7 @@ describe("describe tool", () => {
     const first = await describeIos(registry, device, {}, { isTvOs: false });
     const second = await describeIos(registry, device, {}, { isTvOs: false });
 
-    expect(first.hint).toMatch(/booted through argent/);
+    expect(first.hint).toContain("pre-boot accessibility settings");
     expect(second.hint).toEqual(first.hint);
   });
 
@@ -1078,16 +1136,18 @@ describe("describe tool — ax-service read failure", () => {
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(elementLineCount(result.description)).toBe(0);
     expect(result.hint).toContain("ax-service query timed out: describe");
-    expect(result.hint).not.toContain("not booted through argent");
+    expect(result.hint).not.toContain("pre-boot accessibility settings");
   });
 
   it("keeps the boot caveat ahead of the read failure when the sim was booted externally", async () => {
     const registry = makeMockRegistry({ axService: throwingAxApi(true) });
     const tool = createDescribeTool(registry);
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
-    expect(result.hint).toContain("not booted through argent");
+    expect(result.hint).toContain("pre-boot accessibility settings");
     expect(result.hint).toContain("ax-service query timed out: describe");
-    expect(result.hint!.indexOf("not booted")).toBeLessThan(result.hint!.indexOf("timed out"));
+    expect(result.hint!.indexOf("pre-boot accessibility settings")).toBeLessThan(
+      result.hint!.indexOf("timed out")
+    );
   });
 
   it("still serves the native-devtools tree after a read failure", async () => {
@@ -1118,7 +1178,7 @@ describe("describe tool — ax-service read failure", () => {
     );
     expect(result.source).toBe("native-devtools");
     expect(result.hint).toContain("ax-service query timed out: describe");
-    expect(result.hint).not.toContain("not booted through argent");
+    expect(result.hint).not.toContain("pre-boot accessibility settings");
   });
 });
 
@@ -1168,24 +1228,6 @@ describe("describe tool — ax-service daemon crash", () => {
     };
   }
 
-  const nativeTree = (bundleId: string) =>
-    makeNativeDevtoolsApi({
-      connectedBundleIds: [bundleId],
-      describeScreenResult: {
-        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
-        elements: [
-          {
-            frame: { x: 20, y: 150, width: 400, height: 44 },
-            tapPoint: { x: 220, y: 172 },
-            normalizedFrame: { x: 0.045, y: 0.157, width: 0.909, height: 0.046 },
-            normalizedTapPoint: { x: 0.5, y: 0.18 },
-            traits: ["button"],
-            label: "Go",
-          },
-        ],
-      },
-    });
-
   it("says the service crashed instead of prescribing a reboot", async () => {
     const registry = registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }));
     const tool = createDescribeTool(registry);
@@ -1194,7 +1236,7 @@ describe("describe tool — ax-service daemon crash", () => {
 
     expect(elementLineCount(result.description)).toBe(0);
     expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
-    expect(result.hint).not.toContain("not booted through argent");
+    expect(result.hint).not.toContain("pre-boot accessibility settings");
     // Both remedies are named only to be ruled out.
     expect(result.hint).not.toMatch(/call boot-device/);
     expect(result.should_restart).toBeUndefined();
@@ -1218,7 +1260,7 @@ describe("describe tool — ax-service daemon crash", () => {
     for (const exit of [{ code: 1 }, { code: 137, signal: "SIGKILL" }]) {
       const tool = createDescribeTool(registryWhereAxFailsToStart(startFailure(exit)));
       const result = await tool.execute({}, { udid: UDID });
-      expect(result.hint).toContain("not booted through argent");
+      expect(result.hint).toContain("pre-boot accessibility settings");
       expect(result.hint).toContain("Call boot-device with force=true");
       expect(result.hint).not.toContain("crashed");
       // No read took place, and the error is not dropped.
@@ -1258,7 +1300,7 @@ describe("describe tool — ax-service daemon crash", () => {
       );
       const result = await tool.execute({}, { udid: UDID });
       expect(result.hint).toMatch(/ax-service.*SIGSEGV/i);
-      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("pre-boot accessibility settings");
       expect(result.hint).not.toContain("The accessibility read failed");
     }
   });
@@ -1313,7 +1355,7 @@ describe("describe tool — ax-service daemon crash", () => {
       );
 
     it("is not re-armed by a crash on a sim still not booted through argent", async () => {
-      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
       expect((await crashedRead(true)).hint).toContain("crashed with SIGSEGV");
       // Same sim, same state: the caveat already told stays told.
       expect((await degradedRead()).hint).toBeUndefined();
@@ -1323,9 +1365,9 @@ describe("describe tool — ax-service daemon crash", () => {
       // The crashed read found the sim off the state the caveat describes, as a
       // read that timed out in its place would have. A later external boot of
       // the same udid has not been told.
-      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
       expect((await crashedRead(false)).hint).toContain("crashed with SIGSEGV");
-      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
     });
 
     it.each([true, false])(
@@ -1334,13 +1376,13 @@ describe("describe tool — ax-service daemon crash", () => {
         // A crashed read told the agent nothing about the boot, so the first
         // degraded read after it still owes the caveat.
         expect((await crashedRead(degraded)).hint).toContain("crashed with SIGSEGV");
-        expect((await degradedRead()).hint).toMatch(/booted through argent/);
+        expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
         expect((await degradedRead()).hint).toBeUndefined();
       }
     );
 
     it("is not re-armed by a crash whose boot state nothing measured", async () => {
-      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
       const unmeasured = createDescribeTool(
         registryWhereAxFailsToStart(startFailure({ code: 139, signal: "SIGSEGV" }))
       );
@@ -1352,7 +1394,7 @@ describe("describe tool — ax-service daemon crash", () => {
       // The crash's twin: the daemon was just as gone, and its hint is no more
       // a caveat than the crash hint is. The measured cases, over a real start,
       // are in ax-service-daemon-exit.test.ts.
-      expect((await degradedRead()).hint).toMatch(/booted through argent/);
+      expect((await degradedRead()).hint).toContain("pre-boot accessibility settings");
       const failed = createDescribeTool(registryWhereAxFailsToStart(startFailure({ code: 1 })));
       expect((await failed.execute({}, { udid: UDID })).hint).toContain(
         "ax-service exited with code 1 before connecting"

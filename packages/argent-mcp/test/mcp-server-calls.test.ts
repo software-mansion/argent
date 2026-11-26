@@ -561,9 +561,7 @@ describe("startMcpServer tool calls", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    const content = result.content as Array<{ type: string; text?: string }>;
-    expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok":true');
+    expect(result.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
   });
 
   it("tells the agent what is new on the first call after an update, and only then", async () => {
@@ -573,14 +571,43 @@ describe("startMcpServer tool calls", () => {
       const first = await client.callTool({ name: "noted", arguments: {} });
       const second = await client.callTool({ name: "noted", arguments: {} });
 
-      const firstContent = first.content as Array<{ type: string; text?: string }>;
-      expect(firstContent.at(-1)?.text).toMatch(
-        new RegExp(`^Argent was updated to v${version} before this session\\.`)
-      );
-      expect(textOf(second)).not.toContain("Argent was updated");
+      expect(first.content).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `a note\n{"ok":true}\nArgent was updated to v${version} before this session.`
+          ),
+        },
+      ]);
+      expect(second.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
       expect(getWhatsNewSeenVersion()).toBe(version);
     } finally {
       setWhatsNewSeenVersion(version);
+    }
+  });
+
+  it("leaves a newer installed version's highlights for the adapter that ships them", async () => {
+    const previous = "0.33.0";
+    vi.stubGlobal("ARGENT_CLI_VERSION", previous);
+    setWhatsNewSeenVersion(previous);
+    try {
+      const old = await connect({
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      });
+      try {
+        expect(old.getServerVersion()?.version).toBe(getInstalledVersion());
+        expect(textOf(await old.callTool({ name: "noted", arguments: {} }))).not.toContain(
+          "Argent was updated"
+        );
+        expect(getWhatsNewSeenVersion()).toBe(previous);
+      } finally {
+        await old.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      setWhatsNewSeenVersion(getInstalledVersion());
     }
   });
 
@@ -818,9 +845,13 @@ describe("startMcpServer screen capture after an interaction", () => {
       arguments: { udid, condition: "visible", selector: { text: "Settings" } },
     });
   const describeScreen = (udid = "u") => client.callTool({ name: "describe", arguments: { udid } });
-  /** The last text block: the element tree after an action, or the note. */
-  const lastText = (result: Result) =>
-    (result.content as Array<{ type: string; text?: string }>).at(-1)!.text!;
+  /** The end of the text, from its header on: the element tree after an action, or the note. */
+  const lastText = (result: Result) => {
+    const text = textOf(result);
+    const header = text.lastIndexOf(AUTO_DESCRIBE_HEADER);
+    expect(header).toBeGreaterThanOrEqual(0);
+    return text.slice(header);
+  };
   /** The id the result gives its full tree, as the agent reads it. */
   const treeId = (result: Result) => {
     const id = /^Tree id: (\S+)$/m.exec(textOf(result))?.[1];
@@ -913,6 +944,38 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(textOf(second)).toContain(unchangedScreenshotNote(screenshotId(first), "gesture-tap"));
   });
 
+  it("sends a result without an image as one text block, one part per line", async () => {
+    const tapped = await tap();
+    const shotNote = unchangedScreenshotNote(screenshotId(tapped), "gesture-tap");
+
+    const described = await describeScreen();
+    const waited = await wait();
+
+    // Claude Code shows the blocks of such a result with nothing between them.
+    expect(described.content).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
+          `Tree id: ${treeId(described)}`,
+          "--- Screen after action ---",
+          shotNote,
+        ].join("\n"),
+      },
+    ]);
+    expect(waited.content).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"success":true,"elapsed":120}',
+          "--- Screen after action ---",
+          shotNote,
+          note(treeId(described), "describe"),
+        ].join("\n"),
+      },
+    ]);
+  });
+
   it("still sends a changed screenshot when the tree is identical", async () => {
     const first = await tap();
     screenshotPng = PNG_CHANGED;
@@ -992,10 +1055,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     const described = await describeScreen();
 
     // Right after the tree, before the screenshot of the describe call.
-    const blocks = (described.content as Array<{ type: string; text?: string }>).map((c) =>
-      c.type === "image" ? "image" : c.text!.split("\n")[0]
-    );
-    expect(blocks.slice(0, 3)).toEqual([
+    expect(textOf(described).split("\n").slice(0, 3)).toEqual([
       '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
       `Tree id: ${treeId(described)}`,
       "--- Screen after action ---",

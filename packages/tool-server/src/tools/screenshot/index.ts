@@ -141,20 +141,38 @@ export async function tvScreenshot(
     os.tmpdir(),
     `argent-tv-screenshot-${udid.slice(0, 8)}-${process.hrtime.bigint()}.png`
   );
+  const capture = async (out: string, type?: "jpeg") => {
+    const io = ["io", udid, "screenshot", ...(type ? [`--type=${type}`] : []), out];
+    await execFileAsync("xcrun", await simctlArgsForUdid(udid, io), { signal });
+  };
 
-  await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["io", udid, "screenshot", file]), {
-    signal,
-  });
+  // A capture at a given scale stays lossless. The flow settle compares these
+  // frames for motion, and JPEG spreads a thin coloured line over more pixels:
+  // a 2 pt red line changes 800 pixels at scale 0.25 as PNG and 1200 as JPEG.
+  if (scale !== undefined) {
+    await capture(file);
+    await downscalePngInPlace(file, scale, signal);
+    return file;
+  }
 
-  // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
-  // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
-  // hardcoded 3840 would double the scale on a 1920 capture.
-  if (scale === undefined || scale < 1.0) {
-    await execFileAsync("sips", ["-Z", String(await tvTargetLongSide(file, scale)), file], {
+  // The default capture, which every Apple TV action attaches, is downscaled
+  // anyway, so it is taken as JPEG: simctl encodes a 4K frame as PNG in about
+  // 350 ms and as JPEG in about 150 ms, and the downscale writes the PNG.
+  const jpeg = file.replace(/\.png$/, ".jpg");
+  await capture(jpeg, "jpeg");
+  try {
+    // `sips -Z` caps the longest *actual* side, and capture size isn't fixed (4K
+    // sim is 3840 wide, non-4K is 1920), so scale against the real dimensions — a
+    // hardcoded 3840 would double the scale on a 1920 capture.
+    const longSide = String(await tvTargetLongSide(jpeg, scale));
+    await execFileAsync("sips", ["-Z", longSide, "-s", "format", "png", jpeg, "--out", file], {
       signal,
-    }).catch(() => {
-      // Best-effort: keep the full-resolution capture if sips fails.
     });
+  } catch {
+    // Best-effort: fall back to a full-resolution capture if sips fails.
+    await capture(file);
+  } finally {
+    await fs.rm(jpeg, { force: true });
   }
 
   return file;

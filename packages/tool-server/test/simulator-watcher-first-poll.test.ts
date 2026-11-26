@@ -29,10 +29,15 @@ import { SimctlTimeoutError } from "../src/utils/simctl-exec";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 
-function listsBooted(): void {
+function listsBooted(...udids: string[]): void {
   simctlMock.mockReturnValue({
     stdout: JSON.stringify({
-      devices: { "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [{ udid: UDID, state: "Booted" }] },
+      devices: {
+        "com.apple.CoreSimulator.SimRuntime.iOS-18-5": udids.map((udid) => ({
+          udid,
+          state: "Booted",
+        })),
+      },
     }),
     stderr: "",
   });
@@ -51,6 +56,7 @@ afterEach(() => {
   stop?.();
   stop = undefined;
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   simctlMock.mockReset();
   pending.simctl = false;
 });
@@ -58,7 +64,7 @@ afterEach(() => {
 describe("firstSimulatorPoll", () => {
   it("settles once the first poll has armed every booted simulator", async () => {
     vi.useFakeTimers();
-    listsBooted();
+    listsBooted(UDID);
     let finishInit!: () => void;
     const resolveService = vi.fn(
       () =>
@@ -81,7 +87,7 @@ describe("firstSimulatorPoll", () => {
     simctlMock.mockImplementationOnce(() => {
       throw new Error("CoreSimulatorService connection interrupted");
     });
-    listsBooted();
+    listsBooted(UDID);
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
 
     ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
@@ -101,7 +107,7 @@ describe("firstSimulatorPoll", () => {
     simctlMock.mockImplementationOnce(() => {
       throw new SimctlTimeoutError(["simctl", "list", "devices", "--json"], 10_000);
     });
-    listsBooted();
+    listsBooted(UDID);
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
 
     try {
@@ -138,7 +144,7 @@ describe("firstSimulatorPoll", () => {
 
   it("stops waiting 15s after startup when the first poll never settles", async () => {
     vi.useFakeTimers();
-    listsBooted();
+    listsBooted(UDID);
     const resolveService = vi.fn(() => new Promise(() => {}));
 
     ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
@@ -148,5 +154,38 @@ describe("firstSimulatorPoll", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(await isSettled(firstSimulatorPoll())).toBe(true);
+  });
+});
+
+describe("simulator watcher UDID allowlist", () => {
+  it("arms only listed simulators at startup and when more simulators boot", async () => {
+    vi.useFakeTimers();
+    const second = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+    const neighbor = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB";
+    const laterNeighbor = "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC";
+    vi.stubEnv("ARGENT_SIMULATOR_WATCH_UDIDS", ` ${UDID}, ${second.toLowerCase()} `);
+    listsBooted(UDID, neighbor);
+    const resolveService = vi.fn(async (_urn: string) => ({ isEnvSetup: () => true }));
+    const watcher = startSimulatorWatcher({ resolveService } as unknown as Registry);
+    stop = watcher.stop;
+    await watcher.ready;
+    expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
+
+    listsBooted(UDID, neighbor, second, laterNeighbor);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([
+      `NativeDevtools:${UDID}`,
+      `NativeDevtools:${second}`,
+    ]);
+  });
+
+  it("arms no simulator when the job supplies an empty allowlist", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("ARGENT_SIMULATOR_WATCH_UDIDS", "");
+    listsBooted(UDID);
+    const resolveService = vi.fn();
+    ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
+    expect(await isSettled(firstSimulatorPoll())).toBe(true);
+    expect(resolveService).not.toHaveBeenCalled();
   });
 });

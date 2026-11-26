@@ -9,6 +9,23 @@ export function getWhatsNewSeenVersion(options: ConfigPathOptions = {}): string 
   return typeof value === "string" ? value : null;
 }
 
-export function setWhatsNewSeenVersion(version: string, options: ConfigPathOptions = {}): void {
-  updateConfig((config) => setAtPath(config, WHATS_NEW_SEEN_KEY, version), "global", options);
+export function setWhatsNewSeenVersion(
+  version: string,
+  options: ConfigPathOptions & { ifSeen?: string | null } = {}
+): boolean {
+  let recorded = false;
+  updateConfig(
+    (config) => {
+      // Two editors can make their first call together. Check under the config
+      // lock so only one claims these highlights and an older reader cannot rewind it.
+      const value = getAtPath(config, WHATS_NEW_SEEN_KEY);
+      const seen = typeof value === "string" ? value : null;
+      if (options.ifSeen !== undefined && options.ifSeen !== seen) return;
+      setAtPath(config, WHATS_NEW_SEEN_KEY, version);
+      recorded = true;
+    },
+    "global",
+    options
+  );
+  return recorded;
 }

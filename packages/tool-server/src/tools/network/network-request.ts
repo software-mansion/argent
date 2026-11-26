@@ -11,6 +11,7 @@ import {
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import type { CDPClient } from "../../utils/debugger/cdp-client";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import type { NetworkRequestRecord } from "../../chromium-server/network";
 import {
   ANDROID_NATIVE_REQUEST_ID,
   findAndroidNativeRecord,
@@ -115,6 +116,38 @@ function truncateBody(body: string, mimeType: string): string {
   return body.length > MAX_BODY_SIZE
     ? `${cutMarker(`${body.length} chars`, mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
     : body;
+}
+
+/**
+ * The response body Chrome holds for a request. Chrome keeps no body for a fetch()
+ * whose no-store response the page has not read to its end, though every byte of it
+ * may have arrived and the recorder counts it finished. It still has those bytes
+ * buffered and hands them over through Network.streamResourceContent.
+ */
+async function chromiumResponseBody(
+  cdp: Pick<CDPClient, "send">,
+  rec: NetworkRequestRecord
+): Promise<{ body: string; base64Encoded: boolean } | undefined> {
+  try {
+    const out = (await cdp.send("Network.getResponseBody", { requestId: rec.requestId })) as {
+      body?: string;
+      base64Encoded?: boolean;
+    };
+    if (out.body != null) return { body: out.body, base64Encoded: out.base64Encoded === true };
+  } catch {
+    // Body not retained: navigated away, evicted, never had one, or not read yet.
+  }
+  // A body still arriving would come back cut short.
+  if (!rec.finished || rec.failed) return undefined;
+  try {
+    const out = (await cdp.send("Network.streamResourceContent", {
+      requestId: rec.requestId,
+    })) as { bufferedData?: string };
+    if (out.bufferedData != null) return { body: out.bufferedData, base64Encoded: true };
+  } catch {
+    // The request ended in Chrome already, or this Chrome has no such command.
+  }
+  return undefined;
 }
 
 /** The text of a body that CDP sent as base64, or its bytes when they are not UTF-8 text. */
@@ -318,20 +351,14 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
           mimeType: rec.mimeType ?? "",
         };
         if (params.includeBody) {
-          try {
-            const out = (await chromium.cdp.send("Network.getResponseBody", {
-              requestId: rec.requestId,
-            })) as { body?: string; base64Encoded?: boolean };
-            if (out.body != null) {
-              const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
-              if (typeof body !== "string") {
-                resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
-              } else {
-                resp.body = truncateBody(body, resp.mimeType);
-              }
+          const out = await chromiumResponseBody(chromium.cdp, rec);
+          if (out) {
+            const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
+            if (typeof body !== "string") {
+              resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
+            } else {
+              resp.body = truncateBody(body, resp.mimeType);
             }
-          } catch {
-            // Body not retained: navigated away, evicted, or never had one.
           }
         }
         details.response = resp;

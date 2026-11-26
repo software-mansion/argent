@@ -120,6 +120,16 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     manageCommand: "argent telemetry",
   },
   {
+    key: "autoUpdate.enabled",
+    description:
+      "Automatically update the global Argent installation. Project-local installs require confirmation.",
+    scopes: ["global"],
+    parse: asBoolean,
+    merge: "prioritize-local",
+    default: true,
+    example: "false",
+  },
+  {
     key: "lens.agent",
     description: "Coding-agent id remembered by `argent lens` to skip the picker.",
     scopes: ["project", "global"],

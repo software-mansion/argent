@@ -145,7 +145,7 @@ import { openUrlTool } from "../src/tools/open-url";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
 import { settingsPermissionsTool } from "../src/tools/settings-permissions";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
+import { ensureAutomationEnabled, prepareLocalAxPrefs } from "../src/utils/ax-prefs";
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
@@ -425,7 +425,9 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
     await expect(ensureAutomationEnabled(SIMULATOR.id)).rejects.toBeInstanceOf(
       XcodeFirstLaunchPendingError
     );
-    await expect(isEntitlementBypassActive(SIMULATOR.id)).resolves.toBe(false);
+    await expect(prepareLocalAxPrefs(SIMULATOR.id)).rejects.toBeInstanceOf(
+      XcodeFirstLaunchPendingError
+    );
     expect(xcrunCalls()).toEqual([]);
   });
 });
