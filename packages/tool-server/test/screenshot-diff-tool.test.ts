@@ -112,12 +112,29 @@ describe("screenshotDiffTool", () => {
     });
   });
 
-  it("returns only the summary and diff artifact paths", async () => {
+  it("returns only the summary when nothing differs", async () => {
     const dir = await makeTempDir("argent-screenshot-diff-tool-");
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
     await writePng(currentPath, 2, 2, { r: 10, g: 20, b: 30 });
+
+    const result = await executeScreenshotDiffTool(
+      {},
+      { baselinePath, currentPath, udid: "ABC", outputDir: dir },
+      { artifacts: new ArtifactStore() }
+    );
+
+    expect(result.summary).toContain("- status: unchanged");
+    expect(Object.keys(result)).toEqual(["summary"]);
+  });
+
+  it("returns only the summary and diff artifact paths", async () => {
+    const dir = await makeTempDir("argent-screenshot-diff-tool-");
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
+    await writePng(currentPath, 2, 2, { r: 255, g: 255, b: 255 });
 
     const result = await executeScreenshotDiffTool(
       {},
@@ -153,7 +170,7 @@ describe("screenshotDiffTool", () => {
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(dir, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 2, 2, { r: 255, g: 255, b: 255 });
     const signal = AbortSignal.timeout(1000);
     const captureScreenshot = vi.fn(async () => ({
       url: "http://localhost/current.png",
@@ -272,7 +289,7 @@ describe("screenshotDiffTool", () => {
     const baselinePath = path.join(dir, "baseline.png");
     const capturedPath = path.join(scratch, "captured.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 2, 2, { r: 255, g: 255, b: 255 });
     vi.mocked(captureHarmonyScreenshotPng).mockResolvedValue(capturedPath);
     const captureScreenshot = vi.fn();
 

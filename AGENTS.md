@@ -1,5 +1,11 @@
 # argent
 
+## Tests
+
+Add a test when it catches a specific behavior regression that existing tests would miss.
+Avoid change detectors, such as tests that search source files for a string or copy a
+list of constants just to assert that it stays the same.
+
 ## Documentation
 
 The docs site lives in `packages/docs/` and is published to docs.swmansion.com/argent.
@@ -11,13 +17,13 @@ below refer to the toolkit.
 
 Update the docs in the same pull request as the change:
 
-- MCP tools, CLI, config keys, e2e test files -> the matching page in
-  `packages/docs/docs/reference/`, plus `docs/features/` if the user facing capability
+- MCP tools, CLI, config keys, e2e test files → the matching page in
+  `packages/docs/docs/reference/`, plus `docs/features/` if the user-facing capability
   changed.
-- Install, platforms, editor setup, telemetry -> `packages/docs/docs/fundamentals/`.
-- A new capability -> a `features/` page and a `reference/` entry.
+- Install, platforms, editor setup, telemetry → `packages/docs/docs/fundamentals/`.
+- A new capability → a `features/` page and a `reference/` entry.
 
 If no docs update is needed, say so in the pull request description.
 
-After editing docs, run `npx docusaurus build` in `packages/docs/` and `npm run format` from the
+After editing docs, run `bunx docusaurus build` in `packages/docs/` and `bun run format` from the
 repo root.

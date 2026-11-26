@@ -30,7 +30,7 @@ import {
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { writeCliRecord } from "./cli-record.js";
-import { resolveTelemetryConsent } from "./first-run-notice.js";
+import { resolveTelemetryConsent, seedWhatsNewVersion } from "./first-run-notice.js";
 import { parseInitArgs, InitCancelled } from "./init-args.js";
 import { canPromptUser, noTerminalMessage } from "./terminal.js";
 import {
@@ -272,6 +272,7 @@ export async function init(args: string[]): Promise<void> {
     // Record where this install's CLI lives so a device provider can spawn it
     // without PATH (see `cli-record.ts`).
     writeCliRecord({ mode: tel.installMode, projectRoot, version });
+    seedWhatsNewVersion(version);
 
     const allowlist = await configureAllowlist({
       adapters: writtenAdapters,

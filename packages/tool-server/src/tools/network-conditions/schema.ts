@@ -4,19 +4,14 @@ import { metroPortField } from "../../utils/debugger/metro-port";
 
 export const networkConditionsZodSchema = z
   .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe(
-        "Target device id from `list-devices`: an iOS simulator UDID, an Android emulator serial, or a Chromium id."
-      ),
+    udid: z.string().min(1).describe("Device ID from list-devices."),
     bundleId: z
       .string()
       .min(1)
       .optional()
-      .describe("iOS only, and required there: the bundle id of the app to throttle."),
+      .describe("Bundle ID of the app to shape. Required on iOS and ignored elsewhere."),
     port: metroPortField.describe(
-      "iOS only: the Metro port the throttle leaves alone. Omit it to use this device's port (8081 by default)."
+      "Metro port to exempt from shaping on iOS and Android. Omit for the device's port (usually 8081)."
     ),
     latencyMs: z
       .number()
@@ -25,25 +20,20 @@ export const networkConditionsZodSchema = z
       .max(60_000)
       .optional()
       .describe(
-        "Minimum time in milliseconds from sending a request to its response. iOS and Chromium only."
+        "Delay in milliseconds. Android adds it per round trip. iOS and Chromium use it as a minimum response delay."
       ),
     downloadKbps: z
       .number()
       .int()
       .min(1)
       .optional()
-      .describe("Download limit in kilobits per second. iOS and Chromium only."),
-    uploadKbps: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe("Upload limit in kilobits per second. iOS and Chromium only."),
+      .describe("Download limit in kilobits per second."),
+    uploadKbps: z.number().int().min(1).optional().describe("Upload limit in kilobits per second."),
     offline: z
       .boolean()
       .optional()
       .describe(
-        "Make requests fail as if the network were down. On Android, ports forwarded with adb reverse stay reachable."
+        "Make requests fail as if the network were down. On Android, adb reverse ports stay reachable, but Metro at 10.0.2.2 does not. False alone resets the conditions."
       ),
   })
   .strict();

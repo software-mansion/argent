@@ -41,26 +41,23 @@ import { isTurned, nativeTreeToUi } from "../../../../utils/ui-orientation";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
-// `degraded` means the pre-boot accessibility prefs were never written — the one
-// thing boot-device does that an external `xcrun simctl boot` cannot. It
-// describes how the simulator was booted, not how the read went.
+// The local probe checks the configured preferences. The accessibility read
+// determines whether the system tree is usable for this screen.
 //
 // Rebooting costs the developer whatever is running on the sim, so the caveat
 // splits on what the accessibility read produced: only a blind read has
 // anything to gain from the reboot.
 const DEGRADED_BLIND_HINT =
-  "The accessibility read returned no elements, and this simulator was not booted through argent, " +
-  "so the pre-boot accessibility settings were never applied. Unless the screen is genuinely blank, " +
-  "call boot-device with force=true to reboot it with those settings — this restarts the simulator";
+  "The accessibility read returned no elements. Argent could not verify all pre-boot accessibility settings. " +
+  "If you expect elements on this screen, boot-device with force=true restarts the simulator with those settings";
 
 // Deduped to once per device per server lifetime by
 // `withBootCaveatOncePerDevice`: it holds for every describe against this
 // simulator until the sim is booted through argent, and a session makes dozens
 // of describe calls.
 const DEGRADED_STANDING_HINT =
-  "This simulator was not booted through argent, so system dialogs and native modals may not appear " +
-  "in this tree; everything else reads normally. If something you expect is missing, boot-device with " +
-  "force=true reboots the simulator with the full accessibility settings";
+  "Argent could not verify all pre-boot accessibility settings. System dialogs and native modals may be missing. " +
+  "If you need them, boot-device with force=true restarts the simulator with those settings";
 
 /**
  * The two caveats above, re-addressed to the provider that owns the device:
@@ -94,7 +91,7 @@ function isStandingCaveat(hint: string | undefined): boolean {
 }
 
 function isBlindCaveat(hint: string | undefined): boolean {
-  return hint === DEGRADED_BLIND_HINT || Boolean(hint?.endsWith(EXTERNAL_BLIND_BODY));
+  return Boolean(hint?.endsWith(DEGRADED_BLIND_HINT) || hint?.endsWith(EXTERNAL_BLIND_BODY));
 }
 
 function startFailure(err: unknown): string {
@@ -108,9 +105,8 @@ function startFailure(err: unknown): string {
 // The last sentence is the exit for a start that fails before the boot state is
 // measured, where the caveat would otherwise come back after every reboot.
 const DEGRADED_START_FAILED_TAIL =
-  ", and this simulator was not booted through argent, so the pre-boot accessibility settings were " +
-  "never applied. Call boot-device with force=true to reboot it with those settings — this restarts " +
-  "the simulator. If it fails to start again after that reboot, do not reboot again: the boot was " +
+  ". Check the simulator's pre-boot accessibility settings. Call boot-device with force=true to restart " +
+  "the simulator with those settings. If the service fails to start again, do not reboot again: the boot was " +
   "not the cause.";
 
 // A daemon that a fault signal killed says nothing about how the simulator was
@@ -558,7 +554,13 @@ async function readIos(
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
-    return { tree: nativeTree, source: "native-devtools", hint };
+    const scope = "This app-only tree omits system dialogs, including permission prompts.";
+    return {
+      tree: nativeTree,
+      source: "native-devtools",
+      partial: true,
+      hint: crashHint ?? (hint ? `${scope} ${hint}` : scope),
+    };
   } catch (err) {
     // The service answered but no hierarchy came back: no connected app to
     // auto-target, an ambiguous frontmost, the query threw, or measuring the

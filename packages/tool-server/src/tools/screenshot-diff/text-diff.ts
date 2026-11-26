@@ -63,7 +63,6 @@ export interface TextAnalysis {
 interface AnalyzeScreenshotTextOptions {
   baselinePath: string;
   currentPath: string;
-  hasPixelDiff?: boolean;
   baselineImage?: FontGeometryImage;
   currentImage?: FontGeometryImage;
   ignoreTopPixels?: number;
@@ -100,14 +99,6 @@ export const DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE = 0.7;
 export async function analyzeScreenshotTextChanges(
   options: AnalyzeScreenshotTextOptions
 ): Promise<TextAnalysis> {
-  if (options.hasPixelDiff === false) {
-    return {
-      status: "skipped",
-      provider: "ocr",
-      changes: [],
-    };
-  }
-
   const [baselineOcr, currentOcr] = await Promise.all([
     extractOcrTextBlocks(options.baselinePath),
     extractOcrTextBlocks(options.currentPath),
@@ -325,10 +316,10 @@ function protectValueSymbols(text: string): string {
         return `${prefix}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${digit}`;
       }
     )
-    .replace(/(\p{N})([+-])(\p{N})/gu, (match, left: string, symbol: string, right: string) => {
-      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}${right}`;
+    .replace(/(\p{N})([+-])(?=\p{N})/gu, (match, left: string, symbol: string) => {
+      return `${left}${VALUE_SYMBOL_TOKENS[symbol] ?? symbol}`;
     })
-    .replace(/([\p{L}\p{N}])\s*\/\s*([\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}$2`);
+    .replace(/([\p{L}\p{N}])\s*\/\s*(?=[\p{L}\p{N}])/gu, `$1${VALUE_SYMBOL_TOKENS["/"]}`);
 }
 
 function restoreValueSymbols(text: string): string {

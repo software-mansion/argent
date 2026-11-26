@@ -80,10 +80,17 @@ vi.mock("../src/utils/simulator-watcher", () => ({
 vi.mock("../src/utils/device-shutdown", () => ({
   shutdownOwnedDevices: vi.fn(async () => {}),
 }));
+vi.mock("../src/blueprints/network-inspector", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/blueprints/network-inspector")>()),
+  pauseJsCapturesOf: vi.fn(async () => new Set<string>()),
+}));
 
+import { startUpdateChecker } from "../src/utils/update-checker";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { pauseJsCapturesOf } from "../src/blueprints/network-inspector";
 import { shutdownOwnedDevices } from "../src/utils/device-shutdown";
 import { variantProposalStore } from "../src/utils/variant-proposals";
+import { withCaptureLock } from "../src/tools/network/network-capture";
 
 describe("tool-server startup telemetry", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
@@ -124,7 +131,7 @@ describe("tool-server startup telemetry", () => {
       crash_fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
       crash_phase: "startup",
     });
-    expect(updateCheckerMock.dispose).toHaveBeenCalledOnce();
+    expect(startUpdateChecker).not.toHaveBeenCalled();
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
@@ -134,7 +141,7 @@ describe("tool-server startup telemetry", () => {
 
     expect(telemetryMock.track).toHaveBeenCalledTimes(1);
     expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
-    expect(updateCheckerMock.dispose).toHaveBeenCalledOnce();
+    expect(startUpdateChecker).not.toHaveBeenCalled();
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
@@ -161,6 +168,83 @@ describe("tool-server startup telemetry", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(httpHandleMock.app.listen).not.toHaveBeenCalled();
   });
+
+  it("pauses network capture in the apps' JS runtimes before it disposes the registry", async () => {
+    // The interceptor lives in the app, so the registry's dispose alone leaves it recording.
+    vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+      stop: watcherMock.stop,
+      ready: new Promise<void>(() => {}),
+    });
+    const order: string[] = [];
+    vi.mocked(pauseJsCapturesOf).mockImplementationOnce(async () => {
+      order.push("pause");
+      return new Set<string>();
+    });
+    registryMock.dispose.mockImplementationOnce(async () => {
+      order.push("dispose");
+    });
+    const { start } = await import("../src/index");
+
+    start();
+    process.emit("SIGTERM");
+
+    await vi.waitFor(() => {
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    });
+    expect(pauseJsCapturesOf).toHaveBeenCalledWith(registryMock, undefined, { atExit: true });
+    expect(order).toEqual(["pause", "dispose"]);
+  });
+
+  it.each([
+    { until: "until the start ends", ends: true, order: ["start ended", "pause", "dispose"] },
+    { until: "for at most 2 s", ends: false, order: ["pause", "dispose"] },
+  ])(
+    "waits for a network capture start under way before it pauses capture, $until",
+    async ({ ends, order: expected }) => {
+      vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+        stop: watcherMock.stop,
+        ready: new Promise<void>(() => {}),
+      });
+      const order: string[] = [];
+      vi.mocked(pauseJsCapturesOf).mockImplementationOnce(async () => {
+        order.push("pause");
+        return new Set<string>();
+      });
+      registryMock.dispose.mockImplementationOnce(async () => {
+        order.push("dispose");
+      });
+      let release!: () => void;
+      const underWay = withCaptureLock(
+        "emulator-5554",
+        "com.example.shop",
+        () => new Promise<void>((resolve) => (release = resolve))
+      );
+      const { start } = await import("../src/index");
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        start();
+        process.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(1_900);
+        expect(order).toEqual([]);
+
+        if (ends) {
+          order.push("start ended");
+          release();
+          await underWay;
+        }
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.waitFor(() => {
+          expect(exitSpy).toHaveBeenCalledWith(0);
+        });
+      } finally {
+        vi.useRealTimers();
+        release();
+        await underWay;
+      }
+      expect(order).toEqual(expected);
+    }
+  );
 
   it("stops the watcher before it waits for the owned devices to shut down", async () => {
     // The watcher's simctl calls run in their own process groups, so only the

@@ -88,6 +88,13 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     defaultEnabled: true,
   },
   {
+    name: "whats-new",
+    description:
+      "After an update, tell the agent the highlights of the new Argent version on its first tool call. " +
+      "On by default; turn it off with `argent disable whats-new`.",
+    defaultEnabled: true,
+  },
+  {
     name: "macos-apps",
     description:
       "Control native Mac apps, including Mac Catalyst. " +

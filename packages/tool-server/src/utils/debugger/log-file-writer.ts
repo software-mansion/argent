@@ -29,6 +29,13 @@ export interface MessageCluster {
   sourceLine?: number;
 }
 
+export interface RecentLogEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
 export interface LogStats {
   file: string;
   totalEntries: number;
@@ -50,6 +57,8 @@ const MAX_ENTRIES = 50_000;
 const STALE_LOG_MS = 24 * 60 * 60 * 1000;
 const CLUSTER_KEY_LENGTH = 80;
 const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
+export const RECENT_PER_LEVEL = 100;
+const RECENT_MESSAGE_CHARS = 300;
 
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
@@ -57,6 +66,8 @@ const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 const CAMEL_LEVELS = ["startGroup", "startGroupCollapsed", "endGroup", "profileEnd", "timeEnd"];
 
 const liveLogFiles = new Set<string>();
+// Two sessions on one Metro can start within the same millisecond.
+let lastTimestamp = 0;
 
 export class LogFileWriter {
   private filePath: string;
@@ -67,11 +78,12 @@ export class LogFileWriter {
   private midLine = false;
   private levelCounts: Record<string, number> = {};
   private clusters = new Map<string, ClusterState>();
+  private recent = new Map<string, RecentLogEntry[]>();
   private ready = false;
   private closed = false;
 
   constructor(port: number) {
-    const timestamp = Date.now();
+    const timestamp = (lastTimestamp = Math.max(Date.now(), lastTimestamp + 1));
     const dir = path.join(os.homedir(), ".argent", "tmp");
     try {
       fs.mkdirSync(dir, { recursive: true });
@@ -118,7 +130,7 @@ export class LogFileWriter {
     const line = `[L:${entry.id}] ${entry.timestamp} ${levelDisplay} ${source} | ${flatMessage}\n`;
 
     // Nothing reopens the file, and readAll() serves it alone, so a line with
-    // no file has no reader: the entry lives on only in the counts and clusters.
+    // no file has no reader: the entry lives on only in memory (counts, clusters, getRecent).
     if (this.ready && this.fd !== null) {
       try {
         const bytes = Buffer.from(this.midLine ? `\n${line}` : line);
@@ -140,6 +152,7 @@ export class LogFileWriter {
     this.entryCount++;
 
     this.levelCounts[entry.level] = (this.levelCounts[entry.level] || 0) + 1;
+    this.remember(entry);
 
     // Clusters are in-memory only, never persisted to the log file
     const key = entry.message.slice(0, CLUSTER_KEY_LENGTH);
@@ -160,6 +173,27 @@ export class LogFileWriter {
     }
 
     return rich;
+  }
+
+  private remember(entry: Omit<RichLogEntry, "marker">): void {
+    const ring = this.recent.get(entry.level) ?? [];
+    ring.push({
+      id: entry.id,
+      timestamp: entry.timestamp,
+      level: entry.level,
+      message: cutMessage(entry.message),
+    });
+    if (ring.length > RECENT_PER_LEVEL) ring.shift();
+    this.recent.set(entry.level, ring);
+  }
+
+  /** The newest `limit` entries, oldest first. Exact only up to RECENT_PER_LEVEL. */
+  getRecent(limit: number, levels?: readonly string[]): RecentLogEntry[] {
+    const wanted = levels ? new Set(levels) : null;
+    const pool = [...this.recent]
+      .filter(([level]) => !wanted || wanted.has(level))
+      .flatMap(([, ring]) => ring);
+    return pool.sort((a, b) => a.id - b.id).slice(-limit);
   }
 
   /** A torn line past " | " would parse as a whole entry with its message cut. */
@@ -304,6 +338,22 @@ function cleanSourceUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function cutMessage(message: string): string {
+  if (message.length <= RECENT_MESSAGE_CHARS) return message;
+  let end = RECENT_MESSAGE_CHARS - 1;
+  if (isHighSurrogate(message.charCodeAt(end - 1))) end--;
+  return detachedCopy(message.slice(0, end)) + "…";
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** A `slice` can keep the whole original string alive; a byte copy holds only the cut. */
+function detachedCopy(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
 function parseFlatLine(line: string): RichLogEntry | null {
