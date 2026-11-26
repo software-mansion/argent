@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android / Vega); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
+description: Debug JavaScript with Argent in React Native apps on iOS, Android, Vega, and macOS, or in Chromium and Electron over CDP. Use when connecting to a runtime, inspecting React components, reading console logs, evaluating JavaScript, or inspecting and checking an app's HTTP requests.
 ---
 
 ## 1. Prerequisites
@@ -8,27 +8,49 @@ description: Debug a JS runtime via CDP using argent debugger tools. Primary pat
 Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`.
 
 - **React Native (iOS / Android)**: Metro running (default `localhost:8081`) and the app connected to it. Verify with `debugger-status`.
-- **Android**: a physical device, a TV emulator, or a dev client that loads from `localhost` needs `adb -s <serial> reverse tcp:<port> tcp:<port>` (default 8081). If `list-devices` returns a `hint` about the adb server, prefix the command as the hint shows. Run it again after a reboot or an adb restart; Argent doesn't restore it. A bare RN app on a phone emulator uses `10.0.2.2` and doesn't need it; `react-native run-android` and `expo run:android` set it up themselves.
+- **Android**: a physical device, a TV emulator, or a dev client that loads from `localhost` needs `adb -s <serial> reverse tcp:<port> tcp:<port>` (default 8081). If `list-devices` returns a note about the adb server, prefix the command as the note shows. Run it again after a reboot or an adb restart; Argent doesn't restore it. A bare RN app on a phone emulator uses `10.0.2.2` and doesn't need it; `react-native run-android` and `expo run:android` set it up themselves.
 - **Vega (Fire TV)**: a **Debug `.vpkg`** (a Release build never attaches) and Metro reachable from the device (`vega device start-port-forwarding --port 8081 --forward false`). `debugger-component-tree`, `debugger-inspect-element`, `debugger-reload-metro` and the `react-profiler-*` / `profiler-*` tools are unavailable there; see `references/vega.md` of the `argent-tv-interact` skill.
 - **Chromium (CDP)**: an Electron app booted with `boot-device` `electronAppPath`, or a Chromium browser exposing a CDP port (`list-devices` finds it). Pass its `chromium-cdp-<port>` id as `device_id`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-log-registry`, `view-network-logs` and `view-network-request-details` work there; the other debugger and profiler tools are React Native only.
 
 ## 2. Tools
 
-Pass the same `device_id`, the id from `list-devices`, to every call. With two or more devices on one Metro, `debugger-connect` refuses a serial, or a simulator udid it cannot match to one Metro device by name, and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
+Use the `device_id` from `list-devices` and keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
 
-| Tool                                                 | Use for                                                                                                                |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                           |
-| `debugger-connect`                                   | Connecting to the runtime's CDP (Metro on iOS / Android / Vega; the page session on Chromium)                          |
-| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                             |
-| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                  |
-| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                |
-| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                         |
-| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                             |
-| `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request                                                        |
+| Tool                       | Use for                                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `debugger-status`          | Diagnosing the connection. Call it first when anything fails                                                           |
+| `debugger-connect`         | Opening the session and starting console capture                                                                       |
+| `debugger-reload-metro`    | Reloading the JS bundle of an attached app                                                                             |
+| `restart-app`              | Relaunching the app when it lost its Metro connection                                                                  |
+| `debugger-component-tree`  | Component names and testIDs on screen. Find tap targets with `describe`                                                |
+| `debugger-inspect-element` | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
+| `debugger-log-registry`    | Console log summary, the newest entries inline, and the log file path (§4)                                             |
+| `debugger-evaluate`        | Running a JS expression in the app runtime                                                                             |
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
+
+### React Native Mac apps
+
+1. Start Metro before launching a Debug Hermes build of react-native-macos 0.76+ or React Native for Mac Catalyst. Launch Mac Catalyst through Argent so it can identify its runtime. If `boot-device` refuses a hardened react-native-macos build, have the user start it from Xcode. JavaScript tools still work. UI inspection and gestures require a build Argent can control.
+2. Keep `macos-app-<bundle id>` as `device_id`, even on shared Metro. If a call returns `device_mismatch`, check that the Debug bundle loaded from the requested Metro port. The IDs in the error identify other targets.
+
+Use `describe` for tap targets. The React tools use the root with the most components, which can be in a different window. Before using a point, verify that both tools are looking at the same window. To inspect a tap point from the React tree, multiply its fractions by the width and height in `Screen: WxH`. The resulting points include the title bar. On the old architecture (Paper), native views around the React root can shift those points. Check the returned component against the intended control.
+
+For JavaScript capture in an app started from Xcode, use `macos-app-<bundle id>` as `udid` and select `layer: "js"` on start and stop. `list-devices` only lists Mac apps launched through Argent. Native capture needs a supported build launched through Argent.
+
+If `debugger-reload-metro` fails to reload the Mac app, use `restart-app` for an Argent-controlled build. For a build started from Xcode, restart it there.
+
+### Inspect network requests
+
+1. Choose the log. Use `view-network-logs` for JavaScript or the active Chromium tab and `native-network-logs` for OkHttp or URLSession. The two logs can show the same request.
+2. Start before triggering the request. On iOS simulators, Android, and Mac apps, call `network-capture-start`. Select `layer: "js"` or `layer: "native"` when you only need one. Check that the layer you need is armed. On Vega, read the JS log to start. On Chromium, read the log to attach or call start if you need a window for a request check.
+3. After the action, use `await-network-request` to check for a specific request or read the logs to explore traffic. On Vega, use the log. On Chromium, use a valid placeholder bundle ID such as `argent.capture` for start, stop, and wait. The log includes traffic outside the window. For redirects, Chromium waits match the final URL and method. Other layers match the URL the app requested.
+4. For an `unmet` wait, check the action and matcher against the near misses. For `unreadable`, follow the layer notes before repeating the action. A wait can restore recording while a JS window is active, but may miss requests sent before it reconnects.
+5. Pass an ID from the log or wait to `view-network-request-details`. Read Android native bodies you need before stopping. Stop the capture you started with `network-capture-stop`. Check `armed` and `reason` to confirm what stopped. On Chromium, a stop closes the window and leaves tab logging active.
+
+Keep the original `udid` for start, wait, stop, and native reads. On iOS simulators and Android, if shared Metro requires a logical ID, use it as `logicalDeviceId` on start and stop and as `device_id` on JS reads. For Mac apps, keep `macos-app-<bundle id>` for capture and JS reads, even on shared Metro. Check the project's Metro start script if the port is unclear. Pass the same port throughout when it differs from the device default. The wait reuses the target from start.
+
+After a JavaScript reload or relaunch, start JS capture again before repeating the action. On Vega, read the log again instead. If the Android app restarted outside Argent, start native capture again. If an iOS provider owns native capture, relaunch clears its history. Once the app reconnects, start capture again and confirm the native layer is armed.
 
 ## 3. Rules and recovery
 
@@ -46,7 +68,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary and the file path.
+`debugger-log-registry` returns the newest log entries inline (`levels` and `tail` filter them) plus the path of the full log file. Read `entries` first; search the file only for older lines or full messages.
 
 ### Flat log format
 

@@ -240,6 +240,7 @@ describe("react-profiler-start looks up native network capture on the device it 
     return registerIosNetworkCaptures({
       udid,
       bundleIds: new Set([APP]),
+      stoppedBundleIds: new Set(),
       stores: new Map([[APP, {} as never]]),
     });
   }

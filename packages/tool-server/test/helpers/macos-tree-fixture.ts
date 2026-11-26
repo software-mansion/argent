@@ -271,15 +271,24 @@ export function fakeMacosLibrary(
       }
       throw new Error(`fake library: unexpected method ${method}`);
     },
+    connect: async () => ({ pid: 4242, isOpen: true }),
     launch: async () => {
       throw new Error("fake library: launch");
     },
     isConnected: () => true,
     handshake: () => ({ bundleId: MACOS_BUNDLE_ID, pid: 4242, platform: "macos", protocol: 1 }),
     watchSuspensions: async () => null,
-    activateNetworkInspection: async () => {},
-    networkLog: () => [],
-    clearNetworkLog: () => {},
+    startNetworkCapture: async () => ({ armed: true }),
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    forgetNetworkCaptureStart: () => {},
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    isNetworkCaptureStopUnconfirmed: () => false,
+    networkCaptureMark: () => undefined,
+    takeCaptureGap: () => false,
+    networkRecords: () => {
+      throw new Error("fake library: networkRecords");
+    },
   };
   return { api, calls };
 }

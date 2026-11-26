@@ -28,8 +28,8 @@ const FIRST_POLL_WAIT_MS = 15_000;
 let firstPollSettled: Promise<void> = Promise.resolve();
 
 /**
- * Settles once a poll has read the booted simulators and attempted injection for
- * each, once a tick finds Xcode's component install pending (no poll runs and
+ * Settles once a poll has attempted injection for the eligible booted
+ * simulators, once a tick finds Xcode's component install pending (no poll runs and
  * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
  * Settled when no watcher runs. Awaited by whatever can start an app without
  * arming injection itself, so the app does not start uninjected: open-url, the
@@ -106,6 +106,12 @@ export function startSimulatorWatcher(registry: Registry): {
   stop: () => void;
   ready: Promise<void>;
 } {
+  const configuredUdids = process.env.ARGENT_SIMULATOR_WATCH_UDIDS;
+  // An empty CI lease must match nothing. Only an unset variable watches all UDIDs.
+  const allowedUdids =
+    configuredUdids === undefined
+      ? undefined
+      : new Set(configuredUdids.split(",").map((id) => id.trim().toUpperCase()));
   const trackedServices = new Map<string, NativeDevtoolsApi>();
   /**
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
@@ -176,6 +182,7 @@ export function startSimulatorWatcher(registry: Registry): {
     const claimed = new Set<string>();
 
     for (const udid of booted) {
+      if (allowedUdids && !allowedUdids.has(udid.toUpperCase())) continue;
       const claim = externalClaimForNativeId(udid);
 
       if (!claim) {
@@ -313,7 +320,7 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Settles once ensureEnv has been attempted for every simulator booted at
+  // Settles once ensureEnv has been attempted for every eligible simulator booted at
   // start, once the bounded simctl call fails, or at once while Xcode's install
   // is pending, when nothing is attempted.
   const ready = simctlWouldStartInstall() ? Promise.resolve() : poll(true);

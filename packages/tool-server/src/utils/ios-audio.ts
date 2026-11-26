@@ -118,7 +118,7 @@ function requireAudioDylib(): string {
   } catch (err) {
     throw new FailureError(
       `The audio hook (libArgentAudio.dylib) is not installed: ${(err as Error).message}. ` +
-        "Build it with `npm run build:ios-binaries`, or download it with `scripts/download-native-binaries.sh`.",
+        "Build it with `bun run build:ios-binaries`, or download it with `scripts/download-native-binaries.sh`.",
       {
         error_code: FAILURE_CODES.AUDIO_HOOK_UNAVAILABLE,
         failure_stage: "audio_env_setup",
@@ -173,7 +173,7 @@ export async function armAudio(
 }
 
 /** Live view of one app's hook, parsed from its `st.<bundleId>` file. */
-interface AppAudioStatus {
+export interface AppAudioStatus {
   /** Contract version of the hook; 0 when the hook predates it. */
   proto: number;
   /** `dormant`: hook loaded, the app has not opened audio yet (no helper, no acknowledgements). */

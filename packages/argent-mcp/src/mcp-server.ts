@@ -24,6 +24,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  joinTextOnlyContent,
   type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
@@ -41,18 +42,25 @@ import {
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { createTreeMemory, describedTree, treeIdLine } from "./unchanged-tree.js";
+import { createScreenshotMemory, screenshotIdLine } from "./unchanged-screenshot.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { listDevicesText } from "./list-devices-text.js";
+import { nativeNetworkLogsText } from "./native-network-logs-text.js";
+import { debuggerLogRegistryText } from "./debugger-log-registry-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
+import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
 
 // These end their session whatever the client does, and their result is the only
 // reference to the file: a retry after a dropped result finds no session.
 const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
+
+// esbuild stamps the public package version into the bundle, including canaries.
+declare const ARGENT_CLI_VERSION: string | undefined;
 
 export interface StartMcpServerOptions {
   /**
@@ -102,8 +110,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
+  const whatsNewOn = whatsNewEnabled();
+  const installedVersion = getInstalledVersion();
+  // The updater can replace the package while this adapter is serving calls.
+  // Its highlights belong to the loaded bundle; the handshake reports the
+  // installed manifest, including canaries restamped after the bundle build.
+  const highlightsVersion =
+    typeof ARGENT_CLI_VERSION === "string" ? ARGENT_CLI_VERSION : installedVersion;
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
   const trees = createTreeMemory();
+  const screenshots = createScreenshotMemory();
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -221,8 +237,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   async function captureScreenshotBlocks(
     udid: string,
+    toolName: string,
     signal: AbortSignal
   ): Promise<ContentBlock[]> {
+    const t1 = Date.now();
     try {
       const { result } = await callTool("screenshot", { udid }, { signal });
       const blocks = await toMcpContent(result, "image", {
@@ -231,8 +249,31 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: udid,
         signal,
       });
-      if (!blocks.some((b) => b.type === "image")) return [];
-      return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
+      const img = blocks.find(
+        (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image"
+      );
+      if (!img) return [];
+      const png = Buffer.from(img.data, "base64");
+      const shown = screenshots.afterAction(udid, png, toolName);
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "auto_screenshot",
+        name: toolName,
+        durationMs: Date.now() - t1,
+        bytes: png.length,
+        identical: shown.identical,
+        note: shown.note,
+      });
+      if (shown.note) {
+        return [{ type: "text" as const, text: `--- Screen after action ---\n${shown.noteText}` }];
+      }
+      return [
+        {
+          type: "text" as const,
+          text: `--- Screen after action ---\n${screenshotIdLine(shown.id!)}`,
+        },
+        ...blocks,
+      ];
     } catch {
       return []; /* best-effort */
     }
@@ -261,6 +302,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         name: toolName,
         durationMs: Date.now() - t1,
         chars: tree?.length ?? 0,
+        sentChars: shown?.text.length ?? 0,
+        mode: shown?.mode,
         // `identical` is the repeat rate; `note` is what the agent was spared.
         identical: shown?.identical ?? false,
         note: shown?.note ?? false,
@@ -279,8 +322,21 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   }
 
+  let whatsNewChecked = false;
+
+  function whatsNewBlocks(): ContentBlock[] {
+    if (!whatsNewOn || whatsNewChecked) return [];
+    whatsNewChecked = true;
+    try {
+      const note = takeWhatsNewNote(highlightsVersion);
+      return note ? [{ type: "text" as const, text: note }] : [];
+    } catch {
+      return [];
+    }
+  }
+
   const server = new Server(
-    { name: "argent", version: getInstalledVersion() },
+    { name: "argent", version: installedVersion },
     {
       capabilities: { tools: {} },
       instructions: SERVER_INSTRUCTIONS,
@@ -312,8 +368,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
       ? undefined
       : signal;
-    // The device whose tree memory this call wrote to, if any.
+    // The device whose tree or screenshot memory this call wrote to, if any.
     let treeUdid: string | undefined;
+    let screenshotUdid: string | undefined;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -343,13 +400,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         signal: callSignal,
       };
 
-      const devicesText =
-        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
+      const toolId = canonicalToolId(params.name);
+      const compactText =
+        toolId === "list-devices"
+          ? listDevicesText(result)
+          : toolId === "native-network-logs"
+            ? nativeNetworkLogsText(result)
+            : toolId === "debugger-log-registry"
+              ? debuggerLogRegistryText(result)
+              : undefined;
       let content: ContentBlock[];
-      if (devicesText !== undefined) {
-        content = [{ type: "text" as const, text: devicesText }];
+      if (compactText !== undefined) {
+        content = [{ type: "text" as const, text: compactText }];
       } else if (
-        canonicalToolId(params.name) === "e2e-execute" &&
+        toolId === "e2e-execute" &&
         result &&
         typeof result === "object" &&
         ("e2eTest" in result || "flow" in result) &&
@@ -363,6 +427,18 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
+      if (udid && autoScreenshotOn && canonicalToolId(params.name) === "screenshot") {
+        // Only record when the image actually reached the agent (not
+        // `includeImageInContext: false` or a failed fetch).
+        const img = content.find(
+          (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image"
+        );
+        if (img) {
+          screenshotUdid = udid;
+          const id = screenshots.sent(udid, Buffer.from(img.data, "base64"), "screenshot");
+          content = [...content, { type: "text" as const, text: screenshotIdLine(id) }];
+        }
+      }
       if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
         // The agent now has this tree, so the next action's tree is compared
         // with it. The id lets a later note name it.
@@ -404,10 +480,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         }
       } else if (udid && (wantScreenshot || wantTree)) {
         const screenSettled = await awaitScreenSettled(udid, params.name, signal);
+        if (wantScreenshot) screenshotUdid = udid;
         if (wantTree) treeUdid = udid;
         const captured = await withDeadline(signal, captureTimeoutMs, async (captureSignal) => {
           const screenshot = wantScreenshot
-            ? captureScreenshotBlocks(udid, captureSignal)
+            ? captureScreenshotBlocks(udid, params.name, captureSignal)
             : Promise.resolve([]);
           // An unsettled screen can leave a tree read in flight, which a
           // concurrent describe would reuse (physical iPhone).
@@ -423,15 +500,18 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       if (note) {
         content = [{ type: "text" as const, text: note }, ...content];
       }
+      content = [...content, ...whatsNewBlocks()];
 
       // The client gave up on this call (an interrupt, its tool timeout), and
-      // the SDK drops the response. The agent never gets the tree recorded
-      // above, so a later note must not name it.
+      // the SDK drops the response. The agent never gets the tree or screenshot
+      // recorded above, so a later note must not name them.
       if (treeUdid !== undefined && signal.aborted) trees.forget(treeUdid);
+      if (screenshotUdid !== undefined && signal.aborted) screenshots.forget(screenshotUdid);
 
-      return { content };
+      return { content: joinTextOnlyContent(content) };
     } catch (err) {
       if (treeUdid !== undefined) trees.forget(treeUdid);
+      if (screenshotUdid !== undefined) screenshots.forget(screenshotUdid);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",

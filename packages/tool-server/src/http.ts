@@ -33,6 +33,7 @@ import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
+import { isUpdatingAutomatically } from "./tools/system/update-argent";
 import { buildUpdateNote } from "./update-utils";
 import {
   buildScreenRecordingNote,
@@ -354,6 +355,8 @@ export interface HttpAppHandle {
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
+  /** Tool calls that have started and not yet finished. */
+  getToolCallsInFlight: () => number;
   /** Attach the per-Chromium-device WebSocket upgrade handler to the live
    * http.Server, once it is bound. Split out of `createHttpApp` so construction
    * stays synchronous — the WS upgrade is the only part needing the Node server
@@ -470,6 +473,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   uploadSweeper.unref();
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
+  let toolCallsInFlight = 0;
 
   // A non-loopback bind host is added so its legitimate clients pass the guard;
   // a wildcard bind disables the guard.
@@ -511,7 +515,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   // Snapshotted at startup; the launcher generates it and passes it in via env
   // (see ensureToolsServer). Empty or absent ⇒ auth disabled (`--no-auth`,
-  // `npm run dev`), hence the one-shot stderr warning.
+  // `bun run dev`), hence the one-shot stderr warning.
   const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
   if (!expectedToken) {
     process.stderr.write(
@@ -1052,6 +1056,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         });
       }
 
+      toolCallsInFlight++;
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
@@ -1075,7 +1080,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // Gate on `updateInstallable`, not `updateAvailable`, and advertise the
         // version the resolver would install: both honour the release-age policy.
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
-        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
+        const shouldNotify =
+          updateInstallable &&
+          !isUpdatingAutomatically(installableVersion) &&
+          !isUpdateNoteSuppressed();
         if (shouldNotify) {
           suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
@@ -1217,6 +1225,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           .status(500)
           .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
+        toolCallsInFlight--;
+        idleTimer.touch();
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();
       }
@@ -1240,6 +1250,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       uploads.clear();
     },
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
+    getToolCallsInFlight: () => toolCallsInFlight,
     attachChromiumWebsockets: (httpServer: HttpServer) => {
       attachChromiumServerWebsocket(
         httpServer,

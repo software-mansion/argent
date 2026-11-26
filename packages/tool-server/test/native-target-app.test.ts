@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   chooseFrontmostConnectedApp,
   inspectConnectedNativeApps,
@@ -33,7 +34,12 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     isAppRunning: async (bundleId) => byBundleId.has(bundleId),
     listConnectedBundleIds: () => [...byBundleId.keys()],
     appConnectionState: async () => "connected",
-    activateNetworkInspection: async () => false,
+    startNetworkCapture: async () => false,
+    stopNetworkCapture: async () => ({ confirmed: true }),
+    isNetworkCaptureStarted: () => false,
+    isNetworkCaptureStopped: () => false,
+    networkCaptureMark: () => undefined,
+    refreshLentNetworkCapture: async () => {},
     takeCaptureGap: () => false,
     networkRecords: () => undefined,
     networkCaptureAfterLaunch: async () => undefined,
@@ -91,6 +97,52 @@ describe("native-target-app", () => {
   });
 
   describe("resolveNativeTargetApp", () => {
+    const timeout = new FailureError("ViewInspector RPC timed out: Application.getState", {
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+      failure_stage: "native_devtools_rpc_request",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
+
+    function withSilentSibling(apps: NativeAppState[]) {
+      const api = makeApi(apps);
+      return {
+        ...api,
+        listConnectedBundleIds: () => [...api.listConnectedBundleIds(), "com.example.suspended"],
+        getAppState: async (id: string) => {
+          if (id === "com.example.suspended") throw timeout;
+          return api.getAppState(id);
+        },
+      };
+    }
+
+    it.each([{ applicationState: "active" as const }, { foregroundActiveSceneCount: 1 }])(
+      "selects a unique active response despite a suspended sibling (%o)",
+      async (state) => {
+        const api = withSilentSibling([makeAppState("com.example.front", state)]);
+        await expect(resolveNativeTargetApp(api)).resolves.toEqual({
+          bundleId: "com.example.front",
+          source: "frontmost_detected",
+        });
+      }
+    );
+
+    it.each([
+      { apps: [] },
+      { apps: [makeAppState("com.example.weak", { applicationState: "inactive" })] },
+      {
+        apps: [
+          makeAppState("com.example.a", { applicationState: "active" }),
+          makeAppState("com.example.b", { foregroundActiveSceneCount: 1 }),
+        ],
+      },
+    ])(
+      "preserves the original timeout without a unique active response ($apps)",
+      async ({ apps }) => {
+        await expect(resolveNativeTargetApp(withSilentSibling(apps))).rejects.toBe(timeout);
+      }
+    );
+
     it("uses explicit bundleId when provided", async () => {
       const api = makeApi([makeAppState("com.example.a")]);
 

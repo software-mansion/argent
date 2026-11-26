@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator, Android Emulator, Chromium app and Mac app control",
   "license": "Apache-2.0",
@@ -38,8 +38,8 @@
     "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
-    "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
-    "build:dispatcher": "npm run build:tool-args && rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build": "bun run build:dispatcher && bun run build:bundles && bun run sync-readme",
+    "build:dispatcher": "bun run build:tool-args && rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:tool-args": "tsc --build ../tool-server && node ../tool-server/dist/sdk-tool-args.js src/tool-args.generated.ts",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",

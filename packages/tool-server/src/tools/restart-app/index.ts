@@ -74,7 +74,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     longRunning: true,
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>or Vega.
 Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android, and local iOS simulators where capture stays on for later processes) says whether native network capture followed the launch. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
+Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. If Argent started native capture, networkCapture reports whether it followed the launch or was stopped. This note applies to Android and local iOS simulators. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
 For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the restarted build and arguments. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
     zodSchema,
     alwaysLoad: true,
