@@ -539,8 +539,9 @@ const SNAPSHOT_LOCALIZED_POLLS = 3;
 // An eased or low-contrast fade can change less than PIXEL_THRESHOLD per poll.
 // For this long after the last action, a frame that is not byte-identical to the
 // one before must also not be moving against the one SNAPSHOT_SLOW_START_POLLS
-// polls earlier. The steps between the action and the snapshot (an await, slow
-// captures) use up part of it.
+// polls earlier, so such a frame settles only after that many captures in a row
+// (a failed capture starts the count again). The steps between the action and
+// the snapshot (an await, slow captures) use up part of it.
 const SNAPSHOT_SLOW_START_WINDOW_MS = 2_000;
 const SNAPSHOT_SLOW_START_POLLS = 3;
 

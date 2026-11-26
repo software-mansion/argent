@@ -498,7 +498,7 @@ Before the capture, the step waits until the screen stops changing:
 
 On a local iOS simulator or an Android emulator, a step without `cropOn` also waits until a quiet time has passed. The quiet time is 300 ms on iOS and 400 ms on Android. It starts at the start of the test and again at the end of each step that can change the screen. The steps `await`, `assert`, `wait`, `echo` and `snapshot` do not change the screen.
 
-For 2 seconds after the start of the test or after a step that can change the screen, two screenshots that differ slightly are not enough. The step also compares the newest screenshot with a screenshot from at least 300 ms earlier. Thus the step does not capture a fade that starts slowly.
+For 2 seconds after the start of the test or after a step that can change the screen, two screenshots that differ slightly are not enough. The step also compares the newest screenshot with a screenshot from at least 300 ms earlier. Thus the step waits for most fades that start slowly.
 
 The step compares screenshots for a maximum of 3 seconds. In portrait, the status bar and the home indicator do not count as a change. A caret or a spinner counts as a change for the first 300 ms only.
 
