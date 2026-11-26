@@ -1979,16 +1979,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Only a recorded `run:` step keeps what its nested run returned, as a
       // replay would; a step that failed to append leaves the document as it was.
-      // The fragment's own shutdown ran in the call, after its steps. A replay
-      // runs it after the steps of this test, before this test's own shutdown,
-      // so what it returned reaches only the shutdown list.
+      // The fragment's own shutdown ran in the call, after its steps. Recorded
+      // into `steps:`, what that shutdown returned is dropped: a replay hands it
+      // only to this test's shutdown, and keeping it apart would hide the
+      // output of the steps recorded after this one from the shutdown list.
       if (step.kind === "run" && sharedOutput) {
         const { doc, shutdownDoc = doc } = sharedOutput;
         if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc);
-        else {
-          keepRecordingOutput(session, "steps", doc);
-          if (shutdownDoc !== doc) keepRecordingOutput(session, "shutdown", shutdownDoc);
-        }
+        else keepRecordingOutput(session, "steps", doc);
       }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
@@ -2007,6 +2005,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           block === "shutdown"
             ? (session.shutdownStepWarnings ??= new Map())
             : (session.stepWarnings ??= new Map());
+        // A verdict already under this number belongs to a step a hand edit
+        // removed; it is lost here, so count it.
+        if (verdicts.has(stepCount))
+          session.discardedWarnings = (session.discardedWarnings ?? 0) + 1;
         verdicts.set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),

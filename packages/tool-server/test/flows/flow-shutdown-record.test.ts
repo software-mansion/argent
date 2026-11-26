@@ -282,7 +282,9 @@ describe("recording into shutdown:", () => {
       );
 
     expect((await check(undefined)).status).toBe("pass");
-    expect((await check("yes", true)).status).toBe("pass");
+    // A later shutdown step sees the steps' document, also the output of a step
+    // recorded after the fragment.
+    expect((await check(undefined, true)).status).toBe("pass");
   });
 
   it("leaves a shared document as the steps left it, and the rest in shutdownDoc", async () => {
@@ -343,5 +345,79 @@ describe("recording into shutdown:", () => {
       /^ {3}warning: recorded, but the wait itself never held/
     );
     expect(finished.message).toContain("1 step recorded a wait that did not pass");
+  });
+
+  it("gives a shutdown step the output of a step recorded after a fragment's run:", async () => {
+    const { registry } = mockRegistry();
+    (registry.invokeTool as ReturnType<typeof vi.fn>).mockImplementation(
+      async (
+        _id: string,
+        _args: unknown,
+        opts?: { flowOutput?: { doc: object; shutdownDoc?: object } }
+      ) => {
+        opts!.flowOutput!.shutdownDoc = { cleaned: true };
+        return { ok: true, steps: [] };
+      }
+    );
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("frag.yaml"), "steps:\n  - echo: frag\n");
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    await fs.writeFile(path.join(root, "scripts", "token.mjs"), "output.token = 'abc';\n");
+    await fs.writeFile(
+      path.join(root, "scripts", "need.mjs"),
+      "if (output.token !== 'abc') throw new Error('no token');\n"
+    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+      }
+    );
+    const add = (file: string, shutdown?: boolean) =>
+      flowAddScriptTool.execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          path: `../../scripts/${file}`,
+          ...(shutdown ? { shutdown } : {}),
+        }
+      );
+
+    expect((await add("token.mjs")).status).toBe("pass");
+    expect((await add("need.mjs", true)).status).toBe("pass");
+  });
+
+  it("counts a shutdown wait verdict that a later one replaced after a hand edit", async () => {
+    const { registry } = mockRegistry({
+      success: false,
+      elapsed: 1500,
+      note: "no element matched",
+    });
+    const wait = (text: string) =>
+      createFlowAddStepTool(registry).execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          command: "await-ui-element",
+          args: JSON.stringify({ udid: "u", condition: "visible", selector: { text } }),
+          shutdown: true,
+        }
+      );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await wait("A");
+    // Delete the shutdown step by hand, then record another one in its place.
+    const flow = await onDisk();
+    await fs.writeFile(e2e("t.yaml"), serializeFlow({ ...flow, shutdown: undefined }));
+    await wait("B");
+
+    const finished = await flowFinishRecordingTool.execute({}, { name: "t", project_root: root });
+
+    expect(finished.message).toMatch(/1 warning raised during this recording is NOT in `summary`/);
   });
 });
