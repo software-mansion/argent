@@ -54,6 +54,9 @@ updates:
       - dependency-name: "typescript"
         versions:
           - ">=7"
+      # packages/argent-alias pins @swmansion/argent to a 0.0.0 placeholder that
+      # the publish workflow replaces with the released version.
+      - dependency-name: "@swmansion/argent"
     groups:
       # Batch all minor + patch updates into one PR per week to cut noise.
       npm-minor-patch:
