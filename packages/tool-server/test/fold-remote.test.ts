@@ -121,4 +121,19 @@ describe("fold on a remote simulator", () => {
       "sim-remote fold printed something other than a fold"
     );
   });
+
+  it("does not move the hinge for a call already cancelled", async () => {
+    reply = { stdout: '{"hinge_angle":180.0,"live_screen":3}' };
+
+    const cancelled = foldTool.execute!(
+      {},
+      { udid: REMOTE, posture: "open" },
+      {
+        signal: AbortSignal.abort(),
+      }
+    );
+
+    await expect(cancelled).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
 });

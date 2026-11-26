@@ -303,9 +303,27 @@ function readinessRank(d: ListedDevice): number {
  */
 const REMOTE_FOLDABLE_DEVICE_TYPES = new Set(["com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"]);
 
-async function isRemoteFoldable(deviceType: string | undefined): Promise<boolean> {
-  if (deviceType === undefined) return false;
-  return (await isFoldableDeviceType(deviceType)) || REMOTE_FOLDABLE_DEVICE_TYPES.has(deviceType);
+// Asking this machine's Xcode about a device type takes seconds on a cold
+// cache. The listing does not wait longer than this for all of them: a type
+// still unanswered counts as not foldable this time, and its answer is cached
+// for the next listing.
+const REMOTE_FOLDABLE_LOOKUP_MS = 5_000;
+
+/** The foldable ones among `deviceTypes`. */
+async function remoteFoldableTypes(deviceTypes: Set<string>): Promise<Set<string>> {
+  const foldable = new Set<string>();
+  const asked: Promise<void>[] = [];
+  for (const type of deviceTypes) {
+    if (REMOTE_FOLDABLE_DEVICE_TYPES.has(type)) foldable.add(type);
+    else asked.push(isFoldableDeviceType(type).then((is) => void (is && foldable.add(type))));
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const gaveUp = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, REMOTE_FOLDABLE_LOOKUP_MS);
+  });
+  await Promise.race([Promise.allSettled(asked), gaveUp]);
+  clearTimeout(timer);
+  return new Set(foldable);
 }
 
 /**
@@ -319,26 +337,31 @@ async function listRemoteIosSimulators(): Promise<{
 }> {
   try {
     const result = await simctlListDevices();
-    const out: IosRemoteDevice[] = [];
-    for (const [runtime, devices] of Object.entries(result.devices)) {
+    const listed = Object.entries(result.devices).flatMap(([runtime, devices]) => {
       const runtimeKind = simulatorRuntimeKind(runtime);
-      if (!runtimeKind) continue;
-      for (const d of devices) {
-        if (d.isAvailable === false) continue;
-        out.push({
-          platform: "ios-remote",
-          kind: "simulator",
-          udid: withRemotePrefix(d.udid),
-          name: d.name,
-          state: d.state,
-          runtime,
-          runtimeKind,
-          ...(runtimeKind === "mobile" && (await isRemoteFoldable(d.deviceTypeIdentifier))
-            ? { foldable: true as const }
-            : {}),
-        });
-      }
-    }
+      if (!runtimeKind) return [];
+      return devices
+        .filter((d) => d.isAvailable !== false)
+        .map((d) => ({ runtime, runtimeKind, d }));
+    });
+    const mobileTypes = new Set(
+      listed.flatMap(({ runtimeKind, d }) =>
+        runtimeKind === "mobile" && d.deviceTypeIdentifier ? [d.deviceTypeIdentifier] : []
+      )
+    );
+    const foldableTypes = await remoteFoldableTypes(mobileTypes);
+    const out: IosRemoteDevice[] = listed.map(({ runtime, runtimeKind, d }) => ({
+      platform: "ios-remote",
+      kind: "simulator",
+      udid: withRemotePrefix(d.udid),
+      name: d.name,
+      state: d.state,
+      runtime,
+      runtimeKind,
+      ...(runtimeKind === "mobile" && foldableTypes.has(d.deviceTypeIdentifier ?? "")
+        ? { foldable: true as const }
+        : {}),
+    }));
     return { devices: out, cloud: "logged-in" };
   } catch (err) {
     if ((simRemoteExecError(err) as { code?: unknown }).code === "ENOENT") {

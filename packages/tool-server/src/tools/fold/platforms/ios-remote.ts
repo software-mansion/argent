@@ -38,6 +38,7 @@ export interface RemoteFoldResult {
 export const iosRemoteImpl: PlatformImpl<unknown, RemoteFoldParams, RemoteFoldResult> = {
   requires: ["sim-remote"],
   async handler(_services, params, _device, ctx) {
+    ctx?.signal?.throwIfAborted();
     const target = params.posture ?? String(params.angle);
     const folded = await fold(params.udid, target);
 
@@ -46,6 +47,8 @@ export const iosRemoteImpl: PlatformImpl<unknown, RemoteFoldParams, RemoteFoldRe
     const hingeAngle = folded.hinge_angle;
     const atStop = hingeAngle <= POSTURE_ANGLE.closed || hingeAngle >= POSTURE_ANGLE.open;
     await sleepOrAbort(atStop ? INPUT_READY_HOLD_MS : INPUT_READY_HOLD_MID_ANGLE_MS, ctx?.signal);
+    // Cut short, the hold has not shown the device to take input yet.
+    ctx?.signal?.throwIfAborted();
 
     // With the panel unknown the runner keeps sending input to the cover panel.
     const activeScreen = folded.live_screen ?? MAIN_SCREEN_ID;
