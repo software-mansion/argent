@@ -4783,13 +4783,25 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * would understate the loss in exactly the case that caused it. The caller
  * reports no count instead.
  */
-export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
+export async function countStepsOnDisk(
+  filePath: string,
+  block: RecordedBlock | "both" = "steps"
+): Promise<number | undefined> {
   try {
-    return parseFlow(await fs.readFile(filePath, "utf8")).steps.length;
+    const flow = parseFlow(await fs.readFile(filePath, "utf8"));
+    const shutdown = flow.shutdown?.length ?? 0;
+    return block === "steps"
+      ? flow.steps.length
+      : block === "shutdown"
+        ? shutdown
+        : flow.steps.length + shutdown;
   } catch {
     return undefined;
   }
 }
+
+/** The step list of a flow file a recorder appends to. */
+export type RecordedBlock = "steps" | "shutdown";
 
 /**
  * Set or remove names in a recording's top-level `env:`, persisted the way
@@ -4846,10 +4858,10 @@ export async function setRecordingEnv(
 }
 
 /** Read and parse the flow file, append a step, write it back. */
-async function appendStep(filePath: string, step: FlowStep): Promise<string> {
+async function appendStep(filePath: string, step: FlowStep, block: RecordedBlock): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
-  flow.steps.push(step);
+  (block === "shutdown" ? (flow.shutdown ??= []) : flow.steps).push(step);
   // Re-validate with the new step: a leading `launch` recorded into a
   // prerequisite-bearing recording must error here (nothing written), not
   // produce a file that fails to validate at replay.
@@ -5081,7 +5093,8 @@ function dropMovedWarnings(
  */
 export async function appendStepToFlow(
   session: RecordingSession,
-  step: FlowStep
+  step: FlowStep,
+  block: RecordedBlock = "steps"
 ): Promise<{ savedTo: FlowSavedTo; stepCount: number }> {
   // The session's OWN key, not a fresh resolution of it: the lock this append
   // takes and the identity {@link assertSessionStillLive} checks must be the
@@ -5093,21 +5106,27 @@ export async function appendStepToFlow(
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
       const before = session.flow.steps;
-      const flowFile = await appendStep(session.filePath, step);
+      const flowFile = await appendStep(session.filePath, step, block);
       session.flow = parseFlow(flowFile);
       // `appendStep` adds exactly one step, so everything before the last one
       // is what the file already held — the recorder's previous view, unless a
-      // hand edit landed in between.
+      // hand edit landed in between. A shutdown append leaves `steps` as it was.
+      const steps = session.flow.steps;
       session.discardedWarnings =
         (session.discardedWarnings ?? 0) +
-        dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
+        dropMovedWarnings(
+          session.stepWarnings,
+          block === "shutdown" ? steps : steps.slice(0, -1),
+          before
+        );
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing a
       // concurrent same-key append, which can reassign `session.flow` between
       // the release here and that read.
-      return { savedTo: session.filePath, stepCount: session.flow.steps.length };
+      return { savedTo: session.filePath, stepCount: recordedCount(session.flow, block) };
     }
-    session.flow.steps.push(step);
+    const list = block === "shutdown" ? (session.flow.shutdown ??= []) : session.flow.steps;
+    list.push(step);
     try {
       // Both can reject on a bad step — validateFlow on a cross-field
       // violation, serializeFlow on an unrepresentable one (e.g. a tap with
@@ -5118,11 +5137,17 @@ export async function appendStepToFlow(
       const flowFile = serializeFlow(session.flow);
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),
-        stepCount: session.flow.steps.length,
+        stepCount: list.length,
       };
     } catch (err) {
-      session.flow.steps.pop(); // nothing was recorded
+      list.pop(); // nothing was recorded
+      if (session.flow.shutdown?.length === 0) delete session.flow.shutdown;
       throw err;
     }
   });
+}
+
+/** How many steps `block` of a flow holds. */
+export function recordedCount(flow: FlowFile, block: RecordedBlock): number {
+  return block === "shutdown" ? (flow.shutdown?.length ?? 0) : flow.steps.length;
 }

@@ -200,8 +200,8 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           replaced === null
             ? undefined
             : replaced.persist === "host"
-              ? await countStepsOnDisk(replaced.filePath)
-              : replaced.flow.steps.length;
+              ? await countStepsOnDisk(replaced.filePath, "both")
+              : replaced.flow.steps.length + (replaced.flow.shutdown?.length ?? 0);
 
         let savedTo: FlowSavedTo;
         if (persist === "host") {

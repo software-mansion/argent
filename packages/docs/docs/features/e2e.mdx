@@ -70,7 +70,7 @@ Check the replay report to confirm capture started and stopped. A capture step c
 
 Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. The e2e test or the run can give the script environment values, for example the URL of a staging server. A credential stays out of the file as a secret, and Argent removes the secret from the log of the script. A script can also return values, for example the id of a user that it creates. A later step can tap that id, type it, give it to a different script, or check it.
 
-An e2e test can also have shutdown steps. Argent runs the shutdown steps at the end of each run, also when a step failed. Use them to remove the data that the e2e test made, for example a test user. A failed shutdown step fails the run. When the run is cancelled, Argent skips the shutdown steps. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
+An e2e test can also have shutdown steps. Argent runs the shutdown steps at the end of each run, also when a step failed. Use them to remove the data that the e2e test made, for example a test user. A failed shutdown step fails the run. When the run is cancelled, Argent skips the shutdown steps. Ask the agent to record a cleanup step as a shutdown step. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 

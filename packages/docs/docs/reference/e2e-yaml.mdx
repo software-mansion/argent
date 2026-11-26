@@ -122,6 +122,8 @@ A `run:` fragment can have its own `shutdown`. Argent queues it when the fragmen
 
 The `shutdown` steps do not change the shape of the e2e test. Only `steps` decides if the e2e test is standalone or a fragment.
 
+To record a `shutdown` step, give `shutdown: true` to `e2e-add-step`, `e2e-add-script` or `e2e-add-echo`. The tool runs the call at once and records the step in `shutdown`. Record the `shutdown` steps after the other steps, because the call cleans up the device and the data at once. When `e2e-add-step` records an `e2e-execute` call as a `run:` step, the fragment runs as a separate run, and its `shutdown` runs at the end of the call. A replay runs that `shutdown` at the end of the e2e test. The message of the tool then tells you this.
+
 ### Requirements
 
 The `requires` block names the targets that an e2e test supports. An e2e test without the block runs on all targets.

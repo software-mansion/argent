@@ -1,0 +1,162 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { CLIENT_FILE_MARKER, type Registry } from "@argent/registry";
+import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
+import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
+import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
+import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+
+/** The recorders' `shutdown` param: the step goes to `shutdown:` and still runs now. */
+
+vi.setConfig({ testTimeout: 30_000 });
+
+let root: string;
+const e2e = (file: string) => path.join(root, ".argent", "e2e", file);
+const onDisk = async () => parseFlow(await fs.readFile(e2e("t.yaml"), "utf8"));
+
+function mockRegistry(result: unknown = { ok: true }) {
+  const invokeTool = vi.fn(async () => result);
+  return {
+    registry: { invokeTool, getTool: vi.fn(() => ({})) } as unknown as Registry,
+    invokeTool,
+  };
+}
+
+const echo = (message: string, shutdown?: boolean) =>
+  flowInsertEchoTool.execute(
+    {},
+    { name: "t", project_root: root, message, ...(shutdown ? { shutdown } : {}) }
+  );
+
+beforeEach(async () => {
+  __resetRecordingsForTesting();
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "flow-shutdown-rec-")));
+});
+afterEach(async () => {
+  __resetRecordingsForTesting();
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+describe("recording into shutdown:", () => {
+  it("appends each kind to shutdown:, counts that list, and the finish lists it", async () => {
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(root, "scripts", "down.mjs"),
+      "globalThis.output = { cleaned: true };\n"
+    );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await echo("main");
+    const down = await echo("cleaning up", true);
+    expect(down).toMatchObject({ stepCount: 1, message: expect.stringMatching(/^Shutdown echo/) });
+
+    const script = await flowAddScriptTool.execute(
+      {},
+      { name: "t", project_root: root, path: "../../scripts/down.mjs", shutdown: true }
+    );
+    expect(script).toMatchObject({
+      status: "pass",
+      stepCount: 2,
+      recorded: "shutdown 2. script: ../../scripts/down.mjs",
+    });
+
+    const { registry, invokeTool } = mockRegistry();
+    const tool = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "stop-metro",
+        args: '{"port":8081}',
+        shutdown: true,
+      }
+    );
+    // It ran now, as any recorded step does.
+    expect(invokeTool.mock.calls[0]?.slice(0, 2)).toEqual(["stop-metro", { port: 8081 }]);
+    expect(tool).toMatchObject({ stepCount: 3, recorded: expect.stringMatching(/^shutdown 3\. /) });
+    await echo("after", false);
+
+    expect(await onDisk()).toEqual({
+      executionPrerequisite: "",
+      steps: [
+        { kind: "echo", message: "main" },
+        { kind: "echo", message: "after" },
+      ],
+      shutdown: [
+        { kind: "echo", message: "cleaning up" },
+        { kind: "script", path: "../../scripts/down.mjs" },
+        { kind: "tool", name: "stop-metro", args: { port: 8081 } },
+      ],
+    });
+
+    const finished = await flowFinishRecordingTool.execute({}, { name: "t", project_root: root });
+    expect(finished.message).toContain("(2 steps, 3 shutdown steps)");
+    expect(finished.steps).toBe(2);
+    expect(finished.shutdownSteps).toBe(3);
+    expect(finished.summary.slice(2)).toEqual([
+      "shutdown 1. echo: cleaning up",
+      "shutdown 2. script: ../../scripts/down.mjs",
+      expect.stringMatching(/^shutdown 3\. tool: stop-metro/),
+    ]);
+  });
+
+  it("counts the shutdown steps a restart discards", async () => {
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    await echo("main");
+    await echo("down", true);
+
+    const restarted = await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    expect(restarted).toMatchObject({ discardedSteps: 2 });
+  });
+
+  it("carries shutdown: in a linked recording's file directive", async () => {
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root }, {
+      linked: true,
+    } as never);
+    const out = await flowInsertEchoTool.execute(
+      {},
+      { name: "t", project_root: root, message: "down", shutdown: true },
+      { linked: true } as never
+    );
+
+    const directive = out.savedTo as { [CLIENT_FILE_MARKER]: true; content: string };
+    expect(parseFlow(directive.content).shutdown).toEqual([{ kind: "echo", message: "down" }]);
+    expect(out.stepCount).toBe(1);
+  });
+
+  it("says when a fragment recorded as run: already ran its shutdown", async () => {
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(
+      e2e("frag.yaml"),
+      "steps:\n  - echo: frag\nshutdown:\n  - echo: frag down\n",
+      "utf8"
+    );
+    const { registry } = mockRegistry({
+      ok: true,
+      steps: [
+        { kind: "echo", status: "pass" },
+        { kind: "echo", status: "pass", shutdown: true },
+      ],
+    });
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const out = (await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+      }
+    )) as { message: string };
+
+    expect((await onDisk()).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
+    expect(out.message).toMatch(
+      /frag\.yaml ran its shutdown: steps at the end of this call; a replay runs them at the end/
+    );
+  });
+});

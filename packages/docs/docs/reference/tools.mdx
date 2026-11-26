@@ -1393,6 +1393,8 @@ The old `flow-*` names, for example `flow-execute`, still call these tools. See 
 | `e2e-finish-recording` | Finish the recording and write the e2e test to disk                        |
 | `e2e-execute`          | Run a saved e2e test                                                       |
 
+`e2e-add-step`, `e2e-add-echo` and `e2e-add-script` take `shutdown: true` to record the step in the `shutdown:` list of the e2e test. The tool still runs the call at once. `stepCount` then counts the `shutdown` steps, and `recorded` starts with `shutdown`. `e2e-finish-recording` lists the `shutdown` steps after the other steps and returns their number as `shutdownSteps`. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
+
 ## Design variants
 
 Staged through [Argent Lens](/docs/features/lens) so you can compare proposals against the running app. These tools require the `argent-lens` flag and macOS. The flag is off by default, so `argent tools` omits them until you enable it.

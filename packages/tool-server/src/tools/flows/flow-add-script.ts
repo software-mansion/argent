@@ -18,18 +18,20 @@ import {
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
+  recordedCount,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
   type FlowEnv,
   type FlowSavedTo,
   type FlowStep,
+  type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
 import { InvalidToolInputError } from "../../utils/capability";
 import { mergeScriptEnv, utf8SafeCut } from "./script/flow-script-executor";
-import { summarizeStep } from "./flow-step-definitions";
+import { summarizeShutdownStep, summarizeStep } from "./flow-step-definitions";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
 
@@ -68,12 +70,13 @@ interface FlowAddScriptResult {
  * way, and a bare number here would be the one writer that does not.
  */
 async function recordedStepCount(
-  session: RecordingSession
+  session: RecordingSession,
+  block: RecordedBlock
 ): Promise<{ stepCount: number; note?: string }> {
-  const onDisk = await countStepsOnDisk(session.filePath);
+  const onDisk = await countStepsOnDisk(session.filePath, block);
   if (onDisk !== undefined) return { stepCount: onDisk };
   return {
-    stepCount: session.flow.steps.length,
+    stepCount: recordedCount(session.flow, block),
     note: `Could not verify stepCount from ${session.filePath}.`,
   };
 }
@@ -155,11 +158,17 @@ const zodSchema = z.object({
     .describe(
       'Environment values for this step only, recorded as the step\'s env:, e.g. { "API_KEY": "{{secret:API_KEY}}" }. They replace the same names from the e2e test\'s env: (set with e2e-set-env).'
     ),
+  shutdown: z
+    .boolean()
+    .optional()
+    .describe(
+      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The script still runs now. stepCount then counts the shutdown steps."
+    ),
 });
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
   id: "e2e-add-script",
-  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. The script receives the e2e test's \`env:\` (see e2e-set-env) and this call's \`env\`, recorded as the step's own. It also gets \`output\`, what the recording's earlier scripts left there; what it leaves returns as \`outputJson\`, and later steps read it with \`{{output:PATH}}\`. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
+  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. The script receives the e2e test's \`env:\` (see e2e-set-env) and this call's \`env\`, recorded as the step's own. It also gets \`output\`, what the recording's earlier scripts left there; what it leaves returns as \`outputJson\`, and later steps read it with \`{{output:PATH}}\`. For cleanup, such as deleting a test user, pass \`shutdown: true\`. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],
@@ -184,6 +193,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
   services: () => ({}),
   async execute(_services, params, ctx) {
     const session = await requireRecordingSession(params.project_root, params.name);
+    const block: RecordedBlock = params.shutdown ? "shutdown" : "steps";
 
     // A replay over a link refuses every `script:` step, so a recording over
     // one must not run or record one either.
@@ -279,10 +289,10 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
             `Script "${step.path}" ${lead}; no step was recorded. ${lost} ${leftBehind} ` +
             `Use a new e2e test name because e2e-start-recording overwrites the existing file. ` +
             `stepCount is from the ended recording.`,
-          stepCount: session.flow.steps.length,
+          stepCount: recordedCount(session.flow, block),
         };
       }
-      const { stepCount, note } = await recordedStepCount(session);
+      const { stepCount, note } = await recordedStepCount(session, block);
       return {
         ...common,
         message:
@@ -295,7 +305,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     let savedTo: FlowSavedTo;
     let stepCount: number;
     try {
-      ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+      ({ savedTo, stepCount } = await appendStepToFlow(session, step, block));
     } catch (err) {
       // A host-mode append re-parses the WHOLE file before it pushes, so the
       // scan that refuses an output reference judges the steps already in it as
@@ -325,10 +335,10 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message: `Added script step to "${params.name}" e2e test.`,
+      message: `Added ${params.shutdown ? "shutdown " : ""}script step to "${params.name}" e2e test.`,
       ...(rendered ?? {}),
       stepCount,
-      recorded: summarizeStep(step, stepCount),
+      recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),
       savedTo,
     };
   },

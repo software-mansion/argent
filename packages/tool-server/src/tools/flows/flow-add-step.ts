@@ -34,6 +34,7 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
 import {
@@ -61,7 +62,7 @@ import {
   resolveSavedTest,
   type ProjectAccess,
 } from "./project-access";
-import { stepAnchor, summarizeStep } from "./flow-step-definitions";
+import { stepAnchor, summarizeShutdownStep, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
@@ -908,6 +909,15 @@ async function activeFlowState(
   return { stepCount: session.flow.steps.length };
 }
 
+/** Whether a nested run's report holds a step of a `shutdown:` block. */
+function reportsShutdown(result: unknown): boolean {
+  const steps = (result as { steps?: unknown } | null)?.steps;
+  return (
+    Array.isArray(steps) &&
+    steps.some((s) => (s as { shutdown?: unknown } | null)?.shutdown === true)
+  );
+}
+
 async function recordNothing(
   session: RecordingSession,
   guidance: string
@@ -1531,6 +1541,12 @@ const zodSchema = z.object({
     .min(0)
     .optional()
     .describe("Milliseconds to sleep before executing this step during replay."),
+  shutdown: z
+    .boolean()
+    .optional()
+    .describe(
+      "true records the step in the e2e test's shutdown: list, which a replay runs after the steps, pass or fail. The call still runs now. stepCount then counts the shutdown steps."
+    ),
 });
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
@@ -1549,6 +1565,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     id: "e2e-add-step",
     description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
 A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Args may hold \`{{output:PATH}}\` references to what the recorded scripts returned: the call runs with them resolved, and the step keeps them as a raw tool step.
+For cleanup that a replay must run even after a failed step, such as logging out, pass \`shutdown: true\`.
 Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     zodSchema,
     aliases: ["flow-add-step"],
@@ -1573,6 +1590,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
+      const block: RecordedBlock = params.shutdown ? "shutdown" : "steps";
       // Compared and recorded by the tool's current id; run by the id as called.
       const command = canonicalToolId(params.command);
 
@@ -1934,7 +1952,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       let savedTo: FlowSavedTo;
       let stepCount: number;
       try {
-        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step, block));
       } catch (err) {
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
@@ -1970,7 +1988,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
-      if (waitWarning) {
+      //
+      // Kept for `steps:` only: the verdicts are filed by the number of a step
+      // there, and the finish reads them against that list.
+      if (waitWarning && block === "steps") {
         (session.stepWarnings ??= new Map()).set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),
@@ -1981,11 +2002,18 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         project instanceof ClientProjectAccess && ctx?.flowStack === undefined
           ? project.baselineDirectives()
           : [];
+      // A fragment recorded as `run:` ran here as a run of its own, so its
+      // `shutdown:` already ran. A replay runs it at the end of the test.
+      const fragmentShutdown =
+        step.kind === "run" && reportsShutdown(toolResult)
+          ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps`
+          : undefined;
+      const notes = [warning, fragmentShutdown].filter((n) => n !== undefined).join("; ");
       return {
-        message: `Step added to "${params.name}" e2e test${warning ? ` — ${warning}` : ""}`,
+        message: `${params.shutdown ? "Shutdown step" : "Step"} added to "${params.name}" e2e test${notes ? ` — ${notes}` : ""}`,
         toolResult,
         stepCount,
-        recorded: summarizeStep(step, stepCount),
+        recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),
         savedTo,
         ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };
