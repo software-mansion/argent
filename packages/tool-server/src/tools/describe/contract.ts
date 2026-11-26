@@ -129,7 +129,7 @@ export interface DescribeTreeData {
   hint?: string;
   // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
   stale?: boolean;
-  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // Part of the screen was not read (e.g. system dialogs outside the iOS app),
   // so an element's absence proves nothing; `hint` says why.
   partial?: boolean;
   // Apple TV: the focused element is one the screen has left, as while the
