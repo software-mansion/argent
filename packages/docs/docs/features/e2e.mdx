@@ -68,7 +68,7 @@ A network check verifies that an action sends a request with the URL you expect.
 
 Check the replay report to confirm capture started and stopped. A capture step can pass even if a layer did not start or stop. If the test fails before the stop step, stop capture before retrying. See [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
-Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. The e2e test or the run can give the script environment values, for example the URL of a staging server. A credential stays out of the file as a secret, and Argent removes the secret from the log of the script.
+Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. Use environment values to run the same script against different servers. Use a secret placeholder to pass credentials without storing them in the e2e test file.
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 

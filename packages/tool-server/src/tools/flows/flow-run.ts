@@ -1641,7 +1641,7 @@ const zodSchema = z
       .record(z.string(), z.string())
       .optional()
       .describe(
-        "Environment values for this run's script steps, e.g. { \"API_URL\": \"https://staging.example.com\" }. Each replaces the same name from the test file's env:, a fragment's env: and a step's env:. A value may hold {{secret:NAME}}, resolved on the tool-server and redacted from what the script prints."
+        "Script environment overrides for this run, including run: fragments. Names match [A-Za-z_][A-Za-z0-9_]*, except __proto__. Values can include {{secret:NAME}}. A missing secret rejects the run before any step."
       ),
   })
   .superRefine((params, ctx) => {
