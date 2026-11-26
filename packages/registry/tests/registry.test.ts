@@ -1,9 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { Registry } from "../src/registry";
 import { TypedEventEmitter } from "../src/event-emitter";
 import { ServiceState } from "../src/types";
-import type { ServiceEvents } from "../src/types";
+import type { ServiceEvents, ServiceInstance } from "../src/types";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -747,5 +747,247 @@ describe("Registry -- terminated-during-initialization signal", () => {
     expect(thrown).toBeInstanceOf(ServiceInitializationError);
     expect((thrown as Error).message).toContain("terminated during initialization");
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
+  });
+});
+
+describe("Registry -- teardown during initialization", () => {
+  /**
+   * A factory that waits on something outside the process (a socket, a
+   * handshake) has no instance for the registry to dispose yet, so the signal
+   * is the only way a shutdown reaches it.
+   */
+  const registerWaitingBlueprint = (registry: Registry): { aborted: () => boolean } => {
+    let sawAbort = false;
+
+    registry.registerBlueprint({
+      factory: (_deps, _payload, _options, signal) =>
+        new Promise<ServiceInstance>((_resolve, reject) => {
+          signal!.addEventListener("abort", () => {
+            sawAbort = true;
+            reject(new Error("gave up"));
+          });
+        }),
+      getURN: (payload: string) => `Waiting:${payload}`,
+      namespace: "Waiting",
+    });
+
+    return { aborted: () => sawAbort };
+  };
+
+  it("aborts the factory's signal on dispose and reports the teardown", async () => {
+    const registry = new Registry();
+    const waiting = registerWaitingBlueprint(registry);
+
+    const resolving = registry.resolveService("Waiting:x");
+    resolving.catch(() => {});
+
+    await registry.dispose();
+
+    expect(waiting.aborted()).toBe(true);
+
+    const thrown = await resolving.then(
+      () => undefined,
+      (reason: unknown) => reason
+    );
+
+    expect(thrown).toBeInstanceOf(ServiceInitializationError);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
+    /**
+     * The teardown owns the state; the factory's own error does not flip it to
+     * ERROR.
+     */
+    expect(registry.getServiceState("Waiting:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("does not abort a factory that already resolved", async () => {
+    const registry = new Registry();
+    let signal: AbortSignal | undefined;
+
+    registry.registerBlueprint({
+      factory: async (_deps, _payload, _options, received) => {
+        signal = received;
+        return {
+          api: {},
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+      getURN: (payload: string) => `Quick:${payload}`,
+      namespace: "Quick",
+    });
+
+    await registry.resolveService("Quick:x");
+    await registry.dispose();
+
+    expect(signal?.aborted).toBe(false);
+  });
+});
+
+describe("Registry -- factory signal across teardowns", () => {
+  interface FactoryCall {
+    reject: (error: Error) => void;
+    resolve: (api: Record<string, unknown>) => void;
+    signal: AbortSignal;
+  }
+
+  /**
+   * A blueprint whose factory calls stay pending until the test settles them,
+   * optionally depending on another URN.
+   */
+  const registerHeldBlueprint = (
+    registry: Registry,
+    dependencies: Record<string, string> = {}
+  ): FactoryCall[] => {
+    const calls: FactoryCall[] = [];
+
+    registry.registerBlueprint({
+      factory: (_deps, _payload, _options, signal) =>
+        new Promise<ServiceInstance>((resolve, reject) => {
+          calls.push({
+            reject,
+            resolve: (api) =>
+              resolve({ api, dispose: async () => {}, events: new TypedEventEmitter() }),
+            signal: signal!,
+          });
+        }),
+      getDependencies: () => dependencies,
+      getURN: (payload: string) => `Held:${payload}`,
+      namespace: "Held",
+    });
+
+    return calls;
+  };
+
+  const settled = (promise: Promise<unknown>): Promise<unknown> =>
+    promise.then(
+      (value) => value,
+      (reason: unknown) => reason
+    );
+
+  it("aborts the factory when disposeService tears down a starting service", async () => {
+    const registry = new Registry();
+    const calls = registerHeldBlueprint(registry);
+
+    const resolving = settled(registry.resolveService("Held:x"));
+
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService("Held:x");
+
+    expect(calls[0]!.signal.aborted).toBe(true);
+
+    calls[0]!.reject(new Error("gave up"));
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+  });
+
+  it("aborts a starting dependent's factory when its dependency is torn down", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(createStaticBlueprint("D").blueprint);
+    const calls = registerHeldBlueprint(registry, { dep: staticUrn("D") });
+
+    const resolving = settled(registry.resolveService("Held:x"));
+
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService(staticUrn("D"));
+
+    expect(calls[0]!.signal.aborted).toBe(true);
+
+    calls[0]!.reject(new Error("gave up"));
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+  });
+
+  it("keeps the next resolve abortable when a disposed factory resolves late", async () => {
+    const registry = new Registry();
+    const calls = registerHeldBlueprint(registry);
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService("Held:x");
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    calls[0]!.resolve({});
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await registry.dispose();
+
+    expect(calls[1]!.signal.aborted).toBe(true);
+  });
+
+  it("keeps the next resolve abortable when a disposed factory rejects late", async () => {
+    const registry = new Registry();
+    const calls = registerHeldBlueprint(registry);
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService("Held:x");
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    calls[0]!.reject(new Error("gave up"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await registry.dispose();
+
+    expect(calls[1]!.signal.aborted).toBe(true);
+  });
+
+  it("does not fail the next resolve when a disposed factory rejects late", async () => {
+    const registry = new Registry();
+    const calls = registerHeldBlueprint(registry);
+
+    void settled(registry.resolveService("Held:x"));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await registry.disposeService("Held:x");
+
+    const second = registry.resolveService("Held:x");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    calls[0]!.reject(new Error("gave up"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(registry.getServiceState("Held:x")).toBe(ServiceState.STARTING);
+
+    calls[1]!.resolve({ second: true });
+
+    await expect(second).resolves.toEqual({ second: true });
+    expect(registry.getServiceState("Held:x")).toBe(ServiceState.RUNNING);
+  });
+
+  it("does not call the factory when torn down while a dependency resolves", async () => {
+    const registry = new Registry();
+    let releaseDependency!: () => void;
+
+    registry.registerBlueprint({
+      factory: async () => {
+        await new Promise<void>((resolve) => {
+          releaseDependency = resolve;
+        });
+
+        return { api: {}, dispose: async () => {}, events: new TypedEventEmitter() };
+      },
+      getURN: (payload: string) => `Slow:${payload}`,
+      namespace: "Slow",
+    });
+
+    const calls = registerHeldBlueprint(registry, { dep: "Slow:x" });
+
+    const resolving = settled(registry.resolveService("Held:x"));
+
+    await vi.waitFor(() => expect(releaseDependency).toBeDefined());
+    await registry.disposeService("Held:x");
+    releaseDependency();
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+    expect(calls).toHaveLength(0);
   });
 });

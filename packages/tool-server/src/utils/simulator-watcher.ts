@@ -20,6 +20,12 @@ const POLL_INTERVAL_MS = 10_000;
 const MAX_BACKOFF_TICKS = 29;
 
 /**
+ * Most polls to sit out after a lent simulator's attach keeps failing, about
+ * five minutes. Each failure in a row doubles the wait up to this.
+ */
+const MAX_ATTACH_BACKOFF_POLLS = 30;
+
+/**
  * Cap on {@link firstSimulatorPoll}, from startup, so a tool call never waits on
  * the watcher for longer.
  */
@@ -28,9 +34,10 @@ const FIRST_POLL_WAIT_MS = 15_000;
 let firstPollSettled: Promise<void> = Promise.resolve();
 
 /**
- * Settles once a poll has read the booted simulators and attempted injection for
- * each, once a tick finds Xcode's component install pending (no poll runs and
- * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
+ * Settles once a poll has read the booted simulators and attempted injection
+ * for each one that no provider claims, once a tick finds Xcode's component
+ * install pending (no poll runs and `simctl` launches nothing), or
+ * {@linkcode FIRST_POLL_WAIT_MS} after startup.
  * Settled when no watcher runs. Awaited by whatever can start an app without
  * arming injection itself, so the app does not start uninjected: open-url, the
  * native profiler's malloc relaunch, and the simulator-server and tv-control
@@ -89,7 +96,7 @@ async function initUdid(
   registry: Registry,
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
-): Promise<void> {
+): Promise<boolean> {
   // tvOS sims are also platform "ios" (classified by UDID shape) and
   // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
   // slice.
@@ -97,8 +104,10 @@ async function initUdid(
   try {
     const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
     trackedServices.set(udid, service);
+    return true;
   } catch {
     // Factory tolerates env-init failure; a throw here is structural.
+    return false;
   }
 }
 
@@ -153,6 +162,21 @@ export function startSimulatorWatcher(registry: Registry): {
     }
     return true;
   }
+
+  /**
+   * Lent simulators whose attach failed, with the failures in a row and the
+   * polls left to sit out. A provider that accepts and then hangs up or one
+   * that stopped listening, would otherwise be dialled on every poll and log a
+   * service error each time.
+   *
+   * The wait is not free. The watcher resolves the raw UDID, while a tool call
+   * that uses the `ext:` id from `list-devices` resolves its own service and
+   * dials the provider itself, so it never uses the watcher's connection. A
+   * tool call by raw UDID during the wait attaches a service the watcher does
+   * not track, so if the simulator shuts down before the next attempt the
+   * watcher does not dispose it and only the provider hanging up ends it.
+   */
+  const attachBackoff = new Map<string, { failures: number; pollsLeft: number }>();
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -280,10 +304,57 @@ export function startSimulatorWatcher(registry: Registry): {
      */
     await handBackClaimed(claimed);
 
-    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
-    const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
-      initUdid(registry, udid, trackedServices)
-    );
+    for (const udid of attachBackoff.keys()) {
+      if (!booted.has(udid) || !claimed.has(udid)) attachBackoff.delete(udid);
+    }
+
+    const newUdids = [...booted].filter((udid) => {
+      if (trackedServices.has(udid)) return false;
+
+      const backoff = attachBackoff.get(udid);
+
+      if (backoff && backoff.pollsLeft > 0) {
+        backoff.pollsLeft -= 1;
+        return false;
+      }
+
+      return true;
+    });
+
+    const attemptInit = async (udid: string): Promise<void> => {
+      const attached = await initUdid(registry, udid, trackedServices);
+
+      if (!claimed.has(udid)) return;
+
+      if (attached) {
+        attachBackoff.delete(udid);
+        return;
+      }
+
+      const failures = (attachBackoff.get(udid)?.failures ?? 0) + 1;
+
+      attachBackoff.set(udid, {
+        failures,
+        pollsLeft: Math.min(2 ** (failures - 1), MAX_ATTACH_BACKOFF_POLLS),
+      });
+    };
+
+    const pendingAttempts: Promise<unknown>[] = [];
+
+    /**
+     * What {@linkcode firstSimulatorPoll} waits for. Claimed simulators are
+     * left out: their provider owns the injection, so there is nothing for us
+     * to arm, and an attach can sit out the provider's handshake, which would
+     * hold back the first input to every simulator of our own.
+     */
+    const armingAttempts: Promise<unknown>[] = [];
+
+    const track = (udid: string, attempt: Promise<unknown>) => {
+      pendingAttempts.push(attempt);
+      if (!claimed.has(udid)) armingAttempts.push(attempt);
+    };
+
+    for (const udid of newUdids) track(udid, attemptInit(udid));
 
     for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;
@@ -293,13 +364,16 @@ export function startSimulatorWatcher(registry: Registry): {
        * launched outside argent.
        */
       if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
-        pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
+        track(
+          udid,
+          service.ensureEnvReady().catch(() => {})
+        );
       }
     }
 
     // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
-    const attempted = Promise.all(pendingAttempts).then(markArmed);
-    if (shouldBlockUntilSettled) await attempted;
+    void Promise.all(armingAttempts).then(markArmed);
+    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took
