@@ -2014,15 +2014,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
-      //
-      // A verdict already under this number belongs to a step a hand edit
-      // removed, so it is dropped and counted, also when this step raised none:
-      // the finish would otherwise pin it on this step if the two read alike.
-      const verdicts = block === "shutdown" ? "shutdownStepWarnings" : "stepWarnings";
-      if (session[verdicts]?.delete(stepCount)) {
-        session.discardedWarnings = (session.discardedWarnings ?? 0) + 1;
-      }
       if (waitWarning) {
+        const verdicts = block === "shutdown" ? "shutdownStepWarnings" : "stepWarnings";
         (session[verdicts] ??= new Map()).set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),

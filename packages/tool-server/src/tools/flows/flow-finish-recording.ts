@@ -106,14 +106,14 @@ function warningHeadline(warnings: Iterable<RecordedStepWarning>, discarded: num
  * flow-utils.
  */
 function anchoredWarnings(
-  session: RecordingSession,
+  recorded: FlowStep[],
+  warnings: Map<number, RecordedStepWarning> | undefined,
   steps: FlowStep[]
 ): Map<number, RecordedStepWarning> {
   const kept = new Map<number, RecordedStepWarning>();
-  const recorded = session.flow.steps;
   if (recorded.length !== steps.length) return kept;
   if (!steps.every((step, i) => stepAnchor(step) === stepAnchor(recorded[i]))) return kept;
-  for (const [n, verdict] of session.stepWarnings ?? []) {
+  for (const [n, verdict] of warnings ?? []) {
     // `steps[n - 1]` is defined on every reachable path; the guard is a
     // fail-safe. `stepAnchor(undefined)` would throw inside the finish's
     // critical section and lose the whole recording rather than one warning.
@@ -206,15 +206,11 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         // `JSON.stringify` on a cyclic `args` anchor — is guarded in
         // flow-step-definitions; keeping the order is what makes the next one
         // recoverable rather than fatal.
-        const anchored = anchoredWarnings(session, flow.steps);
-        // A shutdown verdict stays only on the step it judged: a hand edit to
-        // `shutdown:` can move it, and no append re-checks that list.
-        const shutdownAnchored = new Map(
-          [...(session.shutdownStepWarnings ?? [])].filter(
-            ([n, verdict]) =>
-              flow.shutdown?.[n - 1] !== undefined &&
-              stepAnchor(flow.shutdown[n - 1]!) === verdict.step
-          )
+        const anchored = anchoredWarnings(session.flow.steps, session.stepWarnings, flow.steps);
+        const shutdownAnchored = anchoredWarnings(
+          session.flow.shutdown ?? [],
+          session.shutdownStepWarnings,
+          flow.shutdown ?? []
         );
         const summary = [
           ...attachStepWarnings(summarizeSteps(flow), anchored),

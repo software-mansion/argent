@@ -505,4 +505,54 @@ describe("recording into shutdown:", () => {
       expect((await add("check.mjs", true)).status).toBe("pass");
     });
   });
+
+  describe("drops a shutdown wait verdict that a hand edit moved between two identical waits", () => {
+    for (const after of ["finish", "an append"] as const) {
+      it(`then ${after}`, async () => {
+        let pass = false;
+        const registry = {
+          invokeTool: vi.fn(async () =>
+            pass
+              ? { success: true, elapsed: 10 }
+              : { success: false, elapsed: 1500, note: "no element matched" }
+          ),
+          getTool: vi.fn(() => ({})),
+        } as unknown as Registry;
+        const wait = () =>
+          createFlowAddStepTool(registry).execute(
+            {},
+            {
+              name: "t",
+              project_root: root,
+              command: "await-ui-element",
+              args: JSON.stringify({ udid: "u", condition: "visible", selector: { text: "Bye" } }),
+              shutdown: true,
+            }
+          );
+        await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+        expect((await wait()).message).toMatch(/never held/);
+        pass = true;
+        expect((await wait()).message).not.toMatch(/never held/);
+        // Delete the failed wait by hand: the passing one moves to its number.
+        const flow = await onDisk();
+        await fs.writeFile(
+          e2e("t.yaml"),
+          serializeFlow({ ...flow, shutdown: flow.shutdown!.slice(1) })
+        );
+        if (after === "an append") {
+          await flowInsertEchoTool.execute(
+            {},
+            { name: "t", project_root: root, message: "x", shutdown: true }
+          );
+        }
+
+        const finished = await flowFinishRecordingTool.execute(
+          {},
+          { name: "t", project_root: root }
+        );
+
+        expect(finished.summary.some((line) => line.includes("never held"))).toBe(false);
+      });
+    }
+  });
 });

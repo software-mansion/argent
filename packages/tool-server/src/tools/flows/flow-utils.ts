@@ -5120,19 +5120,24 @@ export async function appendStepToFlow(
     assertSessionStillLive(session, step);
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
-      const before = session.flow.steps;
+      const before = session.flow;
       const flowFile = await appendStep(session.filePath, step, block);
       session.flow = parseFlow(flowFile);
       // `appendStep` adds exactly one step, so everything before the last one
-      // is what the file already held — the recorder's previous view, unless a
-      // hand edit landed in between. A shutdown append leaves `steps` as it was.
-      const steps = session.flow.steps;
+      // of `block` is what the file already held — the recorder's previous
+      // view, unless a hand edit landed in between. The other list is as it was.
+      const { steps, shutdown = [] } = session.flow;
       session.discardedWarnings =
         (session.discardedWarnings ?? 0) +
         dropMovedWarnings(
           session.stepWarnings,
-          block === "shutdown" ? steps : steps.slice(0, -1),
-          before
+          block === "steps" ? steps.slice(0, -1) : steps,
+          before.steps
+        ) +
+        dropMovedWarnings(
+          session.shutdownStepWarnings,
+          block === "shutdown" ? shutdown.slice(0, -1) : shutdown,
+          before.shutdown ?? []
         );
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing a
