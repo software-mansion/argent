@@ -308,9 +308,15 @@ const REMOTE_FOLDABLE_DEVICE_TYPES = new Set(["com.apple.CoreSimulator.SimDevice
 // still unanswered counts as not foldable this time, and its answer is cached
 // for the next listing.
 const REMOTE_FOLDABLE_LOOKUP_MS = 5_000;
+// What the lookup leaves of the branch's deadline, so that a listing that
+// came late is still handed back.
+const REMOTE_LISTING_MARGIN_MS = 2_000;
 
-/** The foldable ones among `deviceTypes`. */
-async function remoteFoldableTypes(deviceTypes: Set<string>): Promise<Set<string>> {
+/** The foldable ones among `deviceTypes`, as far as `budgetMs` tells. */
+async function remoteFoldableTypes(
+  deviceTypes: Set<string>,
+  budgetMs: number
+): Promise<Set<string>> {
   const foldable = new Set<string>();
   const asked: Promise<void>[] = [];
   for (const type of deviceTypes) {
@@ -319,7 +325,7 @@ async function remoteFoldableTypes(deviceTypes: Set<string>): Promise<Set<string
   }
   let timer: NodeJS.Timeout | undefined;
   const gaveUp = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, REMOTE_FOLDABLE_LOOKUP_MS);
+    timer = setTimeout(resolve, budgetMs);
   });
   await Promise.race([Promise.allSettled(asked), gaveUp]);
   clearTimeout(timer);
@@ -336,6 +342,7 @@ async function listRemoteIosSimulators(): Promise<{
   cloud: CloudState;
 }> {
   try {
+    const started = Date.now();
     const result = await simctlListDevices();
     const listed = Object.entries(result.devices).flatMap(([runtime, devices]) => {
       const runtimeKind = simulatorRuntimeKind(runtime);
@@ -349,7 +356,11 @@ async function listRemoteIosSimulators(): Promise<{
         runtimeKind === "mobile" && d.deviceTypeIdentifier ? [d.deviceTypeIdentifier] : []
       )
     );
-    const foldableTypes = await remoteFoldableTypes(mobileTypes);
+    const left = BRANCH_DEADLINE_MS - REMOTE_LISTING_MARGIN_MS - (Date.now() - started);
+    const foldableTypes = await remoteFoldableTypes(
+      mobileTypes,
+      Math.max(0, Math.min(REMOTE_FOLDABLE_LOOKUP_MS, left))
+    );
     const out: IosRemoteDevice[] = listed.map(({ runtime, runtimeKind, d }) => ({
       platform: "ios-remote",
       kind: "simulator",
