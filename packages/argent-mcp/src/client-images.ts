@@ -2,11 +2,11 @@
  * The MCP `clientInfo.name` of the clients that pass an image block to their model: Claude
  * Code, Codex, cursor-agent (`Cursor`) and Cursor IDE (`cursor-vscode`), opencode, Gemini
  * CLI, Zed, VS Code (`Visual Studio Code`, and `copilot-cli` for its agent host), Kiro IDE
- * and Kiro CLI's v3 engine (`kiro`). A model without image input gets the client's
- * placeholder instead, and the client's file-read tool refuses a PNG for it too.
+ * and Kiro CLI's v3 engine (`kiro`). On a model without image input, the client's
+ * file-read tool refuses the PNG too, so the path is no use there either.
  *
- * Every other client keeps the path, an unknown one included. Kiro CLI's v1 and v2 engines
- * (`Q DEV CLI`) send the image to the model as base64 text, so the path is all it can use.
+ * Kiro CLI v1/v2 (`Q DEV CLI`) is left out: it sends the image as base64 text, so the path
+ * is all its model can use.
  */
 const SHOWS_IMAGES = [
   /^claude-code\b/,
@@ -22,8 +22,8 @@ const SHOWS_IMAGES = [
 
 /**
  * True when the client named in the MCP handshake passes image blocks to its model, so an
- * auto-screenshot needs no `Saved:` path. A `screenshot` call keeps it: skills pass that
- * path on to `screenshot-diff` and argent-lens.
+ * auto-screenshot needs no `Saved:` path. A `screenshot` call keeps the path: skills pass
+ * it to `screenshot-diff` and argent-lens.
  */
 export function showsImages(clientName: string | undefined): boolean {
   const name = clientName?.trim().toLowerCase() ?? "";
