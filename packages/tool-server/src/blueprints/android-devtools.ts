@@ -25,6 +25,11 @@ export const ANDROID_DEVTOOLS_NAMESPACE = "AndroidDevtools";
 
 type AndroidDevtoolsFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
+/**
+ * The helper exits after {@link HELPER_IDLE_RELEASE_MS} without a call, and
+ * resolving does not reset that timer: call the api right after
+ * `resolveService`, with no other await between.
+ */
 export function androidDevtoolsRef(device: DeviceInfo): {
   urn: string;
   options: AndroidDevtoolsFactoryOptions;
@@ -639,8 +644,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
-    // Resolving does not reset the timer: call the api right after
-    // `resolveService`, with no other await between.
     let inFlight = 0;
     let idleTimer: NodeJS.Timeout | undefined;
     const armIdleRelease = () => {

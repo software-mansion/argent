@@ -85,7 +85,7 @@ vi.mock("@argent/native-devtools-android", () => ({
 }));
 
 import {
-  HELPER_IDLE_RELEASE_MS as IDLE_RELEASE_MS,
+  HELPER_IDLE_RELEASE_MS,
   androidDevtoolsBlueprint,
   androidDevtoolsRef,
   type AndroidDevtoolsApi,
@@ -484,9 +484,9 @@ describe("android-devtools idle release", () => {
   it("releases the helper once it has gone unused for the idle window", async () => {
     const { instance, terminated } = await start();
 
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1_000);
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
     await instance.api.ping();
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1);
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
     expect(terminated).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -500,7 +500,7 @@ describe("android-devtools idle release", () => {
     const { instance, terminated } = await start();
     answer = (method) => (method === "getHierarchy" ? undefined : { result: { ok: true } });
 
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1_000);
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
     const reading = instance.api.getHierarchy();
     await flush();
     await vi.advanceTimersByTimeAsync(10_000);
@@ -508,7 +508,7 @@ describe("android-devtools idle release", () => {
 
     unanswered.shift()!();
     await reading;
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1);
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
     expect(terminated).toEqual([]);
     await vi.advanceTimersByTimeAsync(1);
     expect(terminated).toEqual([undefined]);
@@ -521,7 +521,7 @@ describe("android-devtools idle release", () => {
     const { instance, terminated } = await start();
     answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });
 
-    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1_000);
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
     const filling = instance.api.setText("hello");
     await flush();
     await vi.advanceTimersByTimeAsync(10_000);
@@ -540,7 +540,7 @@ describe("android-devtools idle release", () => {
     await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
     const released = proc;
 
-    vi.advanceTimersByTime(IDLE_RELEASE_MS);
+    vi.advanceTimersByTime(HELPER_IDLE_RELEASE_MS);
     vi.useRealTimers();
     expect(registry.getServiceState(ref.urn)).toBe(ServiceState.TERMINATING);
     const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);

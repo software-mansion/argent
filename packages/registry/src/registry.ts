@@ -48,6 +48,7 @@ export class Registry {
    * service again.
    */
   private selfReleases = new Map<URN, Promise<void>>();
+  private disposing = false;
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
   /**
@@ -327,11 +328,17 @@ export class Registry {
   }
 
   async dispose(): Promise<void> {
-    if (this.selfReleases.size > 0) await Promise.all(this.selfReleases.values());
-    for (const [urn, node] of this.services) {
-      if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
-        await this._teardown(urn);
+    this.disposing = true;
+    try {
+      for (const [urn, node] of this.services) {
+        const selfRelease = this.selfReleases.get(urn);
+        if (selfRelease) await selfRelease;
+        if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
+          await this._teardown(urn);
+        }
       }
+    } finally {
+      this.disposing = false;
     }
   }
 
@@ -374,7 +381,7 @@ export class Registry {
 
     const selfRelease = this.selfReleases.get(urn);
     if (selfRelease) {
-      return selfRelease.then(() => this._resolve<T>(urn, resolutionPath, options));
+      return selfRelease.then(() => this._resolveAfterSelfRelease<T>(urn, resolutionPath, options));
     }
 
     if (node.state === ServiceState.TERMINATING) {
@@ -450,6 +457,21 @@ export class Registry {
       }
       throw new ServiceInitializationError(urn, cause.message, { cause });
     }
+  }
+
+  private _resolveAfterSelfRelease<T>(
+    urn: URN,
+    resolutionPath: string[],
+    options?: Record<string, unknown>
+  ): Promise<T> {
+    if (this.disposing) {
+      return Promise.reject(
+        new ServiceInitializationError(urn, "Service is currently terminating", {
+          cause: terminatingSignalCause("Service is currently terminating"),
+        })
+      );
+    }
+    return this._resolve<T>(urn, resolutionPath, options);
   }
 
   private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {
