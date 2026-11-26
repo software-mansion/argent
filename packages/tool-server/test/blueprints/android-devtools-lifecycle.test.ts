@@ -84,6 +84,7 @@ vi.mock("@argent/native-devtools-android", () => ({
 }));
 
 import {
+  HELPER_IDLE_RELEASE_MS as IDLE_RELEASE_MS,
   androidDevtoolsBlueprint,
   androidDevtoolsRef,
   type AndroidDevtoolsApi,
@@ -470,11 +471,7 @@ describe("android-devtools connection lifecycle", () => {
   });
 });
 
-// Android allows one UiAutomation connection per device: a helper left running
-// makes `uiautomator dump` and every other UiAutomation client fail.
 describe("android-devtools idle release", () => {
-  const IDLE_RELEASE_MS = 180_000;
-
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
@@ -515,6 +512,22 @@ describe("android-devtools idle release", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(terminated).toEqual([undefined]);
 
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
+  it("holds off the release while a setText is in flight", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });
+
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS - 1_000);
+    const filling = instance.api.setText("hello");
+    await flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(terminated).toEqual([]);
+
+    unanswered.shift()!();
+    await filling;
     vi.useRealTimers();
     await instance.dispose();
   });

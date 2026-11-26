@@ -805,3 +805,37 @@ describe("Registry -- resolve during a teardown", () => {
     expect(instances).toHaveLength(1);
   });
 });
+
+describe("Registry -- dispose during a self-release", () => {
+  it("waits for the release before it returns", async () => {
+    const registry = new Registry();
+    let releaseDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => {
+      releaseDispose = resolve;
+    });
+    const events = new TypedEventEmitter<ServiceEvents>();
+    let disposed = false;
+    registry.registerBlueprint({
+      namespace: "Releasing",
+      getURN: (payload: string) => `Releasing:${payload}`,
+      factory: async () => ({
+        api: {},
+        dispose: async () => {
+          await disposeGate;
+          disposed = true;
+        },
+        events,
+      }),
+    });
+    await registry.resolveService("Releasing:x");
+
+    events.emit("terminated");
+    const disposing = registry.dispose();
+    await Promise.resolve();
+    releaseDispose();
+    await disposing;
+
+    expect(disposed).toBe(true);
+    expect(registry.getServiceState("Releasing:x")).toBe(ServiceState.IDLE);
+  });
+});

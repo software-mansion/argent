@@ -321,10 +321,13 @@ export class Registry {
   async disposeService(urn: URN): Promise<void> {
     const node = this.services.get(urn);
     if (!node) throw new ServiceNotFoundError(urn);
+    const selfRelease = this.selfReleases.get(urn);
+    if (selfRelease) await selfRelease;
     await this._teardown(urn);
   }
 
   async dispose(): Promise<void> {
+    if (this.selfReleases.size > 0) await Promise.all(this.selfReleases.values());
     for (const [urn, node] of this.services) {
       if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
         await this._teardown(urn);
@@ -431,8 +434,9 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
+        const selfRelease = !error && node.state === ServiceState.RUNNING;
         const teardown = this._teardown(urn, error);
-        if (!error) this._trackSelfRelease(urn, teardown);
+        if (selfRelease) this._trackSelfRelease(urn, teardown);
       });
 
       return instance.api as T;
@@ -450,7 +454,9 @@ export class Registry {
 
   private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {
     this.selfReleases.set(urn, teardown);
-    const forget = () => this.selfReleases.delete(urn);
+    const forget = () => {
+      if (this.selfReleases.get(urn) === teardown) this.selfReleases.delete(urn);
+    };
     void teardown.then(forget, forget);
   }
 

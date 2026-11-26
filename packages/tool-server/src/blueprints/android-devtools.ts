@@ -101,7 +101,7 @@ const DISPOSE_FORCE_STOP_WAIT_MS = 2_000;
  * Well above the usual gap between an agent's tool calls, so a session rarely
  * pays the restart.
  */
-const HELPER_IDLE_RELEASE_MS = 180_000;
+export const HELPER_IDLE_RELEASE_MS = 180_000;
 const HELPER_PORT_MARKER = /^INSTRUMENTATION_STATUS:\s*port=(\d+)/;
 const ADB_FORWARD_PORT_MARKER = /^(\d+)\s*$/;
 
@@ -639,8 +639,8 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
-    // Counted synchronously when a call starts, so a caller that uses the
-    // service right after resolving it always holds off the release.
+    // Resolving does not touch the timer: callers must call the api in the
+    // same tick as `resolveService`, before any other await.
     let inFlight = 0;
     let idleTimer: NodeJS.Timeout | undefined;
     const armIdleRelease = () => {
@@ -652,7 +652,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       inFlight++;
       clearTimeout(idleTimer);
       return call().finally(() => {
-        if (--inFlight === 0) armIdleRelease();
+        if (--inFlight === 0 && !disposed) armIdleRelease();
       });
     };
     armIdleRelease();
@@ -677,11 +677,11 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
       },
       setText(text: string, setOpts: { check?: boolean } = {}) {
-        return tracked(() => setTextOnce(text, setOpts));
+        return tracked(() => sendSetText(text, setOpts));
       },
     };
 
-    async function setTextOnce(text: string, setOpts: { check?: boolean }): Promise<SetTextResult> {
+    async function sendSetText(text: string, setOpts: { check?: boolean }): Promise<SetTextResult> {
       // Outside the `try`: a reconnect that times out never sent the text,
       // so it must not be reported below as a fill that may have landed.
       const current = await connected();
