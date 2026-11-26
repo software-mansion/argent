@@ -6,12 +6,28 @@ import * as path from "node:path";
 
 // `runSkillsStep` spawns `npx skills add ...`. Mock `spawn` with a child that
 // exits 0 so the test can inspect the spawn options without running npx.
-const { spawnMock, confirmMock, trackMock, state } = vi.hoisted(() => ({
+const { spawnMock, confirmMock, trackMock, resolveSkillsRunnerMock, state } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   confirmMock: vi.fn(),
   trackMock: vi.fn(),
+  resolveSkillsRunnerMock: vi.fn(),
   state: { bundledUnreadable: false, globalRoot: null as string | null },
 }));
+
+// The runner resolver scans the real PATH, which may hold npx, pnpm or neither,
+// so each test picks one. POSIX shape: argv is passed through unchanged.
+const NPX_RUNNER = {
+  kind: "npx" as const,
+  bin: "npx",
+  buildArgs: (args: string[]) => ["--force", ...args],
+  label: "npx",
+};
+const PNPM_RUNNER = {
+  kind: "pnpm" as const,
+  bin: "/usr/local/bin/pnpm",
+  buildArgs: (args: string[]) => ["dlx", ...args],
+  label: "pnpm dlx",
+};
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -29,11 +45,21 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   return {
     ...actual,
     isOnline: vi.fn(async () => true),
-    isSkillsCliAvailable: vi.fn(() => false),
     getGloballyInstalledPackageRoot: () => state.globalRoot,
     getGloballyInstalledVersion: () => (state.globalRoot ? actual.getInstalledVersion() : null),
     listBundledSkills: (dir?: string) =>
       state.bundledUnreadable ? [] : actual.listBundledSkills(dir),
+  };
+});
+
+vi.mock("../src/skills-runner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/skills-runner.js")>();
+  return {
+    ...actual,
+    resolveSkillsRunner: resolveSkillsRunnerMock,
+    isSkillsCliCached: vi.fn(() => false),
+    skillsCommand: (runner: typeof NPX_RUNNER, args: string[]) =>
+      actual.skillsCommand(runner, args, "linux"),
   };
 });
 
@@ -61,9 +87,9 @@ import {
   buildArgentSkillsSource,
   getInstalledVersion,
   isOnline,
-  isSkillsCliAvailable,
   shellQuotePath,
 } from "../src/utils.js";
+import { isSkillsCliCached } from "../src/skills-runner.js";
 
 type SpawnCall = [string, string[], { cwd?: string; stdio?: unknown }];
 
@@ -94,6 +120,8 @@ beforeEach(() => {
   state.globalRoot = null;
   confirmMock.mockReset();
   trackMock.mockClear();
+  resolveSkillsRunnerMock.mockReset();
+  resolveSkillsRunnerMock.mockReturnValue(NPX_RUNNER);
   spawnMock.mockReset();
   spawnMock.mockImplementation((_cmd: string, args: string[], opts: { cwd?: string }) => {
     const child = Object.assign(new EventEmitter(), {
@@ -365,7 +393,26 @@ describe("runSkillsStep", () => {
       expect(text).toContain(`cd ${shellQuotePath(root)} && npx skills add ${SKILLS_DIR} `);
     });
 
-    it("points the pnpm hint at init's root when npx is missing", async () => {
+    it("points the pnpm hint at init's root when pnpm dlx is the runner", async () => {
+      resolveSkillsRunnerMock.mockReturnValue(PNPM_RUNNER);
+      exitCode = 1;
+
+      await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root,
+      });
+
+      const text = vi
+        .mocked(p.note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(text).toContain(`cd ${shellQuotePath(root)} && pnpm dlx skills add ${SKILLS_DIR} `);
+    });
+
+    it("offers no skills CLI command when the runner could not start", async () => {
       spawnMock.mockImplementationOnce(() => {
         const child = Object.assign(new EventEmitter(), {
           stdout: new EventEmitter(),
@@ -389,12 +436,13 @@ describe("runSkillsStep", () => {
         .mocked(p.note)
         .mock.calls.map(([message]) => String(message))
         .join("\n");
-      expect(text).toContain(`cd ${shellQuotePath(root)} && pnpm dlx skills add ${SKILLS_DIR} `);
+      expect(text).toContain(`cp -r ${SKILLS_DIR}/* ${shellQuotePath(`${root}/.claude/skills/`)}`);
+      expect(text).not.toContain("skills add");
     });
 
     it("probes for an offline skills CLI where the install would run", async () => {
       vi.mocked(isOnline).mockResolvedValueOnce(false);
-      vi.mocked(isSkillsCliAvailable).mockReturnValueOnce(true);
+      vi.mocked(isSkillsCliCached).mockReturnValueOnce(true);
 
       await runSkillsStep({
         nonInteractive: true,
@@ -404,7 +452,7 @@ describe("runSkillsStep", () => {
         effectiveRoot: root,
       });
 
-      expect(isSkillsCliAvailable).toHaveBeenCalledWith(root);
+      expect(isSkillsCliCached).toHaveBeenCalledWith(NPX_RUNNER, root);
       const [, args, opts] = spawnMock.mock.calls[0]! as SpawnCall;
       expect(args).toContain("--no-install");
       expect(opts.cwd).toBe(root);
@@ -491,8 +539,8 @@ describe("runSkillsStep", () => {
       effectiveRoot: path.join(tmpDir, "project"),
     });
 
-    expect(isSkillsCliAvailable).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(isSkillsCliAvailable).mock.calls[0]).toEqual([undefined]);
+    expect(isSkillsCliCached).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(isSkillsCliCached).mock.calls[0]).toEqual([NPX_RUNNER, undefined]);
   });
 
   it("prints global-scope manual commands unquoted, so `~` still expands", async () => {
@@ -533,6 +581,91 @@ describe("runSkillsStep", () => {
     });
 
     expect(fs.existsSync(legacy)).toBe(true);
+  });
+
+  describe("skills runner (#1206)", () => {
+    const root = () => path.join(tmpDir, "project");
+    const noteText = () =>
+      vi
+        .mocked(p.note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+
+    beforeEach(() => {
+      mkdirs(root());
+      vi.mocked(p.note).mockClear();
+    });
+
+    it("runs `pnpm dlx skills add` when pnpm is the runner", async () => {
+      resolveSkillsRunnerMock.mockReturnValue(PNPM_RUNNER);
+
+      const result = await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root(),
+      });
+
+      const [cmd, args, opts] = spawnMock.mock.calls[0]! as SpawnCall;
+      expect(cmd).toBe(PNPM_RUNNER.bin);
+      expect(args).toEqual(["dlx", "skills", "add", SKILLS_DIR, "--skill", "*", "-y"]);
+      expect(opts.cwd).toBe(root());
+      expect(result).toMatchObject({ outcome: "success", installedCount: 1 });
+    });
+
+    it("retries with pnpm dlx without npm's --fetch-retries flag", async () => {
+      resolveSkillsRunnerMock.mockReturnValue(PNPM_RUNNER);
+      addExitCodes = [1];
+
+      await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "0.0.1-untagged",
+        scope: "local",
+        effectiveRoot: root(),
+      });
+
+      const retryArgs = spawnMock.mock.calls[1]![1] as string[];
+      expect(retryArgs).toEqual(["dlx", "skills", "add", SKILLS_DIR, "--skill", "*", "-y"]);
+    });
+
+    it("falls back to manual copy instructions, without a CLI command, when no runner is on PATH", async () => {
+      resolveSkillsRunnerMock.mockReturnValue(null);
+      const warn = vi.spyOn(p.log, "warn");
+
+      const result = await runSkillsStep({
+        nonInteractive: true,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root(),
+      });
+
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ method: "manual", forcedManual: true, noRunner: true });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("no package runner was found"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Then run argent init again."));
+      expect(noteText()).toContain("cp -r");
+      expect(noteText()).not.toContain("skills add");
+      expect(formatSkillsSummaryLine(result)).toMatch(/no package runner found/);
+    });
+
+    it("offers the resolved runner's command in the manual instructions", async () => {
+      resolveSkillsRunnerMock.mockReturnValue(PNPM_RUNNER);
+      vi.mocked(p.select).mockResolvedValueOnce("manual");
+
+      const result = await runSkillsStep({
+        nonInteractive: false,
+        fromTar: null,
+        version: "unknown",
+        scope: "local",
+        effectiveRoot: root(),
+      });
+
+      expect(result.method).toBe("manual");
+      expect(noteText()).toContain(`cd ${shellQuotePath(root())} && pnpm dlx skills add`);
+    });
   });
 });
 

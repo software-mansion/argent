@@ -64,6 +64,22 @@ describe("resolveInstallableUpdateTarget", () => {
     expect(result?.targetVersion).toBeNull();
   });
 
+  it("checks the pinned release when the installer's policy would also allow a newer release", async () => {
+    const publishedAt = "2026-05-20T00:00:00Z";
+    mockFetchRegistryInfo.mockResolvedValue({
+      latest: { version: "99.0.0", publishedAt: "2026-05-31T00:00:00Z" },
+      times: { "98.0.0": publishedAt, "99.0.0": "2026-05-31T00:00:00Z" },
+    });
+    mockDetectMinReleaseAgeMsForPm.mockResolvedValue(DAY_MS);
+    await resolveInstallableUpdateTarget("npm", "1.0.0", "/home/u", "98.0.0");
+    expect(mockPickInstallableTarget).toHaveBeenCalledWith(
+      { version: "98.0.0", publishedAt },
+      { "98.0.0": publishedAt },
+      "1.0.0",
+      DAY_MS
+    );
+  });
+
   it("returns null without probing when the registry is unreachable", async () => {
     mockFetchRegistryInfo.mockResolvedValue(null);
 

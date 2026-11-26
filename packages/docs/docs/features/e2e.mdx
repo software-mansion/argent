@@ -74,6 +74,8 @@ You ask the agent to run an e2e test by its name. The agent replays each step in
 
 An e2e test also runs without an agent. The `argent e2e run` command replays an e2e test from the terminal. The command prints the result of each step and exits with a status code. Thus an e2e test runs in a CI job or in a script. The command runs one e2e test, an e2e test file in a different location, or the e2e tests in a directory. When the command runs the e2e tests in a directory, the command prints the failed e2e tests at the end. For each failed e2e test, the command also prints the reason and a command that runs only that e2e test.
 
+On a shared Mac, you can limit automatic devtools setup to the simulators assigned to your CI job. Set the watcher scope when you start the job's tool-server. See [Simulator watcher configuration](/docs/reference/configuration#devices).
+
 ## Suites
 
 Some e2e tests depend on each other. For example, one e2e test adds a post, and the next e2e test deletes it. Put such e2e tests in a suite. A suite is a directory with a `suite.config.yaml` file. The file sets the order of the e2e tests.

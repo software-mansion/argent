@@ -69,6 +69,8 @@ export interface BuildToolsServerEnvOptions {
    * unauthenticated (`argent server start --no-auth`).
    */
   token?: string;
+  /** Who manages the server's lifecycle. `cli` servers keep the consent path for updates. */
+  managed?: "autospawn" | "cli";
 }
 
 export function buildToolsServerEnv(
@@ -89,6 +91,7 @@ export function buildToolsServerEnv(
   }
   // Never inherited: an exported token would authenticate a `--no-auth` server.
   env[AUTH_TOKEN_ENV] = options.token ?? "";
+  env.ARGENT_SERVER_MANAGED = options.managed ?? "autospawn";
   if (paths.installKind) env.ARGENT_INSTALL_KIND = paths.installKind;
   if (paths.installProjectRoot) env.ARGENT_PROJECT_ROOT = paths.installProjectRoot;
   return env;

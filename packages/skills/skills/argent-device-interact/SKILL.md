@@ -43,7 +43,7 @@ After a network test, call `network-conditions` with the same target and omit th
 
 ## 3. Finding Tap Targets
 
-After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each tree has a `Tree id`. When the tree is identical to an earlier one, the result names that id in place of the tree: use that tree, and call `describe` if it is not in your context. An identical tree does not mean the action did nothing.
+After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each full tree has a `Tree id`, and each full screenshot has a `Screenshot id`. When the tree or screenshot matches an earlier one (or only a few tree lines changed), the result names that id in place of repeating it (an unchanged note, or `-` gone / `+` new lines against it): refer back to the named result, and call `describe` or `screenshot` if it is not in your context. An identical tree does not mean the action did nothing.
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
