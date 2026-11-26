@@ -8,13 +8,17 @@ import type { RegistryInfo } from "@argent/update-core";
 // (with their own low-level tests there). The checker only orchestrates them,
 // so we mock that boundary and keep the real, pure pickInstallableTarget.
 // vi.hoisted keeps the same fn instances across the vi.resetModules() below.
-const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMs, mockGetConfigValueByKey } = vi.hoisted(
-  () => ({
-    mockFetchRegistryInfo: vi.fn<() => Promise<RegistryInfo | null>>(),
-    mockDetectMinReleaseAgeMs: vi.fn<() => Promise<number>>(),
-    mockGetConfigValueByKey: vi.fn<(key: string) => unknown>(),
-  })
-);
+const {
+  mockFetchRegistryInfo,
+  mockDetectMinReleaseAgeMs,
+  mockGetConfigValueByKey,
+  mockGetConfigValueAtScope,
+} = vi.hoisted(() => ({
+  mockFetchRegistryInfo: vi.fn<() => Promise<RegistryInfo | null>>(),
+  mockDetectMinReleaseAgeMs: vi.fn<() => Promise<number>>(),
+  mockGetConfigValueByKey: vi.fn<(key: string) => unknown>(),
+  mockGetConfigValueAtScope: vi.fn<(key: string, scope: string, options: object) => unknown>(),
+}));
 vi.mock("@argent/update-core", async (importActual) => {
   const actual = await importActual<typeof import("@argent/update-core")>();
   return {
@@ -23,8 +27,10 @@ vi.mock("@argent/update-core", async (importActual) => {
     detectMinReleaseAgeMs: mockDetectMinReleaseAgeMs,
   };
 });
-vi.mock("@argent/configuration-core", () => ({
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
   getConfigValueByKey: mockGetConfigValueByKey,
+  getConfigValueAtScope: mockGetConfigValueAtScope,
 }));
 
 let getUpdateState: typeof import("../src/utils/update-checker").getUpdateState;
@@ -54,6 +60,7 @@ describe("update-checker", () => {
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
     mockGetConfigValueByKey.mockReset();
     mockGetConfigValueByKey.mockReturnValue(false);
+    mockGetConfigValueAtScope.mockReset();
 
     // Re-import after module reset so each test gets fresh state.
     const mod = await import("../src/utils/update-checker");
@@ -148,6 +155,22 @@ describe("update-checker", () => {
     const handle = startUpdateChecker({ onAutoUpdate });
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    handle.dispose();
+  });
+
+  it("keeps an autoUpdate.enabled opt-out in ~/.argent under a moved Argent home", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    mockGetConfigValueByKey.mockReturnValue(true);
+    mockGetConfigValueAtScope.mockReturnValue(false);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockGetConfigValueAtScope).toHaveBeenCalledWith("autoUpdate.enabled", "global", {
+      homeDir: os.homedir(),
+    });
     expect(onAutoUpdate).not.toHaveBeenCalled();
     handle.dispose();
   });

@@ -19,6 +19,7 @@ import {
   stateFileForBundle,
   formatToolsServerUrl,
   formatLinkUrl,
+  healthCheckHost,
   generateAuthToken,
   parseListeningPort,
   STATE_PATHS,
@@ -273,14 +274,8 @@ function resolveConnectHost(bindHost: string): string {
   return bindHost;
 }
 
-/** Host a client on this machine connects to: loopback for a wildcard bind. */
-function localConnectHost(bindHost: string): string {
-  if (bindHost === "0.0.0.0") return "127.0.0.1";
-  return isWildcard(bindHost) ? "::1" : bindHost;
-}
-
 function printReadyJson(bindHost: string, port: number, pid: number, token?: string): void {
-  const url = formatToolsServerUrl(localConnectHost(bindHost), port);
+  const url = formatToolsServerUrl(healthCheckHost(bindHost), port);
   console.log(JSON.stringify({ url, port, pid, ...(token ? { token } : {}) }));
 }
 

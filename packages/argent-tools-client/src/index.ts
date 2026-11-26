@@ -16,6 +16,7 @@ export {
   writeToolsServerStateSync,
   clearToolsServerState,
   formatToolsServerUrl,
+  healthCheckHost,
   generateAuthToken,
   AUTH_TOKEN_ENV,
   STATE_PATHS,

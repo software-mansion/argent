@@ -223,9 +223,9 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### Argent home
 
-| Variable          | Default     | Description                                                          |
-| ----------------- | ----------- | -------------------------------------------------------------------- |
-| `ARGENT_HOME_DIR` | `~/.argent` | Absolute path of the directory that holds the global files of Argent |
+| Variable          | Default     | Description                                                                                                         |
+| ----------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_HOME_DIR` | `~/.argent` | Path of the directory that holds the global files of Argent. A relative path resolves against the working directory |
 
 Set `ARGENT_HOME_DIR` to run a second Argent install next to the global install, for example a project install, a CI job or a script. Export the same value for the CLI and for the MCP server. The directory holds these files:
 
@@ -239,7 +239,7 @@ Each directory has its own tool-server:
 - `argent server stop`, `argent update` and `argent uninstall` do not stop a tool-server of a different directory.
 - When a tool-server of a different directory uses the port, the start fails. Use `--port 0` to get a free port.
 
-Project-scope files in `<project-root>/.argent/` and screen recordings do not move. A telemetry opt-out in `~/.argent/config.json` also applies when `ARGENT_HOME_DIR` is set.
+Project-scope files in `<project-root>/.argent/` and screen recordings do not move. A telemetry opt-out or an `autoUpdate.enabled` opt-out in `~/.argent/config.json` also applies when `ARGENT_HOME_DIR` is set.
 
 ### Tool-server
 

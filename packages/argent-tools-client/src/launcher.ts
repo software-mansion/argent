@@ -231,7 +231,7 @@ export function isToolsServerProcessAlive(pid: number): boolean {
 }
 
 /** Wildcard bind hosts (`0.0.0.0`, `::`) cannot be connected to; use loopback. */
-function healthCheckHost(host: string): string {
+export function healthCheckHost(host: string): string {
   if (host === "0.0.0.0" || host === "") return "127.0.0.1";
   if (host === "::" || host === "::0") return "::1";
   return host;
