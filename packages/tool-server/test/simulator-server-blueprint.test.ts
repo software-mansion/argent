@@ -89,6 +89,10 @@ const runAdbMock = vi.fn(async (_args: string[], _options?: { timeoutMs?: number
   stdout: "",
   stderr: "",
 }));
+vi.mock("../src/utils/android-agent-retry", async (load) => ({
+  ...(await load<typeof import("../src/utils/android-agent-retry")>()),
+  identifyAgent: async () => null,
+}));
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   runAdb: (args: string[], options?: { timeoutMs?: number }) => runAdbMock(args, options),

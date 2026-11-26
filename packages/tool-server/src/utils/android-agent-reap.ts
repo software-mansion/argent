@@ -1,5 +1,6 @@
 import { getFailureSignal } from "@argent/registry";
 import { runAdb } from "./adb";
+import { forgetAgent, rememberAgent } from "./android-agent-retry";
 
 /**
  * Host-side reaper for the on-device screen-sharing agent that
@@ -76,9 +77,14 @@ export async function detectAgentSocket(
  */
 export async function reapAndroidScreenSharingAgent(
   serial: string,
-  socket: string | null
+  socket: string | null,
+  record: string | null = null
 ): Promise<void> {
   if (socket == null || !SAFE_AGENT_SOCKET.test(socket)) return;
+  // Queue before adb: shutdown may finish while a disconnected device times
+  // out. The next tool-server resumes the check. A read-only home must not
+  // prevent the existing immediate cleanup.
+  if (record) await rememberAgent(record).catch(() => {});
 
   // `[.]`: `pkill -f` matches full argv, and the `sh -c` adbd runs for this
   // command carries the pattern too. An unescaped pattern makes the shell kill
@@ -89,10 +95,12 @@ export async function reapAndroidScreenSharingAgent(
   ).then(
     // Exit 0: a live agent was found, so the binary did not clean up after
     // itself. That is the one outcome worth a line.
-    () =>
+    async () => {
       process.stderr.write(
         `[argent] stopped a leftover screen-sharing agent on ${serial} (socket ${socket})\n`
-      ),
+      );
+      if (record) await forgetAgent(record).catch(() => {});
+    },
     (err: unknown) => {
       // Exit 1 is "nothing matched", the healthy case.
       if (getFailureSignal(err)?.failure_exit_code === 1) return;

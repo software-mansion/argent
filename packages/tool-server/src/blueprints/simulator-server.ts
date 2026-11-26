@@ -41,6 +41,7 @@ import {
   reapAndroidScreenSharingAgent,
   trackAgentReap,
 } from "../utils/android-agent-reap";
+import { identifyAgent } from "../utils/android-agent-retry";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -372,7 +373,7 @@ type SpawnedServer = Awaited<ReturnType<typeof spawnSimulatorServerProcess>> & {
    * probe runs after ready and is never awaited before the exit listener is
    * attached, so an exit during it still reaches the registry.
    */
-  agentSocket: Promise<string | null>;
+  agentSocket: Promise<{ socket: string; record: string | null } | null>;
 };
 
 const NO_AGENT = Promise.resolve(null);
@@ -391,7 +392,11 @@ async function spawnAndroidDevice(serial: string): Promise<SpawnedServer> {
   }
   const before = await listAgentReverseSockets(serial);
   const server = await spawnSimulatorServerProcess(serial, "android_device");
-  const agentSocket = before ? detectAgentSocket(serial, before) : NO_AGENT;
+  const agentSocket = before
+    ? detectAgentSocket(serial, before).then(async (socket) =>
+        socket ? { socket, record: await identifyAgent(serial, socket) } : null
+      )
+    : NO_AGENT;
   return { ...server, agentSocket };
 }
 
@@ -756,12 +761,12 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         // registry's sequential teardown. Shutdown waits via settleAgentReaps.
         trackAgentReap(
           (async () => {
-            const socket = await agentSocket;
-            if (!socket) return;
+            const agent = await agentSocket;
+            if (!agent) return;
             // The binary's own teardown first; then reap unconditionally, for a
             // binary without one, one wedged past the grace, or a SIGKILL.
             await waitForExit(proc, EXIT_GRACE_MS);
-            await reapAndroidScreenSharingAgent(device.id, socket);
+            await reapAndroidScreenSharingAgent(device.id, agent.socket, agent.record);
           })()
         );
       },

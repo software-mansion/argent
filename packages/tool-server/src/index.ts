@@ -37,6 +37,7 @@ import { pauseJsCapturesOf } from "./blueprints/network-inspector";
 import { withCaptureSweep } from "./tools/network/network-capture";
 import { renderFlagGated } from "./utils/flag-gated-text";
 import { settleAgentReaps } from "./utils/android-agent-reap";
+import { scheduleAgentRetries } from "./utils/android-agent-retry";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 /**
@@ -446,6 +447,7 @@ export function start(): void {
     .then(() => {
       if (shuttingDown) return;
       server = httpHandle.app.listen(PORT, HOST, () => {
+        scheduleAgentRetries();
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
         const addr = server!.address();
