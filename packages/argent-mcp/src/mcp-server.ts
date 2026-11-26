@@ -163,6 +163,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const sessionId = crypto.randomUUID();
+  // The connection is the session, also for calls sent after it ended.
+  delete process.env.ARGENT_SESSION;
   let sessionCalledTools = false;
   let sessionEnded = false;
 
