@@ -46,8 +46,8 @@ import {
 // here, and used below where the notes are built.
 const WAIT_CANCELLED_NOTE = "wait was cancelled before the condition was met";
 const TREE_FETCH_FAILED_NOTE_PREFIX = "last tree fetch failed: ";
-const HIDDEN_UNREADABLE_NOTE =
-  "could not confirm the element is hidden — the UI tree was empty or unreadable at timeout";
+const HIDDEN_UNCONFIRMED = "could not confirm the element is hidden";
+const HIDDEN_UNREADABLE_NOTE = `${HIDDEN_UNCONFIRMED} — the UI tree was empty or unreadable at timeout`;
 
 /**
  * The cause this wait recorded, or the closest its `note` can be read for.
@@ -66,7 +66,7 @@ export function unmetUiWaitCause(result: unknown): UnmetWaitCause {
   const note = (result as { note?: unknown } | null)?.note;
   if (typeof note !== "string") return "unmet";
   if (note === WAIT_CANCELLED_NOTE) return "cancelled";
-  if (note.startsWith(TREE_FETCH_FAILED_NOTE_PREFIX) || note.startsWith(HIDDEN_UNREADABLE_NOTE)) {
+  if (note.startsWith(TREE_FETCH_FAILED_NOTE_PREFIX) || note.startsWith(HIDDEN_UNCONFIRMED)) {
     return "unreadable";
   }
   return "unmet";
@@ -171,8 +171,7 @@ function isMacos(params: Params): boolean {
   return params.udid !== undefined && resolveDevice(params.udid).platform === "macos";
 }
 
-// A blind read judges nothing; a partial one (an Apple TV hierarchy cut at its
-// node cap) shows what it found, but its misses prove nothing: `exists` needs a
+// A blind read judges nothing. A partial tree can only confirm what it contains: `exists` needs a
 // match, the other conditions a visible one.
 function cannotJudge(
   data: DescribeTreeData,
@@ -226,9 +225,13 @@ function timeoutNote(
       break;
     }
     case "hidden":
-      base = matches.some(isVisible)
-        ? "an element matching the selector was still visible at timeout"
-        : HIDDEN_UNREADABLE_NOTE;
+      if (matches.some(isVisible)) {
+        base = "an element matching the selector was still visible at timeout";
+      } else if (lastData?.partial && lastData.source === "native-devtools") {
+        base = HIDDEN_UNCONFIRMED;
+      } else {
+        base = HIDDEN_UNREADABLE_NOTE;
+      }
       break;
     case "visible":
       base =

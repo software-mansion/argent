@@ -1,0 +1,25 @@
+---
+sidebar_position: 11
+sidebar_label: Automatic updates
+title: Automatic updates
+sidebar_custom_props:
+  icon: repeat-2
+---
+
+Argent checks for updates when the tool server starts and every 24 hours. By default, Argent updates a confirmed global installation in the background. Argent follows the minimum release age policy.
+
+A linked checkout or a locally built package never updates itself. If your project declares the Argent version, the agent asks before updating it. The agent also asks when Argent cannot confirm which installation the package manager would update, and when you started the tool server yourself with `argent server start`.
+
+Argent waits until the tool server is idle before it starts a background update. An open e2e recording or a screen recording you have not retrieved also postpones the update. When you postpone the update reminder, Argent also postpones the background update. A background update refreshes your global skills, rules and editor MCP entries, and leaves your workspace files alone. The next MCP session uses the updated version. On the first tool call, the agent tells you what changed.
+
+To ask before every update, run:
+
+```bash
+argent config set autoUpdate.enabled false
+```
+
+To turn off the update check, the reminder and automatic updates for one tool server, set `ARGENT_DISABLE_UPDATE_CHECK=1` in its environment.
+
+To turn off release highlights, run `argent disable whats-new`.
+
+See the [configuration reference](/docs/reference/configuration) and the [tools reference](/docs/reference/tools).
