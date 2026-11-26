@@ -16,6 +16,8 @@ interface Claim {
   session: string;
   lastUsedAt: number;
   activeCalls: number;
+  /** Released while a call was in flight: the claim ends when the last call does. */
+  released?: boolean;
 }
 
 export type ClaimResult = { ok: true; done: () => void } | { ok: false; device: string };
@@ -48,21 +50,28 @@ export class DeviceClaims {
     return {
       ok: true,
       done: () => {
-        for (const claim of held) {
+        for (const [index, claim] of held.entries()) {
           claim.activeCalls -= 1;
           claim.lastUsedAt = this.now();
+          if (claim.released && claim.activeCalls === 0) this.drop(devices[index]!, claim);
         }
       },
     };
   }
 
-  /** Releases `session`'s claim on `device`, or on every device it holds. Returns the released devices. */
+  /**
+   * Releases `session`'s claim on `device`, or on every device it holds. A
+   * device with a call in flight stays claimed until that call ends. Returns
+   * the released devices.
+   */
   release(session: string, device?: string): string[] {
     const released: string[] = [];
-    for (const [key, claim] of this.claims) {
-      if (claim.session !== session) continue;
+    for (const key of [...this.claims.keys()]) {
+      const claim = this.liveClaim(key);
+      if (!claim || claim.released || claim.session !== session) continue;
       if (device !== undefined && key !== device) continue;
-      this.claims.delete(key);
+      if (claim.activeCalls > 0) claim.released = true;
+      else this.claims.delete(key);
       released.push(key);
     }
     return released;
@@ -84,11 +93,16 @@ export class DeviceClaims {
     return claim;
   }
 
+  private drop(device: string, claim: Claim): void {
+    if (this.claims.get(device) === claim) this.claims.delete(device);
+  }
+
   private hold(device: string, session: string): Claim {
     const existing = this.liveClaim(device);
     const claim = existing ?? { session, lastUsedAt: this.now(), activeCalls: 0 };
     claim.activeCalls += 1;
     claim.lastUsedAt = this.now();
+    claim.released = false;
     this.claims.set(device, claim);
     return claim;
   }

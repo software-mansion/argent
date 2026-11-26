@@ -53,7 +53,8 @@ describe("DeviceClaims", () => {
 
   it("releases one device or all of a session, idempotently, and never another session's", () => {
     const claims = new DeviceClaims(1_000);
-    claims.claim("a", [SIM, EMU]);
+    const call = claims.claim("a", [SIM, EMU]);
+    if (call.ok) call.done();
     expect(claims.release("b")).toEqual([]);
     expect(claims.release("a", SIM)).toEqual([SIM]);
     expect(claims.release("a", SIM)).toEqual([]);
@@ -61,6 +62,25 @@ describe("DeviceClaims", () => {
     expect(claims.release("a")).toEqual([EMU]);
     expect(claims.release("a")).toEqual([]);
     expect(claims.claim("b", [SIM, EMU]).ok).toBe(true);
+  });
+
+  it("keeps a released device claimed until the call in flight ends", () => {
+    const claims = new DeviceClaims(1_000);
+    const call = claims.claim("a", [SIM]);
+    expect(claims.release("a")).toEqual([SIM]);
+    expect(claims.release("a")).toEqual([]);
+    expect(claims.claim("b", [SIM]).ok).toBe(false);
+    if (call.ok) call.done();
+    expect(claims.claim("b", [SIM]).ok).toBe(true);
+  });
+
+  it("does not report a claim that already expired as released", () => {
+    const time = clock();
+    const claims = new DeviceClaims(1_000, time.now);
+    const call = claims.claim("a", [SIM]);
+    if (call.ok) call.done();
+    time.advance(1_001);
+    expect(claims.release("a")).toEqual([]);
   });
 
   it("keeps a claim when a call ends after its device was released and claimed again", () => {
