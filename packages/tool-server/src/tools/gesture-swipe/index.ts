@@ -16,6 +16,12 @@ import {
 } from "../../utils/harmony-uitest";
 import { ensureDep } from "../../utils/check-deps";
 import { sendCommand } from "../../utils/simulator-client";
+import {
+  describeVerify,
+  joinWarnings,
+  runWithDeliveryVerification,
+  type DeliveryCheck,
+} from "../../utils/touch-verification";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -42,7 +48,7 @@ const MOMENTUM_FREE_MIN_DURATION_MS = 150;
 // applied to the same thing: one finger-down-to-lift stroke.
 const MAX_DURATION_MS = 10_000;
 
-interface Result {
+interface Result extends DeliveryCheck {
   swiped: boolean;
   timestampMs: number;
   /**
@@ -54,6 +60,7 @@ interface Result {
   /**
    * Foldable iOS simulators only: the panel the device renders to could not
    * be resolved, so the swipe went to the cover panel. Says why and what to check.
+   * Also carries the delivery-check warning (see `DeliveryCheck`).
    */
   warning?: string;
 }
@@ -93,6 +100,16 @@ const zodSchema = z
       .describe(
         `Whether the swipe releases with momentum; default true (a natural flinging swipe). false eases the finger into the end point so the OS applies little to no fling and the content stops where the finger lifts: use it when you need a deterministic scroll distance, e.g. in scroll-to-element loops. false needs durationMs >= ${MOMENTUM_FREE_MIN_DURATION_MS} and is rejected below that; near ${MOMENTUM_FREE_MIN_DURATION_MS} it can still land short or fling, so keep the default 300.`
       ),
+    verify: z
+      .boolean()
+      .optional()
+      .describe(
+        describeVerify("swipe", {
+          tail:
+            "iOS simulator and Android only. It is a frame-diff heuristic: a swipe on content " +
+            "already scrolled to its end can change nothing.",
+        })
+      ),
     // `momentum`'s shipped spelling, with the opposite polarity. Declared so this
     // non-strict object refuses it instead of stripping it and flinging - the exact
     // inverse of the gesture the caller asked for.
@@ -128,7 +145,7 @@ Swipe up (fromY > toY) to scroll content down.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium; use gesture-scroll there instead.<flag:macos-apps> Not supported on a Mac app; use gesture-scroll or gesture-drag there.</flag:macos-apps>
 Physical iOS: an edge gesture (back-swipe) needs fromX 0 exactly; durationMs sets drag speed, not time; momentum:false only rests 300ms at the end and does not damp.<flag:harmonyos>
 HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a short slow swipe ends early and a long fast one runs late.</flag:harmonyos>
-Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
+Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator or Android, swipes are checked against the screen until one changes it: verified: false and a warning mean the screen did not change (see the verify parameter). Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
   zodSchema,
   alwaysLoad: true,
   // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
@@ -228,77 +245,90 @@ Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app 
     let warning: string | undefined;
     let lastX = 0;
     let lastY = 0;
-    // Neither touch backend delivers the Up's coordinates: on both, the finger
-    // lifts wherever the last Move landed. So the end point has to be repeated as
-    // a Move or the swipe lands short of where it was authored - a full step out
-    // for a plain swipe (50% at durationMs 32), (1/steps)^n for a momentum-free
-    // one. Unconditional, because the duplicate sample does not damp the iOS
-    // fling it used to be withheld for (806px with against 803px without, n=14).
-    for (let i = 0; i <= steps; i++) {
-      // Every frame below is a 16ms sleep, so without this a cancelled run keeps
-      // driving the device for the rest of the duration, its samples interleaving
-      // into whatever gesture is sent to that device next.
-      if (ctx?.signal?.aborted) {
-        const err = new Error(
-          `gesture-swipe aborted - cancelled mid-gesture after ${i} of ${steps + 1} frames`
-        );
-        err.name = "AbortError";
-        // Down has already landed, so lift the finger before unwinding. Best
-        // effort - a cancel is often the device going away - so a lift that is
-        // refused rides along as the AbortError's `cause` rather than replacing
-        // it, which callers key on by name.
-        if (i > 0) {
-          try {
-            await sendCommand(api, {
-              cmd: "touch",
-              type: "Up",
-              x: lastX,
-              y: lastY,
-              second_x: null,
-              second_y: null,
-            });
-          } catch (liftErr) {
-            err.cause = liftErr;
+    // Re-stamped at the first Down: a verified swipe captures a frame first, and
+    // profiler annotations anchor on this timestamp.
+    let injectedAtMs = timestampMs;
+    const injectSwipe = async () => {
+      injectedAtMs = Date.now();
+      // Neither touch backend delivers the Up's coordinates: on both, the finger
+      // lifts wherever the last Move landed. So the end point has to be repeated as
+      // a Move or the swipe lands short of where it was authored - a full step out
+      // for a plain swipe (50% at durationMs 32), (1/steps)^n for a momentum-free
+      // one. Unconditional, because the duplicate sample does not damp the iOS
+      // fling it used to be withheld for (806px with against 803px without, n=14).
+      for (let i = 0; i <= steps; i++) {
+        // Every frame below is a 16ms sleep, so without this a cancelled run keeps
+        // driving the device for the rest of the duration, its samples interleaving
+        // into whatever gesture is sent to that device next.
+        if (ctx?.signal?.aborted) {
+          const err = new Error(
+            `gesture-swipe aborted - cancelled mid-gesture after ${i} of ${steps + 1} frames`
+          );
+          err.name = "AbortError";
+          // Down has already landed, so lift the finger before unwinding. Best
+          // effort - a cancel is often the device going away - so a lift that is
+          // refused rides along as the AbortError's `cause` rather than replacing
+          // it, which callers key on by name.
+          if (i > 0) {
+            try {
+              await sendCommand(api, {
+                cmd: "touch",
+                type: "Up",
+                x: lastX,
+                y: lastY,
+                second_x: null,
+                second_y: null,
+              });
+            } catch (liftErr) {
+              err.cause = liftErr;
+            }
           }
+          throw err;
         }
-        throw err;
-      }
 
-      const t = i / steps;
-      // A momentum-free swipe lifts at ~0 velocity, so the OS applies no fling.
-      // Ease-out beats a train of identical "hold" samples: those get coalesced
-      // away, leaving the fast pre-hold velocity to fling, and a beyond-the-end
-      // hold would run off-screen for a swipe that already finishes at an edge.
-      const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
-      const x = params.fromX + (params.toX - params.fromX) * progress;
-      const y = params.fromY + (params.toY - params.fromY) * progress;
-      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-      // In the Up's own frame, with no added sleep, so the cadence is unchanged.
-      if (type === "Up") {
-        await sendCommand(api, {
+        const t = i / steps;
+        // A momentum-free swipe lifts at ~0 velocity, so the OS applies no fling.
+        // Ease-out beats a train of identical "hold" samples: those get coalesced
+        // away, leaving the fast pre-hold velocity to fling, and a beyond-the-end
+        // hold would run off-screen for a swipe that already finishes at an edge.
+        const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
+        const x = params.fromX + (params.toX - params.fromX) * progress;
+        const y = params.fromY + (params.toY - params.fromY) * progress;
+        const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+        // In the Up's own frame, with no added sleep, so the cadence is unchanged.
+        if (type === "Up") {
+          await sendCommand(api, {
+            cmd: "touch",
+            type: "Move",
+            x,
+            y,
+            second_x: null,
+            second_y: null,
+          });
+        }
+        const sent = await sendCommand(api, {
           cmd: "touch",
-          type: "Move",
+          type,
           x,
           y,
           second_x: null,
           second_y: null,
         });
+        // Only the Down resolves the panel; the rest of the sequence keeps it.
+        if (type === "Down") warning = sent.warning;
+        lastX = x;
+        lastY = y;
+        if (i < steps) await sleep(16);
       }
-      const sent = await sendCommand(api, {
-        cmd: "touch",
-        type,
-        x,
-        y,
-        second_x: null,
-        second_y: null,
-      });
-      // Only the Down resolves the panel; the rest of the sequence keeps it.
-      if (type === "Down") warning = sent.warning;
-      lastX = x;
-      lastY = y;
-      if (i < steps) await sleep(16);
-    }
+    };
 
-    return { swiped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
+    const check = await runWithDeliveryVerification(api, params.verify, injectSwipe, device);
+    warning = joinWarnings(warning, check.warning);
+    return {
+      swiped: true,
+      timestampMs: injectedAtMs,
+      ...(check.verified !== undefined ? { verified: check.verified } : {}),
+      ...(warning !== undefined ? { warning } : {}),
+    };
   },
 };

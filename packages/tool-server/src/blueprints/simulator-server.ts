@@ -24,6 +24,7 @@ import {
   createMoqTransport,
   fetchDisplayState,
   KEY_ACK_TIMEOUT_MS,
+  notifyAttachClosed,
   sendCommand,
   type SimulatorDisplayState,
 } from "../utils/simulator-client";
@@ -219,6 +220,7 @@ async function buildRemoteInstance(
   return {
     api,
     dispose: async () => {
+      notifyAttachClosed(api.apiUrl);
       await moq.close();
     },
     events,
@@ -275,7 +277,11 @@ async function buildAttachedInstance(
 
   return {
     api,
-    dispose: async () => {},
+    // Never kills the provider's process, but the apiUrl outlives this
+    // instance, so per-attach caches keyed on it must still be dropped.
+    dispose: async () => {
+      notifyAttachClosed(api.apiUrl);
+    },
     events: new TypedEventEmitter<ServiceEvents>(),
   };
 }
@@ -690,6 +696,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     const instance: ServiceInstance<SimulatorServerApi> = {
       api,
       dispose: async () => {
+        notifyAttachClosed(apiUrl);
         proc.kill();
       },
       events,

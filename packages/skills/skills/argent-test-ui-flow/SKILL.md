@@ -43,6 +43,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 - Screen mid-transition or loading: wait with `await-ui-element` as in step 4, then re-check. Fall back to a fixed wait + `screenshot` only when no element reliably marks the transition. Don't poll with repeated screenshots.
 - Tap misses the target: re-run `describe` and retry once with new coordinates. If it fails twice, stop and report that the element was not found.
 - Permission dialog or modal visible: re-run `describe` first. Stay in screenshot-driven navigation only while the overlay is not exposed reliably: tap one visible button at a time, verify with the returned screenshot, and switch back to `describe` as soon as it is dismissed.
+- Taps report success but the screen never changes on an **iOS simulator** (`verified: false` with a `warning`): the simulator may have stopped delivering touches, which re-discovering coordinates does not fix. Follow `argent-device-interact` § 3 (taps reported but not landing).
 - A **saved e2e test** fails during `e2e-execute` replay (as opposed to the live steps above): follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full e2e test.
 
 **Record for replay**: if a tested flow is likely to be repeated, use the `argent-create-e2e` skill to record it as a `.yaml` test, so it can be replayed later with a single `e2e-execute` call.

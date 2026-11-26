@@ -30,6 +30,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                                           |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                                             |
 | `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, network capture and its requests (not on Vega), the Android throttle proxy |
+| `recover-touch-injection`    | Restart the CoreSimulator daemon when a local iOS simulator stops taking touches. Shuts down every booted simulator, then boots them again                   |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                                             |
 
 `list-devices` returns `devices` and, when one applies, `notes`. Each device has a `platform`, a `kind` and a `state`:
@@ -307,6 +308,29 @@ Argent sends the full screenshot again in these cases:
 A `screenshot` call always returns the full image, with its `Screenshot id` (unless `includeImageInContext` is `false` or `disable-auto-screenshot` is on).
 
 Call `screenshot` or `describe` to read the screen again.
+
+### Touch delivery check
+
+On a local iOS simulator, simulator-server can accept a touch that the app does not receive. This can occur after an Xcode debugger attached to the device. `describe` and `screenshot` continue to work. `stop-simulator-server` and `boot-device` with `force` do not clear this state.
+
+`gesture-tap` and `gesture-swipe` compare a screenshot before and after the touch. This applies on an iOS simulator and on Android. The `verify` parameter controls the check:
+
+| `verify` | Check                                                                                                     |
+| -------- | --------------------------------------------------------------------------------------------------------- |
+| not set  | Argent checks each touch until one changes the screen. Then it stops until the simulator-server restarts. |
+| `true`   | Argent checks this touch.                                                                                 |
+| `false`  | Argent does not check this touch.                                                                         |
+
+Argent samples the screen for up to about 1 second after the touch, so a slow transition still counts as a change. When a check runs, the result contains `verified`. If the screen did not change, `verified` is `false` and the result contains a `warning`. Many controls have no visible effect, so the first warning without `verify: true` does not name a fix. On a local iOS simulator, a second touch in a row with no change names `recover-touch-injection`. The check does not run while a screen recording shows the touch pointer, because the pointer changes the screen.
+
+`recover-touch-injection` takes the `udid` of a local iOS simulator. It runs these steps:
+
+1. It stops the Argent services of every local iOS simulator.
+2. It shuts down every booted simulator with `xcrun simctl shutdown all`.
+3. It stops the CoreSimulator daemon with `killall com.apple.CoreSimulator.CoreSimulatorService`. macOS starts the daemon again.
+4. It boots the device and waits until the boot completes. It also boots every other simulator that was booted before step 2, but it does not wait for them. Set `rebootAfter` to `false` to leave all simulators shut down.
+
+The result contains `recovered`, `steps`, `disposedServices`, and a `note`. `recovered` is `false` when a step failed. The `note` names each simulator that did not boot again. Use `launch-app` to open the app again after the recovery.
 
 ## Audio
 

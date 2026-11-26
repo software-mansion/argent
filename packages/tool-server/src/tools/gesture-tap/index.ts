@@ -22,10 +22,16 @@ import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { macosAppServices, macosClick, requireMacosApp } from "../../utils/macos-input";
 import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
 import { sendCommand } from "../../utils/simulator-client";
+import {
+  describeVerify,
+  joinWarnings,
+  runWithDeliveryVerification,
+  type DeliveryCheck,
+} from "../../utils/touch-verification";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-interface Result {
+interface Result extends DeliveryCheck {
   tapped: boolean;
   timestampMs: number;
   /**
@@ -37,6 +43,7 @@ interface Result {
   /**
    * Foldable iOS simulators only: the panel the device renders to could not
    * be resolved, so the tap went to the cover panel. Says why and what to check.
+   * Also carries the delivery-check warning (see `DeliveryCheck`).
    */
   warning?: string;
 }
@@ -153,6 +160,16 @@ const zodSchema = z.object({
         "loop single taps, which a double-tap recognizer may pair.<flag:harmonyos> On HarmonyOS they " +
         "land as separate taps.</flag:harmonyos> Default 1."
     ),
+  verify: z
+    .boolean()
+    .optional()
+    .describe(
+      describeVerify("tap", {
+        tail:
+          "iOS simulator and Android only. It is a frame-diff heuristic: unrelated animation can " +
+          "mask a dropped touch, and a control with no visible effect can look dropped.",
+      })
+    ),
   button: z
     .enum(["left", "right"])
     .optional()
@@ -178,7 +195,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
   description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.
 If a modifier click returns \`MACOS_APP_LIBRARY_OUTDATED\`, the tool stopped before clicking. Run \`restart-app\` to reload the library, then retry. If the error persists, use an Argent build with modifier-click support.</flag:macos-apps>
 Use when tapping a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. On an iOS simulator or Android, taps are checked against the screen until one changes it: verified: false and a warning mean the screen did not change (see the verify parameter). Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
 Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
   zodSchema,
   alwaysLoad: true,
@@ -285,27 +302,40 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
     }
     const api = services.simulatorServer as SimulatorServerApi;
     let warning: string | undefined;
-    for (let i = 1; i <= clickCount; i++) {
-      if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-      const down = await sendCommand(api, {
-        cmd: "touch",
-        type: "Down",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
-      warning ??= down.warning;
-      await sleep(TAP_HOLD_MS);
-      await sendCommand(api, {
-        cmd: "touch",
-        type: "Up",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
-    }
-    return { tapped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
+    // Re-stamped at the first Down: a verified tap captures a frame first, and
+    // profiler annotations anchor on this timestamp.
+    let injectedAtMs = timestampMs;
+    const injectTaps = async () => {
+      injectedAtMs = Date.now();
+      for (let i = 1; i <= clickCount; i++) {
+        if (i > 1) await sleep(MULTI_TAP_GAP_MS);
+        const down = await sendCommand(api, {
+          cmd: "touch",
+          type: "Down",
+          x: params.x,
+          y: params.y,
+          second_x: null,
+          second_y: null,
+        });
+        warning ??= down.warning;
+        await sleep(TAP_HOLD_MS);
+        await sendCommand(api, {
+          cmd: "touch",
+          type: "Up",
+          x: params.x,
+          y: params.y,
+          second_x: null,
+          second_y: null,
+        });
+      }
+    };
+    const check = await runWithDeliveryVerification(api, params.verify, injectTaps, device);
+    warning = joinWarnings(warning, check.warning);
+    return {
+      tapped: true,
+      timestampMs: injectedAtMs,
+      ...(check.verified !== undefined ? { verified: check.verified } : {}),
+      ...(warning !== undefined ? { warning } : {}),
+    };
   },
 };

@@ -118,6 +118,23 @@ interface Connection {
 const connections = new Map<string, Connection>();
 let cmdId = 0;
 
+const attachCloseListeners = new Set<(apiUrl: string) => void>();
+
+/** Register a callback fired when an attach's WebSocket closes. */
+export function onAttachClose(listener: (apiUrl: string) => void): void {
+  attachCloseListeners.add(listener);
+}
+
+/**
+ * Drop every per-attach cache keyed on this apiUrl. Dispose paths must call it
+ * too: a remote (MoQ) sim never opens the WebSocket below, and apiUrls are
+ * re-used by the next spawn.
+ */
+export function notifyAttachClosed(apiUrl: string): void {
+  pointerVisibleApis.delete(apiUrl);
+  for (const listener of attachCloseListeners) listener(apiUrl);
+}
+
 /**
  * A reply to a command. simulator-server echoes the request id on success
  * (`{"id":"7","status":"ok"}`) but NOT on failure — a rejected command answers
@@ -291,10 +308,12 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ws.on("error", (err: Error) => {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, err.message));
+    notifyAttachClosed(key);
   });
   ws.on("close", () => {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+    notifyAttachClosed(key);
     // The server drops the connection's capture_on_demand with it.
     if (api.deviceId) captureOnDemandDropped(api.deviceId, key);
   });
@@ -709,12 +728,28 @@ export async function resolveCapturePanel(
  * which is what makes gestures visible in a screen recording. Returns false
  * instead of throwing, so a recording is never lost to a pointer toggle.
  */
-export function setPointerVisible(
+export async function setPointerVisible(
   api: SimulatorServerApi,
   show: boolean,
   signal?: AbortSignal
 ): Promise<boolean> {
-  return pointerPost(api, { show }, signal);
+  // Asymmetric on purpose: `disable()` aborts after 2s and drops the result, so
+  // ack-gating the clear would strand the flag on a slow-but-applied POST, and a
+  // stuck `true` disables delivery verification for good.
+  if (!show) pointerVisibleApis.delete(api.apiUrl);
+  const ok = await pointerPost(api, { show }, signal);
+  if (ok && show) pointerVisibleApis.add(api.apiUrl);
+  return ok;
+}
+
+// Which simulator-servers currently have the pointer overlay on, keyed by
+// apiUrl. The overlay draws every sent touch into the frame stream whether or
+// not it landed, so frame-diff touch verification must stand down while it is on.
+const pointerVisibleApis = new Set<string>();
+
+/** Whether the touch-pointer overlay is currently on for this simulator-server. */
+export function isPointerVisible(api: SimulatorServerApi): boolean {
+  return pointerVisibleApis.has(api.apiUrl);
 }
 
 /** Frames of comet trail left behind a moving touch. */

@@ -92,6 +92,7 @@ import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-
 import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
+import { createRecoverTouchInjectionTool } from "../tools/simulator/recover-touch-injection";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
@@ -236,6 +237,7 @@ export function createRegistry(): Registry {
 
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
+  registry.registerTool(createRecoverTouchInjectionTool(registry));
   registry.registerTool(stopMetroTool);
 
   registry.registerTool(flowStartRecordingTool);

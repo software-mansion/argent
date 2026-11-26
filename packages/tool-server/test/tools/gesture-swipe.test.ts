@@ -20,6 +20,29 @@ vi.mock("../../src/utils/simulator-client", () => ({
     afterSend?.(sent.length);
     return {};
   },
+  onAttachClose: () => {},
+}));
+
+// Stub the delivery check so the tool's contract is tested on its own: it
+// passes the caller's `verify` and device through, runs the injection inside
+// the check, and folds the outcome into its result. The check policy itself is
+// covered by test/utils/touch-verification.test.ts.
+let mockCheck: { verified?: boolean; warning?: string } = {};
+const runWithDeliveryVerificationMock = vi.fn(
+  async (
+    _api: unknown,
+    _verify: boolean | undefined,
+    action: () => Promise<void>,
+    _device?: unknown
+  ) => {
+    await action();
+    return mockCheck;
+  }
+);
+vi.mock("../../src/utils/touch-verification", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/touch-verification")>()),
+  runWithDeliveryVerification: (...args: Parameters<typeof runWithDeliveryVerificationMock>) =>
+    runWithDeliveryVerificationMock(...args),
 }));
 
 import { gestureSwipeTool } from "../../src/tools/gesture-swipe";
@@ -434,4 +457,26 @@ describe("gesture-swipe interpolated-Move boundary", () => {
       expect(events.filter((e) => e.type === "Move" && e.x !== across.toX)).toHaveLength(eased);
     }
   );
+});
+
+describe("gesture-swipe delivery check", () => {
+  beforeEach(() => {
+    mockCheck = {};
+    runWithDeliveryVerificationMock.mockClear();
+  });
+
+  it("runs the whole swipe inside the check and reports its outcome", async () => {
+    sent.length = 0;
+    mockCheck = { verified: false, warning: "warn:no-change" };
+    const result = await gestureSwipeTool.execute(services, { ...base, verify: true });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      true,
+      expect.any(Function),
+      { id: IOS_UDID, platform: "ios", kind: "simulator" }
+    );
+    expect(sent[0].type).toBe("Down");
+    expect(sent[sent.length - 1].type).toBe("Up");
+    expect(result).toMatchObject({ swiped: true, verified: false, warning: "warn:no-change" });
+  });
 });

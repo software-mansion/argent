@@ -9,11 +9,37 @@ interface TouchCmd {
   y: number;
 }
 const sent: TouchCmd[] = [];
+const sentAt: number[] = [];
+let downWarning: string | undefined;
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);
-    return {};
+    sentAt.push(Date.now());
+    return cmd.type === "Down" && downWarning !== undefined ? { warning: downWarning } : {};
   },
+  onAttachClose: () => {},
+}));
+
+// Stub the delivery check so the tool's contract is tested on its own: it
+// passes the caller's `verify` and device through, runs the injection inside
+// the check, and folds the outcome into its result. The check policy itself is
+// covered by test/utils/touch-verification.test.ts.
+let mockCheck: { verified?: boolean; warning?: string } = {};
+const runWithDeliveryVerificationMock = vi.fn(
+  async (
+    _api: unknown,
+    _verify: boolean | undefined,
+    action: () => Promise<void>,
+    _device?: unknown
+  ) => {
+    await action();
+    return mockCheck;
+  }
+);
+vi.mock("../../src/utils/touch-verification", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/touch-verification")>()),
+  runWithDeliveryVerification: (...args: Parameters<typeof runWithDeliveryVerificationMock>) =>
+    runWithDeliveryVerificationMock(...args),
 }));
 
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
@@ -38,6 +64,10 @@ function runnerRig() {
 
 beforeEach(() => {
   sent.length = 0;
+  sentAt.length = 0;
+  downWarning = undefined;
+  mockCheck = {};
+  runWithDeliveryVerificationMock.mockClear();
 });
 
 describe("gesture-tap", () => {
@@ -275,5 +305,59 @@ describe("gesture-tap modifiers", () => {
     expect(gestureTapTool.services!({ udid, x: 0.5, y: 0.5, modifiers: [] })).not.toEqual({});
     await gestureTapTool.execute(touchServices, { udid, x: 0.5, y: 0.5, modifiers: [] });
     expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+  });
+});
+
+describe("gesture-tap delivery check", () => {
+  const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+
+  it("passes the caller's verify flag and the resolved device to the check", async () => {
+    await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5, verify: true });
+    // The device is what keeps the recover-touch-injection hint off Android.
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      true,
+      expect.any(Function),
+      { id: IOS_UDID, platform: "ios", kind: "simulator" }
+    );
+    await gestureTapTool.execute(touchServices, { udid: "emulator-5554", x: 0.5, y: 0.5 });
+    expect(runWithDeliveryVerificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.any(Function),
+      { id: "emulator-5554", platform: "android", kind: "emulator" }
+    );
+  });
+
+  it("reports verified:false and the warning when the screen did not change", async () => {
+    mockCheck = { verified: false, warning: "warn:no-change" };
+    const result = await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
+    expect(result).toMatchObject({ tapped: true, verified: false, warning: "warn:no-change" });
+  });
+
+  it("keeps a foldable panel warning next to the delivery warning", async () => {
+    downWarning = "warn:panel";
+    mockCheck = { verified: false, warning: "warn:no-change" };
+    const result = await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(result.warning).toBe("warn:panel warn:no-change");
+  });
+
+  it("leaves the result bare when no check ran", async () => {
+    const result = await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(result).not.toHaveProperty("verified");
+    expect(result).not.toHaveProperty("warning");
+  });
+
+  it("stamps timestampMs at the first Down, not before the frame capture", async () => {
+    // react-profiler-analyze computes commit offsets from this field.
+    const CAPTURE_MS = 60;
+    runWithDeliveryVerificationMock.mockImplementationOnce(async (_api, _verify, action) => {
+      await new Promise((resolve) => setTimeout(resolve, CAPTURE_MS));
+      await action();
+      return { verified: true };
+    });
+    const result = await gestureTapTool.execute(touchServices, { udid: IOS_UDID, x: 0.5, y: 0.5 });
+    expect(sentAt[0] - result.timestampMs).toBeLessThan(CAPTURE_MS / 2);
   });
 });
