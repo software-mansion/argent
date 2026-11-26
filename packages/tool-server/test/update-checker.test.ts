@@ -49,12 +49,12 @@ describe("update-checker", () => {
     vi.setSystemTime(NOW);
     vi.resetModules();
     vi.clearAllMocks();
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", undefined);
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
     mockGetConfigValueByKey.mockReset();
     mockGetConfigValueByKey.mockReturnValue(false);
-    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", undefined);
 
     // Re-import after module reset so each test gets fresh state.
     const mod = await import("../src/utils/update-checker");
