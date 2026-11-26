@@ -158,7 +158,8 @@ export function tvFocusTree(
   if (cursorNotListed) {
     elements.push({ ...res.focused, isFocused: true });
   }
-  const cursorNotLanded = cursorNotListed && cursorLeftBehind(res.focused!, hierarchy);
+  const cursorNotLanded =
+    cursorNotListed && cursorLeftBehind(res.focused!, res.focusable, hierarchy);
   const flags = cursorNotLanded ? { cursorNotLanded } : {};
 
   // A focusable's label and value also appear as its own children in the hierarchy.
@@ -189,11 +190,22 @@ const TEXT_ENTRY_TRAIT = 0x40000n;
  * element that accessibility treats as one item (a card, a SwiftUI `.combine`
  * stack) is never listed either, but that element is on screen around it.
  */
-function cursorLeftBehind(focused: TvElement, hierarchy: TvHierarchyResponse | null): boolean {
-  if (focused._traitsHex && BigInt(focused._traitsHex) & TEXT_ENTRY_TRAIT) return true;
+function cursorLeftBehind(
+  focused: TvElement,
+  focusable: TvElement[],
+  hierarchy: TvHierarchyResponse | null
+): boolean {
+  const isTextEntry = (element: TvElement | TvHierarchyNode) =>
+    !!element._traitsHex && (BigInt(element._traitsHex) & TEXT_ENTRY_TRAIT) !== 0n;
+  if (isTextEntry(focused)) return true;
   const screen = hierarchy?.screenFrame;
   const f = focused.frame;
   if (!hierarchy?.tree || !screen?.width || !screen.height || !f) return true;
+  // On close the form is already back in the hierarchy but no control is
+  // listed yet. Even a card behind the old keyboard key is not proof of focus.
+  const containsField = (node: TvHierarchyNode): boolean =>
+    isTextEntry(node) || (node.children ?? []).some(containsField);
+  if (focusable.length === 0 && containsField(hierarchy.tree)) return true;
   const x = f.x * screen.width;
   const y = f.y * screen.height;
   const right = x + f.width * screen.width;
@@ -203,7 +215,14 @@ function cursorLeftBehind(focused: TvElement, hierarchy: TvHierarchyResponse | n
   const EPS = 0.5;
   const encloses = (node: TvHierarchyNode): boolean => {
     const g = node.frame;
-    if (g) {
+    // A grouped accessibility item is a named leaf. Layout ancestors and
+    // static labels can cover the old cursor without containing its control.
+    if (
+      g &&
+      !node.children?.length &&
+      (node.label || node.value) &&
+      !node.traits?.includes("staticText")
+    ) {
       const gArea = g.width * g.height;
       if (
         gArea < screen.width * screen.height &&

@@ -285,7 +285,21 @@ describe("tvFocusTree — the rest of the screen", () => {
         },
         focusable: [],
       },
-      hierarchy([field])
+      // tvOS 27.2: the form's Profile label covers the keyboard button's old
+      // position. The enclosing layout view does too. Neither owns the button.
+      hierarchy([
+        {
+          frame: { x: 50, y: 50, width: 1820, height: 980 },
+          children: [
+            {
+              label: "Profile",
+              traits: ["staticText"],
+              frame: { x: 80, y: 80, width: 1760, height: 920 },
+            },
+            field,
+          ],
+        },
+      ])
     );
     // Opening: the text field keeps focus while only the keyboard is listed,
     // and a wrapper around the field is larger than it.
@@ -308,6 +322,22 @@ describe("tvFocusTree — the rest of the screen", () => {
 
     expect(hasTvCursor(closing)).toBe(false);
     expect(hasTvCursor(opening)).toBe(false);
+  });
+
+  it("waits for focus on a returning form even if a card covers the old key", () => {
+    const closing = tvFocusTree(
+      { focused: { label: "done", frame: pt(893, 798, 133, 63) }, focusable: [] },
+      hierarchy([
+        { label: "Profile card", frame: { x: 80, y: 80, width: 1760, height: 920 } },
+        {
+          label: "Name",
+          _traitsHex: "0x2200040000",
+          frame: { x: 496, y: 310, width: 808, height: 91 },
+        },
+      ])
+    );
+
+    expect(hasTvCursor(closing)).toBe(false);
   });
 
   it("keeps `role` to what the remote can reach", () => {

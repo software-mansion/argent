@@ -33,6 +33,7 @@ export interface TvHierarchyNode {
   label?: string;
   value?: string;
   traits?: string[];
+  _traitsHex?: string;
   frame?: { x: number; y: number; width: number; height: number };
   children?: TvHierarchyNode[];
 }

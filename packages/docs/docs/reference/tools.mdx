@@ -196,6 +196,10 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 | `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
+On an Apple TV simulator, `await-screen-idle` checks focus during keyboard transitions. tvOS can still report the old control after the keyboard opens or closes.
+
+By default, `screenshot` captures an Apple TV simulator frame as JPEG and resizes it to PNG. Set `scale` explicitly to avoid JPEG compression. Use `scale: 1` for full-resolution comparisons.
+
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
