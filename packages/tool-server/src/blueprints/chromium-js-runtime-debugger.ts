@@ -10,7 +10,7 @@ import { CHROMIUM_CDP_NAMESPACE, type ChromiumCdpApi } from "./chromium-cdp";
 import type { ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
-import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { LogFileWriter, detachedCopy } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import {
@@ -58,16 +58,17 @@ type StackTrace = ConsoleLogEntry["stackTrace"];
 
 /** Matches the entry cap of LogFileWriter. */
 const MAX_REPLAY_KEYS = 50_000;
+const REPLAY_KEY_PREFIX_CHARS = 64;
 
-interface BrowserMessage {
-  level: string;
-  message: string;
-  timestamp: number;
-  stackTrace?: StackTrace;
+type RecordedFields = Omit<ConsoleLogEntry, "id">;
+
+function replayKey({ timestamp, level, message }: RecordedFields): string {
+  const prefix = detachedCopy(message.slice(0, REPLAY_KEY_PREFIX_CHARS));
+  return `${timestamp}|${level}|${message.length}|${prefix}`;
 }
 
 /** A `Log.entryAdded` message the browser wrote itself, such as a failed resource load. */
-function browserLogMessage(params: Record<string, unknown>): BrowserMessage {
+function browserLogMessage(params: Record<string, unknown>): RecordedFields {
   const entry = (params.entry ?? {}) as {
     level?: string;
     text?: string;
@@ -77,6 +78,7 @@ function browserLogMessage(params: Record<string, unknown>): BrowserMessage {
   };
   const text = entry.text ?? "";
   return {
+    args: [],
     level: entry.level === "verbose" ? "debug" : (entry.level ?? "info"),
     message: entry.url && !text.includes(entry.url) ? `${text} ${entry.url}` : text,
     timestamp: entry.timestamp ?? NaN,
@@ -85,7 +87,7 @@ function browserLogMessage(params: Record<string, unknown>): BrowserMessage {
 }
 
 /** A `Runtime.exceptionThrown` message: an uncaught error or an unhandled rejection. */
-function uncaughtExceptionMessage(params: Record<string, unknown>): BrowserMessage {
+function uncaughtExceptionMessage(params: Record<string, unknown>): RecordedFields {
   const details = (params.exceptionDetails ?? {}) as {
     text?: string;
     exception?: { description?: string; value?: unknown };
@@ -97,6 +99,7 @@ function uncaughtExceptionMessage(params: Record<string, unknown>): BrowserMessa
     (exception && "value" in exception ? stringifyConsoleValue(exception.value) : undefined);
   const text = details.text ?? "Uncaught";
   return {
+    args: [],
     level: "error",
     message: thrown ? `${text} ${thrown}` : text,
     timestamp: (params.timestamp as number | undefined) ?? NaN,
@@ -215,15 +218,15 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // Selecting a tab again replays its earlier messages with their original
     // timestamps, which Chrome gives to the microsecond.
     const recorded = new Set<string>();
-    const isReplay = (fields: Omit<ConsoleLogEntry, "id">): boolean => {
+    const isReplay = (fields: RecordedFields): boolean => {
       if (!Number.isFinite(fields.timestamp)) return false;
-      const key = `${fields.timestamp}|${fields.level}|${fields.message}`;
+      const key = replayKey(fields);
       if (recorded.has(key)) return true;
       if (recorded.size < MAX_REPLAY_KEYS) recorded.add(key);
       return false;
     };
 
-    const record = (fields: Omit<ConsoleLogEntry, "id">) => {
+    const record = (fields: RecordedFields) => {
       if (isReplay(fields)) return;
       // Timestamps are ms-since-epoch on Chrome as on Hermes (see
       // consoleTimestampToIso); keep them finite so streamed entries carry a
@@ -257,9 +260,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     const onBrowserEvent = (method: string, params: Record<string, unknown>) => {
       if (method === "Log.entryAdded") {
-        record({ args: [], ...browserLogMessage(params) });
+        record(browserLogMessage(params));
       } else if (method === "Runtime.exceptionThrown") {
-        record({ args: [], ...uncaughtExceptionMessage(params) });
+        record(uncaughtExceptionMessage(params));
       }
     };
     cdp.events.on("event", onBrowserEvent);

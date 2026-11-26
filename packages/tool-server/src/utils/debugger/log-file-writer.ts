@@ -352,7 +352,7 @@ function isHighSurrogate(code: number): boolean {
 }
 
 /** A `slice` can keep the whole original string alive; a byte copy holds only the cut. */
-function detachedCopy(text: string): string {
+export function detachedCopy(text: string): string {
   return Buffer.from(text, "utf16le").toString("utf16le");
 }
 

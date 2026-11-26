@@ -474,6 +474,64 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     }
   });
 
+  it("keys replays on a short prefix, so long messages sharing it stay apart", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const prefix = "x".repeat(20_000);
+      const log = (message: string, timestamp: number) =>
+        fake.events.emit("consoleAPICalled", {
+          type: "log",
+          args: [{ type: "string", value: message }],
+          timestamp,
+        });
+      log(`${prefix}a`, 1710000000000.125);
+      log(`${prefix}b`, 1710000000000.25);
+      log(`${prefix}bc`, 1710000000000.25);
+      log(`${prefix}a`, 1710000000000.125);
+      expect(received.map((r) => r.message.slice(prefix.length))).toEqual(["a", "b", "bc"]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("drops replayed Log.entryAdded and Runtime.exceptionThrown messages", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const replayBoth = () => {
+        fake.events.emit("event", "Log.entryAdded", {
+          entry: { level: "error", text: "Failed to load resource", timestamp: 1710000000000.5 },
+        });
+        fake.events.emit("event", "Runtime.exceptionThrown", {
+          timestamp: 1710000000000.75,
+          exceptionDetails: { text: "Uncaught", exception: { description: "Error: boom" } },
+        });
+      };
+      replayBoth();
+      replayBoth();
+      expect(received.map((r) => r.message)).toEqual([
+        "Failed to load resource",
+        "Uncaught Error: boom",
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("records every message that has no timestamp", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const entry = { entry: { level: "warning", text: "no time" } };
+      fake.events.emit("event", "Log.entryAdded", entry);
+      fake.events.emit("event", "Log.entryAdded", entry);
+      expect(received).toEqual([
+        { level: "warning", message: "no time" },
+        { level: "warning", message: "no time" },
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it("dispose stops recording browser messages", async () => {
     const { fake, instance, received } = await captureLogs();
     await instance.dispose();
