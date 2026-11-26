@@ -46,6 +46,13 @@ export const INSTALL_MODE_FLAG_CONFLICT: InstallerFailureSignal = {
   error_kind: "validation",
 };
 
+export const INSTALL_NEEDS_TERMINAL: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_NEEDS_TERMINAL,
+  failure_stage: "installer_init_prompt",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 export const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_FROM_TAR_PACKAGE_FAILED,
   failure_stage: "installer_from_tar_package_install",
