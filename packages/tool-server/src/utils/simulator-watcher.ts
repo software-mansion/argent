@@ -414,10 +414,11 @@ export function startSimulatorWatcher(registry: Registry): {
   const armsInFlight = new Map<string, Promise<void>>();
   const armThisWatcher = (udid: string): Promise<void> => {
     if (!isWatched(udid)) return Promise.resolve();
-    const existing = armsInFlight.get(udid);
+    const key = udid.toUpperCase();
+    const existing = armsInFlight.get(key);
     if (existing) return existing;
-    const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(udid));
-    armsInFlight.set(udid, arming);
+    const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(key));
+    armsInFlight.set(key, arming);
     return arming;
   };
   armTarget = armThisWatcher;

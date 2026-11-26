@@ -176,6 +176,20 @@ describe("armSimulator", () => {
     expect(resolveService).toHaveBeenCalledTimes(1);
   });
 
+  it("shares one attempt between calls that spell a simulator in different cases", async () => {
+    vi.useFakeTimers();
+    listsBooted();
+    const lettered = "ABCDEF01-2345-4678-9ABC-DEF012345678";
+    const resolveService = vi.fn(() => new Promise(() => {}));
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+
+    void armSimulator(lettered);
+    void armSimulator(lettered.toLowerCase());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolveService).toHaveBeenCalledTimes(1);
+  });
+
   it("is not awaited by a cross-platform tool call on an Android device", async () => {
     listsBooted();
     const resolveService = vi.fn(async () => ({ ensureEnvReady: async () => {} }));
