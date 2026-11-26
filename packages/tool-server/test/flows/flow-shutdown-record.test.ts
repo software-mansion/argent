@@ -166,6 +166,31 @@ describe("recording into shutdown:", () => {
     );
   });
 
+  it("does not say a cancelled fragment ran its shutdown", async () => {
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("frag.yaml"), "steps:\n  - echo: frag\nshutdown:\n  - echo: down\n");
+    const { registry } = mockRegistry({
+      ok: false,
+      steps: [
+        { kind: "echo", status: "skip", reason: "run aborted" },
+        { kind: "echo", status: "skip", reason: "run aborted", shutdown: true },
+      ],
+    });
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const out = (await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+      }
+    )) as { message: string };
+
+    expect(out.message).not.toContain("ran its shutdown");
+  });
+
   it("keeps what a shutdown script returns out of the later steps, as a replay does", async () => {
     await fs.mkdir(path.join(root, "scripts"), { recursive: true });
     await fs.writeFile(

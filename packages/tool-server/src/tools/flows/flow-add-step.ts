@@ -928,11 +928,15 @@ async function activeFlowState(
 }
 
 /** Whether a nested run's report holds a step of a `shutdown:` block. */
+/** Whether a nested run's report holds a step of a `shutdown:` block that ran (a cancel skips them). */
 function reportsShutdown(result: unknown): boolean {
   const steps = (result as { steps?: unknown } | null)?.steps;
   return (
     Array.isArray(steps) &&
-    steps.some((s) => (s as { shutdown?: unknown } | null)?.shutdown === true)
+    steps.some((s) => {
+      const step = s as { shutdown?: unknown; status?: unknown } | null;
+      return step?.shutdown === true && step.status !== "skip";
+    })
   );
 }
 
@@ -1733,16 +1737,24 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         : undefined;
       // A deferred shutdown whose `run:` step is not recorded runs now: a
       // replay has no step to run it for. Unless a drain already ran it from
-      // the session, which takes it before the append (below).
+      // the session, which takes it before the append (below). Returns the
+      // clause the call's error gives it.
       let queued = false;
-      const runUnrecordedShutdown = async (): Promise<void> => {
+      const runUnrecordedShutdown = async (): Promise<string> => {
         const run = sharedOutput?.deferredShutdown;
-        if (!run) return;
+        if (!run) return "";
         delete sharedOutput.deferredShutdown;
         const at = session.deferredShutdown?.indexOf(run) ?? -1;
         if (at >= 0) session.deferredShutdown!.splice(at, 1);
-        else if (queued) return;
-        await run(ctx, { doc: sharedOutput.doc }, []).catch(() => undefined);
+        else if (queued) return "";
+        const steps: object[] = [];
+        await run(ctx, { doc: sharedOutput.doc }, steps).catch(() => undefined);
+        const ok = !steps.some((s) =>
+          ["fail", "error"].includes((s as { status?: string }).status ?? "")
+        );
+        return ` No step was recorded, so the shutdown: of the fragment ran now (${
+          ok ? "it passed" : "a step failed"
+        }), and the device is as it would be after a replay of it.`;
       };
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
@@ -1800,14 +1812,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       if (linked && command === RUN_TARGET_COMMAND) {
         const outcome = nestedOrchestratorOutcome(RUN_TARGET_COMMAND, toolResult);
         if (outcome) {
-          await runUnrecordedShutdown();
+          const ranShutdown = await runUnrecordedShutdown();
           throw new FailureError(
-            outcome.status === "fail"
+            (outcome.status === "fail"
               ? `Cannot record this call: the nested e2e test did not pass (${outcome.reason}). A ` +
-                  `replay over the same link fails at the same step. No step was recorded. Fix ` +
-                  `the nested e2e test, then call e2e-add-step again.`
+                `replay over the same link fails at the same step. No step was recorded. Fix ` +
+                `the nested e2e test, then call e2e-add-step again.`
               : `Cannot record this call: the nested e2e test did not run (${outcome.reason}). No ` +
-                  `step was recorded.`,
+                `step was recorded.`) + ranShutdown,
             {
               error_code: FAILURE_CODES.FLOW_FILE_INVALID,
               failure_stage: "flow_add_step_nested_failed",
@@ -2002,9 +2014,12 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       try {
         ({ savedTo, stepCount } = await appendStepToFlow(session, step, block));
       } catch (err) {
-        await runUnrecordedShutdown();
-        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
-        const refused = err instanceof Error ? err.message : String(err);
+        const ranShutdown = await runUnrecordedShutdown();
+        if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") {
+          if (err instanceof Error) err.message += ranShutdown;
+          throw err;
+        }
+        const refused = (err instanceof Error ? err.message : String(err)) + ranShutdown;
         // A host-mode append re-parses the file, so the scan that checks
         // output references sees the steps ALREADY there as well — and a
         // mid-recording hand edit is a supported way for one of those to break

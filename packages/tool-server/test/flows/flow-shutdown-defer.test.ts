@@ -36,7 +36,7 @@ function registry(): Registry {
 async function script(name: string, body: string): Promise<void> {
   await fs.writeFile(
     path.join(root, "scripts", name),
-    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";\n` +
+    `import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";\n` +
       `const STATE = ${JSON.stringify(state)};\nconst LOG = ${JSON.stringify(log)};\n${body}\n`
   );
 }
@@ -188,17 +188,21 @@ describe("a fragment recorded as run: in steps:", () => {
     expect(finished.message).toContain("(2 steps, 1 failed; see fragmentShutdown)");
   });
 
-  it("skips it when the call that runs it is cancelled", async () => {
+  it("keeps it for a later call when the call that runs it is cancelled", async () => {
     await recorder(registry()).run("login");
     const cancelled = new AbortController();
     cancelled.abort();
 
-    const finished = await recorder(registry(), cancelled.signal).finish();
-
+    await recorder(registry(), cancelled.signal)
+      .script("need-out.mjs", true)
+      .catch(() => undefined);
+    await expect(recorder(registry(), cancelled.signal).finish()).rejects.toThrow(/still open/);
     expect(await readState()).toBe("in");
-    expect(finished.fragmentShutdown?.steps).toMatchObject([
-      { status: "skip", reason: "run aborted", shutdown: true },
-    ]);
+
+    const finished = await recorder(registry()).finish();
+
+    expect(await readState()).toBe("out");
+    expect(finished.fragmentShutdown?.steps).toMatchObject([{ status: "pass", shutdown: true }]);
   });
 
   it("keeps nothing for later from a cancelled run, which skips its shutdown", async () => {
@@ -249,22 +253,36 @@ describe("a fragment recorded as run: in steps:", () => {
   });
 
   it("runs a fragment recorded while the finish runs another's shutdown", async () => {
+    // The finish holds its lock while slow-out.mjs waits for the release, and
+    // login is recorded in that window.
     await script(
       "slow-out.mjs",
-      `await new Promise((r) => setTimeout(r, 1500)); appendFileSync(LOG, "slow\\n");`
+      `writeFileSync(STATE + ".mark", "");\n` +
+        `const until = Date.now() + 10000;\n` +
+        `while (!existsSync(STATE + ".release") && Date.now() < until) await new Promise((r) => setTimeout(r, 20));\n` +
+        `appendFileSync(LOG, "slow\\n");`
     );
     await fs.writeFile(
       e2e("slow.yaml"),
       "steps:\n  - echo: slow\nshutdown:\n  - script: { path: ../../scripts/slow-out.mjs }\n"
     );
-    const r = registry();
-    const rec = recorder(r);
+    const rec = recorder(registry());
     await rec.run("slow");
+    const until = async (check: () => Promise<boolean>) => {
+      while (!(await check())) await new Promise((r) => setTimeout(r, 20));
+    };
 
     const finishing = rec.finish();
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    await rec.run("login").catch(() => undefined);
-    await finishing;
+    await until(() =>
+      fs.access(`${state}.mark`).then(
+        () => true,
+        () => false
+      )
+    );
+    const login = rec.run("login").catch(() => undefined);
+    await until(async () => (await readState().catch(() => "")) === "in");
+    await fs.writeFile(`${state}.release`, "");
+    await Promise.all([finishing, login]);
 
     expect(await readLog()).toContain("login saw");
     expect(await readState()).toBe("out");
@@ -288,7 +306,7 @@ describe("a fragment recorded as run: in steps:", () => {
     // A hand edit the next append cannot parse.
     await fs.writeFile(e2e("t.yaml"), "steps: [\n");
 
-    await expect(recorder(r).run("login")).rejects.toThrow();
+    await expect(recorder(r).run("login")).rejects.toThrow(/the shutdown: of the fragment ran now/);
 
     expect(await readState()).toBe("out");
     expect(await readLog()).toBe("login saw -\n");

@@ -5238,8 +5238,9 @@ export interface FragmentShutdownReport {
  * ({@link RecordingSession.deferredShutdown}), newest first, in the call `ctx`,
  * as a replay runs them before the test's own shutdown steps. Each block runs
  * after one before it failed. What they return goes to the later shutdown
- * calls only ({@link keepRecordingOutput}). Undefined when nothing was
- * deferred.
+ * calls only ({@link keepRecordingOutput}). A block the call's cancel reached
+ * stays kept, for a later call to run, since the recording goes on. Undefined
+ * when no step ran.
  */
 export async function runDeferredShutdown(
   session: RecordingSession,
@@ -5252,16 +5253,23 @@ export async function runDeferredShutdown(
   const ranAgainst = recordingOutput(session, "shutdown");
   const output = { doc: structuredClone(ranAgainst) };
   const steps: object[] = [];
+  const kept: typeof queued = [];
   let thrown: { error: unknown } | undefined;
-  for (const run of queued.reverse()) {
-    try {
-      await run(ctx, output, steps);
-    } catch (error) {
-      thrown ??= { error };
+  for (const run of [...queued].reverse()) {
+    if (!ctx?.signal?.aborted) {
+      try {
+        await run(ctx, output, steps);
+      } catch (error) {
+        thrown ??= { error };
+      }
     }
+    // Recording order, ahead of any block queued while this one ran.
+    if (ctx?.signal?.aborted) kept.unshift(run);
   }
+  if (kept.length > 0) session.deferredShutdown = [...kept, ...(session.deferredShutdown ?? [])];
   keepRecordingOutput(session, "shutdown", output.doc, ranAgainst);
   if (thrown) throw thrown.error;
+  if (steps.length === 0) return undefined;
   const failed = steps.some((s) => {
     const status = (s as { status?: unknown }).status;
     return status === "fail" || status === "error";
@@ -5272,14 +5280,18 @@ export async function runDeferredShutdown(
 /** The sentence a recording call's message or error gives a {@link FragmentShutdownReport}. */
 export function fragmentShutdownNote(report: FragmentShutdownReport): string {
   const total = report.steps.length;
-  const failed = report.steps.filter((s) => {
-    const status = (s as { status?: unknown }).status;
-    return status === "fail" || status === "error";
-  }).length;
+  const count = (...statuses: string[]) =>
+    report.steps.filter((s) => statuses.includes((s as { status?: string }).status ?? "")).length;
+  const failed = count("fail", "error");
+  const skipped = count("skip");
   return (
     `Separately, the recording ran the kept shutdown: of the fragments recorded as run: ` +
     `steps, as a replay does before the shutdown steps (${total} ${total === 1 ? "step" : "steps"}` +
-    (failed === 0 ? ")." : `, ${failed} failed; see fragmentShutdown).`)
+    (failed === 0 ? "" : `, ${failed} failed; see fragmentShutdown`) +
+    (skipped === 0
+      ? ""
+      : `, ${skipped} skipped as cancelled, which a later shutdown call or the finish runs again`) +
+    `).`
   );
 }
 
@@ -5288,7 +5300,7 @@ export function fragmentShutdownNote(report: FragmentShutdownReport): string {
  * and say in its message, or in its error, that the shutdown ran: it has, also
  * when the call is then refused.
  */
-export async function afterDeferredShutdown<R extends { message: string }>(
+async function afterDeferredShutdown<R extends { message: string }>(
   session: RecordingSession,
   ctx: ToolContext | undefined,
   call: () => Promise<R>

@@ -191,6 +191,16 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       async () => {
         const session = await requireRecordingSession(params.project_root, params.name);
         fragmentShutdown = await runDeferredShutdown(session, ctx);
+        // Kept for a later call after a cancel: the session must stay open to
+        // run them. A block a `run:` step queued meanwhile runs when its
+        // append fails on the closed session.
+        if (ctx?.signal?.aborted && session.deferredShutdown?.length) {
+          throw new Error(
+            `The finish was cancelled before the kept shutdown: of the fragments recorded as ` +
+              `run: steps ran, so the recording "${params.name}" is still open. Call ` +
+              `e2e-finish-recording again.`
+          );
+        }
 
         // Host mode re-reads so manual edits made during the recording reach the
         // summary; in client mode this host never has the file, so the in-memory
