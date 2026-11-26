@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
@@ -365,13 +366,14 @@ export async function screenRecordFetch(
 }
 
 /** What `sim-remote fold --json` prints. */
-export interface RemoteFold {
+const remoteFoldSchema = z.object({
   /** The angle the hinge was moved to, in degrees. */
-  hinge_angle: number;
+  hinge_angle: z.number(),
   /** Screen id of the panel the device renders to; null when the runner could not tell. */
-  live_screen: number | null;
-  warning?: string;
-}
+  live_screen: z.number().nullable(),
+  warning: z.string().optional(),
+});
+export type RemoteFold = z.infer<typeof remoteFoldSchema>;
 
 // The first sweep after a simulator-server starts can take it 30 s to begin,
 // and the runner then waits for the device to hand over to the other panel.
@@ -382,11 +384,14 @@ export async function fold(udid: string, target: string): Promise<RemoteFold> {
   const args = ["fold", stripRemotePrefix(udid), target, "--json"];
   const { stdout } = await run(args, { timeoutMs: FOLD_TIMEOUT_MS });
   try {
-    return JSON.parse(stdout) as RemoteFold;
+    return remoteFoldSchema.parse(JSON.parse(stdout));
   } catch (err) {
-    throw new Error(`sim-remote fold returned non-JSON output: ${(err as Error).message}`, {
-      cause: err,
-    });
+    throw new Error(
+      `sim-remote fold printed something other than a fold: ${(err as Error).message}`,
+      {
+        cause: err,
+      }
+    );
   }
 }
 

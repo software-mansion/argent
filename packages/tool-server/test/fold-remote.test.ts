@@ -113,4 +113,12 @@ describe("fold on a remote simulator", () => {
       "the hinge can only be moved on a foldable iOS simulator"
     );
   });
+
+  it("fails when sim-remote prints something other than a fold", async () => {
+    reply = { stdout: "{}" };
+
+    await expect(fold({ posture: "open" })).rejects.toThrow(
+      "sim-remote fold printed something other than a fold"
+    );
+  });
 });
