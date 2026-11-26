@@ -90,7 +90,12 @@ export async function reapAndroidScreenSharingAgent(
   // command carries the pattern too. An unescaped pattern makes the shell kill
   // itself first. `--socket=` scopes the kill to this session.
   const pkill = runAdb(
-    ["-s", serial, "shell", `pkill -f 'screensharing[.]Main.*--socket=${socket}'`],
+    [
+      "-s",
+      serial,
+      "shell",
+      `pkill -HUP -f 'screensharing[.]Main.*--socket=${socket}( |$)' || { rc=$?; [ "$rc" = 1 ] && exit 42; exit "$rc"; }`,
+    ],
     { timeoutMs: REAP_ADB_TIMEOUT_MS }
   ).then(
     // Exit 0: a live agent was found, so the binary did not clean up after
@@ -101,9 +106,13 @@ export async function reapAndroidScreenSharingAgent(
       );
       if (record) await forgetAgent(record).catch(() => {});
     },
-    (err: unknown) => {
-      // Exit 1 is "nothing matched", the healthy case.
-      if (getFailureSignal(err)?.failure_exit_code === 1) return;
+    async (err: unknown) => {
+      // Only the remote shell translates "nothing matched" to 42. adb itself
+      // exits 1 on transport failure, when the retry record is still needed.
+      if (getFailureSignal(err)?.failure_exit_code === 42) {
+        if (record) await forgetAgent(record).catch(() => {});
+        return;
+      }
       process.stderr.write(
         `[argent] could not stop the screen-sharing agent on ${serial}: ` +
           `${err instanceof Error ? err.message : String(err)}\n`

@@ -780,7 +780,12 @@ describe("simulatorServerBlueprint — reaps the on-device screen-sharing agent 
   // mirror, which runs the same class from the same path.
   const SERIAL = "HT82A0203045";
   const SOCKET = "screen-sharing-agent-46527";
-  const PKILL = ["-s", SERIAL, "shell", `pkill -f 'screensharing[.]Main.*--socket=${SOCKET}'`];
+  const PKILL = [
+    "-s",
+    SERIAL,
+    "shell",
+    `pkill -HUP -f 'screensharing[.]Main.*--socket=${SOCKET}( |$)' || { rc=$?; [ "$rc" = 1 ] && exit 42; exit "$rc"; }`,
+  ];
   const UNREVERSE = ["-s", SERIAL, "reverse", "--remove", `localabstract:${SOCKET}`];
 
   const physicalDevice = (): DeviceInfo => ({ id: SERIAL, platform: "android", kind: "device" });
@@ -990,12 +995,12 @@ describe("simulatorServerBlueprint — reaps the on-device screen-sharing agent 
       reverseListReturns("", listed(SOCKET));
       const instance = await startPhone(exitingProc());
       runAdbMock.mockRejectedValue(
-        new FailureError("adb exited 1", {
+        new FailureError("adb exited 42", {
           error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
           failure_stage: "android_adb_command",
           failure_area: "tool_server",
           error_kind: "subprocess",
-          failure_exit_code: 1,
+          failure_exit_code: 42,
         })
       );
       await instance.dispose();

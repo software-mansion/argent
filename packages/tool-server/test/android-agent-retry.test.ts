@@ -1,8 +1,11 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberAgent, retryPendingAgents } from "../src/utils/android-agent-retry";
+import { reapAndroidScreenSharingAgent } from "../src/utils/android-agent-reap";
 import { runAdb } from "../src/utils/adb";
 
 let home: string;
@@ -26,6 +29,29 @@ describe("pending Android agent cleanup", () => {
     vi.mocked(runAdb).mockReset();
   });
   afterEach(() => rm(home, { recursive: true, force: true }));
+
+  it.each([true, false])(
+    "queues a retry only if teardown lost transport (online=%s)",
+    async (online) => {
+      vi.mocked(runAdb).mockImplementation(async (args) => {
+        if (args[2] !== "shell") return { stdout: "", stderr: "" };
+        // A clean exit leaves no agent for pkill. A disconnected adb also
+        // exits 1, but never runs the remote shell in the first place.
+        const code = online
+          ? spawnSync("sh", ["-c", `pkill() { return 1; }; ${args[3]}`]).status!
+          : 1;
+        throw new FailureError(`adb exited ${code}`, {
+          error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+          failure_stage: "android_adb_command",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_exit_code: code,
+        });
+      });
+      await reapAndroidScreenSharingAgent("usb", socket, record);
+      expect(await records()).toEqual(online ? [] : [record]);
+    }
+  );
 
   it("keeps the record offline, then reaps through a new transport for the same boot", async () => {
     await rememberAgent(record);

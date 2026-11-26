@@ -73,7 +73,7 @@ export async function retryPendingAgents(): Promise<void> {
           `elif ! ticks=$(awk '{print $22}' /proc/${pid}/stat); then exit 1; ` +
           `elif [ "$ticks" != '${start}' ]; then echo gone; ` +
           `elif pgrep -f '${processPattern(socket!)}' | grep -qx '${pid}'; then ` +
-          `kill ${pid} && echo stopped; fi`
+          `kill -HUP ${pid} && echo stopped; fi`
       ).catch(() => "");
       if (outcome === "stopped") {
         process.stderr.write(
