@@ -157,6 +157,7 @@ const flowAddStepSchema: JsonSchema = {
     command: { type: "string" },
     args: { type: "string" },
     delayMs: { type: "integer" },
+    shutdown: { type: "boolean" },
   },
   required: ["name", "project_root", "command"],
 };
