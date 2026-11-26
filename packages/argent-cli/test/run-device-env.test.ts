@@ -175,6 +175,12 @@ describe("applyDeviceFromEnv", () => {
     expect(payload).toEqual({ udid: "emulator-5554" });
   });
 
+  it("keeps a device field the call set to null", () => {
+    const payload: Record<string, unknown> = { udid: null };
+    applyDeviceFromEnv(payload, gestureTap.inputSchema, { ARGENT_UDID: "X" });
+    expect(payload).toEqual({ udid: null });
+  });
+
   it("skips a retired device field", () => {
     const payload: Record<string, unknown> = {};
     const schema = {
