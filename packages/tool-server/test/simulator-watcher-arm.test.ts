@@ -63,7 +63,7 @@ describe("armSimulator", () => {
     let finishInit!: () => void;
     const ensureEnvReady = vi.fn(async () => {});
     const resolveService = vi.fn(
-      () =>
+      (_urn: string) =>
         new Promise((resolve) => {
           finishInit = () => resolve({ ensureEnvReady });
         })
