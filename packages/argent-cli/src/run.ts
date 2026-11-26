@@ -5,6 +5,7 @@ import {
   materializeArtifacts,
   getDeviceIdFromArgs,
   shouldAutoScreenshot,
+  autoScreenshotEnabled,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
@@ -449,7 +450,10 @@ settled=false or debugger-status's not_connected.
         await saveImage(async () => writeImageFile(outPath, screenshot.data));
         console.log(`Wrote: ${outPath}`);
       } else if (shouldAutoScreenshot(toolName, payload)) {
-        console.error(`No screen was captured, so ${outPath} was not written.`);
+        const reason = autoScreenshotEnabled()
+          ? "No screen was captured"
+          : "The disable-auto-screenshot flag is on";
+        console.error(`${reason}, so ${outPath} was not written.`);
       }
     }
   }

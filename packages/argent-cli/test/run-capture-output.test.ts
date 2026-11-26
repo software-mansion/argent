@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AUTO_DESCRIBE_HEADER } from "@argent/tools-client";
+import { setFlag } from "@argent/configuration-core";
 import { run } from "../src/run.js";
 
 const SHOT = { localPath: "/tmp/after.png", data: Buffer.from("png"), mimeType: "image/png" };
@@ -111,5 +112,15 @@ describe("argent run after an interaction tool", () => {
     expect(logs).toEqual([JSON.stringify({ tapped: true }, null, 2)]);
     expect(errs[0]).toContain("Auto-screenshot and element tree skipped");
     expect(errs.at(-1)).toBe(`No screen was captured, so ${out} was not written.`);
+  });
+
+  it("names the disable-auto-screenshot flag when --out gets no screen", async () => {
+    const out = path.join(tmp, "after.png");
+    setFlag("disable-auto-screenshot", true, "global");
+
+    await run([...tapArgs, "--out", out], { paths: {} as never });
+
+    expect(fs.existsSync(out)).toBe(false);
+    expect(errs.at(-1)).toBe(`The disable-auto-screenshot flag is on, so ${out} was not written.`);
   });
 });
