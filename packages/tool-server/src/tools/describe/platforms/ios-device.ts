@@ -49,6 +49,9 @@ export async function describeIosDevice(
           "The screenshot shows what the tree dropped."
         : summary +
           "The tree may be incomplete; retry after the UI settles, or fall back to the screenshot.";
+    // For the e2e runner's tree (`describe` sends no `truncated`). The runner
+    // reports only this cut: its depth limits leave no mark.
+    if (quality.reasonCode === "node_cap") data.truncated = true;
   } else if (data.tree.children.length === 0) {
     // Blind-read guards key off this hint. Every childless tree must carry one.
     data.hint =

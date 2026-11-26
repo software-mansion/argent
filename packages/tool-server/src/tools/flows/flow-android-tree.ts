@@ -398,7 +398,7 @@ export async function queryAndroidFullHierarchy(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`the argent android helper is unavailable: ${msg}`, { cause: err });
   }
-  const [{ xml, captureMode }, size] = await Promise.all([
+  const [{ xml, captureMode, truncated }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
     devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true, ...options }),
     devtools.getScreenSize(),
@@ -415,5 +415,7 @@ export async function queryAndroidFullHierarchy(
     ...(size.width > 0 && size.height > 0
       ? { screen: { width: size.width, height: size.height } }
       : {}),
+    // The helper cut the dump at FLOW_MAX_NODES nodes or its depth limit.
+    ...(truncated ? { truncated: true } : {}),
   };
 }

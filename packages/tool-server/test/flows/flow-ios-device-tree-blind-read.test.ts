@@ -146,4 +146,25 @@ describe("queryIosDeviceFlowTree: blind (childless runner tree) reads", () => {
       children: [],
     });
   });
+
+  it.each([
+    ["the node cap", "node_cap", true],
+    ["another degraded reason", "SNAPSHOT_TIMEOUT", undefined],
+  ])("flags truncated for %s only", async (_name, reasonCode, truncated) => {
+    const run = vi.fn(async () => ({
+      nodes: [appRoot(), continueButton()],
+      quality: { state: "degraded", backend: "xctest", reasonCode },
+    }));
+    const data = await queryIosDeviceFlowTree(registryFor({ udid: DEVICE_UDID, run }), IOS_DEVICE);
+    expect(data.truncated).toBe(truncated);
+  });
+
+  it("sets no truncated on a healthy snapshot", async () => {
+    const run = vi.fn(async () => ({
+      nodes: [appRoot(), continueButton()],
+      quality: { state: "healthy" },
+    }));
+    const data = await queryIosDeviceFlowTree(registryFor({ udid: DEVICE_UDID, run }), IOS_DEVICE);
+    expect("truncated" in data).toBe(false);
+  });
 });

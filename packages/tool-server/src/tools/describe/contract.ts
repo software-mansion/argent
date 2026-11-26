@@ -81,6 +81,11 @@ export interface DescribeNode {
   // the e2e conditions do not see it. Set by the e2e runner's tree adapters only; the
   // describe tool leaves it unset.
   keyboard?: boolean;
+  // The walk was cut (a size limit) while it was inside this element, so the
+  // element is missing descendants: its `subtreeText` holds only those before
+  // the cut. Set by the Chromium walk and carried by the flow flatten to the
+  // leaf whose `subtreeText` it gives.
+  cutInside?: boolean;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -114,6 +119,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       selected: z.boolean().optional(),
       layer: z.number().int().nonnegative().optional(),
       keyboard: z.boolean().optional(),
+      cutInside: z.boolean().optional(),
     })
     .passthrough()
 );
@@ -169,8 +175,9 @@ export interface DescribeTreeData {
   // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
   quotableTree?: DescribeNode;
   // The source cut its walk short (a node, depth or time cap): what it found is
-  // real, but an element past the cut reads as absent. Set by the iOS
-  // simulator flow tree.
+  // real, but an element past the cut reads as absent. Set by the flow trees
+  // of the iOS simulator, a physical iPhone (its node cap only), Android,
+  // Chromium and Mac apps. The describe tool does not send it.
   truncated?: boolean;
   // What may hide a selector's target from `tree`, for the wording of a miss
   // only: never matched, never quoted. Set by the iOS simulator and Android

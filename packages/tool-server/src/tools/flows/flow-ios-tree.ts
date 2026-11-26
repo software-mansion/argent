@@ -418,6 +418,8 @@ function adaptIosDeviceTreeForFlows(tree: DescribeNode): DescribeNode {
  * of the keyboard's window marked `keyboard` (the runner keeps that boundary;
  * see `holdsKeyboard` in its snapshot code).
  * Throws on a blind read: an empty tree must not settle or satisfy hidden.
+ * A snapshot the runner cut at its node budget comes flagged `truncated` (see
+ * `describeIosDevice`).
  */
 export async function queryIosDeviceFlowTree(
   registry: Registry,

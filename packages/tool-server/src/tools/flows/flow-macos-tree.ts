@@ -85,8 +85,8 @@ export function adaptMacosTreeForFlows(read: MacosTreeRead): DescribeNode {
  * A read that judges the screen. Refuses when the macos-apps flag is off, and
  * when the read is known to miss content (a web view that could not be read,
  * elements that still did not answer after the re-read): a `hidden` check would
- * pass on content that is still on screen. The callers retry. A cut at the node
- * limit is only hinted, as Chromium's walk limit is.
+ * pass on content that is still on screen. The callers retry. A cut at the
+ * library's limit is not refused: a flow read marks it `truncated`.
  */
 async function readForJudging(
   registry: Registry,
@@ -130,5 +130,8 @@ export async function queryMacosTree(
   device: DeviceInfo
 ): Promise<DescribeTreeData> {
   const read = await readForJudging(registry, device, "flow-execute");
-  return macosTreeData(read, adaptMacosTreeForFlows(read));
+  const data = macosTreeData(read, adaptMacosTreeForFlows(read));
+  // The library cut the tree or a web view's items at its limit; the hints say which.
+  if (read.truncated || read.webTruncated) data.truncated = true;
+  return data;
 }

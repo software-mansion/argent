@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { adaptChromiumTreeForFlows } from "../../src/tools/flows/flow-chromium-tree";
+import type { Registry } from "@argent/registry";
+import {
+  adaptChromiumTreeForFlows,
+  queryChromiumTree,
+} from "../../src/tools/flows/flow-chromium-tree";
+import { resolveDevice } from "../../src/utils/device-info";
 import { assertText, evaluateCondition, findAll } from "../../src/utils/ui-tree-match";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 
@@ -143,5 +148,65 @@ describe("adaptChromiumTreeForFlows", () => {
       expect(child.children).toHaveLength(0);
       expect(Boolean(child.identifier || child.label || child.value || child.clickable)).toBe(true);
     }
+  });
+});
+
+describe("queryChromiumTree", () => {
+  const registry = (payload: Record<string, unknown>) =>
+    ({
+      resolveService: async () => ({
+        refreshViewport: async () => ({ width: 1000, height: 1000 }),
+        cdp: { send: async () => ({ result: { value: JSON.stringify(payload) } }) },
+      }),
+    }) as unknown as Registry;
+  const device = resolveDevice("chromium-cdp-9222");
+
+  it.each([
+    ["the node budget", { truncated: true }],
+    ["the depth limit", { depthCut: true }],
+  ])("flags a walk cut at %s truncated", async (_name, cut) => {
+    const data = await queryChromiumTree(registry({ tree: screen(), ...cut }), device);
+    expect(data.truncated).toBe(true);
+  });
+
+  it("sets no truncated on a whole walk", async () => {
+    const data = await queryChromiumTree(
+      registry({ tree: screen(), truncated: false, depthCut: false }),
+      device
+    );
+    expect("truncated" in data).toBe(false);
+  });
+
+  it("carries a cut container's mark to the leaf its text gives, and only there", () => {
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        cutInside: true,
+        children: [
+          el({
+            identifier: "box",
+            cutInside: true,
+            frame: { x: 0, y: 0.5, width: 1, height: 0.2 },
+            children: [el({ value: "Alpha", frame: { x: 0, y: 0.55, width: 1, height: 0.05 } })],
+          }),
+          // Marked, but all its text is its own: no subtreeText to cut.
+          el({
+            identifier: "own",
+            label: "Total",
+            cutInside: true,
+            frame: { x: 0, y: 0.8, width: 1, height: 0.1 },
+          }),
+          el({
+            identifier: "whole",
+            frame: { x: 0, y: 0.2, width: 1, height: 0.2 },
+            children: [el({ value: "Beta", frame: { x: 0, y: 0.25, width: 1, height: 0.05 } })],
+          }),
+        ],
+      })
+    );
+    const leaf = (id: string) => findAll(tree, { identifier: id })[0]!;
+    expect(leaf("box")).toMatchObject({ subtreeText: "Alpha", cutInside: true });
+    expect(leaf("own").cutInside).toBeUndefined();
+    expect(leaf("whole").cutInside).toBeUndefined();
   });
 });

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows/flow-android-tree";
+import type { Registry } from "@argent/registry";
+import {
+  adaptFullAndroidHierarchyToDescribeResult,
+  queryAndroidFullHierarchy,
+} from "../../src/tools/flows/flow-android-tree";
+import { resolveDevice } from "../../src/utils/device-info";
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import {
   assertText,
@@ -1020,3 +1025,25 @@ ${pair("Wi-Fi", 400, inside)}${pair("Bluetooth", 550, inside)}
 function deriveRoleOf(cls: string): string {
   return cls.split(".").pop()!;
 }
+
+describe("queryAndroidFullHierarchy", () => {
+  const registry = (truncated: boolean) =>
+    ({
+      resolveService: async () => ({
+        getHierarchy: async () => ({ xml: RN_XML, captureMode: "windows", truncated }),
+        getScreenSize: async () => ({ width: SCREEN_W, height: SCREEN_H }),
+      }),
+    }) as unknown as Registry;
+  const device = resolveDevice("emulator-5554");
+
+  it("flags a dump the helper cut at its limit truncated", async () => {
+    const data = await queryAndroidFullHierarchy(registry(true), device);
+    expect(data.truncated).toBe(true);
+    expect(ids(data.tree)).toContain("submit-button");
+  });
+
+  it("sets no truncated on a whole dump", async () => {
+    const data = await queryAndroidFullHierarchy(registry(false), device);
+    expect("truncated" in data).toBe(false);
+  });
+});

@@ -38,7 +38,9 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
 
   let leaf: DescribeNode | null = null;
   if (onScreen && addressable) {
-    leaf = { ...node, children: [] };
+    // The flatten sets `cutInside` on the leaf when the leaf gets the cut text.
+    const { cutInside: _cutInside, ...own } = node;
+    leaf = { ...own, children: [] };
     // The walker already withholds a password's value, but a failing text
     // assert echoes a leaf's text verbatim; `[password]` mirrors the Android
     // adapter.
@@ -57,6 +59,7 @@ function projectChromiumNode(node: DescribeNode): FlatNode<DescribeNode> {
     ownText: onScreen && !node.password ? nodeText(node) : "",
     leaf,
     shield: Boolean(node.identifier) || node.password === true,
+    ...(node.cutInside ? { cutInside: true } : {}),
   };
 }
 
@@ -98,5 +101,9 @@ export async function queryChromiumTree(
   const ref = chromiumCdpRef(device);
   const api = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
   const data = await describeChromium(api, FLOW_WALK_LIMITS);
-  return { tree: adaptChromiumTreeForFlows(data.tree), source: data.source };
+  return {
+    tree: adaptChromiumTreeForFlows(data.tree),
+    source: data.source,
+    ...(data.truncated ? { truncated: true } : {}),
+  };
 }

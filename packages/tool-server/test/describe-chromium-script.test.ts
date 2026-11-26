@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
+import { DESCRIBE_DOM_SCRIPT, describeChromium } from "../src/tools/describe/platforms/chromium";
 
 /**
  * `DESCRIBE_DOM_SCRIPT` is an IIFE injected via Runtime.evaluate that walks the live
@@ -6860,5 +6860,101 @@ describe("DESCRIBE_DOM_SCRIPT clips across shadow trees and ignored overflow", (
     const page = findById(run([row("a", BOX)], body).tree, "page")!;
     expect(page.scrollable).toBe(true);
     expect(page.clipFrame).toBeUndefined();
+  });
+});
+
+// A cut of the walk (the node budget or MAX_DEPTH) leaves elements out. The
+// e2e runner warns on a result the cut can change, so the walk reports both
+// kinds and marks the elements it was inside when a cut came.
+describe("DESCRIBE_DOM_SCRIPT cuts", () => {
+  /** `depth` nested wrappers around `leaf`; with the html and body above, its depth is depth + 2. */
+  function nested(depth: number, leaf: MockElement): MockElement {
+    let node = leaf;
+    for (let i = 0; i < depth; i++) node = el({ rect: BOX, children: [node] });
+    return node;
+  }
+  type Cut = { tree: unknown; truncated: boolean; depthCut?: boolean };
+
+  it("records a depth cut of an element the walk would emit, and walks its siblings on", () => {
+    const { tree, truncated, depthCut } = run([
+      el({ attrs: { id: "before" }, rect: BOX, children: [el({ text: "B1", rect: BOX })] }),
+      el({
+        attrs: { id: "deep" },
+        rect: BOX,
+        children: [nested(70, el({ text: "DEEP", rect: BOX })), el({ text: "SIBLING", rect: BOX })],
+      }),
+      el({ text: "AFTER", rect: BOX }),
+    ]) as Cut;
+    expect(truncated).toBe(false);
+    expect(depthCut).toBe(true);
+    expect(valuesOf(tree)).toEqual(expect.arrayContaining(["B1", "SIBLING", "AFTER"]));
+    expect(valuesOf(tree)).not.toContain("DEEP");
+    // The ancestors of the cut point, not a container walked whole.
+    expect(findById(tree, "deep")!.cutInside).toBe(true);
+    expect((tree as Record<string, unknown>).cutInside).toBe(true);
+    expect(findById(tree, "before")!.cutInside).toBeUndefined();
+  });
+
+  it.each([
+    ["hidden", el({ text: "DEEP", rect: BOX, style: { display: "none" } })],
+    ["empty", el({ rect: BOX })],
+  ])("records no depth cut for a %s element past the limit", (_, leaf) => {
+    // The leaf is at depth 61, the first past MAX_DEPTH (60).
+    const { tree, depthCut } = run([
+      el({ attrs: { id: "deep" }, rect: BOX, children: [nested(58, leaf)] }),
+    ]) as Cut;
+    expect(depthCut).toBe(false);
+    expect(findById(tree, "deep")!.cutInside).toBeUndefined();
+  });
+
+  it("records a depth cut for a shown element right past the limit", () => {
+    const { tree, depthCut } = run([
+      el({
+        attrs: { id: "deep" },
+        rect: BOX,
+        children: [nested(58, el({ text: "DEEP", rect: BOX }))],
+      }),
+    ]) as Cut;
+    expect(depthCut).toBe(true);
+    expect(findById(tree, "deep")!.cutInside).toBe(true);
+  });
+
+  it("marks the containers the node budget cut inside", () => {
+    // MAX_NODES is 5000.
+    const rows = Array.from({ length: 5100 }, (_, i) => el({ text: "R" + i, rect: BOX }));
+    const { tree, truncated, depthCut } = run([
+      el({ attrs: { id: "before" }, rect: BOX, children: [el({ text: "B1", rect: BOX })] }),
+      el({ attrs: { id: "list" }, rect: BOX, children: rows }),
+    ]) as Cut;
+    expect(truncated).toBe(true);
+    expect(depthCut).toBe(false);
+    expect(findById(tree, "list")!.cutInside).toBe(true);
+    expect(findById(tree, "before")!.cutInside).toBeUndefined();
+  });
+});
+
+describe("describeChromium cut flags", () => {
+  const api = (payload: Record<string, unknown>) =>
+    ({
+      refreshViewport: async () => ({ width: W, height: H }),
+      cdp: { send: async () => ({ result: { value: JSON.stringify(payload) } }) },
+    }) as unknown as Parameters<typeof describeChromium>[0];
+  const tree = { role: "html", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [] };
+
+  it("sets truncated with no hint on a depth cut", async () => {
+    const data = await describeChromium(api({ tree, truncated: false, depthCut: true }));
+    expect(data.truncated).toBe(true);
+    expect(data.hint).toBeUndefined();
+  });
+
+  it("sets truncated and the node budget hint on a node cut", async () => {
+    const data = await describeChromium(api({ tree, truncated: true, depthCut: false }));
+    expect(data.truncated).toBe(true);
+    expect(data.hint).toMatch(/node budget/);
+  });
+
+  it("sets no truncated on a whole walk", async () => {
+    const data = await describeChromium(api({ tree, truncated: false, depthCut: false }));
+    expect("truncated" in data).toBe(false);
   });
 });
