@@ -27,6 +27,7 @@ import {
   type FileInputSpec,
   type OnDiskSpelling,
   type ToolContext,
+  type ToolDefinition,
 } from "@argent/registry";
 import {
   hasVisibleText,
@@ -5254,7 +5255,7 @@ export async function runDeferredShutdown(
   let thrown: { error: unknown } | undefined;
   for (const run of queued.reverse()) {
     try {
-      steps.push(...(await run(ctx, output)));
+      await run(ctx, output, steps);
     } catch (error) {
       thrown ??= { error };
     }
@@ -5268,21 +5269,62 @@ export async function runDeferredShutdown(
   return { ok: !failed, steps };
 }
 
-/** The clause a recording call's message gives a {@link FragmentShutdownReport}. */
-export function fragmentShutdownNote(
-  report: FragmentShutdownReport | undefined
-): string | undefined {
-  if (!report) return undefined;
+/** The sentence a recording call's message or error gives a {@link FragmentShutdownReport}. */
+export function fragmentShutdownNote(report: FragmentShutdownReport): string {
+  const total = report.steps.length;
   const failed = report.steps.filter((s) => {
     const status = (s as { status?: unknown }).status;
     return status === "fail" || status === "error";
   }).length;
   return (
-    `first ran the shutdown: of the fragments recorded as run: steps, as a replay does ` +
-    (failed === 0
-      ? `(${report.steps.length} ${report.steps.length === 1 ? "step" : "steps"})`
-      : `(${failed} of ${report.steps.length} steps failed; see fragmentShutdown)`)
+    `First the recording ran the shutdown: of the fragments recorded as run: steps, as a ` +
+    `replay does (${total} ${total === 1 ? "step" : "steps"}` +
+    (failed === 0 ? ")." : `, ${failed} failed; see fragmentShutdown).`)
   );
+}
+
+/**
+ * Run `call` after the deferred fragment shutdown ({@link runDeferredShutdown}),
+ * and say in its message, or in its error, that the shutdown ran: it has, also
+ * when the call is then refused.
+ */
+export async function afterDeferredShutdown<R extends { message: string }>(
+  session: RecordingSession,
+  ctx: ToolContext | undefined,
+  call: () => Promise<R>
+): Promise<R & { fragmentShutdown?: FragmentShutdownReport }> {
+  const report = await runDeferredShutdown(session, ctx);
+  if (!report) return call();
+  const note = fragmentShutdownNote(report);
+  let result: R;
+  try {
+    result = await call();
+  } catch (err) {
+    if (err instanceof Error) err.message = `${err.message} ${note}`;
+    throw err;
+  }
+  const lead = /[.!?]$/.test(result.message) ? result.message : `${result.message}.`;
+  return { ...result, message: `${lead} ${note}`, fragmentShutdown: report };
+}
+
+/**
+ * A recorder whose `shutdown: true` calls first run the deferred fragment
+ * shutdown ({@link afterDeferredShutdown}): a replay runs it before the test's
+ * own shutdown steps, and what it returns reaches them.
+ */
+export function deferredShutdownFirst<
+  P extends { name: string; project_root: string; shutdown?: boolean | undefined },
+  R extends { message: string; fragmentShutdown?: FragmentShutdownReport },
+>(tool: ToolDefinition<P, R>): ToolDefinition<P, R> {
+  const record = tool.execute.bind(tool);
+  return {
+    ...tool,
+    async execute(services, params, ctx) {
+      if (!params.shutdown) return record(services, params, ctx);
+      const session = await requireRecordingSession(params.project_root, params.name);
+      return afterDeferredShutdown(session, ctx, () => record(services, params, ctx));
+    },
+  };
 }
 
 /** How many steps `block` of a flow holds. */

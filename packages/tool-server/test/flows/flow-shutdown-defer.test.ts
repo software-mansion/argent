@@ -135,7 +135,9 @@ describe("a fragment recorded as run: in steps:", () => {
     expect(down.reason ?? down.status).toBe("pass");
     // The fragment's shutdown ran first, against the steps' latest output.
     expect(await readLog()).toBe("login saw yes\n");
-    expect(down.message).toContain("first ran the shutdown: of the fragments");
+    expect(down.message).toMatch(
+      /e2e test\. First the recording ran the shutdown: of the fragments/
+    );
     expect(down.fragmentShutdown).toMatchObject({
       ok: true,
       steps: [{ kind: "script", status: "pass", shutdown: true, e2eTest: "login" }],
@@ -162,7 +164,7 @@ describe("a fragment recorded as run: in steps:", () => {
 
     expect(await readLog()).toBe("second saw -\nlogin saw -\n");
     expect(await readState()).toBe("out");
-    expect(finished.message).toContain("first ran the shutdown: of the fragments");
+    expect(finished.message).toContain("First the recording ran the shutdown: of the fragments");
     expect(finished.fragmentShutdown?.ok).toBe(true);
     expect(finished.fragmentShutdown?.steps.map((s) => (s as { e2eTest: string }).e2eTest)).toEqual(
       ["second", "login"]
@@ -183,7 +185,7 @@ describe("a fragment recorded as run: in steps:", () => {
 
     expect(await readLog()).toBe("login saw -\n");
     expect(finished.fragmentShutdown?.ok).toBe(false);
-    expect(finished.message).toContain("1 of 2 steps failed; see fragmentShutdown");
+    expect(finished.message).toContain("(2 steps, 1 failed; see fragmentShutdown)");
   });
 
   it("skips it when the call that runs it is cancelled", async () => {
@@ -215,6 +217,70 @@ describe("a fragment recorded as run: in steps:", () => {
 
     expect(shared.deferredShutdown).toBeUndefined();
     expect(result.steps.at(-1)).toMatchObject({ status: "skip", shutdown: true });
+  });
+
+  it("runs it when a restart discards the take", async () => {
+    await recorder(registry()).run("login");
+
+    const restarted = await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    expect(await readState()).toBe("out");
+    expect(restarted.message).toContain("ran the shutdown: of the fragments");
+  });
+
+  it("says so when the shutdown call that ran it is then refused", async () => {
+    const r = registry();
+    await recorder(r).run("login");
+
+    const refused = r.invokeTool("e2e-add-step", {
+      name: "t",
+      project_root: root,
+      command: "await-ui-element",
+      args: JSON.stringify({
+        udid: "u",
+        condition: "visible",
+        selector: { text: "{{output:nope}}" },
+      }),
+      shutdown: true,
+    });
+
+    await expect(refused).rejects.toThrow(/ran the shutdown: of the fragments/);
+    expect(await readState()).toBe("out");
+  });
+
+  it("runs a fragment recorded while the finish runs another's shutdown", async () => {
+    await script(
+      "slow-out.mjs",
+      `await new Promise((r) => setTimeout(r, 1500)); appendFileSync(LOG, "slow\\n");`
+    );
+    await fs.writeFile(
+      e2e("slow.yaml"),
+      "steps:\n  - echo: slow\nshutdown:\n  - script: { path: ../../scripts/slow-out.mjs }\n"
+    );
+    const r = registry();
+    const rec = recorder(r);
+    await rec.run("slow");
+
+    const finishing = rec.finish();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await rec.run("login").catch(() => undefined);
+    await finishing;
+
+    expect(await readLog()).toContain("login saw");
+    expect(await readState()).toBe("out");
+  });
+
+  it("numbers the steps of several fragments' shutdown apart", async () => {
+    await loginFragment("second");
+    const rec = recorder(registry());
+    await rec.run("login");
+    await rec.run("second");
+
+    const finished = await rec.finish();
+
+    expect(finished.fragmentShutdown?.steps.map((s) => (s as { index: number }).index)).toEqual([
+      0, 1,
+    ]);
   });
 
   it("runs it at once when the run: step is not recorded", async () => {

@@ -2812,19 +2812,20 @@ function canDeferShutdown(state: ExecState, viaUpload: boolean): boolean {
  * the call it is given, so that call's cancel skips them, against the output
  * document it is given, as {@link execShutdown} would have at the run's end. A
  * recorder that records this run as a `run:` step calls it where a replay
- * reaches the blocks: before the test's own shutdown steps.
+ * reaches the blocks: before the test's own shutdown steps. The reports go to
+ * `reports`, numbered on from those already there.
  */
 function deferShutdown(
   state: ExecState
-): (ctx: ToolContext | undefined, output: { doc: FlowOutput }) => Promise<StepReport[]> {
+): (ctx: ToolContext | undefined, output: { doc: FlowOutput }, reports: object[]) => Promise<void> {
   const queue = state.shutdownQueue;
-  return async (ctx, output) => {
+  return async (ctx, output, reports) => {
     const { onStepReport: _, ...rest } = state;
     const later: ExecState = {
       ...rest,
       ctx,
       signal: ctx?.signal,
-      reports: [],
+      reports: reports as StepReport[],
       stopped: false,
       pinned: false,
       owned: [],
@@ -2842,7 +2843,6 @@ function deferShutdown(
         await teardownBootedChromium(state.registry, later.owned[i]!);
       }
     }
-    return later.reports;
   };
 }
 

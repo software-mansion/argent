@@ -18,12 +18,11 @@ import {
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
-  fragmentShutdownNote,
+  deferredShutdownFirst,
   type FragmentShutdownReport,
   keepRecordingOutput,
   recordedCount,
   recordingOutput,
-  runDeferredShutdown,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
@@ -173,7 +172,10 @@ const zodSchema = z.object({
     ),
 });
 
-export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
+export const flowAddScriptTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  FlowAddScriptResult
+> = deferredShutdownFirst({
   id: "e2e-add-script",
   description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. The script receives the e2e test's \`env:\` (see e2e-set-env) and this call's \`env\`, recorded as the step's own. It also gets \`output\`, what the recording's earlier scripts left there; what it leaves returns as \`outputJson\`, and later steps read it with \`{{output:PATH}}\`. For cleanup, such as deleting a test user, pass \`shutdown: true\`. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   zodSchema,
@@ -253,9 +255,6 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // The test's env: as it stands, under the step's own: what a replay
     // without run values gives the step.
     const env: FlowEnv = mergeScriptEnv(await recordedFileEnv(session), step.env);
-    // As in e2e-add-step: a replay runs the recorded fragments' shutdown first.
-    const fragmentShutdown =
-      block === "shutdown" ? await runDeferredShutdown(session, ctx) : undefined;
     const ranAgainst = recordingOutput(session, block);
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
@@ -267,9 +266,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 
-    const shutdownNote = fragmentShutdownNote(fragmentShutdown);
     const common = {
-      ...(fragmentShutdown ? { fragmentShutdown } : {}),
       status: outcome.status,
       ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
       ...(outcome.scriptLog !== undefined ? { log: outcome.scriptLog } : {}),
@@ -348,13 +345,11 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message:
-        `Added ${params.shutdown ? "shutdown " : ""}script step to "${params.name}" e2e test` +
-        (shutdownNote ? ` — ${shutdownNote}.` : "."),
+      message: `Added ${params.shutdown ? "shutdown " : ""}script step to "${params.name}" e2e test.`,
       ...(rendered ?? {}),
       stepCount,
       recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),
       savedTo,
     };
   },
-};
+});

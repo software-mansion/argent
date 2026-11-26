@@ -161,6 +161,8 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-finish-recording"],
+  // It may run the fragments' shutdown, on the device.
+  longRunning: true,
   interaction: {
     // Name the flow: other recordings stay live, so an unqualified message would
     // not identify which one.
@@ -175,13 +177,10 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
   services: () => ({}),
   async execute(_services, params, ctx) {
     // A replay runs the shutdown of the fragments recorded as `run:` steps at
-    // the end of the test. Before the lock: it acts on the device, which may
-    // take a while, and an append may still land meanwhile.
-    const fragmentShutdown = await runDeferredShutdown(
-      await requireRecordingSession(params.project_root, params.name),
-      ctx
-    );
-    const shutdownNote = fragmentShutdownNote(fragmentShutdown);
+    // the end of the test, so the finish runs what no shutdown call ran. In
+    // the lock, so a `run:` step cannot land after it and be dropped with the
+    // session. A finish that then fails says it ran.
+    let fragmentShutdown: FragmentShutdownReport | undefined;
     // Resolve, read and clear as ONE critical section: host mode's
     // `await fs.readFile` is a yield, and an append landing in it would be on
     // disk while the summary and step count — taken from the pre-append read —
@@ -191,6 +190,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       params.name,
       async () => {
         const session = await requireRecordingSession(params.project_root, params.name);
+        fragmentShutdown = await runDeferredShutdown(session, ctx);
 
         // Host mode re-reads so manual edits made during the recording reach the
         // summary; in client mode this host never has the file, so the in-memory
@@ -247,7 +247,14 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         clearRecordingSession(session);
         return { filePath, flowFile, savedTo, flow, summary, headline };
       }
-    );
+    ).catch((err: unknown) => {
+      if (fragmentShutdown && err instanceof Error) {
+        err.message = `${err.message} ${fragmentShutdownNote(fragmentShutdown)}`;
+      }
+      throw err;
+    });
+    // Assigned in the lock callback, which TypeScript does not follow.
+    const ran = fragmentShutdown as FragmentShutdownReport | undefined;
 
     return {
       // Name the counts in `message` as well. A caller that reads only
@@ -257,12 +264,12 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         (flow.shutdown ? `, ${flow.shutdown.length} shutdown steps` : "") +
         `)` +
         headline +
-        (shutdownNote ? `. It ${shutdownNote}` : ""),
+        (ran ? `. ${fragmentShutdownNote(ran)}` : ""),
       path: filePath,
       executionPrerequisite: flow.executionPrerequisite,
       steps: flow.steps.length,
       ...(flow.shutdown ? { shutdownSteps: flow.shutdown.length } : {}),
-      ...(fragmentShutdown ? { fragmentShutdown } : {}),
+      ...(ran ? { fragmentShutdown: ran } : {}),
       summary,
       e2eTestFile: flowFile,
       flowFile,

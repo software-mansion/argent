@@ -163,7 +163,8 @@ export interface InvokeToolOptions {
    * end, and puts the document after its shutdown in `shutdownDoc`. With
    * `deferShutdown`, the run does not run its queued `shutdown:` blocks: it
    * sets `deferredShutdown`, which runs them later, in the call it is given,
-   * against the document it is given, and returns their step reports.
+   * against the document it is given, and appends their step reports to
+   * `reports`, numbered on from those already there.
    */
   flowOutput?: {
     doc: Record<string, unknown>;
@@ -171,8 +172,9 @@ export interface InvokeToolOptions {
     deferShutdown?: boolean;
     deferredShutdown?: (
       ctx: ToolContext | undefined,
-      output: { doc: Record<string, unknown> }
-    ) => Promise<object[]>;
+      output: { doc: Record<string, unknown> },
+      reports: object[]
+    ) => Promise<void>;
   };
 }
 
