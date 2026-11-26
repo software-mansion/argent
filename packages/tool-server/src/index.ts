@@ -24,6 +24,7 @@ import { collectHostDepsReport } from "./utils/host-deps-report";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { scheduleAutomaticUpdate } from "./tools/system/update-argent";
 import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
@@ -36,6 +37,7 @@ import { shutdownOwnedDevices } from "./utils/device-shutdown";
 import { pauseJsCapturesOf } from "./blueprints/network-inspector";
 import { withCaptureSweep } from "./tools/network/network-capture";
 import { renderFlagGated } from "./utils/flag-gated-text";
+import { settleAgentReaps } from "./utils/android-agent-reap";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 /**
@@ -45,6 +47,10 @@ const PROCESS_TIMEOUT_MS = 5_000;
  * SIGTERM_GRACE_MS (6 s, this file's PROCESS_TIMEOUT_MS plus a buffer).
  */
 const EXIT_CAPTURE_WAIT_MS = 2_000;
+// Phone sessions reap their on-device screen-sharing agent in the background
+// after dispose (#1161). The exit waits for that, but stays inside the 6 s a
+// `server stop` gives before SIGKILL.
+const EXIT_AGENT_REAP_WAIT_MS = 3_000;
 const DEFAULT_PORT = "3001";
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
@@ -215,7 +221,7 @@ export function start(): void {
   const warmKeepAlive = setInterval(() => {}, 1_000);
   void identityWarm.finally(() => clearInterval(warmKeepAlive));
   const serverStartedAt = Date.now();
-  const updateChecker = startUpdateChecker();
+  let updateChecker: ReturnType<typeof startUpdateChecker> | undefined;
 
   const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
@@ -346,7 +352,7 @@ export function start(): void {
     }
 
     previewWindow.dispose();
-    updateChecker.dispose();
+    updateChecker?.dispose();
     httpHandle.dispose();
 
     // A network capture start or stop under way ends first, as at
@@ -367,6 +373,7 @@ export function start(): void {
         process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
       }
     });
+    await settleAgentReaps(EXIT_AGENT_REAP_WAIT_MS);
 
     try {
       await eventLog?.dispose();
@@ -441,6 +448,13 @@ export function start(): void {
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
+        const serverActivity = {
+          lastActivityAt: httpHandle.getLastActivityAt,
+          toolCallsInFlight: httpHandle.getToolCallsInFlight,
+        };
+        updateChecker = startUpdateChecker({
+          onAutoUpdate: (version) => scheduleAutomaticUpdate(version, serverActivity),
+        });
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
         const origin = formatOrigin(HOST, boundPort);

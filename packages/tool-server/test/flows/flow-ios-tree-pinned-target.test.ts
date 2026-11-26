@@ -55,8 +55,8 @@ function rpcTimeout(): FailureError {
 function appState(bundleId: string): NativeAppState {
   return {
     bundleId,
-    applicationState: "active",
-    foregroundActiveSceneCount: 1,
+    applicationState: "inactive",
+    foregroundActiveSceneCount: 0,
     foregroundInactiveSceneCount: 0,
     backgroundSceneCount: 0,
     unattachedSceneCount: 0,
@@ -289,15 +289,13 @@ describe("queryFullHierarchyTree - pinned target vs poisoned auto-resolve", () =
     const message = (err as Error).message;
     expect(message).toContain(`${APP} (the launched app) stopped answering Application.getState`);
     expect(message).toContain("an earlier one in this run answered");
-    // The escape hatch must be one that re-targets reads. A foreground-NEUTRAL
-    // `tool:` step is not: it demotes the pin back to a fan-out this same
-    // silent app sinks.
+    // Launching names the intended target even when auto-resolve is inconclusive.
     expect(message).toContain("give the e2e test a `launch:` step for that app");
     expect(message).toContain(
       "`tool: launch-app` or `tool: restart-app` naming that app works too"
     );
     expect(message).toContain("how a recorded e2e test switches apps");
-    expect(message).toContain("A foreground-NEUTRAL raw `tool:` step does not work here");
+    expect(message).toContain("exactly one foreground-active response");
     expect(message).not.toContain("clears the pin");
     expect(message).not.toContain("returns reads to frontmost auto-resolve");
     // The timeout's own classification: no app state was observed here.

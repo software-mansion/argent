@@ -157,6 +157,12 @@ export function startSimulatorWatcher(registry: Registry): {
   stop: () => void;
   ready: Promise<void>;
 } {
+  const configuredUdids = process.env.ARGENT_SIMULATOR_WATCH_UDIDS;
+  // An empty CI lease must match nothing. Only an unset variable watches all UDIDs.
+  const allowedUdids =
+    configuredUdids === undefined
+      ? undefined
+      : new Set(configuredUdids.split(",").map((id) => id.trim().toUpperCase()));
   const trackedServices = new Map<string, NativeDevtoolsApi>();
   /**
    * Simulators a tool has targeted: every one whose native-devtools service
@@ -231,6 +237,7 @@ export function startSimulatorWatcher(registry: Registry): {
     const claimed = new Set<string>();
 
     for (const udid of booted) {
+      if (allowedUdids && !allowedUdids.has(udid.toUpperCase())) continue;
       const claim = externalClaimForNativeId(udid);
 
       if (!claim) {
