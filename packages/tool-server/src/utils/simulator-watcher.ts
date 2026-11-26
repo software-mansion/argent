@@ -334,7 +334,7 @@ export function startSimulatorWatcher(registry: Registry): {
 
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
     if (!urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
-    const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length);
+    const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length).toUpperCase();
     if (to === ServiceState.RUNNING) {
       targetedUdids.add(udid);
     } else if (to === ServiceState.IDLE && !watcherDisposals.has(udid)) {

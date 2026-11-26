@@ -293,8 +293,11 @@ describe("simulator-watcher with api-owned init failure state", () => {
     }
   });
 
-  it("arms a targeted simulator again after it reboots", async () => {
-    let bootedUdids: string[] = [UDID];
+  it.each([
+    ["in upper case", LETTERED_UDID],
+    ["in lower case", LETTERED_UDID.toLowerCase()],
+  ])("arms a simulator a tool named %s again after it reboots", async (_case, target) => {
+    let bootedUdids: string[] = [LETTERED_UDID];
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return bootedListResponse(bootedUdids);
       return { stdout: "", stderr: "" };
@@ -315,13 +318,13 @@ describe("simulator-watcher with api-owned init failure state", () => {
     vi.useFakeTimers();
     try {
       const { ready, stop } = startSimulatorWatcher(registry);
-      targetSimulators(registry, UDID);
+      targetSimulators(registry, target);
       await ready;
       expect(calls).toBe(1);
 
       bootedUdids = [];
       await vi.advanceTimersByTimeAsync(10_000);
-      bootedUdids = [UDID];
+      bootedUdids = [LETTERED_UDID];
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(calls).toBe(2);
