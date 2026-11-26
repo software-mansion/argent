@@ -172,9 +172,11 @@ export function startSimulatorWatcher(registry: Registry): {
    * started, until something other than the watcher disposes that service, such
    * as stop-all-simulator-servers. Only these are armed, and re-armed after a
    * reboot, so a simulator another project or session drives keeps its own
-   * environment.
+   * environment. Keyed by the upper-case UDID, holding the spelling the tool
+   * used, so the watcher adopts the tool's service instead of starting a second
+   * one that would take over its socket.
    */
-  const targetedUdids = new Set<string>();
+  const targetedUdids = new Map<string, string>();
   /** Services the watcher itself disposes, whose simulators stay targeted. */
   const watcherDisposals = new Set<string>();
 
@@ -328,17 +330,18 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
+  /** The booted simulators a tool has targeted, under the tool's spelling. */
   function onlyTargeted(booted: Set<string>): Set<string> {
-    return new Set([...booted].filter((udid) => targetedUdids.has(udid)));
+    return new Set([...booted].flatMap((udid) => targetedUdids.get(udid.toUpperCase()) ?? []));
   }
 
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
     if (!urn.startsWith(NATIVE_DEVTOOLS_URN_PREFIX)) return;
-    const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length).toUpperCase();
+    const udid = urn.slice(NATIVE_DEVTOOLS_URN_PREFIX.length);
     if (to === ServiceState.RUNNING) {
-      targetedUdids.add(udid);
+      targetedUdids.set(udid.toUpperCase(), udid);
     } else if (to === ServiceState.IDLE && !watcherDisposals.has(udid)) {
-      targetedUdids.delete(udid);
+      targetedUdids.delete(udid.toUpperCase());
       trackedServices.delete(udid);
     }
   }
@@ -374,7 +377,7 @@ export function startSimulatorWatcher(registry: Registry): {
 
     // Read again after the hand-back, which a stop-all can overlap.
     const newUdids = [...booted].filter(
-      (udid) => targetedUdids.has(udid) && !trackedServices.has(udid)
+      (udid) => targetedUdids.has(udid.toUpperCase()) && !trackedServices.has(udid)
     );
     const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
       initUdid(registry, udid, trackedServices)

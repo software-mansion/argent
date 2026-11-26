@@ -490,7 +490,7 @@ On an iOS simulator, Argent sets an environment that loads the Argent library in
 - When Argent finds that the simulator shut down and booted again, Argent arms it again.
 - After `stop-all-simulator-servers`, Argent does not arm the simulator again until the next tool call that targets it. The simulator keeps the environment until it shuts down.
 - Argent does not change a simulator that no tool call targets.
-- With [`ARGENT_SIMULATOR_WATCH_UDIDS`](/docs/reference/configuration#devices) set, a gesture or `describe` does not arm an unlisted simulator, and Argent does not arm it again after a reboot.
+- With [`ARGENT_SIMULATOR_WATCH_UDIDS`](/docs/reference/configuration#devices) set, a gesture does not arm an unlisted simulator, and Argent does not arm it again after a reboot.
 
 On a Mac app, these tools read the app through the Argent library:
 

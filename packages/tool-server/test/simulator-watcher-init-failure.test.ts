@@ -122,7 +122,7 @@ function makeRegistry(api: NativeDevtoolsApi): {
   // return the cached api. Attempt counts only go up when the watcher itself
   // calls api.ensureEnvReady().
   let factoryRan = false;
-  const resolveService = vi.fn(async () => {
+  const resolveService = vi.fn(async (_urn: string) => {
     if (!factoryRan) {
       factoryRan = true;
       await api.ensureEnvReady().catch(() => {});
@@ -313,7 +313,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
         return Promise.resolve();
       },
     };
-    const { registry } = makeRegistry(counted);
+    const { registry, resolveService } = makeRegistry(counted);
 
     vi.useFakeTimers();
     try {
@@ -328,6 +328,9 @@ describe("simulator-watcher with api-owned init failure state", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(calls).toBe(2);
+      expect(new Set(resolveService.mock.calls.map(([urn]) => urn))).toEqual(
+        new Set([`NativeDevtools:${target}`])
+      );
       stop();
     } finally {
       vi.useRealTimers();
