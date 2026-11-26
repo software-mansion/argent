@@ -42,6 +42,12 @@ export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /**
+   * Teardowns of services that ended themselves without a fault, such as on
+   * being idle. A resolve that arrives during one waits for it and starts the
+   * service again.
+   */
+  private selfReleases = new Map<URN, Promise<void>>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
   /**
@@ -363,6 +369,11 @@ export class Registry {
       );
     }
 
+    const selfRelease = this.selfReleases.get(urn);
+    if (selfRelease) {
+      return selfRelease.then(() => this._resolve<T>(urn, resolutionPath, options));
+    }
+
     if (node.state === ServiceState.TERMINATING) {
       return Promise.reject(
         new ServiceInitializationError(urn, "Service is currently terminating", {
@@ -420,7 +431,8 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        void this._teardown(urn, error);
+        const teardown = this._teardown(urn, error);
+        if (!error) this._trackSelfRelease(urn, teardown);
       });
 
       return instance.api as T;
@@ -434,6 +446,12 @@ export class Registry {
       }
       throw new ServiceInitializationError(urn, cause.message, { cause });
     }
+  }
+
+  private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {
+    this.selfReleases.set(urn, teardown);
+    const forget = () => this.selfReleases.delete(urn);
+    void teardown.then(forget, forget);
   }
 
   private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {

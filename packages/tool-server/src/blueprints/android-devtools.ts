@@ -94,6 +94,14 @@ const EXIT_GRACE_MS = 200;
 const HELPER_EXIT_TIMEOUT_MS = 3_000;
 /** How long dispose waits for `am force-stop`; it takes about 0.2 s. */
 const DISPOSE_FORCE_STOP_WAIT_MS = 2_000;
+/**
+ * How long the helper may go unused before it exits. Android allows one
+ * UiAutomation connection per device, so while the helper runs, `uiautomator
+ * dump`, instrumented tests and other UiAutomation clients on the device fail.
+ * Well above the usual gap between an agent's tool calls, so a session rarely
+ * pays the restart.
+ */
+const HELPER_IDLE_RELEASE_MS = 180_000;
 const HELPER_PORT_MARKER = /^INSTRUMENTATION_STATUS:\s*port=(\d+)/;
 const ADB_FORWARD_PORT_MARKER = /^(\d+)\s*$/;
 
@@ -631,8 +639,26 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
-    const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
-      send<T>(await connected(), method, params);
+    // Counted synchronously when a call starts, so a caller that uses the
+    // service right after resolving it always holds off the release.
+    let inFlight = 0;
+    let idleTimer: NodeJS.Timeout | undefined;
+    const armIdleRelease = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => events.emit("terminated"), HELPER_IDLE_RELEASE_MS);
+      idleTimer.unref();
+    };
+    const tracked = <T>(call: () => Promise<T>): Promise<T> => {
+      inFlight++;
+      clearTimeout(idleTimer);
+      return call().finally(() => {
+        if (--inFlight === 0) armIdleRelease();
+      });
+    };
+    armIdleRelease();
+
+    const request = <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
+      tracked(async () => send<T>(await connected(), method, params));
 
     const api: AndroidDevtoolsApi = {
       isReady: () => ready && !disposed,
@@ -650,51 +676,56 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       ping() {
         return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
       },
-      async setText(text: string, setOpts: { check?: boolean } = {}) {
-        // Outside the `try`: a reconnect that times out never sent the text,
-        // so it must not be reported below as a fill that may have landed.
-        const current = await connected();
-        let result: Partial<SetTextResult>;
-        try {
-          result = await send<Partial<SetTextResult>>(current, "setText", {
-            text,
-            ...(setOpts.check ? { check: true } : {}),
-          });
-        } catch (err) {
-          // A helper older than 3 answers the dispatcher's own rejection.
-          if (err instanceof Error && err.message.includes("Unknown method: setText")) {
-            throw new FailureError("The devtools helper predates `setText`; update argent", {
-              error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
-              failure_stage: "android_devtools_set_text",
-              failure_area: "tool_server",
-              error_kind: "unknown",
-            });
-          }
-          // The RPC or the helper's worker ran out of time; the action may
-          // still have landed.
-          if (
-            getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT ||
-            (err instanceof Error && err.message.includes("Helper worker timed out"))
-          ) {
-            return { focused: true, verified: false, timedOut: true };
-          }
-          throw err;
-        }
-        return {
-          focused: result.focused === true,
-          verified: result.verified === true,
-          ...(typeof result.performed === "boolean" ? { performed: result.performed } : {}),
-          ...(typeof result.password === "boolean" ? { password: result.password } : {}),
-          ...(result.singleLine === true ? { singleLine: true } : {}),
-        };
+      setText(text: string, setOpts: { check?: boolean } = {}) {
+        return tracked(() => setTextOnce(text, setOpts));
       },
     };
+
+    async function setTextOnce(text: string, setOpts: { check?: boolean }): Promise<SetTextResult> {
+      // Outside the `try`: a reconnect that times out never sent the text,
+      // so it must not be reported below as a fill that may have landed.
+      const current = await connected();
+      let result: Partial<SetTextResult>;
+      try {
+        result = await send<Partial<SetTextResult>>(current, "setText", {
+          text,
+          ...(setOpts.check ? { check: true } : {}),
+        });
+      } catch (err) {
+        // A helper older than 3 answers the dispatcher's own rejection.
+        if (err instanceof Error && err.message.includes("Unknown method: setText")) {
+          throw new FailureError("The devtools helper predates `setText`; update argent", {
+            error_code: FAILURE_CODES.ANDROID_DEVTOOLS_RPC_ERROR,
+            failure_stage: "android_devtools_set_text",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
+        // The RPC or the helper's worker ran out of time; the action may
+        // still have landed.
+        if (
+          getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT ||
+          (err instanceof Error && err.message.includes("Helper worker timed out"))
+        ) {
+          return { focused: true, verified: false, timedOut: true };
+        }
+        throw err;
+      }
+      return {
+        focused: result.focused === true,
+        verified: result.verified === true,
+        ...(typeof result.performed === "boolean" ? { performed: result.performed } : {}),
+        ...(typeof result.password === "boolean" ? { password: result.password } : {}),
+        ...(result.singleLine === true ? { singleLine: true } : {}),
+      };
+    }
 
     const instance: ServiceInstance<AndroidDevtoolsApi> = {
       api,
       dispose: async () => {
         disposed = true;
         ready = false;
+        clearTimeout(idleTimer);
         // Ask the helper to exit on its own and let `am instrument` follow it.
         // The helper finishes 50 ms after it replies, and once `am` is gone
         // that `finish()` crashes on the dead UiAutomation connection, so
