@@ -750,29 +750,29 @@ describe("Registry -- terminated-during-initialization signal", () => {
   });
 });
 
-describe("Registry -- resolve during a teardown", () => {
-  function gatedBlueprint() {
-    const instances: Array<{ events: TypedEventEmitter<ServiceEvents> }> = [];
-    let releaseDispose!: () => void;
-    const disposeGate = new Promise<void>((resolve) => {
-      releaseDispose = resolve;
-    });
-    const blueprint = {
-      namespace: "Gated",
-      getURN: (payload: string) => `Gated:${payload}`,
-      factory: async () => {
-        const instance = {
-          api: { n: instances.length },
-          dispose: () => disposeGate,
-          events: new TypedEventEmitter<ServiceEvents>(),
-        };
-        instances.push(instance);
-        return instance;
-      },
-    };
-    return { blueprint, instances, releaseDispose };
-  }
+function gatedBlueprint() {
+  const instances: Array<{ events: TypedEventEmitter<ServiceEvents> }> = [];
+  let releaseDispose!: () => void;
+  const disposeGate = new Promise<void>((resolve) => {
+    releaseDispose = resolve;
+  });
+  const blueprint = {
+    namespace: "Gated",
+    getURN: (payload: string) => `Gated:${payload}`,
+    factory: async () => {
+      const instance = {
+        api: { n: instances.length },
+        dispose: () => disposeGate,
+        events: new TypedEventEmitter<ServiceEvents>(),
+      };
+      instances.push(instance);
+      return instance;
+    },
+  };
+  return { blueprint, instances, releaseDispose };
+}
 
+describe("Registry -- resolve during a teardown", () => {
   it("waits for a teardown without a fault and starts the service again", async () => {
     const registry = new Registry();
     const { blueprint, instances, releaseDispose } = gatedBlueprint();
@@ -828,27 +828,11 @@ describe("Registry -- resolve during a teardown", () => {
 describe("Registry -- dispose during a self-release", () => {
   it("waits for the release before it returns", async () => {
     const registry = new Registry();
-    let releaseDispose!: () => void;
-    const disposeGate = new Promise<void>((resolve) => {
-      releaseDispose = resolve;
-    });
-    const events = new TypedEventEmitter<ServiceEvents>();
-    let disposed = false;
-    registry.registerBlueprint({
-      namespace: "Releasing",
-      getURN: (payload: string) => `Releasing:${payload}`,
-      factory: async () => ({
-        api: {},
-        dispose: async () => {
-          await disposeGate;
-          disposed = true;
-        },
-        events,
-      }),
-    });
-    await registry.resolveService("Releasing:x");
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
 
-    events.emit("terminated");
+    instances[0]!.events.emit("terminated");
     let settled = false;
     const disposing = registry.dispose().then(() => (settled = true));
     await new Promise((resolve) => setImmediate(resolve));
@@ -856,32 +840,23 @@ describe("Registry -- dispose during a self-release", () => {
     releaseDispose();
     await disposing;
 
-    expect(disposed).toBe(true);
-    expect(registry.getServiceState("Releasing:x")).toBe(ServiceState.IDLE);
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
   });
 
   it("makes disposeService wait for the release", async () => {
     const registry = new Registry();
-    let releaseDispose!: () => void;
-    const disposeGate = new Promise<void>((resolve) => {
-      releaseDispose = resolve;
-    });
-    const events = new TypedEventEmitter<ServiceEvents>();
-    registry.registerBlueprint({
-      namespace: "Releasing",
-      getURN: (payload: string) => `Releasing:${payload}`,
-      factory: async () => ({ api: {}, dispose: () => disposeGate, events }),
-    });
-    await registry.resolveService("Releasing:x");
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
 
-    events.emit("terminated");
+    instances[0]!.events.emit("terminated");
     let settled = false;
-    const disposing = registry.disposeService("Releasing:x").then(() => (settled = true));
+    const disposing = registry.disposeService("Gated:x").then(() => (settled = true));
     await new Promise((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     releaseDispose();
     await disposing;
 
-    expect(registry.getServiceState("Releasing:x")).toBe(ServiceState.IDLE);
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
   });
 });

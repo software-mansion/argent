@@ -529,6 +529,11 @@ describe("android-devtools idle release", () => {
 
     unanswered.shift()!();
     await filling;
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
+    expect(terminated).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(terminated).toEqual([undefined]);
+
     vi.useRealTimers();
     await instance.dispose();
   });

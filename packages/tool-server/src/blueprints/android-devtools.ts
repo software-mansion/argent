@@ -663,7 +663,10 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
     const request = <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
       tracked(async () => send<T>(await connected(), method, params));
 
-    async function sendSetText(text: string, setOpts: { check?: boolean }): Promise<SetTextResult> {
+    const sendSetText = async (
+      text: string,
+      setOpts: { check?: boolean }
+    ): Promise<SetTextResult> => {
       // Outside the `try`: a reconnect that times out never sent the text,
       // so it must not be reported below as a fill that may have landed.
       const current = await connected();
@@ -700,7 +703,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         ...(typeof result.password === "boolean" ? { password: result.password } : {}),
         ...(result.singleLine === true ? { singleLine: true } : {}),
       };
-    }
+    };
 
     const api: AndroidDevtoolsApi = {
       isReady: () => ready && !disposed,

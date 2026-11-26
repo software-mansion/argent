@@ -43,12 +43,12 @@ export class Registry {
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
   /**
-   * Teardowns of services that ended themselves without a fault, such as on
-   * being idle. A resolve that arrives during one waits for it and starts the
+   * Teardowns of services that ended themselves without a fault, for example
+   * after an idle window. A resolve that arrives during one waits for it and starts the
    * service again.
    */
   private selfReleases = new Map<URN, Promise<void>>();
-  private disposing = false;
+  private disposeCalls = 0;
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
   /**
@@ -328,7 +328,7 @@ export class Registry {
   }
 
   async dispose(): Promise<void> {
-    this.disposing = true;
+    this.disposeCalls++;
     try {
       for (const [urn, node] of this.services) {
         const selfRelease = this.selfReleases.get(urn);
@@ -338,7 +338,7 @@ export class Registry {
         }
       }
     } finally {
-      this.disposing = false;
+      this.disposeCalls--;
     }
   }
 
@@ -385,11 +385,7 @@ export class Registry {
     }
 
     if (node.state === ServiceState.TERMINATING) {
-      return Promise.reject(
-        new ServiceInitializationError(urn, "Service is currently terminating", {
-          cause: terminatingSignalCause("Service is currently terminating"),
-        })
-      );
+      return Promise.reject(serviceTerminatingError(urn));
     }
 
     if (node.state === ServiceState.RUNNING && node.instance) {
@@ -464,21 +460,15 @@ export class Registry {
     resolutionPath: string[],
     options?: Record<string, unknown>
   ): Promise<T> {
-    if (this.disposing) {
-      return Promise.reject(
-        new ServiceInitializationError(urn, "Service is currently terminating", {
-          cause: terminatingSignalCause("Service is currently terminating"),
-        })
-      );
+    if (this.disposeCalls > 0) {
+      return Promise.reject(serviceTerminatingError(urn));
     }
     return this._resolve<T>(urn, resolutionPath, options);
   }
 
   private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {
     this.selfReleases.set(urn, teardown);
-    const forget = () => {
-      if (this.selfReleases.get(urn) === teardown) this.selfReleases.delete(urn);
-    };
+    const forget = () => this.selfReleases.delete(urn);
     void teardown.then(forget, forget);
   }
 
@@ -535,6 +525,12 @@ export class Registry {
  * REGISTRY_SERVICE_INITIALIZATION_FAILED signal, hiding this transient window
  * from telemetry and from callers that classify by code.
  */
+function serviceTerminatingError(urn: URN): ServiceInitializationError {
+  return new ServiceInitializationError(urn, "Service is currently terminating", {
+    cause: terminatingSignalCause("Service is currently terminating"),
+  });
+}
+
 function terminatingSignalCause(message: string): FailureError {
   return new FailureError(message, {
     error_code: FAILURE_CODES.REGISTRY_SERVICE_TERMINATING,
