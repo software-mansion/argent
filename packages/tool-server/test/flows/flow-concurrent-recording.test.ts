@@ -152,6 +152,24 @@ async function writeScript(root: string, source: string): Promise<void> {
 }
 
 /**
+ * Write a script that throws once the returned release file exists, so a test
+ * decides when the failure reaches the tool. It gives up waiting after 5 s.
+ */
+async function writeGatedFailingScript(root: string): Promise<string> {
+  const release = path.join(root, "release-script");
+  await writeScript(
+    root,
+    `import fs from "node:fs";
+const deadline = Date.now() + 5000;
+while (!fs.existsSync(${JSON.stringify(release)}) && Date.now() < deadline) {
+  await new Promise((r) => setTimeout(r, 10));
+}
+throw new Error("boom");`
+  );
+  return release;
+}
+
+/**
  * Call the tool with the .mjs already on disk.
  *
  * The file write is a real await, so a test that races this call against a
@@ -1438,7 +1456,7 @@ describe("a restart that lands while a step is still running", () => {
     await addEcho(root, "alpha", "one");
     await addEcho(root, "alpha", "two");
 
-    await writeScript(root, "throw new Error('boom');");
+    const release = await writeGatedFailingScript(root);
     const gate = openGate();
     const held = withFlowFileLock(root, "alpha", () => gate.promise);
     const restarting = start(root, "alpha");
@@ -1447,6 +1465,7 @@ describe("a restart that lands while a step is still running", () => {
     gate.open();
     await held;
     expect((await restarting).restarted).toBe(true);
+    await fs.writeFile(release, "");
 
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
@@ -1467,7 +1486,7 @@ describe("a restart that lands while a step is still running", () => {
     await start(root, "alpha");
     await addEcho(root, "alpha", "one");
 
-    await writeScript(root, "throw new Error('boom');");
+    const release = await writeGatedFailingScript(root);
     const gate = openGate();
     const held = withFlowFileLock(root, "alpha", () => gate.promise);
     const finishing = finish(root, "alpha");
@@ -1476,6 +1495,7 @@ describe("a restart that lands while a step is still running", () => {
     gate.open();
     await held;
     await finishing;
+    await fs.writeFile(release, "");
 
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
