@@ -82,6 +82,8 @@ On a local iOS simulator, `boot-device` fails if `simctl list` does not answer w
 
 On Chromium, `open-url` fails when the URL does not load a page, start a download or run as a `javascript:` URL. Examples are a URL with no scheme, an unknown scheme, `tel:`, `mailto:`, a host that does not resolve, a response with no content and a navigation that a `beforeunload` handler on the current page cancels. An HTTP error status, for example 404, does not make the tool fail, also when Chromium shows its own error page for it. In headless Chrome, a 401 that asks for credentials makes the tool fail.
 
+On Chromium, when every tab is closed, Argent opens a blank tab before the first tool acts. An Electron app cannot open one, so the tool fails with `CHROMIUM_CDP_NO_PAGE_TARGET`.
+
 `stop-metro` returns `stopped: true` when it sends SIGTERM to every listening process it finds, or the process has already exited, and `stopped: false` when it finds none. The tool fails if it cannot read the port, if it finds a listener but not the process that owns it, or if it cannot signal a listener it found, for example with EPERM. On macOS, the tool detects a listener that belongs to another user only when it sees no other listener on the port, so that listener can still hold the port after `stopped: true`.
 
 On Android, `boot-device` accepts two parameters that let several emulators run one AVD at the same time, for example one for each agent:
@@ -255,6 +257,8 @@ In `run-sequence`, Argent waits for the element tree to stop changing after some
 - A tap or a `button` step.
 - An enter or escape key, or `keyboard` text that contains a newline.
 - An `await-ui-element` step with a met condition.
+
+On Chromium, `keyboard` inserts a character outside ASCII, such as `Ż` or an emoji, as text. The page receives an `input` event for it, but no `keydown` or `keyup`.
 
 Argent reads the element tree until two reads are equal, for at most 1 second. Then Argent applies the `delayMs` of the step and starts the next step. Argent does not wait when the next step is `await-ui-element`, because that step polls the tree itself. Argent also does not wait between two taps at the same position, so a double tap or a triple tap keeps its timing.
 

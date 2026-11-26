@@ -114,6 +114,38 @@ describe("TabsManager", () => {
     expect(created.label).toBe("docs");
   });
 
+  it("open() closes the blank tab Argent opened for a windowless browser", async () => {
+    const withPlaceholder = createTabsManager({
+      cdp: cdp as never,
+      port: 9222,
+      initialTargetId: "A",
+      placeholderTargetId: "A",
+      onActivated: onActivated as never,
+      networkThrottled: () => false,
+    });
+    listMock.mockResolvedValue([{ ...tgt("A"), url: "about:blank" }, tgt("TID-NEW")]);
+
+    await withPlaceholder.open({ url: "https://x.test" });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.closeTarget", { targetId: "A" });
+  });
+
+  it("open() keeps the placeholder tab once something loaded in it", async () => {
+    const withPlaceholder = createTabsManager({
+      cdp: cdp as never,
+      port: 9222,
+      initialTargetId: "A",
+      placeholderTargetId: "A",
+      onActivated: onActivated as never,
+      networkThrottled: () => false,
+    });
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await withPlaceholder.open({ url: "https://x.test" });
+
+    expect(browserSend).not.toHaveBeenCalledWith("Target.closeTarget", expect.anything());
+  });
+
   it("open() loads the url only after the new tab's session is prepared", async () => {
     listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
     const order: string[] = [];

@@ -50,7 +50,7 @@ interface CreateChromiumServerOpts {
 export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
-  const { cdp, wsUrl, target } = await connectCdp(opts.port);
+  const { cdp, wsUrl, target, openedBlank } = await connectCdp(opts.port);
   let viewport: ViewportSize;
   try {
     if (opts.answerTimeoutMs !== undefined) {
@@ -80,6 +80,7 @@ export async function createChromiumServer(
     cdp,
     port: opts.port,
     initialTargetId: target.id,
+    placeholderTargetId: openedBlank ? target.id : undefined,
     onActivated: async () => {
       await primePageSession(cdp);
       viewport = await readViewport(cdp);
