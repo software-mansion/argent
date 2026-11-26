@@ -110,7 +110,11 @@ import { androidImpl as launchAndroid } from "../src/tools/launch-app/platforms/
 import { androidImpl as restartAndroid } from "../src/tools/restart-app/platforms/android";
 import { makeIosImpl as makeLaunchIosImpl } from "../src/tools/launch-app/platforms/ios";
 import { makeIosImpl as makeRestartIosImpl } from "../src/tools/restart-app/platforms/ios";
-import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import {
+  NATIVE_DEVTOOLS_NAMESPACE,
+  nativeDevtoolsBlueprint,
+  type NativeDevtoolsApi,
+} from "../src/blueprints/native-devtools";
 import {
   androidNetworkInspectorBlueprint,
   androidNetworkInspectorRef,
@@ -542,7 +546,10 @@ describe.each(iosTools)(
 
       expect(result).toEqual(ok);
       expect(result).not.toHaveProperty("networkCapture");
-      expect(resolveService).not.toHaveBeenCalled();
+      expect(resolveService).not.toHaveBeenCalledWith(
+        expect.stringMatching(`^${NATIVE_DEVTOOLS_NAMESPACE}:`),
+        expect.anything()
+      );
       expect(networkCaptureAfterLaunch).not.toHaveBeenCalled();
       expect(launchCalls()).toHaveLength(1);
     });

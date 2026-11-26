@@ -49,7 +49,6 @@ const scannedSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const clearAutomationEnabledOrWarnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
-const isEntitlementBypassActiveMock = vi.fn();
 
 let scanTimedOut = false;
 
@@ -65,7 +64,6 @@ vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
-  isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
 // The launch-crash record lives in the real ~/.argent; its own suite covers it.
@@ -120,12 +118,41 @@ describe("boot-device — iOS path", () => {
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
-    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
+
+  it("prepares the shutdown simulator without starting it, and reports a failed write", async () => {
+    const tool = createBootDeviceTool({} as Registry);
+    const udid = "11111111-1111-1111-1111-111111111111";
+    const prepare = () => tool.execute!({}, { udid, prepareOnly: true });
+    await expect(prepare()).resolves.toEqual({
+      platform: "ios",
+      udid,
+      prepared: true,
+      booted: false,
+    });
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(udid, { isTvOs: false });
+    setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("write failed"));
+    await expect(prepare()).rejects.toThrow("write failed");
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["Booted", "Booting", "Shutting Down", undefined])(
+    "refuses preparation in state %s",
+    async (state) => {
+      const udid = "11111111-1111-1111-1111-111111111111";
+      scannedSimulatorsMock.mockResolvedValue(state ? [{ udid, state }] : []);
+      const tool = createBootDeviceTool({} as Registry);
+      await expect(tool.execute!({}, { udid, prepareOnly: true })).rejects.toThrow(
+        "requires a Shutdown simulator"
+      );
+      expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    }
+  );
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
     const reverifyEnv = vi.fn(async () => {});
@@ -1148,7 +1175,6 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     scannedSimulatorsMock.mockReset().mockResolvedValue([]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
-    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
   afterEach(() => {

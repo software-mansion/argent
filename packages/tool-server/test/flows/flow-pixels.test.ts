@@ -1005,6 +1005,44 @@ describe("settleOnPixels", () => {
     expect(screenshot).toHaveBeenCalledTimes(4);
   });
 
+  it("waits out a fade that starts slower than one poll can see", async () => {
+    const easeIn = [10, 17, 24, 31].map((gray) => frame([gray, gray, gray]));
+    const { env, screenshot } = replaying(easeIn, { lastActionAt: Date.now() - 400 });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot.mock.calls.length).toBeGreaterThan(easeIn.length);
+  });
+
+  it("settles an identical screen in two captures soon after an action", async () => {
+    const clockTick = frame([10, 10, 10], { changedRows: [0] });
+    const { env, screenshot } = replaying([frame([10, 10, 10]), clockTick], {
+      lastActionAt: Date.now() - 500,
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a caret blink through the slow-change check right after an action", async () => {
+    const big = { width: 50, height: 200 };
+    const caret = [frame([10, 10, 10], big), frame([10, 10, 10], { ...big, changedPixels: 30 })];
+    const { env, screenshot } = replaying([...caret, ...caret, ...caret, ...caret], {
+      lastActionAt: Date.now(),
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+
+  it("settles slightly different captures in two long after the last action", async () => {
+    const { env, screenshot } = replaying([frame([10, 10, 10]), frame([14, 14, 14])], {
+      lastActionAt: Date.now() - 5_000,
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
   it("does not settle a still screen until the quiet window after the last action", async () => {
     const startedAt = Date.now();
     const { env, screenshot } = replaying([frame([10, 10, 10])], { lastActionAt: startedAt });

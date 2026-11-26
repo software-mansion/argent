@@ -110,7 +110,15 @@ An emulator started with `-port` belongs to the boots that give that `port`:
 - With `force: true`, a boot stops an emulator only when no other emulator of the AVD would still block the boot. Otherwise it fails with `BOOT_ANDROID_READ_ONLY_CONFLICT` and stops nothing.
 - A read-only boot with `port` fails with `BOOT_ANDROID_PORT_IN_USE` when the AVD runs writable on that port. Add `force: true` to stop that emulator and boot it read-only.
 
-A read-only emulator that Argent did not start is reused only if it was started with `-port`, because Argent finds its serial in the command line. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
+A read-only boot also reuses a read-only emulator that Argent did not start, under the rules above:
+
+- A boot with `port` reuses such an emulator on that port.
+- A boot without `port` reuses such an emulator started without `-port`.
+
+If the screenshot check fails on that external emulator during a boot without `port`, Argent reports an error and leaves the emulator running.
+Set `force: true` to replace it.
+
+The process list does not show the serial of an emulator started without `-port`. Argent takes that emulator as read-only when all the emulators of the AVD in the process list are read-only. Argent records each read-only emulator that it starts in `~/.argent/android-read-only-boots.json`. A read-only boot reuses such an emulator also after the tool-server restarts.
 
 On Windows, Argent cannot read the command lines of the emulators. There:
 
@@ -159,6 +167,26 @@ See [Physical iOS devices](/docs/features/physical-ios-devices) for signing requ
 
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
+### Accessibility on a pre-booted iOS simulator
+
+To prepare a local simulator for a job, start it with `boot-device` while it is shut down.
+If a pool manager already started it, use `boot-device` with `force: true` before the job. This restarts the simulator.
+
+A pool manager can run this command on the Mac before it starts the local simulator:
+
+```sh
+argent run boot-device --udid "$UDID" --prepareOnly
+```
+
+Wait for the command to succeed before starting the simulator. The result includes `prepared: true` and `booted: false`.
+The command requires the `Shutdown` state. It enables these Boolean settings in the simulator's `com.apple.Accessibility` preferences:
+
+- `IgnoreAXServerEntitlements`
+- `AccessibilityEnabled`
+- `ApplicationAccessibilityEnabled`
+
+The simulator reads these settings at startup. For a [provider device](/docs/reference/device-providers), use the provider to apply the settings and restart the simulator.
+
 ### Network conditions
 
 Use `network-conditions` with a device ID from `list-devices`. Each call replaces the previous settings.
@@ -196,6 +224,10 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 | `await-screen-idle` | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
+On an Apple TV simulator, `await-screen-idle` checks focus during keyboard transitions. tvOS can still report the old control after the keyboard opens or closes.
+
+By default, `screenshot` captures an Apple TV simulator frame as JPEG and resizes it to PNG. Set `scale` explicitly to avoid JPEG compression. Use `scale: 1` for full-resolution comparisons.
+
 On Chromium, `describe` reports a zero-area frame when a rotated container fully clips an element along one axis.
 
 On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
@@ -208,6 +240,8 @@ On Android, Chrome 158 and later does not give the page of a regular tab to the 
 - The frames are fractions of the screen, as for all other elements.
 - The `source` is `android-devtools+cdp` or `uiautomator+cdp`, and the `hint` tells that the page came from the DOM.
 - When the DevTools read fails, `describe` returns the accessibility tree without the page.
+
+On an iOS simulator, `source: "native-devtools"` means that `describe` read the app's own tree. This tree omits system dialogs, including permission prompts. The result's `hint` explains the limitation. See [Accessibility on a pre-booted iOS simulator](#accessibility-on-a-pre-booted-ios-simulator). On this tree, `await-ui-element` can confirm a match. If the element is absent, a `hidden` wait continues until the accessibility service can confirm its absence. If the wait times out with only app-tree misses, the result has `success: false` and `cause: "unreadable"`.
 
 On an iOS simulator, a line of `describe` can show:
 
@@ -435,6 +469,8 @@ Call `network-capture-start`, trigger the request, then call `await-network-requ
 | `pollIntervalMs`   | Interval between reads in milliseconds. Default 400, range 50–5,000.                                                                       |
 
 The wait uses retained requests that started inside the latest capture window. Its JavaScript search requires that the start included JavaScript. A native layer already recording can also supply requests that started after the latest start. Clearing the native log listing leaves those records available to the wait. The wait can search a stopped window while the records remain available. For stopped JS capture, the wait needs an existing debugger connection. Requests that are still open or whose outcome Argent missed cannot match.
+
+On Chromium, Chrome reports the end of a `fetch()` response with `Cache-Control: no-store` only after the page reads its body. Argent marks such a request complete when the tab receives every byte that `Content-Length` declares. Thus the wait can match before the page reads the body, or when the page never reads it. `view-network-request-details` returns that body. A compressed response, a response with `Transfer-Encoding` or a response without `Content-Length` stays open until the page reads the body.
 
 With an active JavaScript window, the wait can reconnect to Metro and resume capture after a reload or relaunch. Repeat the action if it ran before capture resumed. If the window is missing (`NETWORK_CAPTURE_NOT_STARTED`), start capture and repeat the action.
 
@@ -664,6 +700,8 @@ All coordinates use the UI as the user sees it, also when the UI is landscape or
 - The coordinates of the gesture tools
 
 Argent reads the orientation of the UI from the device for each action. Argent uses a reading for at most one second, and reads again after `rotate`, `fold`, `button`, `launch-app`, `restart-app`, `open-url`, `terminate-app` and `reinstall-app`. All touches of one gesture use one reading. The orientation follows the app, not the device. Thus a portrait-only app on a rotated device stays portrait.
+
+On a local iOS simulator, `launch-app` and `restart-app` wait up to 5 seconds after launch for the accessibility service to report the app in front. If the wait times out, the next orientation reading or element tree can still describe the previous app.
 
 If Argent cannot read the orientation, the tool result has a note. For a live capture of `screenshot-diff`, the note is in the summary. Then Argent uses the portrait axes of the screen. The `rotation` parameter of `screenshot` overrides the orientation of the image only. With it, the image can disagree with the coordinates.
 
@@ -1072,10 +1110,10 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Workspace and maintenance
 
-| Tool             | Description                                        |
-| ---------------- | -------------------------------------------------- |
-| `update-argent`  | Apply a pending Argent update                      |
-| `dismiss-update` | Postpone the update reminder for a number of hours |
+| Tool             | Description                                                                 |
+| ---------------- | --------------------------------------------------------------------------- |
+| `update-argent`  | Apply a pending Argent update                                               |
+| `dismiss-update` | Postpone the update reminder and the automatic update for a number of hours |
 
 ## SDK-only tools
 
