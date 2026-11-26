@@ -1953,7 +1953,6 @@ Without a link, every step kind runs.`,
         // status-bar restore / chromium teardown lands after every step
         // already ran, and must not flip a finished run to FAIL.
         aborted = state.signal?.aborted === true;
-        endClaim?.();
         // Restored on the device the pin was applied to — `state.device` may
         // have moved on since.
         if (state.pinned && device) await restoreStatusBar(device);
@@ -1961,6 +1960,7 @@ Without a link, every step kind runs.`,
         for (let i = state.owned.length - 1; i >= 0; i--) {
           await teardownBootedChromium(registry, state.owned[i]!);
         }
+        endClaim?.();
       }
 
       // The starting device: a run that switched says so on the launch step.
