@@ -103,7 +103,7 @@ export function dispatchByPlatform<
       if (opts.ios.requires?.length) {
         await ensureDeps(opts.ios.requires);
       }
-      await armSimulator(device.id);
+      void armSimulator(device.id);
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }
     if (device.platform === "ios-remote") {

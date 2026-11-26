@@ -664,6 +664,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
      * server on an in-use device this whole path exists to prevent.
      */
     const claim = externalClaimForAnyId(device.id);
+    let arming = Promise.resolve();
 
     if (claim) {
       return withCaptureOnDemand(device.id, await buildAttachedInstance(device, claim));
@@ -689,9 +690,8 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
             "presses, and `keyboard` to type (see the argent-tv-interact skill)"
         );
       }
-      // Input could open an app from the home screen, which must not launch
-      // before native-devtools injection is armed.
-      await Promise.all([clearAutomationEnabledOrWarn(device.id), armSimulator(device.id)]);
+      arming = armSimulator(device.id);
+      await clearAutomationEnabledOrWarn(device.id);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).
@@ -706,6 +706,9 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
 
     const { proc, apiUrl, streamUrl, agentSocket } = await spawnWithEmulatorFallback(device);
+    // Input could open an app from the home screen, which must not launch
+    // before native-devtools injection is armed.
+    await arming;
 
     const events = new TypedEventEmitter<ServiceEvents>();
 

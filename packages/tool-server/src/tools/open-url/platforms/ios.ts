@@ -7,12 +7,14 @@ import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 import { httpDeepLinkNote } from "../deep-link-note";
+import { armSimulator } from "../../../utils/simulator-watcher";
 
 const execFileAsync = promisify(execFile);
 
 export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["xcrun"],
   handler: async (_services, params) => {
+    await armSimulator(params.udid);
     try {
       await execFileAsync(
         "xcrun",

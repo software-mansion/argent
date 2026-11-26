@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const simctlMock = vi.fn();
+const execFileMock = vi.fn();
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFile: (...args: unknown[]) => {
+    execFileMock(...args);
+    const done = args.at(-1);
+    if (typeof done === "function") done(null, { stdout: "", stderr: "" });
+  },
+}));
 
 vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
@@ -19,12 +29,15 @@ vi.mock("../src/utils/simctl-exec", async () => {
   };
 });
 
+import type { DeviceInfo } from "@argent/registry";
+import { iosImpl as openUrlIos } from "../src/tools/open-url/platforms/ios";
 import { dispatchByPlatform } from "../src/utils/cross-platform-tool";
 import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 const OTHER_UDID = "22222222-2222-2222-2222-222222222222";
+const IOS_DEVICE: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 
 function listsBooted(): void {
   simctlMock.mockReturnValue({
@@ -111,24 +124,40 @@ describe("armSimulator", () => {
     expect(await isSettled(armSimulator(UDID))).toBe(true);
   });
 
-  it("is awaited by a cross-platform tool call on an iOS simulator before its handler runs", async () => {
+  it("starts on a cross-platform tool call on an iOS simulator without holding its handler", async () => {
     listsBooted();
-    const order: string[] = [];
-    const resolveService = vi.fn(async (urn: string) => {
-      order.push(urn);
-      return { ensureEnvReady: async () => {} };
-    });
+    const resolveService = vi.fn((_urn: string) => new Promise(() => {}));
     ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
     const execute = dispatchByPlatform({
       toolId: "probe",
       capability: { apple: { simulator: true }, android: { emulator: true } },
-      ios: { handler: async () => order.push("handler") },
-      android: { handler: async () => order.push("handler") },
+      ios: { handler: async () => "handled" },
+      android: { handler: async () => "android" },
     });
 
-    await execute({}, { udid: UDID });
+    expect(await execute({}, { udid: UDID })).toBe("handled");
+    expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
+  });
 
-    expect(order).toEqual([`NativeDevtools:${UDID}`, "handler"]);
+  it("is awaited by open-url on an iOS simulator before it opens the URL", async () => {
+    vi.useFakeTimers();
+    listsBooted();
+    let finishInit!: () => void;
+    const resolveService = vi.fn(
+      () =>
+        new Promise((resolve) => (finishInit = () => resolve({ ensureEnvReady: async () => {} })))
+    );
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+    execFileMock.mockClear();
+
+    const opened = openUrlIos.handler({}, { udid: UDID, url: "myapp://home" }, IOS_DEVICE, {});
+    opened.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execFileMock).not.toHaveBeenCalled();
+
+    finishInit();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execFileMock.mock.calls[0]?.[1]).toContain("openurl");
   });
 
   it("shares one attempt and one deadline between concurrent calls for a simulator", async () => {
