@@ -568,4 +568,29 @@ describe("recording into shutdown:", () => {
       });
     }
   });
+
+  it("says an unmet wait stops the run in steps:, and only fails it in shutdown:", async () => {
+    const { registry } = mockRegistry({
+      success: false,
+      elapsed: 1500,
+      note: "no element matched",
+    });
+    const wait = (shutdown: boolean) =>
+      createFlowAddStepTool(registry).execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          command: "await-ui-element",
+          args: JSON.stringify({ udid: "u", condition: "visible", selector: { text: "A" } }),
+          shutdown,
+        }
+      );
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    expect((await wait(false)).message).toContain("FAILS the step and stops the run there");
+    const shutdown = (await wait(true)).message;
+    expect(shutdown).toContain("FAILS the step and the run");
+    expect(shutdown).not.toContain("stops the run");
+  });
 });

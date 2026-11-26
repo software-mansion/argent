@@ -447,13 +447,13 @@ const SPELLING_CLAUSE =
 /**
  * `await-ui-element` reports an unmet condition by returning
  * `{ success: false }` rather than throwing, so the recorder writes the step
- * anyway. At replay the same step FAILS and stops the run, so the message must
- * not read as fine.
+ * anyway. At replay the same step FAILS, and in `steps:` stops the run, so the
+ * message must not read as fine. A failed shutdown step does not stop the next.
  */
-const UNMET_WAIT_WARNING =
+const unmetWaitWarning = (block: RecordedBlock): string =>
   "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
   "returning success:false instead of failing, so the step was written to the e2e test anyway. At " +
-  "replay an unmet wait FAILS the step and the run, so re-record it once the " +
+  `replay an unmet wait FAILS the step and ${block === "shutdown" ? "the run" : "stops the run there"}, so re-record it once the ` +
   "condition can actually hold, and delete the failed step after `e2e-finish-recording` rather " +
   "than mid-recording: over a link the in-memory copy is authoritative and the next " +
   "append writes the step straight back, and without a link the recorder re-reads the file before " +
@@ -485,10 +485,10 @@ const CANCELLED_WAIT_WARNING =
   "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
-function unmetWaitWarningFor(cause: UnmetWaitCause): string {
+function unmetWaitWarningFor(cause: UnmetWaitCause, block: RecordedBlock): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
   if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
-  return UNMET_WAIT_WARNING;
+  return unmetWaitWarning(block);
 }
 
 /**
@@ -1830,7 +1830,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
       // One that came back success:false is reported by CAUSE instead: only a
-      // genuine miss fails the step at replay (see {@link UNMET_WAIT_WARNING});
+      // genuine miss fails the step at replay (see {@link unmetWaitWarning});
       // an unreadable tree or a cancellation observed nothing (see
       // {@link UNREADABLE_WAIT_WARNING}).
       //
@@ -1843,7 +1843,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           warning:
             command === AWAIT_NETWORK_REQUEST_TOOL_ID
               ? unmetNetworkWaitWarningFor(cause)
-              : unmetWaitWarningFor(cause),
+              : unmetWaitWarningFor(cause, block),
           kind: "wait",
         };
       } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
@@ -2032,7 +2032,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // for a `run:` in shutdown, right after it, as here.
       const fragmentShutdown =
         block === "steps" && step.kind === "run" && reportsShutdown(toolResult)
-          ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps`
+          ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps. If a later step needs what that shutdown undid (a login, a test user), record the fragment's steps one by one instead, its cleanup with shutdown: true, and swap them for the run: line after e2e-finish-recording`
           : undefined;
       const notes = [warning, fragmentShutdown].filter((n) => n !== undefined).join("; ");
       return {

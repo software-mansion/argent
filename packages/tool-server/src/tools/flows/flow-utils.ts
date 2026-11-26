@@ -405,7 +405,8 @@ export interface RecordingSession {
    * ({@link REMOVED_OUTPUT_KEY}). A replay runs them after every step, so what
    * they return never reaches a step, and each one starts from {@link output},
    * as the later steps leave it, with these changes on top. A key a shutdown
-   * step wrote back unchanged is not kept.
+   * step wrote back unchanged is not kept. Like {@link output}, it keeps what a
+   * step hand-deleted from the file set.
    */
   shutdownChanges?: Map<string, unknown>;
   /** LRU order for the eviction backstop. See {@link touch}. */

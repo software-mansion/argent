@@ -401,7 +401,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const warning = warningOf(result, "unmet");
     expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("FAILS the step and the run");
+    expect(warning).toContain("FAILS the step and stops the run there");
     expect(warning).not.toContain("replays fine");
     // Nothing was compared, so nothing may blame a tree divergence.
     expect(warning).not.toContain("neither contains the other");
@@ -1840,7 +1840,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Sign in")]));
     await recordWait("deleted", { condition: "visible", selector: { text: "Sign in" } });
 
-    // Delete the diverging step 1, the remedy `UNMET_WAIT_WARNING` offers.
+    // Delete the diverging step 1, the remedy `unmetWaitWarning` offers.
     const file = path.join(tmpDir, ".argent", "e2e", "deleted.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
