@@ -1548,7 +1548,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   return {
     id: "e2e-add-step",
     description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Args may hold \`{{output:PATH}}\` references to what the recorded scripts returned: the call runs with them resolved, and the step keeps them as a raw tool step.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Use \`{{output:PATH}}\` in arguments to read prior script output. The tool resolves the values for the live call and saves the references in a \`tool:\` step.
 Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     zodSchema,
     aliases: ["flow-add-step"],

@@ -68,7 +68,9 @@ A network check verifies that an action sends a request with the URL you expect.
 
 Check the replay report to confirm capture started and stopped. A capture step can pass even if a layer did not start or stop. If the test fails before the stop step, stop capture before retrying. See [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
-Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. The e2e test or the run can give the script environment values, for example the URL of a staging server. A credential stays out of the file as a secret, and Argent removes the secret from the log of the script. A script can also return values, for example the id of a user that it creates. A later step can tap that id, type it, give it to a different script, or check it.
+Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. Use environment values to run the same script against different servers. Use a secret placeholder to pass credentials without storing them in the e2e test file.
+
+A script can return a value, such as the ID of a user it creates. Later steps can use that ID to find the user in the app or pass it to a cleanup script.
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 
@@ -114,4 +116,6 @@ The e2e tests in a directory without a `suite.config.yaml` file are independent.
 - Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different e2e test when that e2e test fails. In both cases, Argent records no step.
 - An argent client that is older than the tool-server can write the e2e test file on the computer of the tool-server. It can also record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
 
-Argent does this with the `e2e-start-recording`, `e2e-add-step`, `e2e-add-echo`, `e2e-add-script`, `e2e-set-env`, `e2e-finish-recording` and `e2e-execute` tools, and with the `argent e2e` command. The [tools reference](/docs/reference/tools) contains all tools. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the file format and the command options.
+Ask the agent to set the script environment values before it records a script. See [Set values while recording](/docs/reference/e2e-yaml#set-values-while-recording).
+
+Argent does this with the `e2e-start-recording`, `e2e-add-step`, `e2e-add-echo`, `e2e-add-script`, `e2e-finish-recording` and `e2e-execute` tools, and with the `argent e2e` command. The [tools reference](/docs/reference/tools) contains all tools. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the file format and the command options.

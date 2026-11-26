@@ -238,9 +238,8 @@ Options (run):
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
                          unless such a step sets updateBaselines
-  --env NAME=value       Set an environment value for the test's script steps,
-                         replacing the same name from the test file and its
-                         steps. Repeatable. The value may hold {{secret:NAME}}
+  --env NAME=value       Override a script environment value for this run.
+                         Repeatable. Values may contain {{secret:NAME}}
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<test>/ — a stable path for CI artifact
