@@ -34,6 +34,39 @@ export interface NetworkRequestRecord {
   errorText?: string;
 }
 
+interface CdpCallFrame {
+  url?: string;
+  lineNumber?: number;
+}
+
+interface CdpStackTrace {
+  callFrames?: CdpCallFrame[];
+  parent?: CdpStackTrace;
+}
+
+/**
+ * The initiator without its call stack, which on a real app can run to
+ * hundreds of kilobytes. `lineNumber` is 1-based; CDP's is 0-based.
+ */
+export function initiatorSummary(raw: unknown): NetworkRequestRecord["initiator"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const initiator = raw as CdpCallFrame & { type?: string; stack?: CdpStackTrace };
+  const source = initiator.url ? initiator : firstFrameWithUrl(initiator.stack);
+  return {
+    type: initiator.type ?? "other",
+    ...(source?.url ? { url: source.url } : {}),
+    ...(source?.lineNumber != null ? { lineNumber: source.lineNumber + 1 } : {}),
+  };
+}
+
+function firstFrameWithUrl(stack: CdpStackTrace | undefined): CdpCallFrame | undefined {
+  for (let trace = stack; trace; trace = trace.parent) {
+    const frame = trace.callFrames?.find((f) => f.url);
+    if (frame) return frame;
+  }
+  return undefined;
+}
+
 /**
  * Where the last network-capture-start began in this tab's log, as a sequence
  * number: a record numbered higher was created after it. A stop keeps the
@@ -139,7 +172,7 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         if (r.headers) rec.requestHeaders = { ...(rec.requestHeaders ?? {}), ...r.headers };
         if (r.postData != null) rec.postData = r.postData;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
-        rec.initiator = (params.initiator as NetworkRequestRecord["initiator"]) ?? rec.initiator;
+        rec.initiator = initiatorSummary(params.initiator) ?? rec.initiator;
         rec.startTs = (params.timestamp as number) ?? rec.startTs;
         if (params.wallTime) {
           rec.startedDateTime = new Date((params.wallTime as number) * 1000).toISOString();

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
-import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
+import {
+  createNetworkManager,
+  initiatorSummary,
+  type NetworkManager,
+} from "../src/chromium-server/network";
 import { toCdpNetworkConditions } from "../src/utils/network-conditions";
 
 // A fake CDP client: a real event bus (so the manager's `event` listener fires)
@@ -492,5 +496,45 @@ describe("view-network-request-details (chromium branch)", () => {
 
     expect(result.success).toBe(true);
     expect(result.data?.includeBody).toBe(value);
+  });
+});
+
+describe("initiatorSummary", () => {
+  it("keeps the type, url and line and drops the call stack", () => {
+    const frame = {
+      functionName: "layer",
+      scriptId: "1",
+      url: "http://x/app.js",
+      lineNumber: 4,
+      columnNumber: 2,
+    };
+    expect(
+      initiatorSummary({
+        type: "script",
+        stack: { callFrames: [frame, ...Array(150).fill({ ...frame, lineNumber: 9 })] },
+      })
+    ).toEqual({ type: "script", url: "http://x/app.js", lineNumber: 5 });
+  });
+
+  it("reads the first frame with a url, through the async parents", () => {
+    expect(
+      initiatorSummary({
+        type: "script",
+        stack: {
+          callFrames: [{ url: "", lineNumber: 0 }],
+          parent: { callFrames: [{ url: "http://x/a.js", lineNumber: 7 }] },
+        },
+      })
+    ).toEqual({ type: "script", url: "http://x/a.js", lineNumber: 8 });
+  });
+
+  it("keeps a parser initiator's own url and line", () => {
+    expect(
+      initiatorSummary({ type: "parser", url: "http://x/", lineNumber: 3, columnNumber: 10 })
+    ).toEqual({ type: "parser", url: "http://x/", lineNumber: 4 });
+  });
+
+  it("returns undefined when CDP sent no initiator", () => {
+    expect(initiatorSummary(undefined)).toBeUndefined();
   });
 });
