@@ -1016,6 +1016,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // Nobody is left to read the result.
       if (callerGone) return;
 
+      let endClaim: (() => void) | undefined;
       if (session && def.id !== RELEASE_DEVICE_TOOL_ID) {
         const claim = deviceClaims.claim(session, claimTargets(parsedData));
         if (!claim.ok) {
@@ -1035,7 +1036,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        res.once("close", claim.done);
+        endClaim = claim.done;
       }
 
       const controller = new AbortController();
@@ -1268,6 +1269,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         idleTimer.touch();
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();
+        endClaim?.();
       }
     }
   );

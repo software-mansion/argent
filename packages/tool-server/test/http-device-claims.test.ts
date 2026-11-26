@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { Registry, type ToolContext } from "@argent/registry";
 import { z } from "zod";
+import type { AddressInfo } from "node:net";
 import { createHttpApp } from "../src/http";
 import { deviceClaims } from "../src/utils/device-claims";
 import { releaseDeviceTool } from "../src/tools/devices/release-device";
@@ -9,8 +10,19 @@ import { releaseDeviceTool } from "../src/tools/devices/release-device";
 const SIM = "11111111-2222-3333-4444-555555555555";
 const OTHER_SIM = "AAAAAAAA-2222-3333-4444-555555555555";
 
+let finishHold = (): void => {};
+
 function app() {
   const registry = new Registry();
+  registry.registerTool({
+    id: "hold",
+    zodSchema: z.object({ udid: z.string() }),
+    services: () => ({}),
+    async execute() {
+      await new Promise<void>((resolve) => (finishHold = resolve));
+      return {};
+    },
+  });
   registry.registerTool({
     id: "tap",
     zodSchema: z.object({ udid: z.string() }),
@@ -23,7 +35,7 @@ function app() {
   return createHttpApp(registry).app;
 }
 
-function tap(server: ReturnType<typeof app>, udid: string, session?: string) {
+function tap(server: Parameters<typeof request>[0], udid: string, session?: string) {
   const call = request(server).post("/tools/tap");
   if (session !== undefined) call.set("x-argent-session", session);
   return call.send({ udid });
@@ -100,6 +112,29 @@ describe("device claims over HTTP", () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ released: [] });
     expect((await tap(server, SIM, "b")).status).toBe(409);
+  });
+
+  it("keeps the device claimed until a cancelled call has stopped", async () => {
+    const server = app().listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    const { port } = server.address() as AddressInfo;
+    const abort = new AbortController();
+    const held = fetch(`http://127.0.0.1:${port}/tools/hold`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-argent-session": "a" },
+      body: JSON.stringify({ udid: SIM }),
+      signal: abort.signal,
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(deviceClaims.ownerOf(SIM, "a")).toBe("this session"));
+    abort.abort();
+    await held;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    deviceClaims.release("a");
+    expect((await tap(server, SIM, "b")).status).toBe(409);
+    finishHold();
+    await vi.waitFor(async () => expect((await tap(server, SIM, "b")).status).toBe(200));
+    server.close();
   });
 
   it("asks for a session when release-device has none", async () => {
