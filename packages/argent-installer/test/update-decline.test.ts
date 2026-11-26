@@ -444,6 +444,9 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
   });
 
   it("refreshes the global skills and leaves the project's skills alone", async () => {
+    const runner = path.join(tmpDir, "npx");
+    fs.writeFileSync(runner, "", { mode: 0o755 });
+    vi.stubEnv("PATH", tmpDir);
     const lock = JSON.stringify({ skills: { "argent-device-interact": {} } });
     const globalLock = path.join(tmpDir, ".agents", ".skill-lock.json");
     fs.mkdirSync(path.dirname(globalLock), { recursive: true });
@@ -454,7 +457,7 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
     await update(["--yes", "--global", "--version", "99.0.0"]);
 
     const skillRuns = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>)
-      .filter(([bin, args]) => bin === "npx" && args.includes("skills"))
+      .filter(([bin, args]) => bin === runner && args.includes("skills"))
       .map(([, args]) => args);
     expect(skillRuns.length).toBeGreaterThan(0);
     expect(skillRuns.every((args) => args.includes("-g"))).toBe(true);

@@ -10,7 +10,7 @@ Argent checks for updates when the tool server starts and every 24 hours. By def
 
 A linked checkout or a locally built package never updates itself. If your project declares the Argent version, the agent asks before updating it. The agent also asks when Argent cannot confirm which installation the package manager would update, and when you started the tool server yourself with `argent server start`.
 
-Argent waits until the tool server is idle before it installs a background update, so it does not replace the package under a session that is still working. When you postpone the update reminder, Argent also postpones the background update. A background update refreshes your global skills, rules and editor MCP entries, and leaves your workspace files alone. The next MCP session uses the updated version. On the first tool call, the agent tells you what changed.
+Argent waits until the tool server is idle before it starts a background update. An open e2e recording or a screen recording you have not retrieved also postpones the update. When you postpone the update reminder, Argent also postpones the background update. A background update refreshes your global skills, rules and editor MCP entries, and leaves your workspace files alone. The next MCP session uses the updated version. On the first tool call, the agent tells you what changed.
 
 To ask before every update, run:
 

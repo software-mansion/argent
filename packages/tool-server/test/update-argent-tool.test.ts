@@ -5,7 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 // Mock child_process and update-checker before importing the module under test.
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: vi.fn(),
 }));
 
@@ -206,6 +207,31 @@ describe("update-argent tool", () => {
       [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
       expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
     );
+  });
+
+  it("keeps a quiet server's e2e recording and uncollected video until both are finished", async () => {
+    const flows = await import("../src/tools/flows/flow-utils");
+    const screen = await import("../src/utils/screen-recording-reminder");
+    await flows.startRecordingSession({
+      name: "checkout",
+      projectRoot: tmpDir,
+      filePath: path.join(tmpDir, "checkout.yaml"),
+      persist: "client",
+      flow: { executionPrerequisite: "", steps: [] },
+    });
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+    vi.advanceTimersByTime(TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    screen.registerActiveScreenRecording("device", Date.now(), 60);
+    flows.clearRecordingSession(await flows.requireRecordingSession(tmpDir, "checkout"));
+    screen.markScreenRecordingFinalized("device", "time limit reached");
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    screen.clearActiveScreenRecording("device");
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).toHaveBeenCalledOnce();
   });
 
   it("leaves a server started with `argent server start` on the consent path", async () => {

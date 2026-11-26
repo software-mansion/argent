@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState, isUpdateNoteSuppressed } from "../../utils/update-checker";
 import { isReleaseBuild } from "../../utils/release-build";
+import { getActiveScreenRecordings } from "../../utils/screen-recording-reminder";
+import { listActiveRecordings } from "../flows/flow-utils";
 
 // dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
 // PATH, updates the SAME install serving this session and works in local
@@ -139,7 +141,15 @@ function cancelPendingAutomaticUpdate(): void {
 function msUntilInstall(activity: ServerActivity): number {
   const postponedByUser = isUpdateNoteSuppressed();
   const busy = activity.toolCallsInFlight() > 0;
-  if (postponedByUser || busy) return AUTOMATIC_UPDATE_IDLE_MS;
+  // Both recording kinds keep state between calls. Even a finalized screen
+  // capture still needs its original server until the client retrieves it.
+  if (
+    postponedByUser ||
+    busy ||
+    getActiveScreenRecordings().length ||
+    listActiveRecordings().length
+  )
+    return AUTOMATIC_UPDATE_IDLE_MS;
   return Math.max(0, activity.lastActivityAt() + AUTOMATIC_UPDATE_IDLE_MS - Date.now());
 }
 
@@ -150,7 +160,7 @@ function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automati
   }
   updateScheduled = true;
   // Let a manual update's MCP response reach the client before its server stops.
-  setTimeout(() => {
+  const launch = () => {
     const child = spawn(
       cliEntry ? process.execPath : "argent",
       cliEntry ? [cliEntry, ...updateArgs] : updateArgs,
@@ -174,7 +184,9 @@ function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automati
       updateScheduled = false;
     });
     child.unref();
-  }, 2000);
+  };
+  if (automatic) launch();
+  else setTimeout(launch, 2000);
 }
 
 function installWhenReady(version: string, cliEntry: string, activity: ServerActivity): void {
