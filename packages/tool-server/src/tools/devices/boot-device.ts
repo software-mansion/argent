@@ -131,8 +131,12 @@ type AndroidBootResult = {
   note?: string;
 };
 
-type BootDeviceResult =
+type IosBootResult =
   | { platform: "ios"; udid: string; booted: true; note?: string }
+  | { platform: "ios"; udid: string; booted: false; prepared: true };
+
+type BootDeviceResult =
+  | IosBootResult
   | { platform: "ios-remote"; udid: string; booted: true }
   | AndroidBootResult
   | VegaBootResult
@@ -644,10 +648,9 @@ async function bootIos(
   udid: string,
   registry: Registry,
   force?: boolean,
-  headless?: boolean
-): Promise<
-  { platform: "ios"; udid: string; booted: true; note?: string } | NativeDevtoolsInitFailedResult
-> {
+  headless?: boolean,
+  prepareOnly?: boolean
+): Promise<IosBootResult | NativeDevtoolsInitFailedResult> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
@@ -681,6 +684,15 @@ async function bootIos(
   }
   const simState = simMatch?.state;
   const isTvOs = simMatch?.runtimeKind === "tv";
+  if (prepareOnly) {
+    if (simState !== "Shutdown") {
+      throw new InvalidToolInputError(
+        `prepareOnly requires a Shutdown simulator. State of ${udid}: ${simState ?? "unknown"}.`
+      );
+    }
+    await setAccessibilityPrefsPreBoot(udid, { isTvOs });
+    return { platform: "ios", udid, booted: false, prepared: true };
+  }
   // The scan above already learned which device set owns this UDID,
   // so this resolves from cache; every simctl below targets that set.
   const deviceSet = await deviceSetForUdid(udid);
@@ -2860,6 +2872,12 @@ const zodSchema = z.object({
     .describe(
       "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. A read-only emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Where the process list cannot be read (Windows, or a failed `ps`), Argent knows only the pinned emulators it booted itself, so a writable call without `port` can reuse, or with `force` shut down, one that someone else pinned. A writable one is still reused, or with `force` shut down, by a writable call without `port`, since the AVD runs one writable emulator at a time. `force` shuts nothing down when another emulator of the AVD would still block the boot. Ignored on other platforms."
     ),
+  prepareOnly: z
+    .boolean()
+    .optional()
+    .describe(
+      "Local iOS simulator only: apply accessibility preferences and leave the simulator shut down for a pool manager to boot. Requires Shutdown state. Cannot be combined with force: true."
+    ),
   headless: z
     .boolean()
     .optional()
@@ -2924,10 +2942,12 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
     searchHint:
       "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
     interaction: {
-      startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
-      completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
+      startedMsg: ({ params }) =>
+        `${params.prepareOnly ? "Preparing" : "Starting"} ${bootTarget(params)}`,
+      completedMsg: ({ params }) =>
+        `${params.prepareOnly ? "Prepared" : "Started"} ${bootTarget(params)}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
+        `Failed to ${params.prepareOnly ? "prepare" : "start"} ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
     capability,
     services: () => ({}),
@@ -2951,6 +2971,14 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
           }
+        );
+      }
+      if (
+        params.prepareOnly &&
+        (!params.udid || classifyDevice(params.udid) !== "ios" || params.force)
+      ) {
+        throw new InvalidToolInputError(
+          "prepareOnly requires a local iOS simulator UDID and cannot be combined with force: true."
         );
       }
       if (hasMacos || (hasUdid && classifyDevice(params.udid!) === "macos")) {
@@ -3027,7 +3055,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             }
           );
         }
-        return bootIos(params.udid!, registry, params.force, params.headless);
+        return bootIos(params.udid!, registry, params.force, params.headless, params.prepareOnly);
       }
       if (hasAvd) {
         if (params.port !== undefined) {

@@ -167,6 +167,26 @@ See [Physical iOS devices](/docs/features/physical-ios-devices) for signing requ
 
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
+### Accessibility on a pre-booted iOS simulator
+
+To prepare a local simulator for a job, start it with `boot-device` while it is shut down.
+If a pool manager already started it, use `boot-device` with `force: true` before the job. This restarts the simulator.
+
+A pool manager can run this command on the Mac before it starts the local simulator:
+
+```sh
+argent run boot-device --udid "$UDID" --prepareOnly
+```
+
+Wait for the command to succeed before starting the simulator. The result includes `prepared: true` and `booted: false`.
+The command requires the `Shutdown` state. It enables these Boolean settings in the simulator's `com.apple.Accessibility` preferences:
+
+- `IgnoreAXServerEntitlements`
+- `AccessibilityEnabled`
+- `ApplicationAccessibilityEnabled`
+
+The simulator reads these settings at startup. For a [provider device](/docs/reference/device-providers), use the provider to apply the settings and restart the simulator.
+
 ### Network conditions
 
 Use `network-conditions` with a device ID from `list-devices`. Each call replaces the previous settings.
@@ -220,6 +240,8 @@ On Android, Chrome 158 and later does not give the page of a regular tab to the 
 - The frames are fractions of the screen, as for all other elements.
 - The `source` is `android-devtools+cdp` or `uiautomator+cdp`, and the `hint` tells that the page came from the DOM.
 - When the DevTools read fails, `describe` returns the accessibility tree without the page.
+
+On an iOS simulator, `source: "native-devtools"` means that `describe` read the app's own tree. This tree omits system dialogs, including permission prompts. The result's `hint` explains the limitation. See [Accessibility on a pre-booted iOS simulator](#accessibility-on-a-pre-booted-ios-simulator). On this tree, `await-ui-element` can confirm a match. If the element is absent, a `hidden` wait continues until the accessibility service can confirm its absence. If the wait times out with only app-tree misses, the result has `success: false` and `cause: "unreadable"`.
 
 On an iOS simulator, a line of `describe` can show:
 
@@ -1088,10 +1110,10 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Workspace and maintenance
 
-| Tool             | Description                                        |
-| ---------------- | -------------------------------------------------- |
-| `update-argent`  | Apply a pending Argent update                      |
-| `dismiss-update` | Postpone the update reminder for a number of hours |
+| Tool             | Description                                                                 |
+| ---------------- | --------------------------------------------------------------------------- |
+| `update-argent`  | Apply a pending Argent update                                               |
+| `dismiss-update` | Postpone the update reminder and the automatic update for a number of hours |
 
 ## SDK-only tools
 

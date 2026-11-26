@@ -5,6 +5,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { deviceSetForUdid, simctlArgsForUdid } from "./ios-device-sets";
+import { parsePlist } from "./ios-device/usbmux-protocol";
+
+const PRE_BOOT_ACCESSIBILITY_KEYS = [
+  "IgnoreAXServerEntitlements",
+  "AccessibilityEnabled",
+  "ApplicationAccessibilityEnabled",
+];
 
 const execFileAsync = promisify(execFile);
 
@@ -33,8 +40,7 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await accessibilityDefaults(udid, "write", "AutomationEnabled", "-bool", "true");
 }
 
-async function hasAutomationEnabled(udid: string): Promise<boolean> {
-  const plist = await accessibilityDefaults(udid, "export", "-");
+function hasAutomationEnabled(plist: string): boolean {
   return plist.includes("<key>AutomationEnabled</key>");
 }
 
@@ -49,13 +55,13 @@ async function hasAutomationEnabled(udid: string): Promise<boolean> {
  * checked through `defaults export`, which prints the domain as an XML plist
  * (an empty one for a missing domain) on every runtime.
  */
-export async function clearAutomationEnabled(udid: string): Promise<void> {
-  if (!(await hasAutomationEnabled(udid))) return;
+export async function clearAutomationEnabled(udid: string, plist?: string): Promise<void> {
+  if (!hasAutomationEnabled(plist ?? (await accessibilityDefaults(udid, "export", "-")))) return;
   try {
     await accessibilityDefaults(udid, "delete", "AutomationEnabled");
   } catch (err) {
     // Another clear of the same sim can delete the key between the check and here.
-    if (await hasAutomationEnabled(udid)) throw err;
+    if (hasAutomationEnabled(await accessibilityDefaults(udid, "export", "-"))) throw err;
   }
 }
 
@@ -69,33 +75,19 @@ export async function clearAutomationEnabledOrWarn(udid: string): Promise<void> 
   });
 }
 
-/**
- * SB caches `IgnoreAXServerEntitlements` at AX-server init, so only the
- * pre-boot plist write in boot-device takes effect; a post-boot write applies
- * from the next restart. False here means that write didn't happen, and
- * describe surfaces a degraded-quality hint.
- */
-export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
+/** The running defaults can reveal a missing setting, but cannot show when it was applied. */
+export async function prepareLocalAxPrefs(udid: string): Promise<boolean> {
+  const plist = await accessibilityDefaults(udid, "export", "-");
+  await clearAutomationEnabled(udid, plist);
   try {
-    const { stdout } = await execFileAsync(
-      "xcrun",
-      /** Same reasoning as {@linkcode accessibilityDefaults}. */
-      await simctlArgsForUdid(
-        udid,
-        [
-          "spawn",
-          udid,
-          "defaults",
-          "read",
-          "com.apple.Accessibility",
-          "IgnoreAXServerEntitlements",
-        ],
-        { granted: "ax-service" }
-      ),
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    const prefs = parsePlist(plist);
+    return (
+      typeof prefs === "object" &&
+      !Array.isArray(prefs) &&
+      PRE_BOOT_ACCESSIBILITY_KEYS.every((key) => prefs[key] === true || prefs[key] === 1)
     );
-    return stdout.trim() === "1";
   } catch {
+    // A diagnostic probe must not prevent the service from reading the screen.
     return false;
   }
 }
@@ -141,12 +133,9 @@ export async function setAccessibilityPrefsPreBoot(
   if (!exists) {
     await execFileAsync("plutil", ["-create", "binary1", plistPath]);
   }
-  const keys = [
-    "IgnoreAXServerEntitlements",
-    "AccessibilityEnabled",
-    "ApplicationAccessibilityEnabled",
-  ];
-  if (isTvOs) keys.unshift("AutomationEnabled");
+  const keys = isTvOs
+    ? ["AutomationEnabled", ...PRE_BOOT_ACCESSIBILITY_KEYS]
+    : PRE_BOOT_ACCESSIBILITY_KEYS;
   for (const key of keys) {
     await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
   }
