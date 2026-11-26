@@ -1322,12 +1322,20 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
+          if (socket.destroyed) return;
           const msg = parsed as { type: string; payload: any };
 
           // Handshake: must be the first message.
           if (bundleId === null) {
             if (msg.type !== "Control") return;
-            bundleId = msg.payload.bundleId as string;
+            const id = msg.payload?.bundleId;
+            // Simulator launchd can inject the agent into Apple apps too. They
+            // aren't targets, and a suspended one won't answer app-state reads.
+            if (typeof id !== "string" || !isInjectableBundleId(id)) {
+              socket.destroy();
+              return;
+            }
+            bundleId = id;
 
             // The same app reconnecting (fast restart) supersedes the old socket.
             const existing = connections.get(bundleId);
