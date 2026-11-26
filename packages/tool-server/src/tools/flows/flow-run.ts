@@ -259,6 +259,11 @@ export interface StepReport {
    * expand time themselves.
    */
   durationMs?: number;
+  /**
+   * The step is from a `shutdown:` block: the test's own, or a fragment's,
+   * which runs after the test's steps whatever their outcome.
+   */
+  shutdown?: true;
 }
 
 export interface FlowRunResult {
@@ -274,6 +279,8 @@ export interface FlowRunResult {
    * all pass/skip is self-explanatory. Absent on completed runs.
    */
   aborted?: boolean;
+  /** A `shutdown:` step failed or errored, so the run cleaned up only partly. Absent otherwise. */
+  shutdownFailed?: true;
   passed: number;
   failed: number;
   skipped: number;
@@ -1181,6 +1188,14 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   networkCaptureNoted: Map<string, string>;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
+  /**
+   * The `shutdown:` blocks still to run, each with the scope it runs in: the
+   * test's own first, then each fragment's as the fragment loads. Run from the
+   * end, so the newest goes first ({@link execShutdown}).
+   */
+  shutdownQueue: { steps: FlowStep[]; scope: StepScope }[];
+  /** Set while {@link execShutdown} runs: every report pushed then is tagged `shutdown`. */
+  inShutdown: boolean;
 }
 
 /**
@@ -1239,13 +1254,23 @@ function displayFlowName(params: { name?: string; e2e_test_path?: string }): str
  * time, so reading it here would duplicate that lookup.
  * {@link execRunStep} repeats the pass where the fragment loads.
  */
-function* walkSteps(steps: FlowStep[], within = ""): Generator<{ step: FlowStep; where: string }> {
+function* walkSteps(
+  steps: FlowStep[],
+  within = "",
+  label = "step"
+): Generator<{ step: FlowStep; where: string }> {
   for (const [i, step] of steps.entries()) {
-    const where = `step ${i + 1}${within}`;
+    const where = `${label} ${i + 1}${within}`;
     yield { step, where };
     const inner = blockSteps(step);
     if (inner) yield* walkSteps(inner, ` of the ${step.kind}: block at ${where}`);
   }
+}
+
+/** {@link walkSteps} over a file's `steps:`, then its `shutdown:`. */
+function* walkFlow(flow: FlowFile, within = ""): Generator<{ step: FlowStep; where: string }> {
+  yield* walkSteps(flow.steps, within);
+  if (flow.shutdown) yield* walkSteps(flow.shutdown, within, "shutdown step");
 }
 
 /** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
@@ -1340,8 +1365,8 @@ function* nestedInvocations(
  * An unknown tool is skipped: that step already fails on its own, with a better
  * message than a missing schema could produce here.
  */
-function findRetiredToolArg(registry: Registry, steps: FlowStep[]): RetiredArgUse | undefined {
-  for (const { step, where } of walkSteps(steps)) {
+function findRetiredToolArg(registry: Registry, flow: FlowFile): RetiredArgUse | undefined {
+  for (const { step, where } of walkFlow(flow)) {
     if (step.kind !== "tool") continue;
     const props = toolArgProps(registry, step.name);
     if (!props) continue;
@@ -1384,8 +1409,8 @@ function retiredArgReason(use: RetiredArgUse): string {
  * earlier steps have seeded data and driven the device, and a step under a
  * `when:` guard passes or errors by the branch the device happens to take.
  */
-async function findUnrunnableScript(steps: FlowStep[]): Promise<string | undefined> {
-  for (const { step } of walkSteps(steps)) {
+async function findUnrunnableScript(flow: FlowFile): Promise<string | undefined> {
+  for (const { step } of walkFlow(flow)) {
     if (step.kind !== "script") continue;
     const refusal = await typeScriptScriptRefusal(step.path);
     if (refusal !== undefined) return refusal;
@@ -1406,10 +1431,10 @@ async function fragmentLoadRefusal(
   fragment: FlowFile,
   target: string
 ): Promise<string | undefined> {
-  const retiredArg = findRetiredToolArg(registry, fragment.steps);
+  const retiredArg = findRetiredToolArg(registry, fragment);
   const shown = escapeInline(target);
   if (retiredArg) return `fragment "${shown}" ${retiredArgReason(retiredArg)}`;
-  const unrunnableScript = await findUnrunnableScript(fragment.steps);
+  const unrunnableScript = await findUnrunnableScript(fragment);
   return unrunnableScript ? `fragment "${shown}" cannot run. ${unrunnableScript}` : undefined;
 }
 
@@ -1523,7 +1548,7 @@ function assertUploadSelfContained(
     }
   };
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
+    for (const { step, where } of walkFlow(file.flow, file.within)) {
       if (step.kind === "run") {
         const line = `${where}: run: ${escapeInline(step.flow)}`;
         if (!closure) offending.push({ kind: "run", line });
@@ -1684,7 +1709,9 @@ export function createRunFlowTool(
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
 exactly one e2e test source: name (under project_root) or e2e_test_path.
-Returns a per-step report: the first failure stops the run and the rest report as skipped.
+Returns a per-step report: the first failure stops the run and the rest report as skipped. A \`shutdown:\`
+block then runs, pass or fail, unless the run was cancelled: its steps report \`shutdown: true\`, each runs
+even after one fails, and a failure sets \`shutdownFailed\` and fails the run.
 Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
 snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
 the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,
@@ -1756,7 +1783,7 @@ Without a link, every step kind runs.`,
       // Refused before the prerequisite handshake and before any step touches
       // the device: a mid-run refusal would land after earlier steps had already
       // driven it (see findRetiredToolArg).
-      const retiredArg = findRetiredToolArg(registry, flow.steps);
+      const retiredArg = findRetiredToolArg(registry, flow);
       if (retiredArg) {
         throw new FailureError(`E2E test "${flowName}" ${retiredArgReason(retiredArg)}`, {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -1768,7 +1795,7 @@ Without a link, every step kind runs.`,
       // Refused here for the same reason, though the file is sound: it is this
       // host that cannot run the step (see findUnrunnableScript). A validation
       // failure all the same, so a directory run goes on to its next e2e test.
-      const unrunnableScript = await findUnrunnableScript(flow.steps);
+      const unrunnableScript = await findUnrunnableScript(flow);
       if (unrunnableScript) {
         throw new FailureError(`E2E test "${flowName}" was not run. ${unrunnableScript}`, {
           error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
@@ -1965,17 +1992,24 @@ Without a link, every step kind runs.`,
           ? { attachedDeviceId: device.id }
           : {}),
         ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
+        shutdownQueue: [],
+        inShutdown: false,
       };
 
       let aborted: boolean;
       try {
-        await execSteps(state, flow.steps, {
+        const rootScope: StepScope = {
           runStack: seed,
           fileEnv: flow.env ?? {},
           rootDisplay: rootEntry.display,
           depth: 0,
           legacyPoints: flowFormatVersion(flow) < 2,
-        });
+        };
+        if (flow.shutdown) state.shutdownQueue.push({ steps: flow.shutdown, scope: rootScope });
+        await execSteps(state, flow.steps, rootScope);
+        // Before the teardown below: shutdown steps act on the device and the
+        // app the run left, so a chromium instance the run owns must still be up.
+        await execShutdown(state);
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
         // status-bar restore / chromium teardown lands after every step
@@ -2077,8 +2111,9 @@ async function resolveRunDevice(
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
-    if (!flowRequiresDevice(registry, flow.steps)) {
-      if (!flowScopesDevice(registry, flow.steps)) return { device: null, booted: null };
+    const allSteps = [...flow.steps, ...(flow.shutdown ?? [])];
+    if (!flowRequiresDevice(registry, allSteps)) {
+      if (!flowScopesDevice(registry, allSteps)) return { device: null, booted: null };
       // A flow that only SCOPES to a device (a cleanup flow) takes one when one
       // is unambiguous, so the teardown stays narrowed to the run device and
       // cannot reap what another agent is mid-session on. When resolution has
@@ -2196,7 +2231,7 @@ function clientRootCanonical(
   name: string | undefined,
   flow: FlowFile
 ): string {
-  const anchors = [...walkSteps(flow.steps)].some(
+  const anchors = [...walkFlow(flow)].some(
     ({ step }) => step.kind === "run" || step.kind === "snapshot"
   );
   if (!anchors) return root.clientPath;
@@ -2438,7 +2473,9 @@ function summarize(
   let failed = 0;
   let skipped = 0;
   let errored = 0;
+  let shutdownFailed = false;
   for (const s of steps) {
+    if (s.shutdown && (s.status === "fail" || s.status === "error")) shutdownFailed = true;
     // Echo is narration, not a test step — counting it would let the summary
     // disagree with the renderers' step numbering (which skips echo too).
     if (s.kind === "echo") continue;
@@ -2458,6 +2495,7 @@ function summarize(
     // as a successful omission.
     ok: failed === 0 && errored === 0 && !aborted,
     ...(aborted ? { aborted: true } : {}),
+    ...(shutdownFailed ? { shutdownFailed: true } : {}),
     passed,
     failed,
     skipped,
@@ -2475,6 +2513,7 @@ function summarize(
  */
 function pushReport(state: ExecState, report: StepReport): void {
   if (report.e2eTest !== undefined) report.flow = report.e2eTest;
+  if (state.inShutdown) report.shutdown = true;
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -2710,6 +2749,25 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     }
     pushReport(state, report);
     if (report.status === "fail" || report.status === "error") state.stopped = true;
+  }
+}
+
+/**
+ * Run the queued `shutdown:` blocks, newest first: the fragments' in the reverse
+ * of the order they loaded, then the test's own. Every entry is attempted
+ * whatever the run's outcome, and one that fails does not stop the next, so
+ * each cleanup gets its chance. A `when:` or `run:` entry still stops at its own
+ * first failure, which is how a chain that depends on each step is written. A
+ * cancelled run cleans up nothing: execSteps reports each entry skipped as
+ * "run aborted", also when the cancel lands during shutdown.
+ */
+async function execShutdown(state: ExecState): Promise<void> {
+  state.inShutdown = true;
+  for (let next = state.shutdownQueue.pop(); next; next = state.shutdownQueue.pop()) {
+    for (const step of next.steps) {
+      state.stopped = false;
+      await execSteps(state, [step], next.scope);
+    }
   }
 }
 
@@ -3029,15 +3087,18 @@ async function execRunStep(
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
-  await execSteps(
-    state,
-    fragment.steps,
-    childScope(scope, {
-      runStack: [...scope.runStack, { canonical, display }],
-      fileEnv: mergeScriptEnv(fragment.env, scope.fileEnv),
-      legacyPoints: flowFormatVersion(fragment) < 2,
-    })
-  );
+  const fragmentScope = childScope(scope, {
+    runStack: [...scope.runStack, { canonical, display }],
+    fileEnv: mergeScriptEnv(fragment.env, scope.fileEnv),
+    legacyPoints: flowFormatVersion(fragment) < 2,
+  });
+  // Queued once the fragment loads, so it runs even when one of its steps
+  // fails. At the run's end, beside the test's own shutdown, not indented
+  // under this `run:` step: the step attribution names the fragment.
+  if (fragment.shutdown) {
+    state.shutdownQueue.push({ steps: fragment.shutdown, scope: { ...fragmentScope, depth: 0 } });
+  }
+  await execSteps(state, fragment.steps, fragmentScope);
 }
 
 type ScriptStepOutcome = Pick<StepReport, "status" | "reason" | "scriptLog" | "scriptLogTruncated">;

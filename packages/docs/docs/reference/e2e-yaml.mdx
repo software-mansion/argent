@@ -51,11 +51,12 @@ steps:
   - await: { idle: true }
 ```
 
-The file has five top-level keys:
+The file has six top-level keys:
 
 | Key                     | Required | Description                                                                                          |
 | ----------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
 | `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                    |
+| `shutdown`              | no       | Steps that run after `steps`, also when a step failed. See [Shutdown](#shutdown)                     |
 | `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                              |
 | `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                            |
 | `env`                   | no       | Environment values for each `script` step of the file. See [Environment values](#environment-values) |
@@ -87,7 +88,39 @@ Argent skips leading `echo` and `script` steps when it classifies an e2e test. A
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
-When a step fails, Argent stops the e2e test and reports the later steps as skipped.
+When a step fails, Argent stops the e2e test and reports the later steps as skipped. Argent then runs the `shutdown` steps.
+
+### Shutdown
+
+```yaml
+steps:
+  - script: { path: scripts/create-user.mjs }
+  - launch: com.example.app
+  - tap: { id: login }
+shutdown:
+  - script:
+      path: scripts/delete-user.mjs
+      env: { USER_ID: "{{output:user.id ?? none}}" }
+```
+
+The `shutdown` list takes the same steps as `steps`. Argent runs the `shutdown` steps after the last step of `steps`. Use them to remove the data and the state that the e2e test made.
+
+| Outcome of `steps`                                                                                 | `shutdown` steps                       |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| All steps passed                                                                                   | Run                                    |
+| A step failed or errored                                                                           | Run                                    |
+| The run was cancelled, for example with Ctrl-C or an MCP cancel                                    | Skipped, with the reason `run aborted` |
+| Argent refused the run before the first step, for example a prerequisite notice or an invalid file | Not run and not reported               |
+
+Argent runs each `shutdown` step, also after a `shutdown` step fails. A `when:` block or a `run:` fragment in `shutdown` stops at its first failure, as in `steps`. Put a chain of steps that depend on each other in one `when:` block. When the run is cancelled during `shutdown`, Argent skips the remaining `shutdown` steps.
+
+The report puts the `shutdown` steps after the other steps, with `shutdown: true` on each one. The counts include them. A failed `shutdown` step fails the run and sets `shutdownFailed: true` on the report. `argent e2e run` prints `shutdown:` above the first `shutdown` step and `shutdown did not finish:` with the failed step. When a step of `steps` also failed, that step is still the first failure.
+
+A `shutdown` step can reference an output that no step wrote, because the steps before it can stop early. A reference without a fallback then errors the step. Give each reference in `shutdown` a `??` fallback, or put the step in a `when: { output: <path>, exists: true }` block. See [References](#references).
+
+A `run:` fragment can have its own `shutdown`. Argent queues it when the fragment loads, also when a step of the fragment fails. At the end of the run, Argent runs the queued `shutdown` lists from the last one queued to the first one, then the `shutdown` of the e2e test. A fragment that runs two times queues its `shutdown` two times. A `tool: e2e-execute` step is a separate run. Its `shutdown` runs when that run ends.
+
+The `shutdown` steps do not change the shape of the e2e test. Only `steps` decides if the e2e test is standalone or a fragment.
 
 ### Requirements
 

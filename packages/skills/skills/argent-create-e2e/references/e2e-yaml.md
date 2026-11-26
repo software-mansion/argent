@@ -233,6 +233,10 @@ Use `when:` only for optional setup or an interstitial that reconverges:
 
 The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega|macos }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
 
+## Shutdown
+
+A top-level `shutdown:` list takes the same steps as `steps:` and runs after them, pass or fail, so put cleanup there (delete the test user, reset a flag). It is skipped when the run is cancelled, and it does not run when the run is refused before step 1 (prerequisite notice, invalid file). Every shutdown entry runs even after one fails; a `when:` or `run:` entry still stops at its own first failure, so keep a dependent chain in one `when:` block. A failed shutdown step fails the run (`shutdownFailed: true`; the report tags each such step `shutdown: true`). Earlier steps may not have run, so give each `{{output:...}}` in shutdown a `??` fallback or guard it with `when: { output: <path>, exists: true }`. A `run:` fragment's own `shutdown:` is queued when it loads and runs at the end of the whole run, newest first, before the test's own; a `tool: e2e-execute` step's runs when that nested run ends. Shutdown does not decide whether the test is standalone.
+
 ## Composition and platform limits
 
 A `run:` target is a YAML path resolved against the directory of the test file containing the step, so `../shared/login.yaml` reaches a sibling directory rather than the project root. The `.yaml` suffix is optional: `run: login` and `run: login.yaml` both name `login.yaml` beside the test. A bare name that is missing beside a test in `.argent/e2e/` is also looked up in `.argent/flows/`, and the reverse. The recorder writes a nested test that is only in the other directory by its path, for example `run: ../flows/login.yaml`.
