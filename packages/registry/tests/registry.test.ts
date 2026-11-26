@@ -843,6 +843,24 @@ describe("Registry -- dispose during a self-release", () => {
     expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
   });
 
+  it("does not start the service again for a resolve that waits behind disposeService", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    const disposing = registry.disposeService("Gated:x");
+    const resolving = registry.resolveService("Gated:x").catch((e: unknown) => e);
+    releaseDispose();
+    await disposing;
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+    expect(instances).toHaveLength(1);
+  });
+
   it("makes disposeService wait for the release", async () => {
     const registry = new Registry();
     const { blueprint, instances, releaseDispose } = gatedBlueprint();

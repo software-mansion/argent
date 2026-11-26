@@ -517,6 +517,21 @@ describe("android-devtools idle release", () => {
     await instance.dispose();
   });
 
+  it("re-arms the release after a call that failed", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) =>
+      method === "getScreenSize"
+        ? { error: { type: "java.lang.IllegalStateException", message: "no display" } }
+        : { result: { ok: true } };
+
+    await expect(instance.api.getScreenSize()).rejects.toThrow("no display");
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS);
+    expect(terminated).toEqual([undefined]);
+
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
   it("holds off the release while a setText is in flight", async () => {
     const { instance, terminated } = await start();
     answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });

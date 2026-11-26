@@ -49,6 +49,7 @@ export class Registry {
    */
   private selfReleases = new Map<URN, Promise<void>>();
   private disposeCalls = 0;
+  private disposingUrns = new Set<URN>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
   /**
@@ -323,8 +324,14 @@ export class Registry {
     const node = this.services.get(urn);
     if (!node) throw new ServiceNotFoundError(urn);
     const selfRelease = this.selfReleases.get(urn);
-    if (selfRelease) await selfRelease;
-    await this._teardown(urn);
+    if (!selfRelease) return this._teardown(urn);
+    this.disposingUrns.add(urn);
+    try {
+      await selfRelease;
+      await this._teardown(urn);
+    } finally {
+      this.disposingUrns.delete(urn);
+    }
   }
 
   async dispose(): Promise<void> {
@@ -460,7 +467,7 @@ export class Registry {
     resolutionPath: string[],
     options?: Record<string, unknown>
   ): Promise<T> {
-    if (this.disposeCalls > 0) {
+    if (this.disposeCalls > 0 || this.disposingUrns.has(urn)) {
       return Promise.reject(serviceTerminatingError(urn));
     }
     return this._resolve<T>(urn, resolutionPath, options);
@@ -525,18 +532,18 @@ export class Registry {
  * REGISTRY_SERVICE_INITIALIZATION_FAILED signal, hiding this transient window
  * from telemetry and from callers that classify by code.
  */
-function serviceTerminatingError(urn: URN): ServiceInitializationError {
-  return new ServiceInitializationError(urn, "Service is currently terminating", {
-    cause: terminatingSignalCause("Service is currently terminating"),
-  });
-}
-
 function terminatingSignalCause(message: string): FailureError {
   return new FailureError(message, {
     error_code: FAILURE_CODES.REGISTRY_SERVICE_TERMINATING,
     failure_stage: "registry_service_terminating",
     failure_area: "registry",
     error_kind: "unknown",
+  });
+}
+
+function serviceTerminatingError(urn: URN): ServiceInitializationError {
+  return new ServiceInitializationError(urn, "Service is currently terminating", {
+    cause: terminatingSignalCause("Service is currently terminating"),
   });
 }
 
