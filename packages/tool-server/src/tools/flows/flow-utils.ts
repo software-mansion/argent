@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
@@ -400,11 +401,13 @@ export interface RecordingSession {
    */
   output?: FlowOutput;
   /**
-   * The document as the recorded `shutdown:` steps leave it. A replay runs them
-   * after every step, so what they return never reaches a step, and each one
-   * starts from {@link output} plus what the shutdown steps before it left.
+   * The top-level keys the recorded `shutdown:` steps set, or removed
+   * ({@link REMOVED_OUTPUT_KEY}). A replay runs them after every step, so what
+   * they return never reaches a step, and each one starts from {@link output},
+   * as the later steps leave it, with these changes on top. A key a shutdown
+   * step wrote back unchanged is not kept.
    */
-  shutdownOutput?: FlowOutput;
+  shutdownChanges?: Map<string, unknown>;
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -5159,9 +5162,19 @@ export async function appendStepToFlow(
   });
 }
 
-/** The output document a call recorded into `block` runs against ({@link RecordingSession.shutdownOutput}). */
+/** Marks a key a shutdown step removed, in {@link RecordingSession.shutdownChanges}. */
+const REMOVED_OUTPUT_KEY = Symbol("removed");
+
+/** The output document a call recorded into `block` runs against ({@link RecordingSession.shutdownChanges}). */
 export function recordingOutput(session: RecordingSession, block: RecordedBlock): FlowOutput {
-  return (block === "shutdown" ? (session.shutdownOutput ?? session.output) : session.output) ?? {};
+  const doc = session.output ?? {};
+  if (block !== "shutdown" || !session.shutdownChanges) return doc;
+  const merged = { ...doc };
+  for (const [key, value] of session.shutdownChanges) {
+    if (value === REMOVED_OUTPUT_KEY) delete merged[key];
+    else merged[key] = value;
+  }
+  return merged;
 }
 
 /** Keep what a call recorded into `block` returned, for the calls recorded after it there. */
@@ -5170,8 +5183,16 @@ export function keepRecordingOutput(
   block: RecordedBlock,
   doc: FlowOutput
 ): void {
-  if (block === "shutdown") session.shutdownOutput = doc;
-  else session.output = doc;
+  if (block === "steps") {
+    session.output = doc;
+    return;
+  }
+  const before = recordingOutput(session, "shutdown");
+  const changes = (session.shutdownChanges ??= new Map());
+  for (const key of Object.keys(before)) if (!(key in doc)) changes.set(key, REMOVED_OUTPUT_KEY);
+  for (const [key, value] of Object.entries(doc)) {
+    if (!(key in before) || !isDeepStrictEqual(before[key], value)) changes.set(key, value);
+  }
 }
 
 /** How many steps `block` of a flow holds. */

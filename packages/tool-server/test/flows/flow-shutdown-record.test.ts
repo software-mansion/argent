@@ -420,4 +420,39 @@ describe("recording into shutdown:", () => {
 
     expect(finished.message).toMatch(/1 warning raised during this recording is NOT in `summary`/);
   });
+
+  it("gives a shutdown step the output of a step recorded after an earlier shutdown script", async () => {
+    await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+    const scripts: Record<string, string> = {
+      "mk1.mjs": "output.user1 = 'u1';\n",
+      "rm1.mjs":
+        "if (output.user1 !== 'u1') throw new Error('no user1');\ndelete output.user1;\noutput.gone1 = true;\n",
+      "mk2.mjs": "output.user2 = 'u2';\n",
+      "rm2.mjs":
+        "if (output.user2 !== 'u2' || !output.gone1 || 'user1' in output) throw new Error(JSON.stringify(output));\n",
+      "main.mjs":
+        "if ('gone1' in output || output.user1 !== 'u1') throw new Error(JSON.stringify(output));\n",
+    };
+    for (const [file, body] of Object.entries(scripts)) {
+      await fs.writeFile(path.join(root, "scripts", file), body);
+    }
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+    const add = (file: string, shutdown?: boolean) =>
+      flowAddScriptTool.execute(
+        {},
+        {
+          name: "t",
+          project_root: root,
+          path: `../../scripts/${file}`,
+          ...(shutdown ? { shutdown } : {}),
+        }
+      );
+
+    expect((await add("mk1.mjs")).status).toBe("pass");
+    expect((await add("rm1.mjs", true)).status).toBe("pass");
+    expect((await add("mk2.mjs")).status).toBe("pass");
+    // The steps still see user1, and not what the shutdown script did.
+    expect((await add("main.mjs")).status).toBe("pass");
+    expect((await add("rm2.mjs", true)).status).toBe("pass");
+  });
 });
