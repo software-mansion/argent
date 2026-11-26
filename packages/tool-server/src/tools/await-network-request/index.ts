@@ -41,27 +41,27 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Device ID passed as udid to network-capture-start, even if that call also used logicalDeviceId."
+        "Device ID passed as udid to network-capture-start. The wait reuses its Metro target."
       ),
     bundleId: z
       .string()
       .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
       .describe(
-        "App ID passed to network-capture-start<flag:macos-apps>. On macOS it must match the app named by udid</flag:macos-apps>. On Chromium, use a valid placeholder such as argent.capture."
+        "The bundleId used for network-capture-start. On Chromium, use a valid placeholder such as argent.capture."
       ),
     url: z
       .string()
       .min(1)
       .describe(
-        'URL text or pattern, such as "/v1/auth/login". Do not include secrets. The result includes the matched URL, and {{secret:...}} placeholders are rejected.'
+        "URL text or a pattern. Match a part with no secrets. The result includes the full URL and secret placeholders are rejected."
       ),
     urlMatch: z
       .enum(["contains", "equals", "matches"])
       .optional()
       .describe(
-        "contains (default) searches for a substring. equals compares the full URL. Both ignore case. matches uses a case-sensitive JavaScript regular expression without implicit anchors."
+        "contains (default) and equals ignore case. matches uses a case-sensitive JavaScript regular expression with no implicit anchors."
       ),
-    method: z.string().min(1).optional().describe("HTTP method such as POST. Ignores case."),
+    method: z.string().min(1).optional().describe("HTTP method, matched without regard to case."),
     status: z
       .union([
         z.enum(STATUS_CLASSES as [string, ...string[]]),
@@ -69,13 +69,13 @@ const zodSchema = z
       ])
       .optional()
       .describe(
-        'Exact HTTP status such as 200 or a class such as "2xx". A failed request matches a status only if it received response headers.'
+        'Exact HTTP status or a class such as "2xx". Failed requests can match if they received response headers.'
       ),
     outcome: z
       .enum(["complete", "failed", "any"])
       .optional()
       .describe(
-        "complete (default) means the response finished, regardless of HTTP status. failed matches a request error such as an abort. any accepts either."
+        "complete (default) accepts a finished response, including HTTP errors. failed accepts a request error. any accepts either."
       ),
     timeoutMs: z
       .number()
@@ -183,9 +183,9 @@ export function createAwaitNetworkRequestTool(
   return {
     // A literal, so scripts/extract-tools.mjs finds the description it scores.
     id: "await-network-request",
-    description: `Check whether a matching request finished. Use when an action should send a specific request. Call network-capture-start before the action, then call this tool. It searches requests started since the latest capture start and waits until a match finishes or the timeout expires. On Chromium, match the final URL, method and status after redirects.
-Pass match.id as requestId to view-network-request-details for headers and bodies. A request can match only if Argent saw its outcome. When success is false, check cause. For unmet or unreadable, nearMisses can show which criteria captured requests missed. For unreadable, follow the layer notes to restore capture and repeat the action. For cancelled, retry if needed. A false result fails an e2e step and stops a run-sequence.
-If the tool raises NETWORK_CAPTURE_NOT_STARTED, start capture and repeat the action. While the JavaScript capture window is active, the wait can reconnect to the runtime and restore recording. Requests sent before recording resumes may be missing.`,
+    description: `Check whether a request finished in the latest capture window. Call network-capture-start before the action. Call this tool after triggering the request, then stop capture when you are done. On Chromium, match the final URL and method after redirects. Other layers use the URL the app requested. Physical iPhones and Vega are unsupported.
+Returns the match or diagnostic details. Use match.id with view-network-request-details. A miss only means no captured request matched. Check cause and nearMisses. If capture is unreadable, follow the layer notes before repeating the action. An active JS window can restore recording after a disconnect. Requests sent before it reconnects can be missing.
+Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Start capture and repeat the action. A result with success false fails an e2e step and stops a run-sequence.`,
     zodSchema,
     searchHint:
       "wait await network request http api call fetch xhr response status url match after capture start e2e assert",

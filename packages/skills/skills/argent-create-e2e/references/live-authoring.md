@@ -16,7 +16,6 @@ Read this file before creating or changing an e2e test. Exercise the saved path 
     - [Scrolling and swiping](#scrolling-and-swiping)
     - [Live waits and checks](#live-waits-and-checks)
     - [Network capture](#network-capture)
-    - [Network checks](#network-checks)
     - [Wrong turns](#wrong-turns)
   - [Finish and polish](#finish-and-polish)
   - [Worked example](#worked-example)
@@ -147,23 +146,16 @@ A warning does not reject the step. If `e2e-finish-recording` reports dropped wa
 
 ### Network capture
 
-On iOS, Android, and Mac apps, record a capture start before reproducing the request. On Chromium, record `view-network-logs` before the action if you only need to inspect requests. Use start and stop steps when the test needs a capture window. The Chromium log includes requests outside that window.
+On iOS simulators, Android, Mac apps, and Chromium, use `e2e-add-step` to record `network-capture-start`, the action, `await-network-request`, and `network-capture-stop` in that order. Put capture start after launch and the first-screen wait. A start before `launch:` makes the test a fragment. Use [Inspect network requests](../../argent-metro-debugger/SKILL.md#inspect-network-requests) for platform setup.
 
-1. Add `network-capture-start` through `e2e-add-step` after the launch and first-screen wait, if present, and before the action. A relaunch ends JS capture. A start before `launch:` makes the test a fragment.
-2. After the action, record a network check if the test must verify the request. Record `network-capture-stop` as soon as you have the requests you need.
-3. If a read reports that capture never started, record the start through `e2e-add-step`, then re-record the action and the read. Replay only runs the steps you recorded.
-4. A `tool:` step keeps its recorded `bundleId` on every platform. Only `launch:` takes an id per platform. If the app id differs by platform, add a top-level `requires:` block with the recording platform (see [File shape and test type](e2e-yaml.md#file-shape-and-test-type)). Record a separate test for each other platform.
-5. After replay, check `armed` and `reason` for the layer the test uses in each step's `result`. A passed step can report an unarmed start or an unconfirmed stop. A Chromium stop reports `armed: false` even when `reason` says no capture window was started. Fix the reported problem and replay before relying on the capture.
+- Keep the wait as a raw `tool:` step. A log listing can pass with an empty log. Match a part of the URL that contains no secret. On Android, capture can slow the app: start just before the action and stop right after the wait. When collecting several related requests, stop after the last check.
+- If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the missing start, then repeat and record the action and the wait. Replay only uses recorded steps.
+- If the recorder saves a failed wait, inspect `toolResult.nearMisses` for an `unmet` wait. Restore capture and repeat the action for `unreadable`. Record a new wait if cancelled. Remove superseded steps after `e2e-finish-recording`.
+- On replay, verify the relevant layer's `armed` and `reason` in the start and stop results. On Chromium, stop can report `armed: false` even when there was no window. If a failed step skips the stop, stop capture before replaying.
 
-### Network checks
+On Vega, call `view-network-logs` before the action to start JavaScript capture. Read the log again after the action to inspect the requests. `await-network-request` is unavailable on Vega.
 
-Use `await-network-request` when the replay must verify that the action sent a request. A log listing passes even when the request is missing. Record start → action → wait → stop through `e2e-add-step`. This works on iOS simulators, Android, Mac apps, and Chromium. On Chromium use the same valid `bundleId` placeholder, such as `argent.capture`, for the capture calls and the wait.
-
-Keep the wait as a `tool:` step in YAML. Match on a part of the URL that contains no secret.
-
-On Android, capture can slow the app. Start just before the triggering action and stop immediately after the wait, before checking the UI. For many related requests, keep capture running through the group and stop after the last wait. If a replay fails before the stop, stop capture before retrying.
-
-If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the start and repeat the action. If it records a wait with `success: false`, read the warning. For `unmet`, use `toolResult.nearMisses` and the request counts in `toolResult.note` to check the matcher and the recorded action. For `unreadable`, fix the layer named in the result before repeating the action. For `cancelled`, record the wait again. Remove superseded steps after `e2e-finish-recording`.
+A recorded `tool:` step keeps its `bundleId` on every platform. If app IDs differ, restrict the test with [`requires:`](e2e-yaml.md#file-shape-and-test-type) and record a test for each platform.
 
 ### Wrong turns
 

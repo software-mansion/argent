@@ -24,10 +24,15 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
-// The step registry serves no describe tree, so a snapshot's settle would poll to its deadline.
+// The step registry serves no describe tree and no captures, so a snapshot's
+// settle would poll to its deadline.
 vi.mock("../src/tools/flows/flow-actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/tools/flows/flow-actions")>()),
   settleTree: vi.fn(async () => ({})),
+}));
+vi.mock("../src/tools/flows/flow-pixels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/flows/flow-pixels")>()),
+  settlesOnPixels: vi.fn(async () => false),
 }));
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";

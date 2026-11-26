@@ -145,6 +145,11 @@ export interface ActionEnv {
    * `ActionEnv` by hand.
    */
   lastRead?: { tree?: DescribeNode; cover?: FlowCover };
+  /**
+   * When the run's last step that can change the screen ended (`Date.now()`).
+   * A `snapshot` keeps settling until a quiet window past it has elapsed.
+   */
+  lastActionAt?: number;
 }
 
 /** Outcome of a selector directive: ok, or a machine-readable reason it failed. */

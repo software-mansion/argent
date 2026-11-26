@@ -105,7 +105,8 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 );
 
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
-// "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
+// "uiautomator" / "android-devtools": Android; with "+cdp", a Chrome tab's page
+// came from the DOM walk over Chrome DevTools. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
 // automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
 // dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
@@ -116,6 +117,8 @@ export type DescribeSource =
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
+  | "uiautomator+cdp"
+  | "android-devtools+cdp"
   | "cdp-dom"
   | "vega-automation"
   | "harmony-uitest"

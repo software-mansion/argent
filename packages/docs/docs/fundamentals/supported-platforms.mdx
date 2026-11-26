@@ -38,6 +38,10 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+### Shared Android emulators
+
+Several agents can boot the same AVD at the same time. Each agent boots a read-only emulator on its own console port. A read-only emulator keeps the AVD and its snapshot unchanged. The emulator does not run a read-only instance next to a writable one, so start your own emulator of that AVD read-only too. See the [tools reference](/docs/reference/tools#devices-and-apps).
+
 ### Foldable simulators and emulators
 
 Argent drives these foldable devices closed, half-open and open:

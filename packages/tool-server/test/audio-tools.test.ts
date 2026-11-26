@@ -22,6 +22,29 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
     SIMULATORS[udid] && { udid, name: "Test Phone", runtime: "test", ...SIMULATORS[udid] },
 }));
 
+// Argent Cloud: the orchestrator's listing, keyed by runtime like `simctl list devices --json`.
+const REMOTE_TV = "1111AAAA-0000-0000-0000-00000000A77E";
+const REMOTE_SHUTDOWN = "1111DDDD-0000-0000-0000-000000000000";
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
+  simctlListDevices: async () => ({
+    devices: {
+      "com.apple.CoreSimulator.SimRuntime.tvOS-26-5": [
+        { udid: REMOTE_TV, name: "Apple TV", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+        { udid: REMOTE_SHUTDOWN, name: "Cloud Phone", state: "Shutdown" },
+      ],
+    },
+  }),
+}));
+
+// The remote listing above stands in for sim-remote, which CI does not have.
+vi.mock("../src/utils/check-deps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
+  ensureDeps: async () => {},
+}));
+
 function registryRig() {
   const registry = new Registry();
   registry.registerTool(createAudioInputTool(registry));
@@ -43,10 +66,16 @@ const targets = [
     FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,
   ],
   ["a tvOS simulator", TVOS, FAILURE_CODES.AUDIO_WRONG_PLATFORM],
+  ["a remote: tvOS simulator", `remote:${REMOTE_TV}`, FAILURE_CODES.AUDIO_WRONG_PLATFORM],
   [
-    "a remote: simulator",
+    "a shut-down remote: simulator",
+    `remote:${REMOTE_SHUTDOWN}`,
+    FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED,
+  ],
+  [
+    "an unknown remote: simulator",
     "remote:0000BBBB-0000-0000-0000-000000000000",
-    FAILURE_CODES.AUDIO_WRONG_PLATFORM,
+    FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED,
   ],
   ["a shut-down simulator", SHUTDOWN, FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED],
   ["a simulator that is still booting", BOOTING, FAILURE_CODES.AUDIO_SIMULATOR_NOT_BOOTED],
@@ -62,17 +91,6 @@ describe("audio tools refuse targets without the hook before resolving any servi
       expect(resolveService).not.toHaveBeenCalled();
     });
   }
-
-  it("says why a remote: simulator is refused", async () => {
-    const { registry } = registryRig();
-    const err = await registry
-      .invokeTool("audio-input", {
-        udid: "remote:0000BBBB-0000-0000-0000-000000000000",
-        source: "tone",
-      })
-      .catch((e: unknown) => e);
-    expect((err as Error).message).toContain("same Mac as the tool-server");
-  });
 
   it("tells a shut-down simulator to be booted first", async () => {
     const { registry } = registryRig();

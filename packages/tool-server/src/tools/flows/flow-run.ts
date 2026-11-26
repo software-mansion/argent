@@ -124,7 +124,12 @@ import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { createRunFlowTool as createVersion1RunFlowTool } from "./version-1/flow-run";
-import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
+import {
+  runSnapshot,
+  warmSnapshotCapture,
+  DEFAULT_MAX_MISMATCH,
+  type SnapshotArtifacts,
+} from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
@@ -1747,6 +1752,9 @@ Without a link, every step kind runs.`,
       // false) on chromium/vega and on a run already cancelled; restored on
       // teardown.
       const statusBarPinned = device !== null && (await pinStatusBar(device, signal));
+      if (device !== null && !signal?.aborted && mayRunSnapshotStep(flow)) {
+        void warmSnapshotCapture(registry, device);
+      }
 
       // The chromium equivalent: front the page so a backgrounded window doesn't
       // throttle rendering — wheel-event acks (scroll steps) stall on a throttled
@@ -1778,6 +1786,8 @@ Without a link, every step kind runs.`,
         // Same shape and sharing as `treeOutage`: the tree of the last read,
         // for a miss reason that reads it instead of the device.
         lastRead: {},
+        // The caller may have acted on the app right before this run.
+        lastActionAt: Date.now(),
         flowsDir,
         viaUpload,
         project,
@@ -2423,6 +2433,23 @@ function depthOf(scope: StepScope): Pick<StepReport, "depth"> {
   return scope.depth ? { depth: scope.depth } : {};
 }
 
+/** A `run:` target is read only when its step executes, so it counts as a possible snapshot. */
+function mayRunSnapshotStep(flow: FlowFile): boolean {
+  return [...walkSteps(flow.steps)].some(
+    ({ step }) => step.kind === "snapshot" || step.kind === "run"
+  );
+}
+
+/** Steps that only read the screen or wait, so the screen cannot change because of them. */
+const SCREEN_READING_STEPS: ReadonlySet<FlowStep["kind"]> = new Set([
+  "echo",
+  "await",
+  "assert",
+  "idle",
+  "wait",
+  "snapshot",
+]);
+
 /** Execute a list of steps, appending reports to state. Honors hard-stop + abort. */
 async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope): Promise<void> {
   for (const step of steps) {
@@ -2517,6 +2544,9 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       scope.legacyPoints && step.kind === "tool" ? "native" : "upright",
       () => execLeafStep(state, step, index, scope)
     );
+    if (report.status !== "skip" && !SCREEN_READING_STEPS.has(step.kind)) {
+      state.lastActionAt = Date.now();
+    }
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
       const screen = await captureFailureScreen(state);

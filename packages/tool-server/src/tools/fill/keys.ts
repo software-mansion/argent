@@ -20,8 +20,9 @@ const MAX_CLEAR_KEYS = 100;
 const XCTEST_DELETE = "\u0008";
 
 /**
- * Key timing. Keys are fire-and-forget, so the app gets `settleMs` to take a
- * backspace before it is read back. Mutable for tests only.
+ * Key timing. A key resolves once the key backend has taken it, not once the
+ * app has applied it, so the app gets `settleMs` to take a backspace before
+ * it is read back. Mutable for tests only.
  */
 export const KEY_TIMING = { holdMs: 20, settleMs: 300, typeDelayMs: 30 };
 

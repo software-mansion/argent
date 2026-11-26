@@ -4,6 +4,7 @@ import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
+import { androidChromeCdpBlueprint } from "../blueprints/android-chrome-cdp";
 import { axServiceBlueprint } from "../blueprints/ax-service";
 import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
@@ -81,6 +82,7 @@ import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-se
 import { createAudioInputTool } from "../tools/audio/audio-input";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
 import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
+import { iosRemoteAudioSessionBlueprint } from "../blueprints/ios-remote-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
@@ -141,8 +143,10 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(screenRecordingSessionBlueprint);
   registry.registerBlueprint(iosAudioSessionBlueprint);
+  registry.registerBlueprint(iosRemoteAudioSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
+  registry.registerBlueprint(androidChromeCdpBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
   registry.registerBlueprint(chromiumCdpBlueprint);
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);

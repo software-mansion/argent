@@ -525,6 +525,18 @@ describe("flow-add-step tap selector capture", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
+  it("says replay cannot read a Chrome tab's web content taken over DevTools", async () => {
+    setTree(
+      [n({ label: "Buy", frame: { x: 0.3, y: 0.5, width: 0.4, height: 0.06 } })],
+      "android-devtools+cdp"
+    );
+
+    const result = await recordTapOn(ANDROID, { x: 0.5, y: 0.52 });
+
+    expect(result.message).toContain("web content came from Chrome DevTools");
+    expect(result.message).not.toContain("android-devtools unavailable");
+  });
+
   it("reports both caveats when a role-only selector comes off Android's fallback tree", async () => {
     // The two warnings are independent and can fire on one capture. A
     // fallback-source read is the most likely to return an unlabeled node. Other

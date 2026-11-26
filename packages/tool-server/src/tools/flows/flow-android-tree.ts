@@ -299,7 +299,8 @@ function holdsScroller(node: ParsedXmlNode, screenW: number, screenH: number): b
  */
 export async function queryAndroidFullHierarchy(
   registry: Registry,
-  device: DeviceInfo
+  device: DeviceInfo,
+  options: { waitForIdleMs?: number } = {}
 ): Promise<DescribeTreeData> {
   let devtools: AndroidDevtoolsApi;
   try {
@@ -311,7 +312,7 @@ export async function queryAndroidFullHierarchy(
   }
   const [{ xml, captureMode }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
-    devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true }),
+    devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true, ...options }),
     devtools.getScreenSize(),
   ]);
   const root = parseDump(xml, size.width, size.height);

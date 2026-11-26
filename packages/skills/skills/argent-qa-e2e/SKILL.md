@@ -83,7 +83,7 @@ A snapshot has no recorder form. Inspect its stable state during the walkthrough
 - **Repeated controls:** prefer an id. Otherwise use a YAML-only scope. When a recorded tap matches more than one element, the recorder writes a `within` or `next` scope itself. During polish, add a missing scope or change an unstable one. Prefer `within` a stable container. Use `text.in` to prove rendered membership inside that container.
 - **Dynamic content:** assert controlled state or stable app chrome. Use anchored structure for unavoidable dynamic values and disclose the dependency.
 - **Visual state:** snapshot only a correct, settled, deterministic screen. Use full screen for global changes and `cropOn` for one component.
-- **Network requests:** record capture inside the test, after `launch:`, so both replays establish their own capture window. On Android, start just before the triggering action and stop after the wait. For many related requests, stop after the last wait. A wait requires a match, so use it only for requests the app must send. See [Network checks](../argent-create-e2e/references/live-authoring.md#network-checks).
+- **Network requests:** record capture inside the test, after `launch:`, so both replays establish their own capture window. On Android, start just before the triggering action and stop after the wait. For many related requests, stop after the last wait. A wait requires a match, so use it only for requests the app must send. See [Network capture](../argent-create-e2e/references/live-authoring.md#network-capture).
 
 Never put acceptance evidence inside `when:`. Use `when:` only for optional setup that reconverges to the required path.
 

@@ -4,13 +4,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import { runSnapshot } from "../../src/tools/flows/flow-visual";
+import { runSnapshot, warmSnapshotCapture } from "../../src/tools/flows/flow-visual";
 import { HostProjectAccess } from "../../src/tools/flows/project-access";
 import { ArtifactStore } from "../../src/artifacts";
 import {
-  diffPngFiles,
-  type DiffPngFilesOptions,
+  compareScreenshots,
+  writeContextDiff,
+  type CompareScreenshotsOptions,
 } from "../../src/tools/screenshot-diff/screenshot-diff";
+import { settleOnPixels, settlesOnPixels } from "../../src/tools/flows/flow-pixels";
 import {
   settleTree,
   invokeOnDevice,
@@ -31,14 +33,14 @@ const h = vi.hoisted(() => ({
   writeContextDiff: false,
   /** Set by the differ mock: the context diff it wrote inside outputDir. */
   contextDiffPath: "",
-  /** Set by the differ mock: the scratch outputDir runSnapshot handed it. */
+  /** Set by the context-diff mock: the scratch dir runSnapshot asked it to write into. */
   outputDir: "",
   /** Set by the differ mock: the currentPath it was asked to compare. */
   diffCurrentPath: "",
   /** Set by the differ mock: that file's bytes, which a pass sweeps from scratch. */
   diffCurrentBytes: Buffer.alloc(0),
   /** Set by the differ mock: the top-mask policy it was passed. */
-  diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
+  diffTopMask: "" as "" | NonNullable<CompareScreenshotsOptions["topMask"]>,
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
     undefined | "aborted" | { x: number; y: number; width: number; height: number },
@@ -64,28 +66,29 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
 }));
 
 vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
-  diffPngFiles: vi.fn(async (options: DiffPngFilesOptions) => {
-    h.outputDir = options.outputDir;
+  compareScreenshots: vi.fn(async (options: CompareScreenshotsOptions) => {
     h.diffCurrentPath = options.currentPath;
     h.diffCurrentBytes = await (await import("node:fs/promises")).readFile(options.currentPath);
     h.diffTopMask = options.topMask ?? "status-bar";
-    // The real differ bails before writing anything on a dimension mismatch.
     if (h.dimensionMismatch) {
       return { mismatchPercentage: 0, dimensionMismatch: h.dimensionMismatch };
     }
-    // Emulate the real differ: the full-res diff always lands in outputDir,
-    // the downscaled context diff only when a test asks for one.
-    const { writeFile } = await import("node:fs/promises");
-    const { join } = await import("node:path");
-    await writeFile(join(options.outputDir, "shot-diff.png"), Buffer.alloc(4));
-    let contextDiffPath: string | undefined;
-    if (h.writeContextDiff) {
-      contextDiffPath = join(options.outputDir, "shot-context-diff.png");
-      await writeFile(contextDiffPath, Buffer.alloc(4));
-      h.contextDiffPath = contextDiffPath;
-    }
-    return { mismatchPercentage: h.mismatchPercentage, contextDiffPath };
+    return { mismatchPercentage: h.mismatchPercentage };
   }),
+  writeContextDiff: vi.fn(async (_comparison: unknown, destination: string) => {
+    const { writeFile } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    h.outputDir = dirname(destination);
+    if (!h.writeContextDiff) return false;
+    await writeFile(destination, Buffer.alloc(4));
+    h.contextDiffPath = destination;
+    return true;
+  }),
+}));
+
+vi.mock("../../src/tools/flows/flow-pixels", () => ({
+  settlesOnPixels: vi.fn(async () => false),
+  settleOnPixels: vi.fn(async () => "still"),
 }));
 
 const env = {
@@ -370,13 +373,13 @@ describe("runSnapshot cross-app key collision", () => {
   it("fails before comparing anything in plain compare mode", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
-    vi.mocked(diffPngFiles).mockClear();
+    vi.mocked(compareScreenshots).mockClear();
 
     const r = await runSnapshot(env, opts({ seenKeys: seenFromAppB() }));
 
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("already captured in this run from a different app");
-    expect(vi.mocked(diffPngFiles)).not.toHaveBeenCalled();
+    expect(vi.mocked(compareScreenshots)).not.toHaveBeenCalled();
   });
 
   it("allows recapturing a key from the same app", async () => {
@@ -432,6 +435,46 @@ describe("runSnapshot settle", () => {
     expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
   });
 
+  it("settles on captures where they are cheap, without reading the tree", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    vi.mocked(settleOnPixels).mockClear();
+    vi.mocked(settleTree).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    const r = await runSnapshot(env, opts());
+
+    expect(r.status).toBe("pass");
+    expect(vi.mocked(settleOnPixels)).toHaveBeenCalledOnce();
+    expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
+  });
+
+  it("captures after a capture settle that never stopped moving, without a tree settle", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    vi.mocked(settleOnPixels).mockResolvedValueOnce("moving");
+    vi.mocked(settleTree).mockClear();
+    vi.mocked(invokeOnDevice).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    await runSnapshot(env, opts());
+
+    expect(vi.mocked(settleTree)).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", expect.anything());
+  });
+
+  it("falls back to the tree settle when no two captures could be compared", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    vi.mocked(settleOnPixels).mockResolvedValueOnce("blind");
+    vi.mocked(settleTree).mockClear();
+    await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
+    await writeFakePng(baselinePath());
+
+    await runSnapshot(env, opts());
+
+    expect(vi.mocked(settleTree)).toHaveBeenCalledOnce();
+  });
+
   it("skips the settle on a platform with no flow tree source, and still captures", async () => {
     // Flows have no harmony tree source, so a settle read would always fail.
     vi.mocked(settleTree).mockClear();
@@ -461,15 +504,19 @@ describe("runSnapshot diff-dir cleanup", () => {
     await writeFakePng(baselinePath());
   };
 
-  it("removes the whole scratch dir on a within-tolerance pass", async () => {
+  const leftoverDiffDirs = async () =>
+    (await fs.readdir(osTmpdir)).filter((entry) => entry.startsWith("argent-e2e-diff-"));
+
+  it("writes no diff and removes the whole scratch dir on a within-tolerance pass", async () => {
     await seedBaseline();
-    h.writeContextDiff = true; // the real differ writes both files even on a pass
+    h.mismatchPercentage = 0.2;
+    vi.mocked(writeContextDiff).mockClear();
 
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("pass");
-    expect(h.outputDir).not.toBe("");
-    await expect(fs.access(h.outputDir)).rejects.toThrow();
+    expect(vi.mocked(writeContextDiff)).not.toHaveBeenCalled();
+    await expect(leftoverDiffDirs()).resolves.toEqual([]);
   });
 
   it("keeps only the registered context diff on failure", async () => {
@@ -506,7 +553,7 @@ describe("runSnapshot diff-dir cleanup", () => {
     const r = await runSnapshot(env, opts());
 
     expect(r.status).toBe("fail");
-    await expect(fs.access(h.outputDir)).rejects.toThrow();
+    await expect(leftoverDiffDirs()).resolves.toEqual([]);
   });
 });
 
@@ -928,5 +975,56 @@ describe("runSnapshot against a baseline an older Argent took of a landscape iOS
     expect(r.reason).toContain("home__ios-8x4.png");
     expect(r).not.toHaveProperty("warning");
     expect(h.diffCurrentPath).toBe(h.shotPath);
+  });
+});
+
+describe("warmSnapshotCapture", () => {
+  const device = { platform: "ios", kind: "simulator", id: "SIM" } as const;
+
+  it("starts the simulator-server where a snapshot settles on captures", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    const resolveService = vi.fn(async () => ({}));
+
+    await warmSnapshotCapture({ resolveService } as never, device);
+
+    expect(resolveService).toHaveBeenCalledWith("SimulatorServer:SIM", { device });
+    expect(resolveService).toHaveBeenCalledTimes(2);
+  });
+
+  it("also starts the accessibility service on an iOS simulator, without reading the orientation", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    __resetUiOrientationForTests();
+    const resolveService = vi.fn(async (_urn: string) => ({}));
+    const orientation = vi.fn(async () => ({ interfaceOrientation: "portrait" as const }));
+    setUiOrientationSourceProvider(async () => ({ orientation }));
+
+    try {
+      await warmSnapshotCapture({ resolveService } as never, device);
+      expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([
+        "SimulatorServer:SIM",
+        expect.stringMatching(/^AXService:/),
+      ]);
+      expect(orientation).not.toHaveBeenCalled();
+    } finally {
+      setUiOrientationSourceProvider(undefined);
+    }
+  });
+
+  it("starts nothing where a snapshot settles on the tree", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(false);
+    const resolveService = vi.fn(async () => ({}));
+
+    await warmSnapshotCapture({ resolveService } as never, device);
+
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("swallows a backend that fails to start", async () => {
+    vi.mocked(settlesOnPixels).mockResolvedValueOnce(true);
+    const resolveService = vi.fn(async () => {
+      throw new Error("simulator-server exited");
+    });
+
+    await expect(warmSnapshotCapture({ resolveService } as never, device)).resolves.toBeUndefined();
   });
 });

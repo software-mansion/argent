@@ -19,7 +19,7 @@
     },
     "packages/archive": {
       "name": "@argent/archive",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "devDependencies": {
         "@types/node": "^26.6.2",
         "typescript": "^6.0.3",
@@ -28,7 +28,7 @@
     },
     "packages/argent": {
       "name": "@swmansion/argent",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "bin": {
         "argent": "dist/cli.js",
         "argent-simulator-server": "bin/argent-simulator-server.cjs",
@@ -68,10 +68,11 @@
     },
     "packages/argent-cli": {
       "name": "@argent/cli",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/configuration-core": "file:../configuration-core",
         "@argent/device-providers": "file:../device-providers",
+        "@argent/installer": "file:../argent-installer",
         "@argent/registry": "file:../registry",
         "@argent/telemetry": "file:../telemetry",
         "@argent/tools-client": "file:../argent-tools-client",
@@ -88,7 +89,7 @@
     },
     "packages/argent-installer": {
       "name": "@argent/installer",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/configuration-core": "file:../configuration-core",
         "@argent/registry": "file:../registry",
@@ -112,7 +113,7 @@
     },
     "packages/argent-mcp": {
       "name": "@argent/mcp",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/configuration-core": "file:../configuration-core",
         "@argent/telemetry": "file:../telemetry",
@@ -129,7 +130,7 @@
     },
     "packages/argent-tools-client": {
       "name": "@argent/tools-client",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/archive": "file:../archive",
         "@argent/configuration-core": "file:../configuration-core",
@@ -144,7 +145,7 @@
     },
     "packages/configuration-core": {
       "name": "@argent/configuration-core",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "dotenv": "^18.0.8",
       },
@@ -156,7 +157,7 @@
     },
     "packages/device-providers": {
       "name": "@argent/device-providers",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "zod": "^4.6.5",
       },
@@ -168,11 +169,11 @@
     },
     "packages/ios-device-runner": {
       "name": "@argent/ios-device-runner",
-      "version": "0.34.0",
+      "version": "0.35.0",
     },
     "packages/native-devtools-android": {
       "name": "@argent/native-devtools-android",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "devDependencies": {
         "@types/node": "^26.6.2",
         "typescript": "^6.0.3",
@@ -181,7 +182,7 @@
     },
     "packages/native-devtools-ios": {
       "name": "@argent/native-devtools-ios",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "devDependencies": {
         "@types/node": "^26.6.2",
         "typescript": "^6.0.3",
@@ -190,7 +191,7 @@
     },
     "packages/preview-window": {
       "name": "@argent/preview-window",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "devDependencies": {
         "@types/node": "^26.6.2",
         "electron": "^44.8.0",
@@ -199,7 +200,7 @@
     },
     "packages/registry": {
       "name": "@argent/registry",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "zod": "^4.6.5",
       },
@@ -210,14 +211,14 @@
     },
     "packages/skills": {
       "name": "@argent/skills",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "bin": {
         "argent-skills": "scripts/install.js",
       },
     },
     "packages/telemetry": {
       "name": "@argent/telemetry",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/configuration-core": "file:../configuration-core",
         "@argent/native-devtools-ios": "file:../native-devtools-ios",
@@ -237,7 +238,7 @@
     },
     "packages/tool-server": {
       "name": "@argent/tool-server",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "@argent/archive": "file:../archive",
         "@argent/configuration-core": "file:../configuration-core",
@@ -251,7 +252,7 @@
         "@fails-components/webtransport": "^1.6.8",
         "@fails-components/webtransport-transport-http3-quiche": "^1.6.8",
         "@moq/net": "^0.3.5",
-        "@swmansion/argent-cloud-sdk": "^0.3.1",
+        "@swmansion/argent-cloud-sdk": "^0.3.3",
         "bunyan": "^1.8.15",
         "bytes": "^3.1.2",
         "dotenv": "^18.0.8",
@@ -286,11 +287,11 @@
     },
     "packages/ui": {
       "name": "@argent/ui",
-      "version": "0.34.0",
+      "version": "0.35.0",
     },
     "packages/update-core": {
       "name": "@argent/update-core",
-      "version": "0.34.0",
+      "version": "0.35.0",
       "dependencies": {
         "semver": "^7.8.5",
       },
@@ -650,7 +651,7 @@
 
     "@swmansion/argent": ["@swmansion/argent@workspace:packages/argent"],
 
-    "@swmansion/argent-cloud-sdk": ["@swmansion/argent-cloud-sdk@0.3.1", "", { "peerDependencies": { "@moq/net": "^0.3.5", "@moq/watch": "^0.5.4", "ws": "*" }, "optionalPeers": ["@moq/watch", "ws"] }, "sha512-y+GTJ20vC9GXzsxyCLUmZOle1InAQrwb6SLLZEd2aK2s642S8gNflEyXsKYuxSpyCKP8RXapYZrEx/TLyYcBVw=="],
+    "@swmansion/argent-cloud-sdk": ["@swmansion/argent-cloud-sdk@0.3.3", "", { "peerDependencies": { "@fails-components/webtransport": "*", "@moq/net": "^0.3.5", "@moq/watch": "^0.5.4", "ws": "*" }, "optionalPeers": ["@fails-components/webtransport", "@moq/watch", "ws"] }, "sha512-lSE3+qQOFecI6NYvIvBaTdl00hXxo9QjR9k/JmXYlS6OcvAcheF01P3/XqP9k02ofh7S1xKR508s2mteTEB/TA=="],
 
     "@tsconfig/node10": ["@tsconfig/node10@1.0.12", "", {}, ""],
 
@@ -1412,6 +1413,8 @@
 
     "zod-validation-error": ["zod-validation-error@4.0.2", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-Q6/nZLe6jxuU80qb/4uJ4t5v2VEZ44lzQjPDhYJNztRQ4wyWc6VF3D3Kb/fAuPetZQnhS3hnajCf9CsWesghLQ=="],
 
+    "@argent/cli/@argent/installer": ["@argent/installer@file:packages/argent-installer", { "dependencies": { "@argent/configuration-core": "file:../configuration-core", "@argent/registry": "file:../registry", "@argent/telemetry": "file:../telemetry", "@argent/tools-client": "file:../argent-tools-client", "@argent/update-core": "file:../update-core", "@clack/prompts": "^1.8.1", "escape-string-regexp": "^5.0.0", "jsonc-parser": "^3.3.1", "picocolors": "^1.1.1", "semver": "^7.8.5", "smol-toml": "^1.9.0", "yaml": "^2.9.1" }, "devDependencies": { "@types/node": "^26.6.2", "@types/semver": "^7.8.0", "typescript": "^6.0.3", "vitest": "^5.0.5" } }],
+
     "@babel/core/semver": ["semver@6.3.1", "", { "bin": "bin/semver.js" }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
 
     "@babel/helper-compilation-targets/semver": ["semver@6.3.1", "", { "bin": "bin/semver.js" }, "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA=="],
@@ -1459,6 +1462,16 @@
     "tree-sitter-typescript/node-addon-api": ["node-addon-api@8.6.0", "", {}, ""],
 
     "type-is/content-type": ["content-type@2.0.0", "", {}, "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ=="],
+
+    "@argent/cli/@argent/installer/@argent/configuration-core": ["@argent/configuration-core@file:packages/configuration-core", {}],
+
+    "@argent/cli/@argent/installer/@argent/registry": ["@argent/registry@file:packages/registry", {}],
+
+    "@argent/cli/@argent/installer/@argent/telemetry": ["@argent/telemetry@file:packages/telemetry", {}],
+
+    "@argent/cli/@argent/installer/@argent/tools-client": ["@argent/tools-client@file:packages/argent-tools-client", {}],
+
+    "@argent/cli/@argent/installer/@argent/update-core": ["@argent/update-core@file:packages/update-core", {}],
 
     "@modelcontextprotocol/sdk/ajv/json-schema-traverse": ["json-schema-traverse@1.0.0", "", {}, ""],
 
