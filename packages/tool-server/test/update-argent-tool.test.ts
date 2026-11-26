@@ -132,6 +132,7 @@ describe("update-argent tool", () => {
         detached: true,
         stdio: "ignore",
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
+        windowsHide: true,
       }
     );
   });

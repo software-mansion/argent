@@ -9,8 +9,13 @@ const execFileAsync = promisify(execFile);
 // A wedged adb daemon or CoreSimulatorService never answers, and both ignore
 // execFile's default SIGTERM, so only timeout + SIGKILL keeps these awaits from
 // hanging forever (as ADB_KILL_SIGNAL in `adb.ts`, SIMCTL_KILL_SIGNAL in
-// `simctl-config.ts`); 30s is runAdb's ceiling.
-const SHUTDOWN_EXEC_OPTIONS = { timeout: 30_000, killSignal: "SIGKILL" } as const;
+// `simctl-config.ts`); 30s is runAdb's ceiling. windowsHide keeps adb.exe from
+// popping a console window on Windows (a no-op elsewhere).
+const SHUTDOWN_EXEC_OPTIONS = {
+  timeout: 30_000,
+  killSignal: "SIGKILL",
+  windowsHide: true,
+} as const;
 
 /**
  * Shut down a device that Argent Lens booted itself (see

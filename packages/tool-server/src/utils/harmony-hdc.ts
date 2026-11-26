@@ -88,6 +88,9 @@ export async function runHdc(
       timeout: timeoutMs,
       killSignal: HDC_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
+      // No-op off Windows. hdc.exe is a console-subsystem binary, so without
+      // this every call pops a console window there — see runAdb in adb.ts.
+      windowsHide: true,
     });
     return { stdout, stderr };
   } catch (err) {

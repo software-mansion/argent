@@ -20,7 +20,12 @@ export async function commandOnPath(name: string): Promise<string | null> {
   if (!/^[A-Za-z0-9_.-]+$/.test(name)) return null;
   try {
     if (process.platform === "win32") {
-      const { stdout } = await execFileAsync("where", [name], { timeout: 2_000 });
+      // `where.exe` is a console-subsystem binary: without windowsHide every
+      // lookup pops a console window on Windows.
+      const { stdout } = await execFileAsync("where", [name], {
+        timeout: 2_000,
+        windowsHide: true,
+      });
       // Explicit win32 semantics: correct on a real Windows host, and
       // unit-testable on POSIX CI.
       const cwd = pathWin32.resolve(process.cwd()).toLowerCase();

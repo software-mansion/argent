@@ -177,7 +177,7 @@ describe("boot-device — HarmonyOS emulator path", () => {
     expect(spawnMock).toHaveBeenCalledWith(
       expect.stringContaining("Emulator"),
       ["-start", INSTANCE],
-      expect.objectContaining({ detached: true })
+      expect.objectContaining({ detached: true, windowsHide: true })
     );
     expect(result).toEqual({
       platform: "harmony",

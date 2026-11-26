@@ -117,6 +117,9 @@ function streamDirectoryAsArchive(
   // tar's "file changed as we read it" on a live trace) and deadlock the child.
   const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
+    // tar.exe (Windows 10+) is a console-subsystem binary: without windowsHide
+    // each download pops a console window on Windows. No-op elsewhere.
+    windowsHide: true,
   });
   child.on("error", (err) => {
     if (!res.headersSent) {

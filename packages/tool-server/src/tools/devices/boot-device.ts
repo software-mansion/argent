@@ -1006,6 +1006,11 @@ async function attemptBoot(params: {
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
     stdio,
+    // No-op off Windows, and `detached: true` alone already leaves the child
+    // without a console there. This is the same windowsHide the other
+    // console-subsystem spawns carry (see runAdb in utils/adb.ts), kept so the
+    // boot stays console-less if `detached` is ever dropped.
+    windowsHide: true,
   });
   child.unref();
   // The child holds its own handle for the log fd; close the parent's copy so a
@@ -2311,6 +2316,8 @@ async function startHarmonyEmulator(
   const child = spawn(bin, ["-start", instanceName], {
     detached: true,
     stdio: logFd === null ? "ignore" : ["ignore", logFd, logFd],
+    // Same windowsHide as attemptBoot, for the same reason; no-op off Windows.
+    windowsHide: true,
   });
   child.unref();
   if (logFd !== null) {

@@ -282,6 +282,10 @@ async function runTar(archive: Archive, args: string[], signal?: AbortSignal): P
   const child = spawn("tar", [...args, "-f", "-"], {
     signal,
     env: tarEnv(process.env),
+    // tar.exe (Windows 10+) is a console-subsystem binary: without windowsHide
+    // every run pops a console window on Windows — the tool-server, a console-less
+    // process, reaches this for each file-input archive it extracts. No-op elsewhere.
+    windowsHide: true,
   });
   // An abort emits "error" as soon as SIGTERM is sent. Tar can still be writing
   // until "close", so remember the error and wait before releasing the destination.

@@ -322,6 +322,10 @@ export function spawnToolsServer(
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
+      // No-op off Windows, and `detached: true` alone already leaves node.exe
+      // without a console there. Kept only to match the console-subsystem
+      // spawns the tool-server itself makes (see runAdb in its utils/adb.ts).
+      windowsHide: true,
     });
     fs.closeSync(logFd);
 
