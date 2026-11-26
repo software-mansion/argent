@@ -461,19 +461,26 @@ export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
 
 export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
 
+// An Android leaf with no label of its own: a row that took the text of its
+// title and summary, or a view kept only for its tap.
+function labelNotOwn(n: DescribeNode): boolean {
+  return n.borrowedLabel === true || n.tapOnly === true;
+}
+
 /**
- * `matches` less each leaf with a borrowed label (an Android row that took the
- * text of its title and summary) that holds another match with a label of its
- * own: the title, not the row around it, is what a `text` check reads and what
- * `next`/`after` count from. A `within` scope keeps the row, since a row as a
- * scope is the point of it, and a tap already takes the smaller exact match.
+ * `matches` less each leaf that `givesWay` marks and that holds another match it
+ * does not mark: the title, not the row around it, is what a `text` check reads
+ * and what `next`/`after` count from. A `within` scope keeps the row, since a
+ * row as a scope is the point of it, and a tap with a field already takes the
+ * smaller exact match.
  */
-function preferOwnLabels(matches: DescribeNode[]): DescribeNode[] {
-  if (!matches.some((n) => n.borrowedLabel === true)) return matches;
+function preferInner(
+  matches: DescribeNode[],
+  givesWay: (n: DescribeNode) => boolean = labelNotOwn
+): DescribeNode[] {
+  if (!matches.some(givesWay)) return matches;
   return matches.filter(
-    (n) =>
-      n.borrowedLabel !== true ||
-      !matches.some((m) => m.borrowedLabel !== true && frameWithin(m.frame, n.frame))
+    (n) => !givesWay(n) || !matches.some((m) => !givesWay(m) && frameWithin(m.frame, n.frame))
   );
 }
 
@@ -491,8 +498,8 @@ const RELATION_RESOLVERS: Record<
   (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
-  after: (matches, scope) => matches.filter(afterTester(preferOwnLabels(scope))),
-  next: (matches, scope) => nearestAfter(matches, preferOwnLabels(scope)),
+  after: (matches, scope) => matches.filter(afterTester(preferInner(scope))),
+  next: (matches, scope) => nearestAfter(matches, preferInner(scope)),
 };
 
 /**
@@ -577,14 +584,14 @@ const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"
 
 // The match a `text` check reads: the first visible one in reading order (the
 // first overall if none is visible), not a row with a borrowed label around
-// another match (see `preferOwnLabels`). On a Mac app, not a text area around a
+// another match (see `preferInner`). On a Mac app, not a text area around a
 // matching text: a web editor's value is the text of the paragraphs inside it,
 // so a selector for a paragraph's text reads that paragraph.
 export function textCheckTarget(
   candidates: DescribeNode[],
   macos: boolean
 ): DescribeNode | undefined {
-  const matches = preferOwnLabels(candidates);
+  const matches = preferInner(candidates);
   const read = macos
     ? matches.filter(
         (n) =>
@@ -912,6 +919,8 @@ function compareTargets(a: TargetCandidate, b: TargetCandidate, byFields: boolea
  * in reading order — keeping an action's target the element an `assert` would
  * quote. It still takes an app element before a key of the on-screen keyboard:
  * a region that reaches under the keyboard names the app's elements there.
+ * And it takes a match inside an Android view kept only for its tap over that
+ * view (see `preferInner`): a wrapper or a row starts above what it holds.
  *
  * `matchFieldValues` is as in {@link findAll}.
  */
@@ -923,8 +932,8 @@ export function selectorToNode(
   const byFields = hasOwnConstraint(selector);
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: TargetCandidate | undefined;
-  for (const node of findAll(root, selector, matchFieldValues)) {
-    if (!isVisible(node)) continue;
+  const visible = findAll(root, selector, matchFieldValues).filter(isVisible);
+  for (const node of byFields ? visible : preferInner(visible, (n) => n.tapOnly === true)) {
     const candidate = {
       node,
       exact: byFields ? exactFieldCount(node, selector, fullTextRegex) : 0,

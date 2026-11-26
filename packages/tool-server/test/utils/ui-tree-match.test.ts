@@ -1949,6 +1949,35 @@ describe("a leaf with a borrowed label", () => {
     expect(findAll(tree, { role: "StaticText", after: { text: "Photos" } })).toEqual([]);
   });
 
+  it("gives way to a match inside it in a field-less pick only when kept for its tap", () => {
+    const wrapped = (mark: Partial<DescribeNode>) =>
+      screen(
+        node({ role: "ViewGroup", identifier: "form", frame: { x: 0, y: 0, width: 1, height: 1 } }),
+        node({
+          role: "ViewGroup",
+          clickable: true,
+          ...mark,
+          frame: { x: 0, y: 0.1, width: 1, height: 0.5 },
+        }),
+        node({
+          role: "StaticText",
+          label: "Hi",
+          frame: { x: 0.1, y: 0.3, width: 0.3, height: 0.03 },
+        })
+      );
+    const anyInForm: Selector = { within: { identifier: "form" } };
+    expect(selectorToNode(wrapped({ tapOnly: true }), anyInForm)?.label).toBe("Hi");
+    // The text check reads the text, not the wrapper.
+    const matches = findAll(wrapped({ tapOnly: true }), anyInForm);
+    expect(textCheckTarget(matches, false)?.label).toBe("Hi");
+    // A view with a mark of its own stays first in reading order.
+    expect(selectorToNode(wrapped({ identifier: "card" }), anyInForm)?.identifier).toBe("card");
+    // A borrowed label alone does not change the field-less pick.
+    expect(selectorToNode(wrapped({ label: "Hi", borrowedLabel: true }), anyInForm)?.role).toBe(
+      "ViewGroup"
+    );
+  });
+
   it("stays a `within` scope", () => {
     expect(findAll(rows(), { role: "Switch", within: { text: "Connected devices" } })).toHaveLength(
       1

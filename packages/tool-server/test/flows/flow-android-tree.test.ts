@@ -7,6 +7,7 @@ import {
   findAll,
   selectorToFrame,
   matchNode,
+  selectorToNode,
   type Selector,
 } from "../../src/utils/ui-tree-match";
 import type { DescribeNode } from "../../src/tools/describe/contract";
@@ -618,10 +619,10 @@ function leaves(tree: DescribeNode): DescribeNode[] {
 const runnerTree = (xml: string) => adaptFullAndroidHierarchyToDescribeResult(xml, DUMP_W, DUMP_H);
 const describeTree = (xml: string) => parseUiAutomatorDump(xml, DUMP_W, DUMP_H);
 
-// The runner tree as it was before rows were elements: no leaf for a view whose
-// only label is borrowed.
+// The runner tree as it was before rows were elements: no leaf kept only for
+// its tap.
 function withoutBorrowed(tree: DescribeNode): DescribeNode {
-  return { ...tree, children: tree.children.filter((n) => n.borrowedLabel !== true) };
+  return { ...tree, children: tree.children.filter((n) => n.tapOnly !== true) };
 }
 
 describe("a view that can be tapped in the runner tree", () => {
@@ -708,6 +709,24 @@ describe("a view that can be tapped in the runner tree", () => {
     expect(findAll(tree, { role: "LinearLayout" }).map((n) => n.label)).toEqual(["System"]);
   });
 
+  it("leaves text scrolled out of the list around it out of a borrowed label", () => {
+    // The row is partly in the list's window; its title is under the header.
+    const tree = runnerTree(
+      dump(`
+<node class="android.widget.TextView" text="Header" bounds="[0,0][1080,400]" />
+<node class="android.widget.ScrollView" bounds="[0,400][1080,2000]">
+  <node class="android.view.ViewGroup" clickable="true" bounds="[0,300][1080,500]">
+    <node class="android.widget.TextView" text="Hidden title" bounds="[40,310][400,380]" />
+    <node class="android.widget.TextView" text="Shown summary" bounds="[40,420][400,480]" />
+  </node>
+</node>`)
+    );
+    expect(findAll(tree, { role: "ViewGroup" }).map((n) => n.label)).toEqual(["Shown summary"]);
+    const hidden = findAll(tree, { text: "Hidden title" });
+    expect(hidden).toEqual([]);
+    expect(evaluateCondition("visible", undefined, hidden)).toBe(false);
+  });
+
   it("borrows nothing when it holds a scroller", () => {
     // A React Native wrapper that closes the keyboard, around a list.
     const tree = runnerTree(
@@ -777,6 +796,43 @@ describe("a view that can be tapped in the runner tree", () => {
     );
   });
 
+  it("gives way to the element inside it in the pick of a selector with no field", () => {
+    // A wrapper that closes the keyboard, around the whole screen: base tapped the text.
+    const form = runnerTree(
+      dump(`
+<node class="android.view.ViewGroup" resource-id="form" bounds="[0,0][1080,2400]">
+  <node class="android.view.ViewGroup" clickable="true" bounds="[0,0][1080,2400]">
+    <node class="android.widget.TextView" text="Hi" bounds="[40,300][400,380]" />
+  </node>
+</node>`)
+    );
+    const wrapper = findAll(form, { role: "ViewGroup", within: { identifier: "form" } });
+    expect(wrapper.map((n) => n.tapOnly)).toEqual([true]);
+    expect(selectorToNode(form, { within: { identifier: "form" } })?.label).toBe("Hi");
+    expect(
+      evaluateCondition("text", "Hi", findAll(form, { within: { identifier: "form" } }), "equals")
+    ).toBe(true);
+
+    // A list of rows: the title of the first row, as before.
+    const tree = runnerTree(SETTINGS_MAIN);
+    const inList: Selector = { within: { identifier: "recycler_view" } };
+    expect(selectorToNode(tree, inList)?.label).toBe(
+      selectorToNode(withoutBorrowed(tree), inList)?.label
+    );
+    // A card with an id was an element before; it stays the pick.
+    const card = runnerTree(
+      dump(`
+<node class="android.widget.FrameLayout" resource-id="grid" bounds="[0,1200][1080,2000]">
+  <node class="androidx.cardview.widget.CardView" resource-id="com.google.android.documentsui:id/item_root" clickable="true" bounds="[64,1298][529,1899]">
+    <node class="android.widget.TextView" text="argent-row-a.txt" bounds="[196,1784][497,1835]" />
+  </node>
+</node>`)
+    );
+    expect(selectorToNode(card, { within: { identifier: "grid" } })?.identifier).toBe(
+      "com.google.android.documentsui:id/item_root"
+    );
+  });
+
   it("never puts the borrowed-label mark in the describe tree", () => {
     for (const xml of [
       SETTINGS_MAIN,
@@ -787,6 +843,7 @@ describe("a view that can be tapped in the runner tree", () => {
       FILES_CARD,
     ]) {
       expect(JSON.stringify(describeTree(xml))).not.toContain("borrowedLabel");
+      expect(JSON.stringify(describeTree(xml))).not.toContain("tapOnly");
     }
   });
 
@@ -806,7 +863,7 @@ describe("a view that can be tapped in the runner tree", () => {
     const tree = runnerTree(SETTINGS_MAIN);
     for (const selector of [
       { role: "StaticText", next: { text: "Connected devices" } },
-      { any: true, next: { text: "Network & internet" } },
+      { next: { text: "Network & internet" } },
       { role: "StaticText", after: { text: "Connected devices" } },
       { text: "Network & internet", after: { text: "Connected devices" } },
     ] as Selector[]) {

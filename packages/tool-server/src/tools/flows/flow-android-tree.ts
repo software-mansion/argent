@@ -12,6 +12,7 @@ import {
   joinDescendantText,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
+  rectFullyOutside,
   WEBVIEW_CLASSES,
 } from "../describe/platforms/android/uiautomator-parser";
 import {
@@ -21,7 +22,7 @@ import {
   TYPE_APPLICATION,
   TYPE_INPUT_METHOD,
 } from "../ui-tree/android";
-import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
+import { type ClipRect, flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
@@ -112,13 +113,21 @@ const BORROW_MAX_SCREEN_SHARE = 0.5;
 /**
  * The label a tappable view with no label of its own borrows from the views
  * under it, joined as `describe` joins them. Only text the screen shows and the
- * view owns: a view with no on-screen frame and a password field give none, and
- * a view that can be tapped itself gives none from its whole subtree (that text
- * is the inner button's). "" when the view holds a text field or a scroller (a
- * wrapper that closes the keyboard around a form or a list), so typed text and a
- * screenful of rows never become a label.
+ * view owns: a view with no on-screen frame and a password field give none, a
+ * view the flatten prunes as scrolled out of `scrollClip` gives none from its
+ * whole subtree, and a view that can be tapped itself gives none from its whole
+ * subtree (that text is the inner button's). "" when the view holds a text
+ * field or a scroller (a wrapper that closes the keyboard around a form or a
+ * list), so typed text and a screenful of rows never become a label. No
+ * scroller lies between the view and the views it borrows from, so the clip
+ * the view gets is the clip of each of them.
  */
-function borrowedLabel(node: ParsedXmlNode, screenW: number, screenH: number): string {
+function borrowedLabel(
+  node: ParsedXmlNode,
+  screenW: number,
+  screenH: number,
+  scrollClip: ClipRect | null
+): string {
   const texts: string[] = [];
   // False when the walk met a text field or a scroller.
   const visit = (n: ParsedXmlNode): boolean => {
@@ -134,6 +143,10 @@ function borrowedLabel(node: ParsedXmlNode, screenW: number, screenH: number): s
         continue;
       }
       const rect = parseUiAutomatorBounds(a.bounds ?? "");
+      // As `flattenHoisting` prunes it: a view with area wholly outside the clip.
+      if (scrollClip && rect && rect.w > 0 && rect.h > 0 && rectFullyOutside(rect, scrollClip)) {
+        continue;
+      }
       if (rect && normalizeRect(rect, screenW, screenH)) {
         texts.push(a.text ?? "", a["content-desc"] ?? "");
       }
@@ -152,7 +165,8 @@ function borrowedLabel(node: ParsedXmlNode, screenW: number, screenH: number): s
 function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  scrollClip: ClipRect | null
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome yields false matches (a system "Back"); SVG implementation
@@ -197,9 +211,11 @@ function projectAndroidNode(
     childNodes(node).length > 0 &&
     !isUiAutomatorScrollable(attrs) &&
     !WEBVIEW_CLASSES.has(className)
-      ? borrowedLabel(node, screenW, screenH)
+      ? borrowedLabel(node, screenW, screenH, scrollClip)
       : "";
   const label = ownLabel || borrowed;
+  // A leaf only for its tap: no id, label, role or focus of its own.
+  const tapOnly = tappable && !(identifier || ownLabel || hasSemanticRole || isFocused);
 
   let leaf: DescribeNode | null = null;
   // Keep any view a selector could address - resource-id (RN testID), label,
@@ -211,6 +227,7 @@ function projectAndroidNode(
       leaf = { role, frame, children: [] };
       if (label) leaf.label = label;
       if (borrowed) leaf.borrowedLabel = true;
+      if (tapOnly) leaf.tapOnly = true;
       if (identifier) leaf.identifier = identifier;
       if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
@@ -275,7 +292,7 @@ function adaptParsedHierarchy(
   const children: DescribeNode[] = [];
   for (const c of root ? childNodes(root) : []) {
     const first = children.length;
-    flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
+    flattenHoisting(c, (n, clip) => projectAndroidNode(n, screenW, screenH, clip), children);
     if (Number(c.attrs["window-type"]) === TYPE_INPUT_METHOD) {
       for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
     }

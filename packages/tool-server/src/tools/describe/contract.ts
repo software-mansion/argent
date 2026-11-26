@@ -42,6 +42,12 @@ export interface DescribeNode {
   // `next`/`after` anchor take a match inside it over it. Set by the Android
   // flow adapter only; the describe tool leaves it unset.
   borrowedLabel?: boolean;
+  // An element only because it takes a tap: the view has no id, label of its
+  // own, role a selector names or focus (an Android row, a wrapper that closes
+  // the keyboard). Like `borrowedLabel`, and also in the pick of a selector
+  // with no field of its own (`any: true`), it gives way to a match inside it.
+  // Set by the Android flow adapter only; the describe tool leaves it unset.
+  tapOnly?: boolean;
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
@@ -89,6 +95,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       subtreeText: z.string().optional(),
       typedValue: z.boolean().optional(),
       borrowedLabel: z.boolean().optional(),
+      tapOnly: z.boolean().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
