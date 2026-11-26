@@ -130,7 +130,7 @@ describe("fold on a remote simulator", () => {
       { udid: REMOTE, posture: "open" },
       {
         signal: AbortSignal.abort(),
-      }
+      } as never
     );
 
     await expect(cancelled).rejects.toThrow();
