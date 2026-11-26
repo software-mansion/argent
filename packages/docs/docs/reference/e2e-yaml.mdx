@@ -88,7 +88,7 @@ Argent skips leading `echo` and `script` steps when it classifies an e2e test. A
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
-When a step fails, Argent stops the e2e test and reports the later steps as skipped. Argent then runs the `shutdown` steps.
+A failure in `steps` skips the remaining entries in that list. Argent then runs the `shutdown` steps.
 
 ### Shutdown
 
@@ -241,7 +241,7 @@ Copy control identifiers and `AX` roles from `describe`. The runner uses the sam
 
 ## Directives
 
-Each step contains one directive. A failed directive stops the e2e test.
+Each step contains one directive. See [Shutdown](#shutdown) for cleanup after a failure.
 
 | Directive    | Shape                                                              | Description                                                                                          |
 | ------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -594,7 +594,7 @@ Three entries in the list give access to a credential. Each entry holds the valu
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
-A failed step stops the e2e test. The verdict names the side that caused the failure.
+The verdict identifies whether the script or the host caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                                                                             |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
