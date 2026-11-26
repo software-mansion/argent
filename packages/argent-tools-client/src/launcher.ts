@@ -336,8 +336,6 @@ export function spawnToolsServer(
     });
     fs.closeSync(logFd);
 
-    child.unref();
-
     const pid = child.pid;
     if (!pid) {
       // A failed spawn emits `error` (ENOENT/EACCES) on the next tick; with no
@@ -384,6 +382,8 @@ export function spawnToolsServer(
         // At runtime it is a net.Socket with unref(); the ChildProcess type
         // widens it to Readable, hence the narrowing.
         (child.stdout as { unref?: () => void } | null)?.unref?.();
+        // Unref only once ready, so a short-lived caller still sees an early exit.
+        child.unref();
         settle(() => resolve({ port: actualPort, pid }));
       }
     });

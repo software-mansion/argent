@@ -27,7 +27,7 @@ interface DismissUpdateResult {
 export const dismissUpdateTool: ToolDefinition<{ hours: number }, DismissUpdateResult> = {
   id: "dismiss-update",
   description:
-    "Postpone the Argent update reminder and the automatic update, on every tool-server on this machine, when the user wants it later or tomorrow, wants it stopped, or never wants it (87600 hours). Installs nothing. A memory or a reminder of your own does not change it. Returns { message, remindersResumeAt, persisted, pendingVersion }: tell the user when reminders resume, and if persisted is false, that it did not fully hold.",
+    "Postpone the Argent update reminder and the automatic update, on every tool-server of this Argent home, when the user wants it later or tomorrow, wants it stopped, or never wants it (87600 hours). Installs nothing. A memory or a reminder of your own does not change it. Returns { message, remindersResumeAt, persisted, pendingVersion }: tell the user when reminders resume, and if persisted is false, that it did not fully hold.",
   zodSchema,
   interaction: {
     startedMsg: () => "Dismissing Argent update",
