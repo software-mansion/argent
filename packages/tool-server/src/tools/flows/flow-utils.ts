@@ -4852,16 +4852,12 @@ export async function setRecordingEnv(
     }
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
-      const before = session.flow.steps;
       const flow = apply(parseFlow(await fs.readFile(session.filePath, "utf8")));
       validateFlow(flow);
       const updated = serializeFlow(flow);
       await writeFlowFile(session.filePath, updated);
-      session.flow = parseFlow(updated);
       // The re-read may take in a hand edit, as an append's does.
-      session.discardedWarnings =
-        (session.discardedWarnings ?? 0) +
-        dropMovedWarnings(session.stepWarnings, session.flow.steps, before);
+      adoptRecordedFile(session, parseFlow(updated));
       return { env: session.flow.env ?? {}, savedTo: session.filePath };
     }
     const flow = apply(session.flow);
@@ -5097,6 +5093,34 @@ function dropMovedWarnings(
 }
 
 /**
+ * Take a host-mode re-read of the file as the recorder's view, and drop the
+ * verdicts of both lists that a hand edit in it moved ({@link dropMovedWarnings}).
+ * `appended` names the list the re-read added one step to, which the previous
+ * view did not hold.
+ */
+export function adoptRecordedFile(
+  session: RecordingSession,
+  flow: FlowFile,
+  appended?: RecordedBlock
+): void {
+  const before = session.flow;
+  session.flow = flow;
+  const { steps, shutdown = [] } = flow;
+  session.discardedWarnings =
+    (session.discardedWarnings ?? 0) +
+    dropMovedWarnings(
+      session.stepWarnings,
+      appended === "steps" ? steps.slice(0, -1) : steps,
+      before.steps
+    ) +
+    dropMovedWarnings(
+      session.shutdownStepWarnings,
+      appended === "shutdown" ? shutdown.slice(0, -1) : shutdown,
+      before.shutdown ?? []
+    );
+}
+
+/**
  * Append a step to a recording and persist it. In "host" mode the file on disk
  * is re-read first, so a manual edit made mid-recording is honored; in "client"
  * mode this process never sees the client's disk, so the in-memory copy is
@@ -5120,25 +5144,7 @@ export async function appendStepToFlow(
     assertSessionStillLive(session, step);
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
-      const before = session.flow;
-      const flowFile = await appendStep(session.filePath, step, block);
-      session.flow = parseFlow(flowFile);
-      // `appendStep` adds exactly one step, so everything before the last one
-      // of `block` is what the file already held — the recorder's previous
-      // view, unless a hand edit landed in between. The other list is as it was.
-      const { steps, shutdown = [] } = session.flow;
-      session.discardedWarnings =
-        (session.discardedWarnings ?? 0) +
-        dropMovedWarnings(
-          session.stepWarnings,
-          block === "steps" ? steps.slice(0, -1) : steps,
-          before.steps
-        ) +
-        dropMovedWarnings(
-          session.shutdownStepWarnings,
-          block === "shutdown" ? shutdown.slice(0, -1) : shutdown,
-          before.shutdown ?? []
-        );
+      adoptRecordedFile(session, parseFlow(await appendStep(session.filePath, step, block)), block);
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing a
       // concurrent same-key append, which can reassign `session.flow` between

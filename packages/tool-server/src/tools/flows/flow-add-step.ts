@@ -34,6 +34,7 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  adoptRecordedFile,
   keepRecordingOutput,
   recordedCount,
   recordingOutput,
@@ -910,7 +911,7 @@ async function activeFlowState(
 ): Promise<{ stepCount: number; note?: string }> {
   if (session.persist === "host") {
     try {
-      session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
+      adoptRecordedFile(session, parseFlow(await fs.readFile(session.filePath, "utf8")));
     } catch (err) {
       return {
         stepCount: recordedCount(session.flow, block),

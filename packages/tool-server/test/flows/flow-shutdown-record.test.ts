@@ -6,6 +6,7 @@ import { CLIENT_FILE_MARKER, type Registry } from "@argent/registry";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowAddScriptTool } from "../../src/tools/flows/flow-add-script";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
+import { flowSetEnvTool } from "../../src/tools/flows/flow-set-env";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import {
@@ -507,7 +508,12 @@ describe("recording into shutdown:", () => {
   });
 
   describe("drops a shutdown wait verdict that a hand edit moved between two identical waits", () => {
-    for (const after of ["finish", "an append"] as const) {
+    for (const after of [
+      "finish",
+      "an append",
+      "e2e-set-env",
+      "a call that records nothing",
+    ] as const) {
       it(`then ${after}`, async () => {
         let pass = false;
         const registry = {
@@ -543,6 +549,13 @@ describe("recording into shutdown:", () => {
           await flowInsertEchoTool.execute(
             {},
             { name: "t", project_root: root, message: "x", shutdown: true }
+          );
+        } else if (after === "e2e-set-env") {
+          await flowSetEnvTool.execute({}, { name: "t", project_root: root, env: { A: "1" } });
+        } else if (after === "a call that records nothing") {
+          await createFlowAddStepTool(registry).execute(
+            {},
+            { name: "t", project_root: root, command: "e2e-add-echo", args: "{}", shutdown: true }
           );
         }
 
