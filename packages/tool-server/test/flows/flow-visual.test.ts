@@ -44,6 +44,8 @@ const h = vi.hoisted(() => ({
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
     undefined | "aborted" | { x: number; y: number; width: number; height: number },
+  /** The warning the waitForFrame mock gives with the frame (a part match on a cut tree). */
+  cropWarning: undefined as undefined | string,
   /** When set, the waitForFrame mock rejects with this (a tree-source outage). */
   cropFrameError: null as null | Error,
   dimensionMismatch: null as null | {
@@ -61,7 +63,8 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
   invokeOnDevice: vi.fn(async () => ({ image: { hostPath: h.shotPath } })),
   waitForFrame: vi.fn(async () => {
     if (h.cropFrameError) throw h.cropFrameError;
-    return h.cropFrame;
+    if (h.cropFrame === undefined || h.cropFrame === "aborted") return h.cropFrame;
+    return { frame: h.cropFrame, ...(h.cropWarning ? { warning: h.cropWarning } : {}) };
   }),
 }));
 
@@ -573,6 +576,18 @@ describe("runSnapshot cropOn", () => {
   beforeEach(async () => {
     await writeRealPng(h.shotPath, 100, 200);
     h.cropFrame = frame;
+    h.cropWarning = undefined;
+  });
+
+  it("carries the crop element's warning onto the outcome", async () => {
+    h.cropWarning = "The UI tree was cut at a size limit, and ...";
+    await fs.mkdir(path.dirname(cropBaselinePath()), { recursive: true });
+    await writeRealPng(cropBaselinePath(), 50, 50);
+
+    const r = await runSnapshot(env, opts({ cropOn }));
+
+    expect(r.status).toBe("pass");
+    expect(r.warning).toBe(h.cropWarning);
   });
 
   it("stores the cropped region as the baseline, keyed by the full capture", async () => {

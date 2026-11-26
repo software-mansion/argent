@@ -852,6 +852,28 @@ function exactFieldCount(
   return count;
 }
 
+/**
+ * Whether the selector's text names the node's whole label or value, not a
+ * part of it: `text` equal to it as matching folds text, and `textMatches`
+ * consuming all of it. Only the text fields count, never the id or the role.
+ * True for a selector with no text field: it names no text, so no part of one.
+ */
+export function matchesWholeText(node: DescribeNode, selector: Selector): boolean {
+  if (
+    selector.text !== undefined &&
+    !equalsCI(node.label, selector.text) &&
+    !equalsCI(node.value, selector.text)
+  ) {
+    return false;
+  }
+  const full = fullConsumptionRegex(selector);
+  return (
+    full === undefined ||
+    regexMatchesNonEmpty(full, node.label) ||
+    regexMatchesNonEmpty(full, node.value)
+  );
+}
+
 /** A visible match of a selector, as the target ranking compares it. */
 interface TargetCandidate {
   node: DescribeNode;

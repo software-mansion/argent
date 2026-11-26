@@ -22,6 +22,9 @@ import {
   treeFingerprint,
   keyboardDrawsAt,
   underKeyboard,
+  matchNode,
+  matchesWholeText,
+  textMatches,
   type Selector,
   type WaitCondition,
   type TextMatchMode,
@@ -137,14 +140,15 @@ export interface ActionEnv {
   /**
    * The tree of the run's most recent read that goes through
    * {@link readFlowTree}, with what that read found covering the app
-   * (`DescribeTreeData.cover`, read only with the tree). The tree is cleared
-   * by a read that fails or was cut short. A miss reason reads them instead of
-   * reading the device again. One
-   * holder per run, shared with nested `run:` flows like
+   * (`DescribeTreeData.cover`, read only with the tree) and whether the source
+   * cut it at a size limit (`DescribeTreeData.truncated`). A read that fails
+   * clears the tree and the flag. A cut read keeps its tree: a cover it found
+   * is still positive evidence. A miss reason reads them instead of reading
+   * the device again. One holder per run, shared with nested `run:` flows like
    * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
    * `ActionEnv` by hand.
    */
-  lastRead?: { tree?: DescribeNode; cover?: FlowCover };
+  lastRead?: { tree?: DescribeNode; cover?: FlowCover; truncated?: boolean };
   /**
    * When the run's last step that can change the screen ended (`Date.now()`).
    * A `snapshot` keeps settling until a quiet window past it has elapsed.
@@ -466,13 +470,82 @@ function flowSelectorToNode(
   sel: FlowSelector,
   matchFieldValues = false
 ): DescribeNode | undefined {
-  let key: DescribeNode | undefined;
-  for (const s of selectorAlternatives(sel)) {
-    const node = selectorToNode(tree, s, matchFieldValues);
-    if (node !== undefined && node.keyboard !== true) return node;
-    key ??= node;
+  return flowSelectorPick(tree, sel, matchFieldValues)?.node;
+}
+
+/** {@link flowSelectorToNode}'s pick, with the strict selector alternative that gave it. */
+function flowSelectorPick(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  matchFieldValues = false
+): { node: DescribeNode; alt: Selector } | undefined {
+  let key: { node: DescribeNode; alt: Selector } | undefined;
+  for (const alt of selectorAlternatives(sel)) {
+    const node = selectorToNode(tree, alt, matchFieldValues);
+    if (node !== undefined && node.keyboard !== true) return { node, alt };
+    if (node !== undefined) key ??= { node, alt };
   }
   return key;
+}
+
+const TREE_CUT = "The UI tree was cut at a size limit";
+
+/**
+ * A condition that found no element before a cut: a `hidden` that passes, a
+ * `when:` guard that is not met. The texts name the cause, not the limits:
+ * the iOS ones live in the accessibility service and can change.
+ */
+function cutAbsenceWarning(sel: FlowSelector): string {
+  return (
+    `${TREE_CUT}, and no element before the cut matched ${describeSelector(sel)}. An element ` +
+    `past the cut is not in the tree, so this result does not prove that the element is absent.`
+  );
+}
+
+/** A `text` check whose result rests on the text of a container the cut left short. */
+function cutContainerWarning(sel: FlowSelector): string {
+  return `${TREE_CUT}, so the text of ${describeSelector(sel)} holds only the elements before the cut.`;
+}
+
+/** A miss on a cut tree: `missed` is the miss text with no scroll hint. */
+function cutMissReason(missed: string): string {
+  return (
+    `${missed}: the UI tree was cut at a size limit, and an element past the cut is not in the ` +
+    `tree. Reduce what the screen shows before this step (for example, close a long list or web ` +
+    `page).`
+  );
+}
+
+const CUT_SCROLL_END =
+  ". The UI tree was cut at a size limit, so the end of the scroll is not certain.";
+
+/**
+ * On a cut tree, the warning for an action whose target's text matched only a
+ * part of the picked node's label or value: an exact match can be past the
+ * cut. Only the text fields of the alternative that gave the node count
+ * ({@link matchesWholeText}), so a selector with no text gets none.
+ */
+function partMatchWarning(
+  env: ActionEnv,
+  data: DescribeTreeData,
+  sel: FlowSelector,
+  pick: { node: DescribeNode; alt: Selector } | undefined
+): string | undefined {
+  if (!data.truncated || pick === undefined) return undefined;
+  const { node, alt } = pick;
+  if (alt.text === undefined && alt.textMatches === undefined) return undefined;
+  if (matchesWholeText(node, alt)) return undefined;
+  const textOnly: Selector = { text: alt.text, textMatches: alt.textMatches };
+  // The field the text matched in, label first as matching tries it.
+  const field = (n: DescribeNode): string =>
+    n.label !== undefined && matchNode({ ...n, value: undefined }, textOnly)
+      ? n.label
+      : (n.value ?? n.label ?? "");
+  const text = quotedText(data, env.device.id, node, field);
+  return (
+    `${TREE_CUT}, and ${describeSelector(sel)} matched only a part of the text "${text}". ` +
+    `An exact match can be past the cut. Use the full text or the id.`
+  );
 }
 
 /**
@@ -500,15 +573,18 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
   return fetchFlowTree(env.registry, env.device, env.treeTarget).then(
     (data) => {
       if (env.treeOutage) env.treeOutage.proven = undefined;
-      // A cut-short read cannot show that only a field holds a text.
       if (env.lastRead) {
-        env.lastRead.tree = data.truncated ? undefined : data.tree;
+        env.lastRead.tree = data.tree;
         env.lastRead.cover = data.cover;
+        env.lastRead.truncated = data.truncated === true;
       }
       return data;
     },
     (err: unknown) => {
-      if (env.lastRead) env.lastRead.tree = undefined;
+      if (env.lastRead) {
+        env.lastRead.tree = undefined;
+        env.lastRead.truncated = undefined;
+      }
       throw err;
     }
   );
@@ -517,10 +593,11 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
 /**
  * Re-read the describe tree until two consecutive reads are identical — the UI
  * has settled (a scroll's fling has stopped, an animation finished). Returns the
- * stable tree, the last tree read on timeout (best effort), or undefined if the
- * run was aborted. Resolving a frame from a settled tree is what keeps a tap
- * from landing mid-deceleration (where a scroll view swallows it) or acting on a
- * frame that has already moved.
+ * read of the stable tree, of the last tree read on timeout (best effort), or
+ * undefined if the run was aborted. The read carries its own `truncated`: on a
+ * timeout it can be older than {@link ActionEnv.lastRead}. Resolving a frame
+ * from a settled tree is what keeps a tap from landing mid-deceleration (where
+ * a scroll view swallows it) or acting on a frame that has already moved.
  *
  * Throws when EVERY read attempt failed: that is a tree-source outage
  * (`fetchFlowTree` refuses to degrade to a trimmed tree), not a mid-animation
@@ -546,10 +623,10 @@ function readFlowTree(env: ActionEnv): Promise<DescribeTreeData> {
 export async function settleTree(
   env: ActionEnv,
   opts: { skipProvenOutage?: boolean } = {}
-): Promise<DescribeNode | undefined> {
+): Promise<DescribeTreeData | undefined> {
   const deadline = Date.now() + SETTLE_TIMEOUT_MS;
   let prevFp: string | undefined;
-  let prevTree: DescribeNode | undefined;
+  let prevRead: DescribeTreeData | undefined;
   let lastError: Error | undefined;
   let reads = 0;
   for (;;) {
@@ -562,9 +639,9 @@ export async function settleTree(
     // of the window would fail the slow cold start #778 raised
     // `ViewHierarchy.getFullHierarchy` to a 15s RPC tier to ride out.
     const read = await settleWithin(readFlowTree(env), undefined, env.signal);
-    let tree: DescribeNode | undefined;
+    let data: DescribeTreeData | undefined;
     if (read.type === "value") {
-      tree = read.value.tree;
+      data = read.value;
     } else if (read.type === "error") {
       // transient describe failure mid-navigation — retry until the deadline
       lastError = read.cause;
@@ -575,22 +652,22 @@ export async function settleTree(
     // gesture would still be dispatched after cancellation with the step
     // recorded as a pass instead of the uniform aborted skip.
     if (env.signal?.aborted) return undefined;
-    if (tree !== undefined) {
-      const fp = treeFingerprint(tree);
-      if (prevFp !== undefined && fp === prevFp) return tree;
+    if (data !== undefined) {
+      const fp = treeFingerprint(data.tree);
+      if (prevFp !== undefined && fp === prevFp) return data;
       prevFp = fp;
-      prevTree = tree;
+      prevRead = data;
     }
     if (Date.now() >= deadline) {
       // Owed another attempt: retry back-to-back rather than sleeping out a
       // poll interval the window no longer has (`waitForCondition`'s final
       // poll does the same). Bounded — `reads` rises on every pass.
       if (reads < SETTLE_MIN_READS) continue;
-      if (prevTree === undefined && lastError !== undefined) {
+      if (prevRead === undefined && lastError !== undefined) {
         if (env.treeOutage) env.treeOutage.proven = { deviceId: env.device.id, error: lastError };
         throw lastError;
       }
-      return prevTree;
+      return prevRead;
     }
     if (!(await sleepOrAbort(SETTLE_POLL_MS, env.signal))) return undefined;
   }
@@ -611,6 +688,9 @@ export async function settleTree(
  * would land on a key, so the selector stays unresolved and the timeout result
  * says `covered`. The step waits for the keyboard to leave that element and
  * never takes another match in its place.
+ *
+ * `warning`: on a cut tree, a target whose text matched only a part of its
+ * element (see {@link partMatchWarning}).
  */
 async function waitForFrames(
   env: ActionEnv,
@@ -618,24 +698,33 @@ async function waitForFrames(
   matchFieldValues = false,
   touched: readonly boolean[] = []
 ): Promise<
-  (DescribeFrame | undefined)[] | "aborted" | { unresolved: FlowSelector; covered: boolean }
+  | { frames: (DescribeFrame | undefined)[]; warning?: string }
+  | "aborted"
+  | { unresolved: FlowSelector; covered: boolean }
 > {
   const pending = selectors.flatMap((selector, i) => (selector ? [{ i, selector }] : []));
-  if (pending.length === 0) return selectors.map(() => undefined);
+  if (pending.length === 0) return { frames: selectors.map(() => undefined) };
   const deadline = Date.now() + DEFAULT_ACTION_TIMEOUT_MS;
   let unresolved = pending[0].selector;
   let covered = false;
   for (;;) {
     if (env.signal?.aborted) return "aborted";
-    const tree = await settleTree(env);
-    if (tree) {
-      const nodes = selectors.map((s) =>
-        s ? flowSelectorToNode(tree, s, matchFieldValues) : undefined
+    const settled = await settleTree(env);
+    if (settled) {
+      const tree = settled.tree;
+      const picks = selectors.map((s) =>
+        s ? flowSelectorPick(tree, s, matchFieldValues) : undefined
       );
+      const nodes = picks.map((pick) => pick?.node);
       const isCovered = (i: number): boolean =>
         touched[i] === true && nodes[i] !== undefined && underKeyboard(tree, nodes[i]);
       const missing = pending.find(({ i }) => nodes[i] === undefined || isCovered(i));
-      if (!missing) return nodes.map((node) => node?.frame);
+      if (!missing) {
+        const parts = pending.map(({ i, selector }) =>
+          partMatchWarning(env, settled, selector, picks[i])
+        );
+        return { frames: nodes.map((node) => node?.frame), ...warnedBy(...new Set(parts)) };
+      }
       unresolved = missing.selector;
       covered = isCovered(missing.i);
     } else if (env.signal?.aborted) {
@@ -655,16 +744,16 @@ async function waitForFrames(
  * be reported as a genuine "element not found" failure.
  *
  * Exported for `snapshot: { cropOn }` (flow-visual.ts), which resolves the crop
- * element's frame with the same settle + auto-wait.
+ * element's frame with the same settle + auto-wait, and carries its warning.
  */
 export async function waitForFrame(
   env: ActionEnv,
   selector: FlowSelector,
   matchFieldValues = false
-): Promise<DescribeFrame | "aborted" | undefined> {
+): Promise<{ frame: DescribeFrame; warning?: string } | "aborted" | undefined> {
   const frames = await waitForFrames(env, [selector], matchFieldValues);
   if (frames === "aborted") return "aborted";
-  return Array.isArray(frames) ? frames[0] : undefined;
+  return "frames" in frames ? { frame: frames.frames[0]!, ...warned(frames) } : undefined;
 }
 
 /**
@@ -677,10 +766,10 @@ async function waitForTouchFrame(
   env: ActionEnv,
   selector: FlowSelector,
   matchFieldValues = false
-): Promise<{ frame: DescribeFrame } | { fail: DirectiveOutcome }> {
+): Promise<{ frame: DescribeFrame; warning?: string } | { fail: DirectiveOutcome }> {
   const frames = await waitForFrames(env, [selector], matchFieldValues, [true]);
   if (frames === "aborted") return { fail: ABORTED_OUTCOME };
-  if (Array.isArray(frames)) return { frame: frames[0]! };
+  if ("frames" in frames) return { frame: frames.frames[0]!, ...warned(frames) };
   return { fail: await targetMissReason(env, frames) };
 }
 
@@ -912,8 +1001,17 @@ async function scrollToVisible(
   let warning: string | undefined;
   // The target showed under the keyboard and the scroll did not move it out.
   let seenCovered = false;
-  // The target never showed: say so when it looks stale.
-  const missed = async (reason: string): Promise<ScrollResolve> => {
+  // The source cut the tree the loop last judged at a size limit.
+  let cutRead = false;
+  // On a cut tree, the target's text matched only a part of its element.
+  let partWarning: string | undefined;
+  const found = (frame: DescribeFrame): ScrollResolve => ({
+    frame,
+    ...warnedBy(warning, partWarning),
+  });
+  // The target never showed: say so when it looks stale, or that the tree was cut.
+  // `end`: the scroll stopped moving, which a cut tree cannot vouch for.
+  const missed = async (reason: string, end = false): Promise<ScrollResolve> => {
     if (seenCovered) {
       return {
         reason:
@@ -928,13 +1026,16 @@ async function scrollToVisible(
       scrollTo: { within: within !== undefined },
     });
     if (stale === "aborted") return { aborted: true };
-    return { reason: stale ?? reason, ...warnedBy(warning) };
+    const cut = end ? `${reason}${CUT_SCROLL_END}` : cutMissReason(reason);
+    return { reason: stale ?? (cutRead ? cut : reason), ...warnedBy(warning) };
   };
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
-    const tree = await settleTree(env);
-    if (!tree) return { aborted: true }; // settleTree only returns undefined on abort
+    const settled = await settleTree(env);
+    if (!settled) return { aborted: true }; // settleTree only returns undefined on abort
+    const tree = settled.tree;
+    cutRead = settled.truncated === true;
 
     // A target a scroll container cuts along the axis is scrolled inside that
     // scroller, whether or not the tree has a node for it: the gesture is anchored
@@ -951,11 +1052,17 @@ async function scrollToVisible(
     // wheel listener), and a wheel at the anchor carries such a box along.
     const container = within ? flowSelectorToNode(tree, within) : undefined;
     if (within && !container) {
-      return { reason: `scroll container ${describeSelector(within)} is not visible` };
+      const missedWithin = `scroll container ${describeSelector(within)} is not visible`;
+      // On a cut tree, a cover the read found still explains the miss.
+      if (!cutRead) return { reason: missedWithin };
+      const cover = coverReason(env, within, missedWithin, undefined);
+      return { reason: cover ?? cutMissReason(missedWithin) };
     }
     // Not a key: one that matches would end the scroll before the target shows.
     // Nor in view while the keyboard covers it: a tap there would press a key.
-    const targetNode = flowSelectorToNode(withoutKeyboard(tree), target);
+    const targetPick = flowSelectorPick(withoutKeyboard(tree), target);
+    const targetNode = targetPick?.node;
+    partWarning = partMatchWarning(env, settled, target, targetPick);
     const frame = targetNode?.frame;
     const covered = targetNode !== undefined && underKeyboard(tree, targetNode);
     seenCovered ||= covered;
@@ -979,7 +1086,7 @@ async function scrollToVisible(
       axisFullyInside(frame, direction, axisCut ?? container?.clipFrame ?? region) &&
       !covered
     ) {
-      return { frame, ...warnedBy(warning) };
+      return found(frame);
     }
     // How far the target reaches into its window from the cutting edge changes only
     // when its scroller moves, not when a wheel carries the window along (the page, a
@@ -997,7 +1104,7 @@ async function scrollToVisible(
     const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
     if (shown !== undefined && prevShown !== undefined && Math.abs(shown - prevShown) < 1e-4) {
-      if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
+      if (anchorSpent) return found(frame!);
       anchorSpent = spentNow = true;
     }
     prevShown = shown;
@@ -1022,8 +1129,11 @@ async function scrollToVisible(
     if (!spentNow && prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort),
       // unless the keyboard still covers it.
-      if (frame && !covered) return { frame, ...warnedBy(warning) };
-      return missed(`reached the end of the scroll without finding ${describeSelector(target)}`);
+      if (frame && !covered) return found(frame);
+      return missed(
+        `reached the end of the scroll without finding ${describeSelector(target)}`,
+        true
+      );
     }
     prevFp = fp;
 
@@ -1032,7 +1142,7 @@ async function scrollToVisible(
     const retry = container?.frame ?? region;
     const retryAt = getDescribeTapPoint(retry);
     if (spentNow && frame && axisCut && frameContains(frame, retryAt.x, retryAt.y)) {
-      return { frame, ...warnedBy(warning) };
+      return found(frame);
     }
     // The finger goes down at the scroll anchor: on the keyboard it would
     // press or slide over the keys, not scroll.
@@ -1053,7 +1163,7 @@ async function scrollToVisible(
       warning ??= sent;
     } catch (err) {
       if (!(err instanceof Error && NO_SCROLLABLE_VIEW.test(err.message))) throw err;
-      if (frame) return { frame, ...warnedBy(warning) };
+      if (frame) return found(frame);
       return {
         reason:
           `nothing scrolls at the centre of ${within ? describeSelector(within) : "the screen"}, ` +
@@ -1309,6 +1419,8 @@ async function staleSelectorReason(
  * or the selector misses for another reason.
  */
 function fieldTextReason(env: ActionEnv, sel: FlowSelector, missed: string): string | undefined {
+  // A cut tree cannot show that only a field holds the text.
+  if (env.lastRead?.truncated) return undefined;
   const tree = env.lastRead?.tree;
   if (!tree) return undefined;
   if (flowFindAll(tree, sel).some(isVisible)) return undefined;
@@ -1321,9 +1433,10 @@ function fieldTextReason(env: ActionEnv, sel: FlowSelector, missed: string): str
 }
 
 /**
- * Why a selector step found no element: the stale reason when one shows, else
- * the scroll-to hint. An action targets keys, so a key that carries the id
- * counts here.
+ * Why a selector step found no element: the stale reason when one shows (a
+ * cover the last read found among them), else, when the last read was cut at
+ * a size limit, that the element can be past the cut, else the scroll-to hint.
+ * An action targets keys, so a key that carries the id counts here.
  */
 export async function selectorMissReason(
   env: ActionEnv,
@@ -1331,7 +1444,13 @@ export async function selectorMissReason(
 ): Promise<DirectiveOutcome> {
   const stale = await staleSelectorReason(env, sel);
   if (stale === "aborted") return ABORTED_OUTCOME;
-  return { ok: false, reason: stale ?? offscreenHint(sel) };
+  if (stale !== undefined) return { ok: false, reason: stale };
+  return {
+    ok: false,
+    reason: env.lastRead?.truncated
+      ? cutMissReason(`no visible element matched selector ${describeSelector(sel)}`)
+      : offscreenHint(sel),
+  };
 }
 
 /**
@@ -1573,7 +1692,7 @@ async function resolveTargetPoint(
   if (target.selector) {
     const resolved = await waitForTouchFrame(env, target.selector);
     if ("fail" in resolved) return resolved;
-    return { point: getDescribeTapPoint(resolved.frame) };
+    return { point: getDescribeTapPoint(resolved.frame), ...warned(resolved) };
   }
   const point = targetPointFromFrame(target, undefined);
   if ("fail" in point) return point;
@@ -1689,12 +1808,13 @@ async function runPinch(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
-  let settle: GestureSettle = {};
+  let settle: GestureSettle;
   if (step.selector) {
     const resolved = await waitForTouchFrame(env, step.selector);
     if ("fail" in resolved) return resolved.fail;
     frame = resolved.frame;
     center = getDescribeTapPoint(resolved.frame);
+    settle = warned(resolved);
   } else {
     settle = await settleForGesture(env);
     if (settle.aborted) return ABORTED_OUTCOME;
@@ -1790,12 +1910,13 @@ async function runRotate(
 ): Promise<DirectiveOutcome> {
   let center = { x: 0.5, y: 0.5 };
   let frame: DescribeFrame | undefined;
-  let settle: GestureSettle = {};
+  let settle: GestureSettle;
   if (step.selector) {
     const resolved = await waitForTouchFrame(env, step.selector);
     if ("fail" in resolved) return resolved.fail;
     frame = resolved.frame;
     center = getDescribeTapPoint(resolved.frame);
+    settle = warned(resolved);
   } else {
     settle = await settleForGesture(env);
     if (settle.aborted) return ABORTED_OUTCOME;
@@ -1909,13 +2030,13 @@ async function runSwipe(
   // view it started in.
   const frames = await waitForFrames(env, selectors, false, [true, false]);
   if (frames === "aborted") return ABORTED_OUTCOME;
-  if (!Array.isArray(frames)) return await targetMissReason(env, frames);
-  const [fromFrame, toFrame] = frames;
+  if (!("frames" in frames)) return await targetMissReason(env, frames);
+  const [fromFrame, toFrame] = frames.frames;
 
   // A selector end already resolved against a settled tree; with neither end
   // carrying one, `waitForFrames` read no tree, so this is the only wait between
   // the touch-down and whatever motion earlier steps left behind.
-  let settle: GestureSettle = {};
+  let settle: GestureSettle = warned(frames);
   if (selectors.every((selector) => selector === undefined)) {
     settle = await settleForGesture(env);
     if (settle.aborted) return ABORTED_OUTCOME;
@@ -2135,12 +2256,46 @@ async function runType(
     // UDID.)
     await invokeOnDevice(env, "keyboard", { key: "enter" });
   }
-  return { ok: true, ...warnedBy(toolWarning(focusTap)) };
+  return { ok: true, ...warnedBy(resolved.warning, toolWarning(focusTap)) };
 }
 
-const CUT_SHORT_READ =
-  "the screen has more elements than the accessibility service reads in one walk, so an " +
-  "element past the cut reads as absent";
+/**
+ * The warning a condition's result owes a cut tree ({@link DescribeTreeData.truncated})
+ * when the part past the cut could change it; undefined on a tree with no cut.
+ *
+ * No element before the cut matched: the absence warning, for a `hidden` that
+ * passes and a `when:` guard that is not met (`absence`). A `text` check: the
+ * container warning, when the result rests on `subtreeText`, which holds only
+ * the elements before the cut: an `equals` or `matches` that passes on it and
+ * not on the element's own text, or a check that fails on it. A `contains` that
+ * passes stays true whatever the cut left out. On Chromium the walk marks the
+ * containers it cut (`cutInside`), so only those warn; the native walkers have
+ * one flag for many cut points, so there each container warns.
+ */
+function cutConditionWarning(
+  data: DescribeTreeData,
+  step: {
+    condition: WaitCondition;
+    selector: FlowSelector;
+    expectedText?: string;
+    textMatch?: TextMatchMode;
+  },
+  matches: DescribeNode[],
+  passed: boolean,
+  absence: boolean,
+  macos: boolean
+): string | undefined {
+  if (!data.truncated) return undefined;
+  if (!matches.some(isVisible)) return absence ? cutAbsenceWarning(step.selector) : undefined;
+  if (step.condition !== "text" || step.expectedText === undefined) return undefined;
+  const mode = step.textMatch ?? "contains";
+  if (passed && mode === "contains") return undefined;
+  const node = textCheckTarget(matches, macos);
+  if (node?.subtreeText === undefined || macFieldText(node, macos) !== undefined) return undefined;
+  if (data.source === "cdp-dom" && node.cutInside !== true) return undefined;
+  if (passed && textMatches(nodeText(node), step.expectedText, mode)) return undefined;
+  return cutContainerWarning(step.selector);
+}
 
 /**
  * Poll a condition against the flow tree until it holds or `timeoutMs` passes.
@@ -2161,6 +2316,11 @@ const CUT_SHORT_READ =
  * when the adapter flagged the read as degraded or the selector had matched on
  * an earlier poll — a transient blank frame mid-navigation must not confirm the
  * element left.
+ *
+ * A read the source cut at a size limit is trusted like any other: the cut
+ * never changes a result. When the part past the cut could change it, the
+ * outcome carries a warning ({@link cutConditionWarning}), and a miss of
+ * `await`/`assert` says that the element can be past the cut.
  */
 async function waitForCondition(
   env: ActionEnv,
@@ -2194,6 +2354,7 @@ async function waitForCondition(
   // reasons below must not call an empty tree.
   let fallbackHint: string | undefined;
   let finalPoll = false;
+  const macos = env.device.platform === "macos";
 
   for (;;) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
@@ -2201,10 +2362,8 @@ async function waitForCondition(
       const data = await readFlowTree(env);
       const matches = flowFindAll(data.tree, step.selector);
       everMatched ||= matches.length > 0;
-      // A cut-short read vouches for what it found, never for an absence.
-      const cutShort = data.truncated === true && matches.length === 0;
-      fetchError = cutShort ? CUT_SHORT_READ : undefined;
-      const blind = cutShort || isBlindRead(data, everMatched, step.condition);
+      fetchError = undefined;
+      const blind = isBlindRead(data, everMatched, step.condition);
       if (!blind) {
         lastMatches = matches;
         lastData = data;
@@ -2217,15 +2376,14 @@ async function waitForCondition(
           : undefined;
       if (
         !blind &&
-        evaluateCondition(
-          step.condition,
-          step.expectedText,
-          matches,
-          step.textMatch,
-          env.device.platform === "macos"
-        )
+        evaluateCondition(step.condition, step.expectedText, matches, step.textMatch, macos)
       ) {
-        return { ok: true };
+        return {
+          ok: true,
+          ...warnedBy(
+            cutConditionWarning(data, step, matches, true, step.condition === "hidden", macos)
+          ),
+        };
       }
     } catch (err) {
       fetchError = err instanceof Error ? err.message : String(err);
@@ -2316,20 +2474,32 @@ async function waitForCondition(
     if (stale === "aborted") return ABORTED_OUTCOME;
     if (stale) return { ok: false, reason: stale + blipNote };
   }
+  const reason = assertReason(
+    step.condition,
+    step.selector,
+    step.expectedText,
+    step.textMatch,
+    lastMatches,
+    macos,
+    // The text of an element is the only part of a reason that comes off
+    // the screen, where a field shows a typed secret.
+    (node, read) => (lastData ? quotedText(lastData, env.device.id, node, read) : read(node))
+  );
+  // An `await`/`assert` miss on a cut tree: the element can be past the cut. A
+  // `when:` guard is not met, and gets the absence warning instead.
+  const cutMiss =
+    explainMiss &&
+    lastData?.truncated === true &&
+    step.condition !== "hidden" &&
+    !lastMatches.some(isVisible);
   return {
     ok: false,
-    reason:
-      assertReason(
-        step.condition,
-        step.selector,
-        step.expectedText,
-        step.textMatch,
-        lastMatches,
-        env.device.platform === "macos",
-        // The text of an element is the only part of a reason that comes off
-        // the screen, where a field shows a typed secret.
-        (node, read) => (lastData ? quotedText(lastData, env.device.id, node, read) : read(node))
-      ) + blipNote,
+    reason: (cutMiss ? cutMissReason(reason) : reason) + blipNote,
+    ...warnedBy(
+      lastData && !cutMiss
+        ? cutConditionWarning(lastData, step, lastMatches, false, !explainMiss, macos)
+        : undefined
+    ),
   };
 }
 
