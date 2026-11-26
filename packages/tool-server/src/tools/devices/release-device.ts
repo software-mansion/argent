@@ -20,7 +20,7 @@ interface ReleaseDeviceResult {
 export const releaseDeviceTool: ToolDefinition<Params, ReleaseDeviceResult> = {
   id: RELEASE_DEVICE_TOOL_ID,
   description:
-    "End this session's claim on a device, so that another session can drive it. Without udid, ends every claim of the session. Releasing a device the session does not hold does nothing.",
+    "End this session's claim on a device, so that another session can drive it. Without udid, ends every claim of the session.",
   zodSchema,
   hideFromMcp: true,
   interaction: {

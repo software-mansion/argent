@@ -543,16 +543,19 @@ function failedRun(result: unknown): unknown {
   return result;
 }
 
-function withSessionFromEnv(headers: Record<string, string>): Record<string, string> {
-  if (Object.keys(headers).some((name) => name.toLowerCase() === SESSION_HEADER)) return headers;
+function sessionFromEnv(): string | undefined {
   const session = process.env.ARGENT_SESSION?.trim();
-  if (!session) return headers;
+  if (!session) return undefined;
   if (!isValidSession(session)) {
     throw new ToolInvocationError(
       "ARGENT_SESSION must be 1 to 128 printable ASCII characters without spaces."
     );
   }
-  return { [SESSION_HEADER]: session, ...headers };
+  return session;
+}
+
+function hasSessionHeader(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some((name) => name.toLowerCase() === SESSION_HEADER);
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -621,7 +624,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
     assertFiniteNumbers(args);
-    const callerHeaders = withSessionFromEnv(options.headers?.() ?? {});
+    const envSession = hasSessionHeader(options.headers?.() ?? {}) ? undefined : sessionFromEnv();
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
@@ -717,7 +720,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
-      ...callerHeaders,
+      ...(envSession ? { [SESSION_HEADER]: envSession } : {}),
+      ...options.headers?.(),
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to
       // 127.0.0.1 included, which nothing else in the request shows.

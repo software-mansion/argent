@@ -334,6 +334,32 @@ describe("createToolsClient options", () => {
     }
   });
 
+  it("reads the caller's headers when it sends the call, not when the call starts", async () => {
+    let ended = false;
+    let route = (): void => {};
+    const routed = new Promise<void>((resolve) => (route = resolve));
+    const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+    const { callTool } = createToolsClient({
+      baseUrl: async () => {
+        await routed;
+        return { url, token: "t", remote: false };
+      },
+      fetchImpl,
+      headers: (): Record<string, string> => (ended ? {} : { "x-argent-session": "mcp-1" }),
+    });
+    vi.stubEnv("ARGENT_SESSION", "ci-job-7");
+    try {
+      const call = callTool("reinstall-app", {});
+      ended = true;
+      route();
+      await call;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+    expect((init.headers as Record<string, string>)["x-argent-session"]).toBeUndefined();
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);
