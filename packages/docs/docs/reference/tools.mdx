@@ -164,8 +164,14 @@ With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started 
 To prepare a local simulator for a job, start it with `boot-device` while it is shut down.
 If a pool manager already started it, use `boot-device` with `force: true` before the job. This restarts the simulator.
 
-A pool manager that controls the boot can also prepare the simulator itself.
-While the simulator is shut down, enable these Boolean settings in its `com.apple.Accessibility` preferences:
+A pool manager can run this command on the Mac before it starts the local simulator:
+
+```sh
+argent run boot-device --udid "$UDID" --prepareOnly
+```
+
+Wait for the command to succeed before starting the simulator. The result includes `prepared: true` and `booted: false`.
+The command requires the `Shutdown` state. It enables these Boolean settings in the simulator's `com.apple.Accessibility` preferences:
 
 - `IgnoreAXServerEntitlements`
 - `AccessibilityEnabled`

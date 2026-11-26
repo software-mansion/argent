@@ -124,6 +124,36 @@ describe("boot-device — iOS path", () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
+  it("prepares the shutdown simulator without starting it, and reports a failed write", async () => {
+    const tool = createBootDeviceTool({} as Registry);
+    const udid = "11111111-1111-1111-1111-111111111111";
+    const prepare = () => tool.execute!({}, { udid, prepareOnly: true });
+    await expect(prepare()).resolves.toEqual({
+      platform: "ios",
+      udid,
+      prepared: true,
+      booted: false,
+    });
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(udid, { isTvOs: false });
+    setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("write failed"));
+    await expect(prepare()).rejects.toThrow("write failed");
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["Booted", "Booting", "Shutting Down", undefined])(
+    "refuses preparation in state %s",
+    async (state) => {
+      const udid = "11111111-1111-1111-1111-111111111111";
+      scannedSimulatorsMock.mockResolvedValue(state ? [{ udid, state }] : []);
+      const tool = createBootDeviceTool({} as Registry);
+      await expect(tool.execute!({}, { udid, prepareOnly: true })).rejects.toThrow(
+        "requires a Shutdown simulator"
+      );
+      expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
+      expect(mockExecFile).not.toHaveBeenCalled();
+    }
+  );
+
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
     const reverifyEnv = vi.fn(async () => {});
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null, reverifyEnv }));
