@@ -67,7 +67,7 @@ interface BrowserMessage {
 }
 
 /** A `Log.entryAdded` message the browser wrote itself, such as a failed resource load. */
-export function browserLogMessage(params: Record<string, unknown>): BrowserMessage {
+function browserLogMessage(params: Record<string, unknown>): BrowserMessage {
   const entry = (params.entry ?? {}) as {
     level?: string;
     text?: string;
@@ -85,7 +85,7 @@ export function browserLogMessage(params: Record<string, unknown>): BrowserMessa
 }
 
 /** A `Runtime.exceptionThrown` message: an uncaught error or an unhandled rejection. */
-export function uncaughtExceptionMessage(params: Record<string, unknown>): BrowserMessage {
+function uncaughtExceptionMessage(params: Record<string, unknown>): BrowserMessage {
   const details = (params.exceptionDetails ?? {}) as {
     text?: string;
     exception?: { description?: string; value?: unknown };
