@@ -4,6 +4,7 @@ import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
+  ToolInvocationError,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
@@ -148,6 +149,13 @@ const SAFE_TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
 function safeToolName(toolName: string | undefined): string {
   return toolName && SAFE_TOOL_RE.test(toolName) ? toolName : "unknown";
+}
+
+function callFailureSignal(err: unknown): { error_code: FailureCode; error_kind: FailureKind } {
+  if (err instanceof ToolInvocationError && err.errorCode === FAILURE_CODES.DEVICE_IN_USE) {
+    return { error_code: FAILURE_CODES.DEVICE_IN_USE, error_kind: "validation" };
+  }
+  return { error_code: FAILURE_CODES.CLI_RUN_TOOL_CALL_FAILED, error_kind: "unknown" };
 }
 
 async function trackRunFailure(
@@ -382,10 +390,9 @@ settled=false or debugger-status's not_connected.
     }
     console.error(err instanceof Error ? err.message : String(err));
     await trackRunFailure(toolName, startedAt, {
-      error_code: FAILURE_CODES.CLI_RUN_TOOL_CALL_FAILED,
+      ...callFailureSignal(err),
       failure_stage: "cli_run_call_tool",
       failure_area: "cli",
-      error_kind: "unknown",
     });
     process.exit(1);
   }

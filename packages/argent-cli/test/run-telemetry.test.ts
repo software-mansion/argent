@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolInvocationError } from "@argent/tools-client";
 import { run } from "../src/run.js";
 
 const toolsClientMock = vi.hoisted(() => ({
@@ -87,6 +88,26 @@ describe("argent run telemetry", () => {
     );
     expect(telemetryMock.track).not.toHaveBeenCalledWith("tool:fail", expect.anything());
     expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a device held by another session as DEVICE_IN_USE", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("Device X is in use by another Argent session.", {
+        errorCode: "DEVICE_IN_USE",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(run(["sample-tool"], { paths: {} as never })).rejects.toThrow("process.exit:1");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "cli:run_fail",
+      expect.objectContaining({
+        error_code: "DEVICE_IN_USE",
+        failure_stage: "cli_run_call_tool",
+        error_kind: "validation",
+      })
+    );
   });
 
   it("emits cli:run_fail, not tool:fail, for local CLI argument parsing failures", async () => {
