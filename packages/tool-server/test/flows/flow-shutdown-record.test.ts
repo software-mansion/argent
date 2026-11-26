@@ -455,4 +455,54 @@ describe("recording into shutdown:", () => {
     expect((await add("main.mjs")).status).toBe("pass");
     expect((await add("rm2.mjs", true)).status).toBe("pass");
   });
+
+  describe("keeps what a shutdown script changed in the document it ran against", () => {
+    const record = async (scripts: Record<string, string>) => {
+      await fs.mkdir(path.join(root, "scripts"), { recursive: true });
+      for (const [file, body] of Object.entries(scripts)) {
+        await fs.writeFile(path.join(root, "scripts", file), body);
+      }
+      await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+      return (file: string, shutdown?: boolean) =>
+        flowAddScriptTool.execute(
+          {},
+          {
+            name: "t",
+            project_root: root,
+            path: `../../scripts/${file}`,
+            ...(shutdown ? { shutdown } : {}),
+          }
+        );
+    };
+
+    it("while a steps call moves the document", async () => {
+      const add = await record({
+        "mk.mjs": "output.a = 1;\n",
+        "slow.mjs": "await new Promise((r) => setTimeout(r, 1500));\noutput.b = 1;\n",
+        "set2.mjs": "output.a = 2;\n",
+        "check.mjs":
+          "if (output.a !== 2 || output.b !== 1) throw new Error(JSON.stringify(output));\n",
+      });
+
+      expect((await add("mk.mjs")).status).toBe("pass");
+      const slow = add("slow.mjs", true);
+      await new Promise((r) => setTimeout(r, 500));
+      expect((await add("set2.mjs")).status).toBe("pass");
+      expect((await slow).status).toBe("pass");
+      expect((await add("check.mjs", true)).status).toBe("pass");
+    });
+
+    it("when it removes a key named like an Object.prototype member", async () => {
+      const add = await record({
+        "mk.mjs": "output.constructor = 'x';\n",
+        "rm.mjs": "delete output.constructor;\n",
+        "check.mjs":
+          "if (Object.hasOwn(output, 'constructor')) throw new Error(JSON.stringify(output));\n",
+      });
+
+      expect((await add("mk.mjs")).status).toBe("pass");
+      expect((await add("rm.mjs", true)).status).toBe("pass");
+      expect((await add("check.mjs", true)).status).toBe("pass");
+    });
+  });
 });

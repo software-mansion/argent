@@ -1706,8 +1706,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
           ? await captureRunTarget(session, args, project)
           : undefined;
+      const ranAgainst = recordingOutput(session, block);
       const sharedOutput: { doc: FlowOutput; shutdownDoc?: FlowOutput } | undefined =
-        runTarget?.flow ? { doc: structuredClone(recordingOutput(session, block)) } : undefined;
+        runTarget?.flow ? { doc: structuredClone(ranAgainst) } : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1985,8 +1986,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // output of the steps recorded after this one from the shutdown list.
       if (step.kind === "run" && sharedOutput) {
         const { doc, shutdownDoc = doc } = sharedOutput;
-        if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc);
-        else keepRecordingOutput(session, "steps", doc);
+        if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc, ranAgainst);
+        else keepRecordingOutput(session, "steps", doc, ranAgainst);
       }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a

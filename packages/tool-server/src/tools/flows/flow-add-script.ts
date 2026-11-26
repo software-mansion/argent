@@ -248,12 +248,13 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // The test's env: as it stands, under the step's own: what a replay
     // without run values gives the step.
     const env: FlowEnv = mergeScriptEnv(await recordedFileEnv(session), step.env);
+    const ranAgainst = recordingOutput(session, block);
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
       projectRoot: params.project_root,
       env,
-      output: recordingOutput(session, block),
+      output: ranAgainst,
       ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
@@ -333,7 +334,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
-    if (result?.output) keepRecordingOutput(session, block, result.output);
+    if (result?.output) keepRecordingOutput(session, block, result.output, ranAgainst);
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,

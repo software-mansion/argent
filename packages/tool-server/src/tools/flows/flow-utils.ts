@@ -5177,21 +5177,30 @@ export function recordingOutput(session: RecordingSession, block: RecordedBlock)
   return merged;
 }
 
-/** Keep what a call recorded into `block` returned, for the calls recorded after it there. */
+/**
+ * Keep what a call recorded into `block` returned, for the calls recorded after
+ * it there. `ranAgainst` is the document the call started from: a shutdown call
+ * keeps only what it changed in it, since other calls may have moved the
+ * session's document while it ran.
+ */
 export function keepRecordingOutput(
   session: RecordingSession,
   block: RecordedBlock,
-  doc: FlowOutput
+  doc: FlowOutput,
+  ranAgainst: FlowOutput
 ): void {
   if (block === "steps") {
     session.output = doc;
     return;
   }
-  const before = recordingOutput(session, "shutdown");
   const changes = (session.shutdownChanges ??= new Map());
-  for (const key of Object.keys(before)) if (!(key in doc)) changes.set(key, REMOVED_OUTPUT_KEY);
+  for (const key of Object.keys(ranAgainst)) {
+    if (!Object.hasOwn(doc, key)) changes.set(key, REMOVED_OUTPUT_KEY);
+  }
   for (const [key, value] of Object.entries(doc)) {
-    if (!(key in before) || !isDeepStrictEqual(before[key], value)) changes.set(key, value);
+    if (!Object.hasOwn(ranAgainst, key) || !isDeepStrictEqual(ranAgainst[key], value)) {
+      changes.set(key, value);
+    }
   }
 }
 
