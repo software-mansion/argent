@@ -216,6 +216,14 @@ On an iOS simulator and on a physical iPhone, the runner and `describe` read one
 
 On Android and on Chromium, an id absent from `describe` can still resolve in an e2e test. Verify the id in a scratch fragment.
 
+On Android, a view that the user can tap is an element of the runner tree. When the view has no label of its own, it takes the text of its children as its label, as in `describe`. For example, a Settings row has the label `Network & internet / Mobile, Wi‑Fi, hotspot`. The runner leaves this text out of such a label:
+
+- The text that a user typed in a text field. A view that holds a text field or a list takes no text.
+- The text of a button or a switch inside the view.
+- The text of a child that is not on the screen.
+
+Thus a label copied from `describe` can miss in an e2e test. A `text` selector matches a part of a label, so `{ role: LinearLayout, text: Network & internet }` selects the row. A `text` condition on the title of such a row reads the title, not the row. A `within` scope can be the row, for example `{ role: Switch, within: { text: Airplane mode } }`.
+
 On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. A step can then miss its target. The reason of the failed step says that a dialog or a sheet is on top of the app. A dialog of the app can hold a list that scrolls, with the target further down. The reason then also suggests a `scroll-to` step, or `within` on a `scroll-to` step. A full-screen sheet of the app looks like a screen, so the reason does not mention it. The same holds for apps side by side, in split screen or in freeform windows.
 
 ### On-screen keyboard
