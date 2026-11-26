@@ -36,8 +36,13 @@ Obey these lifecycle rules:
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. The recorder still appends `await-ui-element` and `await-network-request` steps that return `success: false`. Check the warning before continuing. To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
-6. Set script environment values through the recorder, not the YAML: `e2e-set-env` changes the test's top-level `env:` (call it directly, not through `e2e-add-step`), and `e2e-add-script`'s `env` becomes that step's `env:`. Set the values before the script step that reads them: `e2e-add-script` runs the script with them. See [E2E YAML: Local scripts](e2e-yaml.md#local-scripts).
-7. Record cleanup into `shutdown:` with `shutdown: true` on `e2e-add-step`, `e2e-add-script` or `e2e-add-echo`, usually after the last step. The call still runs live, so the device and the backend are cleaned up now; record main steps first. `stepCount` and `recorded` (`shutdown N. ...`, add-step and add-script) then count the shutdown list. A shutdown script's `output` reaches only later shutdown steps, as at replay. A recorded `e2e-execute` captured as a `run:` in `steps:` already ran the fragment's own `shutdown:` live, while a replay runs it at the end of the test: the message says so. Use `run:` there only for a fragment whose shutdown does not undo what later steps need; otherwise record the fragment's steps one by one (its cleanup with `shutdown: true`) and swap them for the `run:` line after `e2e-finish-recording`. See [E2E YAML: Shutdown](e2e-yaml.md#shutdown).
+6. Set script defaults with `e2e-start-recording.env` or call `e2e-set-env` directly before recording the script. Use `e2e-add-script.env` for values specific to one step. The tool runs the script immediately. If a secret is missing, check the project’s secret sources before retrying.
+
+## Record cleanup after the main steps
+
+Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run immediately. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
+
+Read the result of any call recorded as `run:`. If the fragment already ran cleanup and later steps need that state, record its main steps individually and its cleanup with `shutdown: true`. Replace those steps with the fragment call after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
 
 ## Start in the correct order
 

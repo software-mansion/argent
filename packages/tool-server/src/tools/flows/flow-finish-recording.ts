@@ -150,7 +150,7 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-finish-recording",
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, shutdownSteps, summary, e2eTestFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
+  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns the final YAML and a step summary, including \`shutdownSteps\` when shutdown has entries. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
 A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,

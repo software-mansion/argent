@@ -76,7 +76,7 @@ const zodSchema = z.object({
   env: envRecordSchema(z.string())
     .optional()
     .describe(
-      'The e2e test\'s top-level env:, the environment values every script step receives, e.g. { "API_URL": "https://api.example.com" }. A credential is written as {{secret:NAME}}. Change it later with e2e-set-env.'
+      "Default script environment values saved in the test's top-level env. Use {{secret:NAME}} for credentials."
     ),
 });
 
@@ -111,7 +111,7 @@ standalone e2e test, record a restart-app of the app under test as the FIRST ste
 (captured as the e2e test's \`launch\` step); for a reusable fragment, skip that and
 pass executionPrerequisite instead. Starting over an existing e2e test replaces the
 whole file, including its \`requires:\` and \`env:\` blocks; pass \`requires\` and \`env\` to keep them.
-Use e2e-add-echo to add labels, e2e-set-env to change the test's env values, and
+Use e2e-add-echo to add labels, and
 e2e-add-script to run a local .mjs, .mts, .js or .ts file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
 
