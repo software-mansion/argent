@@ -101,6 +101,10 @@ describe("claimTargets", () => {
     expect(claimTargets({ device: EMU, project_root: "/p" })).toEqual([EMU]);
     expect(claimTargets({ devices: [SIM, EMU, SIM] })).toEqual([SIM, EMU]);
     expect(claimTargets({ udid: `ext:acme-1:${SIM}` })).toEqual([SIM]);
+    expect(
+      claimTargets({ command: "gesture-tap", args: `{"udid":"${SIM.toLowerCase()}"}` })
+    ).toEqual([SIM]);
+    expect(claimTargets({ command: "gesture-tap", args: "not json" })).toEqual([]);
     expect(claimTargets({})).toEqual([]);
     expect(claimTargets(undefined)).toEqual([]);
   });

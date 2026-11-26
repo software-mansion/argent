@@ -53,7 +53,7 @@ export class DeviceClaims {
         for (const [index, claim] of held.entries()) {
           claim.activeCalls -= 1;
           claim.lastUsedAt = this.now();
-          if (claim.released && claim.activeCalls === 0) this.drop(devices[index]!, claim);
+          if (claim.released && claim.activeCalls === 0) this.claims.delete(devices[index]!);
         }
       },
     };
@@ -93,10 +93,6 @@ export class DeviceClaims {
     return claim;
   }
 
-  private drop(device: string, claim: Claim): void {
-    if (this.claims.get(device) === claim) this.claims.delete(device);
-  }
-
   private hold(device: string, session: string): Claim {
     const existing = this.liveClaim(device);
     const claim = existing ?? { session, lastUsedAt: this.now(), activeCalls: 0 };
@@ -117,14 +113,26 @@ export function claimKey(deviceId: string): string {
   return UUID_SHAPE.test(id) ? id.toUpperCase() : id;
 }
 
-/** The devices a call acts on: `udid`, `device_id`, `devices` or e2e-execute's `device`. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The devices a call acts on: `udid`, `device_id`, `devices`, e2e-execute's
+ * `device`, and those in e2e-add-step's JSON `args`.
+ */
 export function claimTargets(args: unknown): string[] {
   if (!args || typeof args !== "object") return [];
   const record = args as Record<string, unknown>;
   const ids = [record.udid, record.device_id, record.device];
   if (Array.isArray(record.devices)) ids.push(...record.devices);
   const named = ids.filter((id): id is string => typeof id === "string" && id.length > 0);
-  return [...new Set(named.map(claimKey))];
+  const stepTargets = typeof record.args === "string" ? claimTargets(parseJson(record.args)) : [];
+  return [...new Set([...named.map(claimKey), ...stepTargets])];
 }
 
 /** The session a header names, `undefined` when absent, or `null` for an unusable one. */
