@@ -96,6 +96,8 @@ On Android and Chromium, an id absent from `describe` can still resolve in an e2
 
 For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On iOS and Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element. On iOS and Android it also means the wait matched only a key of the on-screen keyboard, which conditions do not see.
 
+Each runner tree read stops at a size limit (for example 12,000 nodes on Android and Chromium). If a step has the warning "The UI tree was cut", do not trust an absence: add `await: { visible: ... }` for an element of the next screen. In an action, use the full text or the id. A miss on a cut tree says so in its reason; reduce what the screen shows (close a long list or web page) instead of adding a `scroll-to`.
+
 On an iOS simulator, each tree read after a `launch:` expects the launched app in the foreground. If another app is in front, the step fails and names it. When the switch is intended, add a `tool: launch-app` step before that step. Later reads then expect the app that step started. A `launch:` step restarts the app.
 
 With the on-screen keyboard up, its keys, prediction bar and other buttons are in the runner tree. On iOS the input accessory toolbar above the keys belongs to the app.
