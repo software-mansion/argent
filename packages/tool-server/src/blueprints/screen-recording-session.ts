@@ -1,3 +1,4 @@
+import { argentCloudCommand } from "../utils/argent-cloud-bin";
 import {
   FAILURE_CODES,
   FailureError,
@@ -428,7 +429,7 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
                   ? `The runner-side recording was ended and its download started, so the ` +
                     `video captured up to that point is at ${abandonedOutput} if the download ` +
                     `finished. Otherwise the remote machine keeps it until the machine is ` +
-                    `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
+                    `released: \`${argentCloudCommand()} screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
                     `<FILE> --recording ${abandonedRemote.recordingId}\`.`
                   : abandonedMacos
                     ? `The app was asked to end the recording and write it out first, so the ` +

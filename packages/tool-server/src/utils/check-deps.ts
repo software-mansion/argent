@@ -4,6 +4,7 @@ import { resolveVegaBinary } from "./vega-cli";
 import { resolveHarmonyEmulator } from "./harmony-cli";
 import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
+import { findArgentCloudBin } from "./argent-cloud-bin";
 import { DependencyMissingError } from "./dependency-errors";
 
 export { DependencyMissingError };
@@ -26,7 +27,7 @@ const INSTALL_HINTS: Record<ToolDependency, string> = {
   "emulator":
     "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or point `$ANDROID_HOME` (or the `android.sdkRoot` config key) at the SDK root (the resolver checks `<root>/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
   "sim-remote":
-    "`sim-remote` CLI not found on PATH. Install via the radon-cloud project (see its README) and run `sim-remote login` before invoking any ios-remote tool. Only required for remote iOS simulators.",
+    "Argent Cloud CLI not found: no `ARGENT_CLOUD_BIN`, and no `argent-cloud` or `sim-remote` on PATH or in `~/.local/bin`. Install it as described at https://docs.swmansion.com/argent/docs/cloud/fundamentals/installation, then run its `login` command (`sim-remote login`) before invoking any ios-remote tool. Only required for remote iOS simulators.",
   "vega":
     "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
   "harmony-emulator":
@@ -53,6 +54,9 @@ async function probe(dep: ToolDependency): Promise<boolean> {
   }
   if (dep === "hdc") {
     return (await resolveHdc()) !== null;
+  }
+  if (dep === "sim-remote") {
+    return (await findArgentCloudBin()) !== null;
   }
   // Probe existence without invoking the dep: a bare `xcrun` can pop the Xcode
   // license dialog on first use.

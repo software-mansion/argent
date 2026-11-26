@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
- * Thin wrapper around the `sim-remote` CLI.
+ * Thin wrapper around the Argent Cloud CLI (`argent-cloud`, formerly `sim-remote`).
  *
  * Failures throw with the CLI's stderr appended, so auth and orchestrator-side
  * errors reach the agent verbatim. Commands taking a device id strip a
@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
  */
 
 import { stripRemotePrefix } from "./device-info";
+import { argentCloudBin, forgetArgentCloudBin } from "./argent-cloud-bin";
 import { simulatorRuntimeKind } from "./ios-devices";
 
 export const SIM_REMOTE_TIMEOUT_MS = 30_000;
@@ -27,8 +28,9 @@ interface SimRemoteOptions {
 }
 
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
+  const bin = await argentCloudBin();
   try {
-    const { stdout } = await execFileAsync("sim-remote", args, {
+    const { stdout } = await execFileAsync(bin, args, {
       timeout: options?.timeoutMs ?? SIM_REMOTE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
@@ -37,10 +39,11 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
     return { stdout: typeof stdout === "string" ? stdout : stdout.toString("utf8") };
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string; stdout?: string };
+    if (e.code === "ENOENT") forgetArgentCloudBin();
     const stderr = (e.stderr ?? "").trim();
     const stdout = (e.stdout ?? "").trim();
     const suffix = stderr || stdout || e.message;
-    throw new Error(`sim-remote ${args.join(" ")} failed: ${suffix}`, { cause: err });
+    throw new Error(`${bin} ${args.join(" ")} failed: ${suffix}`, { cause: err });
   }
 }
 
@@ -272,7 +275,7 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
  */
 export async function proxyStart(udid: string, port: number): Promise<void> {
   try {
-    await run(["proxy", "start", stripRemotePrefix(udid), String(port)]);
+    await run(["reverse", "start", stripRemotePrefix(udid), String(port)]);
   } catch (err) {
     const message = (err as Error).message ?? "";
     if (/already/i.test(message)) return;
@@ -282,7 +285,7 @@ export async function proxyStart(udid: string, port: number): Promise<void> {
 
 export async function proxyStop(udid: string, port: number): Promise<void> {
   try {
-    await run(["proxy", "stop", stripRemotePrefix(udid), String(port)]);
+    await run(["reverse", "stop", stripRemotePrefix(udid), String(port)]);
   } catch {
     // best-effort cleanup
   }
