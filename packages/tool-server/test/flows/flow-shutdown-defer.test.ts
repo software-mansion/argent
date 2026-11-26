@@ -136,7 +136,7 @@ describe("a fragment recorded as run: in steps:", () => {
     // The fragment's shutdown ran first, against the steps' latest output.
     expect(await readLog()).toBe("login saw yes\n");
     expect(down.message).toMatch(
-      /e2e test\. First the recording ran the shutdown: of the fragments/
+      /e2e test\. Separately, the recording ran the kept shutdown: of the fragments/
     );
     expect(down.fragmentShutdown).toMatchObject({
       ok: true,
@@ -164,7 +164,7 @@ describe("a fragment recorded as run: in steps:", () => {
 
     expect(await readLog()).toBe("second saw -\nlogin saw -\n");
     expect(await readState()).toBe("out");
-    expect(finished.message).toContain("First the recording ran the shutdown: of the fragments");
+    expect(finished.message).toContain("the recording ran the kept shutdown: of the fragments");
     expect(finished.fragmentShutdown?.ok).toBe(true);
     expect(finished.fragmentShutdown?.steps.map((s) => (s as { e2eTest: string }).e2eTest)).toEqual(
       ["second", "login"]
@@ -225,7 +225,7 @@ describe("a fragment recorded as run: in steps:", () => {
     const restarted = await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
 
     expect(await readState()).toBe("out");
-    expect(restarted.message).toContain("ran the shutdown: of the fragments");
+    expect(restarted.message).toContain("ran the kept shutdown: of the fragments");
   });
 
   it("says so when the shutdown call that ran it is then refused", async () => {
@@ -244,7 +244,7 @@ describe("a fragment recorded as run: in steps:", () => {
       shutdown: true,
     });
 
-    await expect(refused).rejects.toThrow(/ran the shutdown: of the fragments/);
+    await expect(refused).rejects.toThrow(/ran the kept shutdown: of the fragments/);
     expect(await readState()).toBe("out");
   });
 

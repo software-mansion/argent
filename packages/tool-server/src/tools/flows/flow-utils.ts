@@ -5277,8 +5277,8 @@ export function fragmentShutdownNote(report: FragmentShutdownReport): string {
     return status === "fail" || status === "error";
   }).length;
   return (
-    `First the recording ran the shutdown: of the fragments recorded as run: steps, as a ` +
-    `replay does (${total} ${total === 1 ? "step" : "steps"}` +
+    `Separately, the recording ran the kept shutdown: of the fragments recorded as run: ` +
+    `steps, as a replay does before the shutdown steps (${total} ${total === 1 ? "step" : "steps"}` +
     (failed === 0 ? ")." : `, ${failed} failed; see fragmentShutdown).`)
   );
 }
