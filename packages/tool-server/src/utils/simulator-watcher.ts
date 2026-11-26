@@ -32,7 +32,8 @@ let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
  * local iOS or Apple TV simulator, so the app does not start uninjected.
  * Concurrent calls for one simulator share one attempt and one deadline.
  * Settles after the attempt or {@link ARM_WAIT_MS}, at once when no watcher
- * runs, and never rejects.
+ * runs or `ARGENT_SIMULATOR_WATCH_UDIDS` leaves the simulator out, and never
+ * rejects.
  */
 export function armSimulator(udid: string): Promise<void> {
   return armTarget(udid);
@@ -163,6 +164,8 @@ export function startSimulatorWatcher(registry: Registry): {
     configuredUdids === undefined
       ? undefined
       : new Set(configuredUdids.split(",").map((id) => id.trim().toUpperCase()));
+  const isWatched = (udid: string): boolean =>
+    !allowedUdids || allowedUdids.has(udid.toUpperCase());
   const trackedServices = new Map<string, NativeDevtoolsApi>();
   /**
    * Simulators a tool has targeted: every one whose native-devtools service
@@ -237,7 +240,7 @@ export function startSimulatorWatcher(registry: Registry): {
     const claimed = new Set<string>();
 
     for (const udid of booted) {
-      if (allowedUdids && !allowedUdids.has(udid.toUpperCase())) continue;
+      if (!isWatched(udid)) continue;
       const claim = externalClaimForNativeId(udid);
 
       if (!claim) {
@@ -407,6 +410,7 @@ export function startSimulatorWatcher(registry: Registry): {
   registry.events.on("serviceStateChange", noteTargeted);
   const armsInFlight = new Map<string, Promise<void>>();
   const armThisWatcher = (udid: string): Promise<void> => {
+    if (!isWatched(udid)) return Promise.resolve();
     const existing = armsInFlight.get(udid);
     if (existing) return existing;
     const arming = armWithinCap(registry, udid).finally(() => armsInFlight.delete(udid));

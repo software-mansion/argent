@@ -21,7 +21,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
 
 import { dispatchByPlatform } from "../src/utils/cross-platform-tool";
 import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
-import { watcherRegistry } from "./helpers/watcher-registry";
+import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 const OTHER_UDID = "22222222-2222-2222-2222-222222222222";
@@ -53,6 +53,7 @@ afterEach(() => {
   stop?.();
   stop = undefined;
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   simctlMock.mockReset();
 });
 
@@ -160,5 +161,51 @@ describe("armSimulator", () => {
     await execute({}, { udid: "emulator-5554" });
 
     expect(resolveService).not.toHaveBeenCalled();
+  });
+});
+
+describe("ARGENT_SIMULATOR_WATCH_UDIDS", () => {
+  it("arms a listed simulator whatever its case, and settles at once for an unlisted one", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("ARGENT_SIMULATOR_WATCH_UDIDS", ` ${UDID.toLowerCase()} `);
+    listsBooted();
+    const resolveService = vi.fn(() => new Promise(() => {}));
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+
+    expect(await isSettled(armSimulator(OTHER_UDID))).toBe(true);
+    expect(resolveService).not.toHaveBeenCalled();
+
+    expect(await isSettled(armSimulator(UDID))).toBe(false);
+    expect(resolveService).toHaveBeenCalledTimes(1);
+  });
+
+  it("arms no simulator when the list is empty", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("ARGENT_SIMULATOR_WATCH_UDIDS", "");
+    listsBooted();
+    const resolveService = vi.fn();
+    ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
+
+    expect(await isSettled(armSimulator(UDID))).toBe(true);
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("does not re-arm an unlisted simulator that a tool targeted", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("ARGENT_SIMULATOR_WATCH_UDIDS", UDID);
+    listsBooted();
+    const resolveService = vi.fn(async (_urn: string) => ({
+      isEnvSetup: () => true,
+      getInitFailure: () => null,
+    }));
+    const registry = watcherRegistry({ resolveService });
+    const watcher = startSimulatorWatcher(registry);
+    stop = watcher.stop;
+    await watcher.ready;
+
+    targetSimulators(registry, UDID, OTHER_UDID);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
   });
 });
