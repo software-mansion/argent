@@ -121,9 +121,18 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
  * rather than first: a mid-recording relaunch retargets what follows, exactly as
  * a nested `launch:` retargets a run.
  */
-function recordedLaunchedApp(session: RecordingSession, platform: string): string | undefined {
-  for (let i = session.flow.steps.length - 1; i >= 0; i--) {
-    const step = session.flow.steps[i];
+function recordedLaunchedApp(
+  session: RecordingSession,
+  platform: string,
+  block: RecordedBlock
+): string | undefined {
+  // A replay runs the shutdown list after every step.
+  const steps =
+    block === "shutdown"
+      ? [...session.flow.steps, ...(session.flow.shutdown ?? [])]
+      : session.flow.steps;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
     if (step.kind === "launch") return appIdForPlatform(step.app, platform) ?? undefined;
   }
   return undefined;
@@ -823,11 +832,12 @@ async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  block: RecordedBlock
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
-    const launched = recordedLaunchedApp(session, device.platform);
+    const launched = recordedLaunchedApp(session, device.platform, block);
     const data = await fetchFlowTree(
       registry,
       device,
@@ -1687,10 +1697,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          { x: args.x as number, y: args.y as number },
+          block
+        );
       }
 
       // Over a link the call reads its files from those the client sent, as a
@@ -2001,16 +2014,16 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // other two by rendering what was written: kept coordinates read as
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
+      //
+      // A verdict already under this number belongs to a step a hand edit
+      // removed, so it is dropped and counted, also when this step raised none:
+      // the finish would otherwise pin it on this step if the two read alike.
+      const verdicts = block === "shutdown" ? "shutdownStepWarnings" : "stepWarnings";
+      if (session[verdicts]?.delete(stepCount)) {
+        session.discardedWarnings = (session.discardedWarnings ?? 0) + 1;
+      }
       if (waitWarning) {
-        const verdicts =
-          block === "shutdown"
-            ? (session.shutdownStepWarnings ??= new Map())
-            : (session.stepWarnings ??= new Map());
-        // A verdict already under this number belongs to a step a hand edit
-        // removed; it is lost here, so count it.
-        if (verdicts.has(stepCount))
-          session.discardedWarnings = (session.discardedWarnings ?? 0) + 1;
-        verdicts.set(stepCount, {
+        (session[verdicts] ??= new Map()).set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),
         });
