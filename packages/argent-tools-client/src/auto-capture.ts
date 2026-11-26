@@ -297,7 +297,7 @@ export async function awaitScreenSettled(
   }
 }
 
-export interface SettledCaptureOptions<T> {
+interface SettledCaptureOptions<T> {
   call: CaptureToolCall;
   udid: string;
   toolName: string;
