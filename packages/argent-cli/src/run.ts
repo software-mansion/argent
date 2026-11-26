@@ -203,8 +203,8 @@ Examples:
 After an interaction tool (gestures, key presses, app launches), argent run
 waits for the screen to settle, then prints a screenshot path and the element
 tree; after describe it adds only the screenshot. --out also saves that
-screenshot. The disable-auto-screenshot and
-disable-auto-describe flags turn these off. --json prints only the result.
+screenshot. The disable-auto-screenshot and disable-auto-describe flags turn
+these off. --json prints only the result.
 
 Exits 1 when the tool fails. Also exits 1 when the result reports that the
 call did not do its job: an e2e test that does not pass, an await-ui-element
