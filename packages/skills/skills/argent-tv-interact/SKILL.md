@@ -1,6 +1,6 @@
 ---
 name: argent-tv-interact
-description: Control Apple TV (tvOS), Android TV (leanback), and Fire TV (Vega) via Argent (runtimeKind "tv" or platform "vega") — D-pad remote, focus tree, and Vega JS debugging.
+description: Control Apple TV (tvOS), Android TV (leanback), and Fire TV (Vega) via Argent (D-pad remote, focus tree, Vega JS debugging). Use when targeting runtimeKind "tv", platform "vega", or a TV app.
 ---
 
 # Argent TV (Apple TV + Android TV + Fire TV)

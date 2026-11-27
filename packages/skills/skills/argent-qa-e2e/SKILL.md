@@ -1,6 +1,6 @@
 ---
 name: argent-qa-e2e
-description: Author deterministic QA regression e2e tests from test cases, tickets, or acceptance criteria (iOS, Android, Chromium, Mac apps, Vega; not Apple TV/Android TV). For replayable paths without acceptance criteria, use `argent-create-e2e`.
+description: Author deterministic QA regression e2e tests from test cases, tickets, or acceptance criteria (iOS, Android, Chromium, Mac apps, Vega; not Apple TV/Android TV). Use when automating acceptance tests; for replayable paths without criteria, use `argent-create-e2e`.
 ---
 
 # Create a QA regression e2e test

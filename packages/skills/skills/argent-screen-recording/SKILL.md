@@ -1,6 +1,6 @@
 ---
 name: argent-screen-recording
-description: Record a screen video with Argent on iOS, Android, or Mac apps when the user asks to capture a video clip of a flow or interaction.
+description: Record a screen video with Argent on iOS, Android, or Mac apps. Use when asked to capture a video clip of a flow, interaction, or animation.
 ---
 
 `screen-recording-start` and `screen-recording-stop` carry the options (`timeLimitSeconds`, `trimStatic`, `showTouches`) and the result fields. One recording per device at a time; different devices can record concurrently.

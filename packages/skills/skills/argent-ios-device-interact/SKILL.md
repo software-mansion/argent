@@ -1,6 +1,6 @@
 ---
 name: argent-ios-device-interact
-description: Drive a physical iPhone (list-devices kind "device") with Argent. Use ONLY for a physical iPhone, never a simulator. For connection/signing issues, use `argent-ios-device-setup`.
+description: Drive a physical iPhone with Argent. Use when targeting a physical iPhone (list-devices kind "device") and ONLY then, never a simulator. For setup/signing, use `argent-ios-device-setup`.
 ---
 
 # Physical iPhone interaction

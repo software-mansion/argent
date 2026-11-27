@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Profile native CPU hotspots, UI hangs, memory, and iOS app launch time via Instruments (iOS/Mac) or Perfetto (Android).
+description: Profile native CPU hotspots, UI hangs, memory, and iOS launch time via Instruments (iOS/Mac) or Perfetto (Android). Use when diagnosing native performance issues.
 ---
 
 ## 1. Tools and platforms

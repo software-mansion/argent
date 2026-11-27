@@ -1,6 +1,6 @@
 ---
 name: argent-create-e2e
-description: Create, record, edit, replay, or repair Argent e2e test YAML files. Use for reusable flows, repeatable device paths, profiling setup, or repeating 3+ interactions. Not for one-off UI checks (`argent-test-ui-flow`) or acceptance regression tests (`argent-qa-e2e`).
+description: Create, record, edit, replay, or repair Argent e2e test YAML files. Use when authoring reusable flows, repeatable paths, profiling setup, or repeating 3+ interactions (not one-off checks or acceptance QA tests).
 ---
 
 # Create an Argent e2e test

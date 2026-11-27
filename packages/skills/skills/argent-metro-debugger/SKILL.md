@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug JS with Argent in React Native (iOS, Android, Vega, macOS) or Chromium/Electron (CDP) — console logs, React tree, JS eval, and HTTP network inspection.
+description: Debug JS with Argent in React Native (iOS, Android, Vega, macOS) or Chromium/Electron (CDP). Use when reading console logs, inspecting React trees, evaluating JS, or checking HTTP requests.
 ---
 
 ## 1. Prerequisites

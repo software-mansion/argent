@@ -1,6 +1,6 @@
 ---
 name: argent-settings-permissions
-description: Grant, deny, or reset app runtime permissions out-of-band on an iOS simulator or Android device via `settings-permissions`. Use only when the app's own dialog or toggle cannot change the permission.
+description: Grant, deny, or reset app runtime permissions out-of-band on an iOS simulator or Android device via `settings-permissions`. Use when the app's own dialog or toggle cannot change the permission.
 ---
 
 `settings-permissions` edits the platform's permission store directly (the iOS simulator's TCC database, Android's runtime permissions over adb). It is a **test-setup / out-of-band** tool, not a general permissions toggle: the default way to change a permission is still through the app. The tool's description covers the supported permissions per platform, the parameters, the result (`applied` / `skipped`) and the per-platform requirements.

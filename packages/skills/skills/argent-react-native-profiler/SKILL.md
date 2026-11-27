@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-profiler
-description: Profile a React Native Hermes app for JS re-renders and CPU hotspots using Argent profiler tools (before/after measurements, ranked issue reports).
+description: Profile a React Native Hermes app for JS re-renders and CPU hotspots via Argent profiler tools. Use when measuring before/after performance, diagnosing re-renders, or finding CPU hotspots.
 ---
 
 This skill is complementary to `argent-react-native-optimization`, not a replacement for it.

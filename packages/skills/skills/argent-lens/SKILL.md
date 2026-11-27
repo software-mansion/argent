@@ -1,6 +1,6 @@
 ---
 name: argent-lens
-description: Propose multiple visual design variants for on-screen elements so the user can pick in Argent Lens. Use for UI design alternatives or A/B choices.
+description: Propose visual design variants for on-screen elements so the user can pick in Argent Lens. Use when presenting UI design alternatives or A/B choices.
 ---
 
 > **Prerequisite: feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` comes back not-found, the flag is off; enable it and retry.

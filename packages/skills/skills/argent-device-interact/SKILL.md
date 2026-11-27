@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Drive iOS, Android, or Chromium apps with Argent MCP tools (taps, swipes, typing, navigation, waits, screenshots). Not for TV targets.
+description: Drive iOS, Android, or Chromium apps with Argent MCP tools. Use when tapping, swiping, typing, launching apps, waiting for UI, or taking screenshots (not for TV targets).
 ---
 
 Each tool's description carries its parameters, defaults, and return shape. This skill covers routing and gotchas those descriptions don't state.

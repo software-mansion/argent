@@ -1,6 +1,6 @@
 ---
 name: argent-android-emulator-setup
-description: Boot an Android emulator and find its serial with Argent. Use only when no Android emulator is running yet or you need to pick and boot one.
+description: Boot an Android emulator and find its serial with Argent. Use when no Android emulator is running yet or you need to pick and boot one.
 ---
 
 ## 1. Prerequisites

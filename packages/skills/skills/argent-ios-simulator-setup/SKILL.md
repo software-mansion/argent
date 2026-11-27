@@ -1,6 +1,6 @@
 ---
 name: argent-ios-simulator-setup
-description: Boot an iOS simulator and find its UDID with Argent. Use only when no simulator is booted yet or you need to pick and boot one.
+description: Boot an iOS simulator and find its UDID with Argent. Use when no simulator is booted yet or you need to pick and boot one.
 ---
 
 ## 1. Setup Steps
