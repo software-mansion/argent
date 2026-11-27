@@ -195,18 +195,22 @@ export function isRedirect(requestUrl: string | undefined, finalUrl: string | un
   return comparableUrl(finalUrl) !== comparableUrl(requestUrl);
 }
 
+// Whether `url` is on another host than `from`. False without `from`.
+function onOtherHost(url: URL, from?: string): boolean {
+  if (from === undefined) return false;
+  try {
+    return new URL(from).host !== url.host;
+  } catch {
+    return true;
+  }
+}
+
 // The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.
 function shortName(url: string, from?: string): string {
   try {
     const parsed = new URL(url);
     const path = parsed.pathname === "/" ? "" : parsed.pathname;
-    let sameHost = true;
-    try {
-      sameHost = from === undefined || new URL(from).host === parsed.host;
-    } catch {
-      sameHost = false;
-    }
-    if (sameHost) return path || parsed.hostname;
+    if (!onOtherHost(parsed, from)) return path || parsed.hostname;
     return parsed.host + path;
   } catch {
     return url;
@@ -214,24 +218,30 @@ function shortName(url: string, from?: string): string {
 }
 
 /**
- * The short name of a URL with its secrets redacted. A secret that reaches
- * past the short name, such as a whole webhook URL, would show as its path, a
- * piece no redaction finds, so then the whole URL is shown, redacted.
+ * The short name of a URL with its secrets redacted. A secret can reach past
+ * the short name, such as a whole webhook URL, and its path alone is a piece no
+ * redaction finds. So a URL that holds a secret is redacted whole, and the
+ * short name is cut from that text: a marker has no `/`, `?`, `#` or `@`.
  */
 function redactedName(url: string, redact: SecretRedactor, from?: string): string {
-  const short = shortName(url, from);
-  let base: string;
+  const whole = redact(url);
+  if (whole === url) return redact(shortName(url, from));
+  const beforeQuery = whole.split(/[?#]/, 1)[0]!;
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(beforeQuery)?.[0];
+  // A marker in place of the scheme: the secret begins the URL.
+  if (scheme === undefined) return beforeQuery;
+  const rest = beforeQuery.slice(scheme.length);
+  const slash = rest.indexOf("/");
+  const authority = slash === -1 ? rest : rest.slice(0, slash);
+  const host = authority.slice(authority.lastIndexOf("@") + 1);
+  const path = slash === -1 || rest.slice(slash) === "/" ? "" : rest.slice(slash);
+  let otherHost = from !== undefined;
   try {
-    const { href, search, hash } = new URL(url);
-    base = href.slice(0, href.length - search.length - hash.length);
+    otherHost = onOtherHost(new URL(url), from);
   } catch {
-    return redact(short);
+    // Unparsable: shown with its host.
   }
-  const shown = redact(short);
-  const redactedBase = redact(base);
-  if (redactedBase === base) return shown;
-  const head = base.slice(0, base.length - short.length);
-  return base.endsWith(short) && redactedBase === head + shown ? shown : redact(url);
+  return otherHost ? host + path : path || host;
 }
 
 /**

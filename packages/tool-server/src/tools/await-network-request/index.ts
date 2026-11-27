@@ -17,7 +17,7 @@ import {
   type UnmetWaitCause,
 } from "../../utils/wait-result";
 import { CAPTURE_CAPABILITY } from "../network/network-capture";
-import { networkSecretRedactor } from "../network/network-secrets";
+import { networkRedactorOf, networkSecrets } from "../network/network-secrets";
 import { assertMacosAppBundle } from "../native-devtools/macos-view-hierarchy";
 import { markedLayers, type LayerRead, type MarkedLayer } from "./layers";
 import {
@@ -223,16 +223,17 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
        * notes, which can quote an agent or the app. The ids and counts are
        * argent's own and stay, and so does the agent's own pattern in the note.
        */
-      const atStart = networkSecretRedactor(ctx);
-      let redact: (text: string) => string = atStart;
+      const atStart = networkSecrets(ctx);
+      let redact: (text: string) => string = networkRedactorOf(atStart);
       /**
        * The secrets are read again when the result is built, since a value can
        * be typed while the wait polls. The values read at the start stay, in
-       * case one leaves the sources meanwhile.
+       * case one leaves the sources meanwhile. One redactor takes both, so a
+       * new value that holds an old one, such as a URL on a secret host, is
+       * still found whole.
        */
       const readSecretsAgain = () => {
-        const now = networkSecretRedactor(ctx);
-        redact = (text) => now(atStart(text));
+        redact = networkRedactorOf([...networkSecrets(ctx), ...atStart]);
       };
       const shown = <T extends WaitRecord>(record: T): T => ({
         ...record,

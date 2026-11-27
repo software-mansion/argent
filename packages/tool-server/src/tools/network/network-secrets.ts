@@ -11,29 +11,44 @@ import { typedSecrets } from "../../utils/typed-secrets";
  * and body decoding work on what was sent.
  */
 
+type NetworkSecret = { name: string; value: string };
+
 /**
- * A redactor for the values of every secret exposed to argent: the secrets the
- * client forwarded with this call (an e2e run passes them to each step), every
- * value of every secret source (also one an earlier source shadows), and the
- * values typed on each device (see `typedSecrets`), so an edit of a secrets
- * file does not bring back a value already in a field. A value under 2 names is named by the first: the client, then the
- * sources in the order a placeholder resolves, then typing. Read fresh on each
- * call, so an edited secrets file applies to the next one.
+ * The values of every secret exposed to argent: the secrets the client
+ * forwarded with this call (an e2e run passes them to each step), every value
+ * of every secret source (also one an earlier source shadows), and the values
+ * typed on each device (see `typedSecrets`), so an edit of a secrets file does
+ * not bring back a value already in a field. Read fresh on each call, so an
+ * edited secrets file applies to the next one.
  */
-export function networkSecretRedactor(ctx?: ToolContext): SecretRedactor {
-  const byValue = new Map<string, string>();
-  const add = (name: string, value: string) => {
-    if (value.length > 0 && !byValue.has(value)) byValue.set(value, name);
-  };
-  for (const [name, value] of ctx?.clientSecrets ?? []) add(name, value);
+export function networkSecrets(ctx?: ToolContext): NetworkSecret[] {
+  const secrets: NetworkSecret[] = [];
+  for (const [name, value] of ctx?.clientSecrets ?? []) secrets.push({ name, value });
   for (const source of secretSources()) {
-    for (const [name, value] of source.values) add(name, value);
+    for (const [name, value] of source.values) secrets.push({ name, value });
   }
-  for (const { name, value } of typedSecrets()) add(name, value);
+  return [...secrets, ...typedSecrets()];
+}
+
+/**
+ * One whole-value redactor over `secrets`, so the longest value wins where two
+ * overlap. A value under 2 names is named by the first: for `networkSecrets`,
+ * the client, then the sources in the order a placeholder resolves, then typing.
+ */
+export function networkRedactorOf(secrets: readonly NetworkSecret[]): SecretRedactor {
+  const byValue = new Map<string, string>();
+  for (const { name, value } of secrets) {
+    if (value.length > 0 && !byValue.has(value)) byValue.set(value, name);
+  }
   return secretRedactor(
     [...byValue].map(([value, name]) => ({ name, value })),
     { wholeValues: true }
   );
+}
+
+/** A redactor for `networkSecrets(ctx)`. */
+export function networkSecretRedactor(ctx?: ToolContext): SecretRedactor {
+  return networkRedactorOf(networkSecrets(ctx));
 }
 
 /**

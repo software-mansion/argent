@@ -1057,6 +1057,28 @@ describe("secret values in the result", () => {
     }
   });
 
+  it("redacts a whole URL typed while the wait polls, though a secret known at the start is part of it", async () => {
+    await startIos();
+    const hook = `${API}/v1/hook/T0/tok3nLate`;
+    const own = { clientSecrets: new Map([["HOST", "api.test"]]) };
+    const pending = registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 3000, url: "/v1/hook" },
+      own
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    noteTypedSecrets(IOS, [{ name: "HOOK", value: hook }]);
+    ios.add(11, { url: "/v1/hook/T0/tok3nLate", status: 200 });
+
+    try {
+      const result = await pending;
+      expect(result.match?.url).toBe("{{secret:HOOK}}");
+      expect(JSON.stringify(result)).not.toContain("tok3n");
+    } finally {
+      __resetTypedSecretsForTesting();
+    }
+  });
+
   it("redacts a near miss's URL and error before the note cuts them, keeping ids and counts", async () => {
     await startIos();
     // The token spans characters 114 to 137 of the URL, across the note's 120-character cut.

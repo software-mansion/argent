@@ -552,6 +552,34 @@ describe("secret values on the Chromium branch", () => {
     expect(out).not.toContain("tok3n");
   });
 
+  it("view-network-logs redacts a whole-URL secret sent with a query, and leaves the query out", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: `${webhook}?wait=true`, status: 204 }),
+      rec({
+        requestId: "2",
+        method: "GET",
+        url: "https://hooks.test/v1/feed?key=stored-key-0123456789&page=2",
+        status: 200,
+      }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([
+          ["WEBHOOK_URL", webhook],
+          ["KEY", "stored-key-0123456789"],
+        ]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).toContain('{id: 2} "GET /v1/feed" 200');
+    expect(out).not.toMatch(/tok3n|wait=|stored-key|page=/);
+  });
+
   it("view-network-request-details redacts a copy, so the record's initiator keeps its URL", async () => {
     const record = rec({
       requestId: "4821",
