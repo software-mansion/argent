@@ -85,6 +85,7 @@ export {
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
   getAndroidAdbServerPort,
+  isAutoUpdateEnabled,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,

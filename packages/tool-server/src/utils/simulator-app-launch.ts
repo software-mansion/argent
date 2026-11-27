@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { withKeyedLock } from "./keyed-lock";
 import { PS_BIN } from "./vega-process";
+import { argentHomeDir } from "@argent/configuration-core";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +25,7 @@ type Verdict = "runs" | "crashes";
 const launchLocks = new Map<string, Promise<unknown>>();
 
 function verdictFilePath(): string {
-  return path.join(os.homedir(), ".argent", "simulator-app-launch.json");
+  return path.join(argentHomeDir(), "simulator-app-launch.json");
 }
 
 function loadVerdicts(): Record<string, Verdict> {
