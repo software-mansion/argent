@@ -15,7 +15,8 @@ import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
-import { resolveDevice } from "../../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice } from "../../../utils/device-info";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
@@ -532,6 +533,11 @@ Returns a session list or loaded summary. Fails if \`session_id\` or its files a
         return listSessions(debugDir);
 
       case "load_react": {
+        const device = resolveDevice(params.device_id);
+        // The React query tools cannot read a session loaded for an iPhone.
+        if (isIosPhysicalDevice(device)) {
+          throw new UnsupportedOperationError("profiler-load", device, "load_react mode");
+        }
         if (!params.session_id) {
           throw new FailureError(
             "load_react mode requires the session_id parameter. Use list mode first.",

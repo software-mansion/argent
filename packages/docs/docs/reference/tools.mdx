@@ -1047,13 +1047,13 @@ While `react-profiler-stop` collects a run, wait for its result:
 
 `native-profiler-launch-analysis` measures launch times or records a launch trace to investigate startup work.
 
-| Parameter          | Description                                                                                                                       |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`             | Required. `measure` for launch timings, or `profile` for an Instruments trace.                                                    |
-| `bundle_id`        | Required. Bundle ID of the installed Release app.                                                                                 |
-| `device_id`        | Required for an iPhone: its UDID. With `allow_simulator`, accepts a booted simulator UDID; omit to use the only booted simulator. |
-| `allow_simulator`  | Allow a booted simulator. Default `false`. Simulator timings reflect the host hardware.                                           |
-| `duration_seconds` | `profile` only. Recording length from 5 to 60 seconds. Default `8`.                                                               |
+| Parameter          | Description                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`             | Required. `measure` for launch timings, or `profile` for an Instruments trace.                                                                                |
+| `bundle_id`        | Required. Bundle ID of the installed Release app.                                                                                                             |
+| `device_id`        | Required for an iPhone: its UDID. With `allow_simulator`, accepts a booted simulator UDID; omit to use the only booted simulator when no iPhone is connected. |
+| `allow_simulator`  | Allow a booted simulator. Default `false`. Simulator timings reflect the host hardware.                                                                       |
+| `duration_seconds` | `profile` only. Recording length from 5 to 60 seconds. Default `8`.                                                                                           |
 
 #### Prerequisites
 

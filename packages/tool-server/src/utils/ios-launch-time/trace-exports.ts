@@ -96,22 +96,20 @@ function resolvedRows(xml: string): RowCell[][] {
 }
 
 /**
- * Whether a row belongs to `processName`, matched against the process column,
- * formatted "<name> (<pid>)". Rows with no process cell, and every row when
- * `processName` is undefined, pass.
+ * Whether a row belongs to `process`, the process column's "<name> (<pid>)".
+ * Rows with no process cell, and every row when `process` is undefined, pass.
  */
-function processFilter(processName?: string): (cells: RowCell[]) => boolean {
-  if (!processName) return () => true;
-  const pattern = new RegExp(`^${processName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(`);
+function processFilter(process?: string): (cells: RowCell[]) => boolean {
+  if (!process) return () => true;
   return (cells) => {
-    const process = cells.find((cell) => cell.tag === "process");
-    return !process || pattern.test(process.value);
+    const cell = cells.find((candidate) => candidate.tag === "process");
+    return !cell || cell.value === process;
   };
 }
 
-/** Earliest `ApplicationFirstFramePresentation` End signpost of `processName`, trace-relative ns. */
-export function parseFirstFrameSignpostNs(xml: string, processName?: string): number | null {
-  const ofProcess = processFilter(processName);
+/** Earliest `ApplicationFirstFramePresentation` End signpost of `process`, trace-relative ns. */
+export function parseFirstFrameSignpostNs(xml: string, process?: string): number | null {
+  const ofProcess = processFilter(process);
   let earliest: number | null = null;
   for (const cells of resolvedRows(xml)) {
     const values = cells.map((cell) => cell.value);
@@ -129,16 +127,20 @@ export function parseFirstFrameSignpostNs(xml: string, processName?: string): nu
   return earliest;
 }
 
-/** The launched process's name in the TOC, as the signpost process column spells it. */
-export function launchedProcessName(tocXml: string): string | null {
+/**
+ * The launched process as the exports' process column spells it, "<name> (<pid>)".
+ * The pid keeps out the same app on another simulator in host-wide tables.
+ */
+export function launchedProcess(tocXml: string): string | null {
   const tag = tocXml.match(/<process\s[^>]*type="launched"[^>]*>/)?.[0];
   const name = tag?.match(/\sname="([^"]*)"/)?.[1];
-  return name ? decodeXml(name) : null;
+  const pid = tag?.match(/\spid="(\d+)"/)?.[1];
+  return name && pid ? `${decodeXml(name)} (${pid})` : null;
 }
 
-/** Earliest `start-time` among `processName`'s `dyld-activity-interval` rows, trace-relative ns. */
-export function earliestDyldStartNs(xml: string, processName?: string): number | null {
-  const ofProcess = processFilter(processName);
+/** Earliest `start-time` among `process`'s `dyld-activity-interval` rows, trace-relative ns. */
+export function earliestDyldStartNs(xml: string, process?: string): number | null {
+  const ofProcess = processFilter(process);
   let earliest: number | null = null;
   for (const cells of resolvedRows(xml)) {
     if (!ofProcess(cells)) continue;
@@ -151,14 +153,6 @@ export function earliestDyldStartNs(xml: string, processName?: string): number |
   return earliest;
 }
 
-/**
- * Like the CPU parser, skips a row whose `<sample-time>` is a ref, so these
- * counts match what profiler-load reports.
- */
-function isParsedSample(row: string): boolean {
-  return !/<sample-time\s+ref="\d+"\s*\/>/.test(row);
-}
-
 /** Keep only launch samples, including out-of-order ones and their referenced definitions. */
 export function truncateCpuXml(xml: string, endNs: number): { xml: string; keptRows: number } {
   const times = valueRegistry(xml, ["sample-time"]);
@@ -166,7 +160,7 @@ export function truncateCpuXml(xml: string, endNs: number): { xml: string; keptR
   const cut = filterCpuRows(xml, (row) => {
     const time = rowValue(row, "sample-time", times);
     if (time !== null && Number(time) > endNs) return false;
-    if (isParsedSample(row)) keptRows++;
+    keptRows++;
     return true;
   });
   return { xml: cut, keptRows };
@@ -176,8 +170,8 @@ export function truncateCpuXml(xml: string, endNs: number): { xml: string; keptR
  * The interval xctrace sampled the CPU at, from the sample times. The App Launch
  * template asks for 1 ms and 5 ms, xctrace uses one of them, which one changes
  * from run to run, and every row keeps the same weight either way. A thread
- * that keeps running gets one sample per tick, so the most common gap between
- * a thread's consecutive samples is the interval. Null when too few gaps agree.
+ * gets at most one sample per tick, so every gap between its samples is a
+ * whole number of ticks. Null when too few gaps agree.
  */
 function inferredSamplePeriodNs(xml: string): number | null {
   const registry = valueRegistry(xml, ["sample-time"]);
@@ -193,8 +187,8 @@ function inferredSamplePeriodNs(xml: string): number | null {
     else times.set(thread, [time]);
   }
   let oneMs = 0;
-  let fiveMs = 0;
-  let hasShorterGap = false;
+  let onFiveMsGrid = 0;
+  let shorterGaps = 0;
   let gaps = 0;
   for (const series of times.values()) {
     series.sort((a, b) => a - b);
@@ -202,15 +196,15 @@ function inferredSamplePeriodNs(xml: string): number | null {
       const gap = Math.round((series[i]! - series[i - 1]!) / 100_000) * 100_000;
       if (gap <= 0) continue;
       if (gap === 1_000_000) oneMs++;
-      if (gap === 5_000_000) fiveMs++;
-      // Allow timestamp jitter, but a clearly shorter same-thread gap rules out 5 ms.
-      if (gap < 4_500_000) hasShorterGap = true;
+      if (gap % 5_000_000 === 0) onFiveMsGrid++;
+      if (gap < 4_500_000) shorterGaps++;
       gaps++;
     }
   }
   if (gaps < 20) return null;
   if (oneMs * 2 >= gaps) return 1_000_000;
-  return !hasShorterGap && fiveMs * 2 >= gaps ? 5_000_000 : null;
+  // Real 5 ms recordings keep a few jittered gaps (3% seen, down to 0.2 ms); 1 ms ones are nearly all short.
+  return shorterGaps * 10 <= gaps && onFiveMsGrid * 2 >= gaps ? 5_000_000 : null;
 }
 
 /**

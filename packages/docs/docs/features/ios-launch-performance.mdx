@@ -15,7 +15,7 @@ The agent builds the app in Release mode and installs it on the selected device.
 
 For measurement, Argent uses a scripted XCUITest runner and Apple's launch metric. Argent opens the app once. Then XCTest discards one more launch to warm the app and measures five launches. This follows the approach described in Apple's [Optimizing App Launch talk at WWDC 2019](https://developer.apple.com/videos/play/wwdc2019/423/).
 
-For profiling, Xcode Instruments records launch phases and CPU samples with the App Launch template. Argent stores these CPU samples in a native profiler session. The agent queries this session to find functions that use the most CPU time before the first frame.
+For profiling, Xcode Instruments records launch phases and CPU samples with the App Launch template. Argent stores these CPU samples in a native profiler session. The agent loads this session with `profiler-load` and queries it to find functions that use the most CPU time before the first frame.
 
 ## Common pitfalls
 

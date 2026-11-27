@@ -102,7 +102,7 @@ describe("stack shapes", () => {
     expect(stackNames(xml)).toEqual([["leaf", "root"], ["other", "root"], ["leaf", "root"], []]);
   });
 
-  it("resolves a ref to a stack defined in a row skipped for its <sample-time ref>", () => {
+  it("reads a row whose <sample-time ref> shares an earlier row's time", () => {
     const xml = [
       row('<sample-time id="1">1</sample-time>', "<sentinel/>"),
       row(
@@ -115,7 +115,8 @@ describe("stack shapes", () => {
       ),
       row("<sample-time>3</sample-time>", '<tagged-backtrace ref="10"/>'),
     ].join("");
-    expect(stackNames(xml)).toEqual([[], ["leaf", "root"], ["leaf"]]);
+    expect(stackNames(xml)).toEqual([[], ["leaf"], ["leaf", "root"], ["leaf"]]);
+    expect(parseCpuXml(xml).map((s) => s.timestampNs)).toEqual([1, 1, 2, 3]);
   });
 });
 
@@ -148,7 +149,7 @@ describe("real xctrace time-profile exports", () => {
     expect(samples[3]!.stack).toEqual(samples[0]!.stack);
   });
 
-  it("Xcode 26.6: every app sample has its stack, including ones defined in a skipped row", () => {
+  it("Xcode 26.6: every app sample has its stack, including one sampled at another thread's instant", () => {
     const samples = appStacks(load("26.6"));
     expect(samples.map((s) => [s.thread, s.stack.length])).toEqual([
       ["CpuProbeWorker", 9],
@@ -156,12 +157,16 @@ describe("real xctrace time-profile exports", () => {
       ["CpuProbeWorker", 9],
       ["Main", 15],
       ["CpuProbeWorker", 9],
+      ["CpuProbeWorker", 9],
     ]);
     expect(samples[0]!.stack).toContain("cpuProbeHashLoop(_:)");
     expect(samples[1]!.stack[0]).toBe("cpuProbeCountPrimes(_:)");
     expect(samples[2]!.stack).toEqual(samples[0]!.stack);
     expect(samples[3]!.stack).toEqual(samples[1]!.stack);
-    expect(samples[4]!.stack[0]).toBe("DYLD-STUB$$_platform_bzero");
+    // Its <sample-time ref> points at node's main-thread sample on another core.
+    expect(parseCpuXml(load("26.6"), APP_PID)[4]!.timestampNs).toBe(907_600_625);
     expect(samples[4]!.stack).toContain("cpuProbeHashLoop(_:)");
+    expect(samples[5]!.stack[0]).toBe("DYLD-STUB$$_platform_bzero");
+    expect(samples[5]!.stack).toContain("cpuProbeHashLoop(_:)");
   });
 });

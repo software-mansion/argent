@@ -21,7 +21,7 @@ import {
   xcodeVersion,
 } from "../../../../utils/ios-launch-time/workflow";
 import { launchSampleStats } from "../../../../utils/ios-launch-time/results";
-import { reserveLaunchMeasurement } from "../../../../utils/ios-device/runner-reservation";
+import { reserveLaunchAnalysis } from "../../../../utils/ios-device/runner-reservation";
 import {
   resolveRunnerProjectPath,
   runnerBuildLocationArgs,
@@ -54,7 +54,7 @@ export async function measureLaunch(params: NativeProfilerLaunchAnalysisParams, 
         deviceId: params.device_id,
         allowSimulator: params.allow_simulator,
         checkDevice: ({ id }) => {
-          release = reserveLaunchMeasurement(id);
+          release = reserveLaunchAnalysis(id, "measure");
         },
       },
       (message) => ctx?.emitProgress?.({ type: "device-action", message }),
@@ -129,17 +129,20 @@ async function measurePreparedLaunch(
       : ["CODE_SIGNING_ALLOWED=NO"]),
   ];
   try {
-    // The build and the five launches hold the runner's DerivedData.
-    await withRunnerBuildLock(runnerDerivedData, () =>
-      runLogged("xcodebuild", args, {
-        cwd: context.runDir,
-        logPath: runnerLog,
-        signal: ctx?.signal,
-        env: {
-          ...process.env,
-          TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID: context.bundleId,
-        },
-      })
+    // The build and the launches hold the runner's DerivedData.
+    await withRunnerBuildLock(
+      runnerDerivedData,
+      () =>
+        runLogged("xcodebuild", args, {
+          cwd: context.runDir,
+          logPath: runnerLog,
+          signal: ctx?.signal,
+          env: {
+            ...process.env,
+            TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID: context.bundleId,
+          },
+        }),
+      ctx?.signal
     );
   } catch (error) {
     ctx?.signal?.throwIfAborted();

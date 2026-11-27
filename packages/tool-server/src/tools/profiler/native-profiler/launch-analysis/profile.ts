@@ -27,7 +27,7 @@ import {
   cpuTableXpath,
   earliestDyldStartNs,
   launchEndNs,
-  launchedProcessName,
+  launchedProcess,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
   keepRunningRows,
@@ -47,6 +47,7 @@ import {
   stallsSimulatorLaunchRecording,
 } from "../../../../utils/ios-launch-time/results";
 import { parseXcodeVersion } from "../../../../utils/ios-profiler/capture-strategy/select";
+import { reserveLaunchAnalysis } from "../../../../utils/ios-device/runner-reservation";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import type { NativeProfilerLaunchAnalysisParams } from "../native-profiler-launch-analysis";
 
@@ -75,32 +76,49 @@ export const DEFAULT_PROFILE_SECONDS = 8;
 
 /** mode "profile": one Instruments App Launch recording, cut at the first frame. */
 export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, ctx?: ToolContext) {
-  const context = await prepareLaunch(
-    {
-      bundleId: params.bundle_id,
-      deviceId: params.device_id,
-      allowSimulator: params.allow_simulator,
-      checkDevice: async ({ simulator }) => {
-        if (!simulator) return;
-        const version = await xcodeVersion();
-        if (stallsSimulatorLaunchRecording(parseXcodeVersion(version))) {
-          throw new FailureError(
-            `${version} stalls \`xctrace record --launch\` on a simulator after "Starting recording", ` +
-              "so Argent does not record. This is a known issue with Xcode 26.4.x. " +
-              "Use Xcode 27, or record on a physical iPhone.",
-            {
-              error_code: FAILURE_CODES.LAUNCH_ANALYSIS_UNSUPPORTED_HOST,
-              failure_stage: "launch_analysis_record_precheck",
-              failure_area: "tool_server",
-              error_kind: "unsupported",
-            }
-          );
-        }
+  let release: (() => void) | undefined;
+  try {
+    const context = await prepareLaunch(
+      {
+        bundleId: params.bundle_id,
+        deviceId: params.device_id,
+        allowSimulator: params.allow_simulator,
+        checkDevice: ({ id, simulator }) => {
+          release = reserveLaunchAnalysis(id, "profile");
+          return simulator ? refuseStallingSimulatorRecording() : undefined;
+        },
       },
-    },
-    (message) => ctx?.emitProgress?.({ type: "device-action", message }),
-    ctx?.signal
-  );
+      (message) => ctx?.emitProgress?.({ type: "device-action", message }),
+      ctx?.signal
+    );
+    return await profilePreparedLaunch(context, params, ctx);
+  } finally {
+    release?.();
+  }
+}
+
+async function refuseStallingSimulatorRecording(): Promise<void> {
+  const version = await xcodeVersion();
+  if (stallsSimulatorLaunchRecording(parseXcodeVersion(version))) {
+    throw new FailureError(
+      `${version} stalls \`xctrace record --launch\` on a simulator after "Starting recording", ` +
+        "so Argent does not record. This is a known issue with Xcode 26.4.x. " +
+        "Use Xcode 27, or record on a physical iPhone.",
+      {
+        error_code: FAILURE_CODES.LAUNCH_ANALYSIS_UNSUPPORTED_HOST,
+        failure_stage: "launch_analysis_record_precheck",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
+  }
+}
+
+async function profilePreparedLaunch(
+  context: Awaited<ReturnType<typeof prepareLaunch>>,
+  params: NativeProfilerLaunchAnalysisParams,
+  ctx?: ToolContext
+) {
   await terminateForWarmLaunch(context, ctx?.signal);
   await ensureLaunchDeviceReady(
     context,
@@ -199,7 +217,12 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     exportErrors.toc = error instanceof Error ? error.message : String(error);
   }
   const xpaths = {
-    lifecycle: toc.includes('schema="life-cycle-period"') ? TABLE_XPATH("life-cycle-period") : null,
+    // Instruments fills it on an iPhone only.
+    ...(!context.simulator && {
+      lifecycle: toc.includes('schema="life-cycle-period"')
+        ? TABLE_XPATH("life-cycle-period")
+        : null,
+    }),
     dyld: toc.includes('schema="dyld-activity-interval"')
       ? TABLE_XPATH("dyld-activity-interval")
       : null,
@@ -271,15 +294,13 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     );
   }
 
-  // Instruments never fills life-cycle-period on a simulator, so that is not an export error.
-  if (context.simulator) delete exportErrors.lifecycle;
   const phases = exported.lifecycle
     ? parseLifecyclePhases(await fsp.readFile(exported.lifecycle, "utf8"))
     : [];
-  const processName = launchedProcessName(toc) ?? undefined;
+  const launched = launchedProcess(toc) ?? undefined;
   // failedCoreExport guarantees the signpost export on a simulator.
   const endNs = context.simulator
-    ? parseFirstFrameSignpostNs(await fsp.readFile(exported.signpost!, "utf8"), processName)
+    ? parseFirstFrameSignpostNs(await fsp.readFile(exported.signpost!, "utf8"), launched)
     : launchEndNs(phases);
   if (endNs === null) {
     throw new FailureError(
@@ -298,7 +319,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     context.simulator && exported.dyld
       ? simulatorLaunchEstimateMs(
           endNs,
-          earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"), processName)
+          earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"), launched)
         )
       : null;
   const noSimulatorEstimate = context.simulator && simulatorEstimateMs === null;
