@@ -2922,7 +2922,7 @@ export function createBootDeviceTool(
     id: "boot-device",
     // Boots routinely run past the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Boot a target device or app and wait until ready: iOS simulator, Android emulator, Vega VVD, <flag:harmonyos>HarmonyOS emulator, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Electron app.
+    description: `Start a target device or app and wait until ready: iOS simulator, Android emulator, Vega VVD, <flag:harmonyos>HarmonyOS emulator, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Electron app.
 Use when starting a stopped target; pass exactly one target key (\`udid\`, \`avdName\`, \`vvdImage\`, <flag:harmonyos>\`harmonyInstance\`, </flag:harmonyos><flag:macos-apps>\`macosAppPath\`, </flag:macos-apps>or \`electronAppPath\`).
 Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`id\`), \`booted\`, and optional \`note\`.<flag:harmonyos> HarmonyOS starts the instance via DevEco Studio's Emulator manager and waits for its \`hdc\` connect key as \`udid\` (images are served only in mainland China; \`note\` explains any unproven key/readiness).</flag:harmonyos> Fails if the target is missing or cannot boot (failed Android/Electron spawns are cleaned up automatically).`,
     zodSchema,

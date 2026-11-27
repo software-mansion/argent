@@ -163,7 +163,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Tap (or click on Chromium<flag:macos-apps>/Mac</flag:macos-apps>) at normalized [0,1] coordinates taken from \`describe\`.
+  description: `Press (tap, or click on Chromium<flag:macos-apps>/Mac</flag:macos-apps>) at normalized [0,1] coordinates taken from \`describe\`.
 Use when tapping a button, link, or control. Returns { tapped: true, timestampMs, reactivated?, warning? } (on physical iOS, \`reactivated: true\` means re-fronted; re-describe). Fails if the device backend is unreachable.`,
   zodSchema,
   alwaysLoad: true,
