@@ -11,6 +11,7 @@ import {
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import type { CDPClient } from "../../utils/debugger/cdp-client";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import type { NetworkRequestRecord } from "../../chromium-server/network";
 import {
   ANDROID_NATIVE_REQUEST_ID,
   findAndroidNativeRecord,
@@ -117,6 +118,38 @@ function truncateBody(body: string, mimeType: string): string {
     : body;
 }
 
+/**
+ * The response body Chrome holds for a request. Chrome keeps no body for a fetch()
+ * whose no-store response the page has not read to its end, though every byte of it
+ * may have arrived and the recorder counts it finished. It still has those bytes
+ * buffered and hands them over through Network.streamResourceContent.
+ */
+async function chromiumResponseBody(
+  cdp: Pick<CDPClient, "send">,
+  rec: NetworkRequestRecord
+): Promise<{ body: string; base64Encoded: boolean } | undefined> {
+  try {
+    const out = (await cdp.send("Network.getResponseBody", { requestId: rec.requestId })) as {
+      body?: string;
+      base64Encoded?: boolean;
+    };
+    if (out.body != null) return { body: out.body, base64Encoded: out.base64Encoded === true };
+  } catch {
+    // Body not retained: navigated away, evicted, never had one, or not read yet.
+  }
+  // A body still arriving would come back cut short.
+  if (!rec.finished || rec.failed) return undefined;
+  try {
+    const out = (await cdp.send("Network.streamResourceContent", {
+      requestId: rec.requestId,
+    })) as { bufferedData?: string };
+    if (out.bufferedData != null) return { body: out.bufferedData, base64Encoded: true };
+  } catch {
+    // The request ended in Chrome already, or this Chrome has no such command.
+  }
+  return undefined;
+}
+
 /** The text of a body that CDP sent as base64, or its bytes when they are not UTF-8 text. */
 function utf8Text(bytes: Buffer): string | Buffer {
   try {
@@ -213,17 +246,13 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id used to list the request<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
+      "Device ID for the matching log. For JS capture on iOS simulators and Android, use the logicalDeviceId if capture started with it<flag:macos-apps>. For a Mac app, keep the Mac app id even on shared Metro</flag:macos-apps>."
     ),
-  requestId: z
-    .string()
-    .describe(
-      "The requestId from view-network-logs, or a native ID (ios-, android-<flag:macos-apps> or macos-</flag:macos-apps>) from native-network-logs."
-    ),
+  requestId: z.string().describe("Request ID from either network log or await-network-request."),
   includeBody: z
     .boolean()
     .default(true)
-    .describe("Whether to include the response body (if captured)."),
+    .describe("Set false to omit the response body. The request body can still appear."),
 });
 
 export const networkRequestTool: ToolDefinition<
@@ -231,11 +260,9 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Read the details of one request after listing captured traffic. Native requests can be read without a debugger connection.
-Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of a native ID. For a native ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app may still be sending the request body, call again once the request has ended. Use when you need headers, body, or timing for a specific request after listing logs.
-If a request is missing, the tool returns an error: list requests again. If capture is off, start it before reproducing the request. On Vega, a JS lookup can start capture. Use view-network-logs before triggering requests on Vega.
-IDs from stopped capture still work. After a JavaScript reload, list requests again because an old JS ID may now refer to a different request.`,
+  description: `Read the details of one captured request. Call this with an ID from a network log or await-network-request. Native requests need no debugger connection.
+Returns status, timing, headers and available bodies. Argent redacts sensitive headers and limits text previews to 1000 characters. URLs and bodies can still contain secrets. If a native upload is still in progress, retry after it finishes.
+If the ID is not found, the tool returns a message. Refresh the log if that happens or after a JavaScript reload. Reloads can reuse IDs for different requests. On Vega, a JS lookup can start capture. Read view-network-logs before triggering the request.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -324,20 +351,14 @@ IDs from stopped capture still work. After a JavaScript reload, list requests ag
           mimeType: rec.mimeType ?? "",
         };
         if (params.includeBody) {
-          try {
-            const out = (await chromium.cdp.send("Network.getResponseBody", {
-              requestId: rec.requestId,
-            })) as { body?: string; base64Encoded?: boolean };
-            if (out.body != null) {
-              const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
-              if (typeof body !== "string") {
-                resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
-              } else {
-                resp.body = truncateBody(body, resp.mimeType);
-              }
+          const out = await chromiumResponseBody(chromium.cdp, rec);
+          if (out) {
+            const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
+            if (typeof body !== "string") {
+              resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
+            } else {
+              resp.body = truncateBody(body, resp.mimeType);
             }
-          } catch {
-            // Body not retained: navigated away, evicted, or never had one.
           }
         }
         details.response = resp;

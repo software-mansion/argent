@@ -11,7 +11,20 @@ import {
   type AudioSession,
   type HookState,
 } from "../../utils/ios-audio";
-import { audioCapability, resolveAudioDevice, resolveAudioSession } from "./audio-target";
+import {
+  armRemoteAudio,
+  clearRemoteAudioInput,
+  listRemoteLiveApps,
+  readRemoteAppHook,
+  setRemoteAudioInput,
+  type RemoteAudioSession,
+} from "../../utils/ios-audio-remote";
+import {
+  audioCapability,
+  resolveAudioDevice,
+  resolveAudioSession,
+  resolveRemoteAudioSession,
+} from "./audio-target";
 
 const zodSchema = z
   .object({
@@ -81,7 +94,7 @@ A file starts playing on this call, so call it right before the action that make
       failedMsg: ({ failureSignal }) => `Failed to set audio input: ${failureSignal.error_code}`,
     },
     capability: audioCapability,
-    requires: ["xcrun"],
+    // No `requires`: resolveAudioDevice checks xcrun or sim-remote, whichever the device needs.
     fileInputs,
     // afconvert decodes a long file for up to a minute, past the 30s MCP fetch timeout.
     longRunning: true,
@@ -90,6 +103,9 @@ A file starts playing on this call, so call it right before the action that make
     services: () => ({}),
     async execute(_services, params) {
       const device = await resolveAudioDevice("audio-input", params.udid);
+      if (device.platform === "ios-remote") {
+        return executeRemote(await resolveRemoteAudioSession(registry, device), params);
+      }
       const ref = nativeDevtoolsRef(device);
       const devtools = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
       const session = await resolveAudioSession(registry, device);
@@ -124,13 +140,51 @@ A file starts playing on this call, so call it right before the action that make
   };
 }
 
+/** The same steps on an Argent Cloud simulator, through the feeder that runs in it (`ios-audio-remote.ts`). */
+async function executeRemote(
+  session: RemoteAudioSession,
+  params: Params
+): Promise<AudioInputResult> {
+  await armRemoteAudio(session);
+  const hook = params.bundleId ? await readRemoteAppHook(session, params.bundleId) : undefined;
+  if (hook?.state === "old-proto") assertHookProto(hook.status, params.bundleId!);
+  let result: Pick<AudioInputResult, "source" | "durationMs">;
+  if (params.source === "microphone") {
+    await clearRemoteAudioInput(session);
+    result = { source: "microphone" };
+  } else {
+    result = await setRemoteAudioInput(
+      session,
+      params.source === "file"
+        ? { kind: "file", path: params.path!, plays: params.plays ?? 1 }
+        : {
+            kind: "tone",
+            frequencyHz: params.frequencyHz ?? 1000,
+            amplitude: params.amplitude ?? 0.4,
+          }
+    );
+  }
+  return appReadiness(
+    { ...result, liveApps: await listRemoteLiveApps(session) },
+    params,
+    hook?.state
+  );
+}
+
 function withApps(
   session: AudioSession,
   params: Params,
   result: Pick<AudioInputResult, "source" | "durationMs">,
   hook: HookState | undefined
 ): AudioInputResult {
-  const out: AudioInputResult = { ...result, liveApps: listLiveApps(session) };
+  return appReadiness({ ...result, liveApps: listLiveApps(session) }, params, hook);
+}
+
+function appReadiness(
+  out: AudioInputResult,
+  params: Params,
+  hook: HookState | undefined
+): AudioInputResult {
   if (params.bundleId) {
     out.appReady = hook === "dormant" || hook === "active";
     if (!out.appReady) {

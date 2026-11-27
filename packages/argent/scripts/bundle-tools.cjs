@@ -80,6 +80,11 @@ const TELEMETRY_DEFINE = {
   ARGENT_OTEL_INGEST_TOKEN: JSON.stringify(TELEMETRY_OTEL_INGEST_TOKEN),
 };
 
+const BUILD_DEFINE = {
+  ...TELEMETRY_DEFINE,
+  ARGENT_RELEASE_BUILD: JSON.stringify(process.env.ARGENT_RELEASE_BUILD === "1"),
+};
+
 // Prefer "module" over esbuild's node default ["main","module"]: UMD entries
 // (e.g. jsonc-parser's) use runtime `require("./impl/...")` that can't be
 // statically resolved, and impl/ isn't shipped next to the bundle.
@@ -467,7 +472,7 @@ function buildBundle({ entry, out, format, label, external = [] }) {
     outfile: out,
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
-    define: TELEMETRY_DEFINE,
+    define: BUILD_DEFINE,
     // ESM bundles need the require() shim and must keep node: builtins external;
     // CJS bundles externalise only what the caller passes.
     ...(format === "esm"

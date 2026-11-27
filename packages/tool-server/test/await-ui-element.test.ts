@@ -532,33 +532,10 @@ describe("await-ui-element tool", () => {
     });
 
     it("`hidden` can succeed for a role selector that would otherwise pin the root", async () => {
-      const { api } = makeSequencedAXService([axResponse([])]);
-      // The hierarchy must be READ and empty, not merely unread. Here the
-      // native source answers with zero elements, which IS evidence.
-      const nativeApi = {
-        listConnectedBundleIds: () => ["com.example.app"],
-        appConnectionState: async () => "connected" as const,
-        getAppState: async () => ({
-          bundleId: "com.example.app",
-          applicationState: "active",
-          foregroundActiveSceneCount: 1,
-          foregroundInactiveSceneCount: 0,
-          backgroundSceneCount: 0,
-          unattachedSceneCount: 0,
-          isFrontmostCandidate: true,
-        }),
-        queryViewHierarchy: async () => ({
-          screenFrame: { x: 0, y: 0, width: 440, height: 956 },
-          elements: [],
-        }),
-      };
-      const tool = createAwaitUiElementTool({
-        resolveService: vi.fn(async (urn: string) => {
-          if (urn.startsWith("AXService:")) return api;
-          if (urn.startsWith("NativeDevtools:")) return nativeApi;
-          throw new Error(`unexpected service: ${urn}`);
-        }),
-      } as any);
+      const { api } = makeSequencedAXService([
+        axResponse([{ label: "Continue", frame: FRAME, traits: ["button"] }]),
+      ]);
+      const tool = createAwaitUiElementTool(iosRegistry(api));
 
       const result = await tool.execute(
         {},
@@ -859,7 +836,7 @@ describe("await-ui-element tool", () => {
     expect(result.success).toBe(false);
     expect(result.note).toContain("crashed with SIGSEGV");
     expect(result.note).toContain("will not fix it");
-    expect(result.note).not.toContain("not booted through argent");
+    expect(result.note).not.toContain("pre-boot accessibility settings");
     expect(result.note).not.toMatch(/call (boot-device|restart-app)/);
     // No read happened, so the condition was not judged.
     expect(unmetUiWaitCause(result)).toBe("unreadable");

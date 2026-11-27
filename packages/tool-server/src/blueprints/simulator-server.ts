@@ -35,6 +35,12 @@ import {
 import { simctlPbcopy } from "../utils/sim-remote";
 import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
 import { firstSimulatorPoll } from "../utils/simulator-watcher";
+import {
+  detectAgentSocket,
+  listAgentReverseSockets,
+  reapAndroidScreenSharingAgent,
+  trackAgentReap,
+} from "../utils/android-agent-reap";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -64,6 +70,28 @@ const getPaths = () => {
 };
 
 const READY_TIMEOUT_MS = 30_000;
+
+/**
+ * How long a dispose gives the binary to exit after SIGTERM before Argent reaps
+ * what it left on the device. About twice the ~1.3 s a healthy device-side
+ * teardown takes, so a binary that cleans up after itself always wins and the
+ * reap log only reports what was really left behind.
+ */
+const EXIT_GRACE_MS = 2_500;
+
+/** Resolve once `proc` has exited or `timeoutMs` elapsed, whichever is first. */
+function waitForExit(proc: ChildProcess, timeoutMs: number): Promise<void> {
+  if (proc.exitCode != null || proc.signalCode != null) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      proc.off("exit", done);
+      resolve();
+    };
+    const timer = setTimeout(done, timeoutMs);
+    proc.once("exit", done);
+  });
+}
 
 // `exit` can fire before the child's stderr is drained, and the last stderr
 // line is usually the reason it exited. Wait this long for the stream to end.
@@ -337,12 +365,41 @@ async function waitForFirstFrame(streamUrl: string): Promise<void> {
     .finally(() => stream.close());
 }
 
-async function spawnWithEmulatorFallback(
-  device: DeviceInfo
-): ReturnType<typeof spawnSimulatorServerProcess> {
+type SpawnedServer = Awaited<ReturnType<typeof spawnSimulatorServerProcess>> & {
+  /**
+   * The on-device screen-sharing agent's socket, or null when this session
+   * started none or it cannot be told apart from another one. A promise: the
+   * probe runs after ready and is never awaited before the exit listener is
+   * attached, so an exit during it still reaches the registry.
+   */
+  agentSocket: Promise<string | null>;
+};
+
+const NO_AGENT = Promise.resolve(null);
+
+/**
+ * Only `android_device` leaves a process on the device that can outlive the
+ * binary (#1161). The `adb reverse` agent sockets listed before the spawn are
+ * someone else's; the one new entry after ready is this session's. A spawn that
+ * fails before ready reaps nothing: with no live binary to own a socket, a new
+ * entry could just as well be an Android Studio mirror that started meanwhile.
+ */
+async function spawnAndroidDevice(serial: string): Promise<SpawnedServer> {
+  // Hoisted from the spawn sink: the snapshot puts the serial on an adb argv first.
+  if (!SAFE_SIMULATOR_DEVICE_ID.test(serial)) {
+    throw new Error(`Refusing to start simulator-server for unsafe device id "${serial}".`);
+  }
+  const before = await listAgentReverseSockets(serial);
+  const server = await spawnSimulatorServerProcess(serial, "android_device");
+  const agentSocket = before ? detectAgentSocket(serial, before) : NO_AGENT;
+  return { ...server, agentSocket };
+}
+
+async function spawnWithEmulatorFallback(device: DeviceInfo): Promise<SpawnedServer> {
   const subcommand = subcommandForDevice(device);
+  if (subcommand === "android_device") return spawnAndroidDevice(device.id);
   try {
-    return await spawnSimulatorServerProcess(device.id, subcommand);
+    return { ...(await spawnSimulatorServerProcess(device.id, subcommand)), agentSocket: NO_AGENT };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (subcommand !== "android" || !EMULATOR_NOT_DISCOVERED.test(message)) throw err;
@@ -350,7 +407,7 @@ async function spawnWithEmulatorFallback(
       `[sim ${device.id}] emulator not found through gRPC discovery; ` +
         `falling back to the adb screen-sharing controller\n`
     );
-    const server = await spawnSimulatorServerProcess(device.id, "android_device");
+    const server = await spawnAndroidDevice(device.id);
     await waitForFirstFrame(server.streamUrl);
     return server;
   }
@@ -648,7 +705,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnWithEmulatorFallback(device);
+    const { proc, apiUrl, streamUrl, agentSocket } = await spawnWithEmulatorFallback(device);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -687,10 +744,26 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
         );
       },
     };
+    let disposed = false;
     const instance: ServiceInstance<SimulatorServerApi> = {
       api,
       dispose: async () => {
+        // An explicit stop and a `terminated` teardown can both land here.
+        if (disposed) return;
+        disposed = true;
         proc.kill();
+        // In the background: a phone that stopped answering must not hold the
+        // registry's sequential teardown. Shutdown waits via settleAgentReaps.
+        trackAgentReap(
+          (async () => {
+            const socket = await agentSocket;
+            if (!socket) return;
+            // The binary's own teardown first; then reap unconditionally, for a
+            // binary without one, one wedged past the grace, or a SIGKILL.
+            await waitForExit(proc, EXIT_GRACE_MS);
+            await reapAndroidScreenSharingAgent(device.id, socket);
+          })()
+        );
       },
       events,
     };

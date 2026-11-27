@@ -63,7 +63,6 @@ export interface TextAnalysis {
 interface AnalyzeScreenshotTextOptions {
   baselinePath: string;
   currentPath: string;
-  hasPixelDiff?: boolean;
   baselineImage?: FontGeometryImage;
   currentImage?: FontGeometryImage;
   ignoreTopPixels?: number;
@@ -100,14 +99,6 @@ export const DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE = 0.7;
 export async function analyzeScreenshotTextChanges(
   options: AnalyzeScreenshotTextOptions
 ): Promise<TextAnalysis> {
-  if (options.hasPixelDiff === false) {
-    return {
-      status: "skipped",
-      provider: "ocr",
-      changes: [],
-    };
-  }
-
   const [baselineOcr, currentOcr] = await Promise.all([
     extractOcrTextBlocks(options.baselinePath),
     extractOcrTextBlocks(options.currentPath),

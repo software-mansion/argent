@@ -489,6 +489,20 @@ A `tool: e2e-execute` step runs a different e2e test as a nested run. `run:` ste
 
 A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
 
+Before the capture, the step waits until the screen stops changing:
+
+| Device                                                                            | The step waits until                      |
+| --------------------------------------------------------------------------------- | ----------------------------------------- |
+| Local iOS simulator or Android emulator, without `cropOn`                         | Two screenshots 100 ms apart are the same |
+| Other devices, a remote simulator, an Apple TV simulator, or a step with `cropOn` | Two reads of the UI tree are the same     |
+| HarmonyOS                                                                         | The step does not wait                    |
+
+On a local iOS simulator or an Android emulator, a step without `cropOn` also waits until a quiet time has passed. The quiet time is 300 ms on iOS and 400 ms on Android. It starts at the start of the test and again at the end of each step that can change the screen. The steps `await`, `assert`, `wait`, `echo` and `snapshot` do not change the screen.
+
+For 2 seconds after the start of the test or after a step that can change the screen, two screenshots that differ slightly are not enough. The step also compares the newest screenshot with a screenshot from at least 300 ms earlier. Thus the step waits for most fades that start slowly.
+
+The step compares screenshots for a maximum of 3 seconds. In portrait, the status bar and the home indicator do not count as a change. A caret or a spinner counts as a change for the first 300 ms only.
+
 Baselines live in `__baselines__/<test>/` beside the e2e test file, for example `.argent/e2e/__baselines__/checkout/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent e2e run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
 
 Mac snapshots capture the app window and attached dialogs or menus at one pixel per point. Baseline names include `macos` and the capture size, such as `summary__macos-900x640.png`. Keep the window size consistent between runs. After an intentional resize, update and review the baseline.
