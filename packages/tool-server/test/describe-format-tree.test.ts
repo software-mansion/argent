@@ -944,4 +944,33 @@ describe("formatDescribeTree", () => {
     expect(chromiumOut).toContain("  fieldset [disabled]");
     expect(chromiumOut).toContain("  dialog (0.1,0.3,0.8,0.2)");
   });
+
+  it("omits iOS scroll bars by default and keeps them when raw: true", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXAdjustable",
+          label: "Vertical scroll bar, 2 pages",
+          value: "0%",
+          frame: { x: 0.96, y: 0.1, width: 0.03, height: 0.8 },
+        }),
+        leaf({
+          role: "AXButton",
+          label: "Settings",
+          frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+        }),
+      ],
+    };
+
+    const compact = elementLines(formatDescribeTree(root, { source: "ax-service" }));
+    expect(compact).toEqual(['  AXButton "Settings" (0.1,0.1,0.3,0.05)']);
+
+    const raw = elementLines(formatDescribeTree(root, { source: "ax-service", raw: true }));
+    expect(raw).toEqual([
+      '  AXButton "Settings" (0.1,0.1,0.3,0.05)',
+      '  AXAdjustable "Vertical scroll bar, 2 pages" value="0%" (0.96,0.1,0.03,0.8)',
+    ]);
+  });
 });

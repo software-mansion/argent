@@ -40,17 +40,11 @@ const buttonSchema = z
     z.union([z.enum(BUTTONS), z.array(z.enum(BUTTONS)).min(1).max(64)])
   )
   .describe(
-    "A single TV-remote button, or a path of them run in one call. Move focus with " +
-      "up/down/left/right, confirm with select, go back with back/menu, exit with home; the " +
-      "media and volume buttons press the matching remote keys. " +
-      'For multi-step navigation pass an array, e.g. ["up","right","right","select"]; ' +
-      "strongly prefer this over multiple `tv-remote` calls: the whole path runs in a single call."
+    'Single remote button or array path run in one call (e.g. ["up","right","select"]; prefer an array over repeated calls).'
   );
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target TV device id from `list-devices` (Apple TV, Android TV, or Vega)."),
+  udid: z.string().describe("TV device id from `list-devices` (Apple TV, Android TV, or Vega)."),
   button: buttonSchema,
   repeat: z
     .number()
@@ -58,10 +52,7 @@ const zodSchema = z.object({
     .min(1)
     .max(50)
     .optional()
-    .describe(
-      "Repeat the whole `button` value this many times (default 1). " +
-        'Compact for long same-button runs, e.g. { button: "down", repeat: 12 }.'
-    ),
+    .describe('Repeat `button` N times (default 1, e.g. `{ button: "down", repeat: 12 }`).'),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -73,10 +64,9 @@ type Params = z.infer<typeof zodSchema>;
 export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, TvRemoteResult> {
   return {
     id: "tv-remote",
-    description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
-A TV is navigated with a directional remote, not touch. Use when you need to move focus or press a key on a TV, instead of gesture-tap/swipe (which do not apply on a TV).
-Call \`describe\` before the first press to find the cursor. Read where focus landed from the element tree in this result, or call \`describe\` again when it is missing.
-Returns { pressed, count }. Fails on a target that is not a TV, and on the Apple TV simulator for rewind, fastForward, next, previous, volumeUp, volumeDown and mute (its HID stack ignores them); every other button works on all three platforms.`,
+    description: `Press a TV remote / D-pad button (or array path) on Apple TV (tvOS), Android TV, or Vega (Fire TV).
+Use when navigating focus or pressing remote keys on a TV instead of touch gestures. Call \`describe\` first to locate focus; check the returned tree after.
+Returns \`{ pressed, count }\`. Fails on non-TV targets, or on Apple TV sim for rewind/fastForward/next/previous/volume/mute.`,
     zodSchema,
     searchHint:
       "tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path apple tv tvos android tv leanback vega fire tv",

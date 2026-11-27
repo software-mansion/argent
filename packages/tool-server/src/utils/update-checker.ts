@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import semver from "semver";
 import { version as currentVersion } from "../../package.json";
+import { isUpdateCheckDisabled } from "./update-check-env";
 import {
   detectMinReleaseAgeMs,
   fetchRegistryInfo,
@@ -159,6 +160,10 @@ export function startUpdateChecker(options: UpdateCheckerOptions = {}): { dispos
   const generation = ++lifecycleGeneration;
   if (interval) {
     clearInterval(interval);
+  }
+
+  if (isUpdateCheckDisabled()) {
+    return { dispose() {} };
   }
 
   // Fire-and-forget initial check — don't block startup.

@@ -38,30 +38,23 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
-    ),
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name from build.gradle `applicationId`. Vega (Fire TV): the interactive component app id from manifest.toml (e.g. com.example.app.main). <flag:harmonyos>HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). </flag:harmonyos>Chromium: any tag matching the pattern.<flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps>"
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega interactive component app id from manifest.toml e.g. `com.example.app.main`,<flag:harmonyos> HarmonyOS bundle name from `bm dump -a`,</flag:harmonyos> or Chromium tag)."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
-    .describe(
-      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted, the app's default launcher activity is used."
-    ),
+    .describe("Android only: Activity name (default: launcher activity)."),
   launchArgs: z
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them<flag:macos-apps>, except a Mac app: use restart-app for that. Omitted on a Mac app, a stopped app gets the arguments of its last start</flag:macos-apps>. The call fails, launching nothing, if terminating it does not finish within 15s on a local iOS simulator, or fails for a reason other than the app not running on a remote one.'
+      'Apple targets only: process launch args, e.g. `["-FeatureFlag", "YES"]`. Relaunches running simulators/phones to apply.'
     ),
 });
 
@@ -78,14 +71,11 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
     id: "launch-app",
     // Android's device probes plus `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Open an installed app, or confirm the running renderer (Chromium).<flag:macos-apps> On a Mac app it starts the app in the background when it does not run, and leaves a running app as it is.</flag:macos-apps>
-Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
-Returns { launched, bundleId, <flag:macos-apps>kind?, appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready. If Argent started native capture, networkCapture reports whether it followed the launch or was stopped. This note applies to Android and local iOS simulators.<flag:macos-apps>
-For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the build and arguments in use. The note can report an already running app or a missing window.</flag:macos-apps>
-For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
-
-Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
-Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
+    description: `Open an installed app, or refresh a Chromium target (use \`open-url\` to navigate Chromium).<flag:macos-apps> On a Mac app, starts it in the background if stopped.</flag:macos-apps> Also prepares native-devtools injection on iOS/tvOS and registers the active app on physical iPhones (\`com.apple.springboard\` registers without launching so \`describe\` can read system dialogs).
+Use when starting an app; prefer this over tapping home-screen icons.
+Returns { launched, bundleId, <flag:macos-apps>kind?, appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed.
+Common iOS ids: com.apple.Preferences, com.apple.mobilesafari, com.apple.MobileSMS, com.apple.Maps, com.apple.mobileslideshow, com.apple.MobileAddressBook.
+Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
