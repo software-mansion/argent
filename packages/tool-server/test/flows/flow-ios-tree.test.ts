@@ -783,10 +783,10 @@ describe("queryIosSimulatorFlowTree", () => {
     );
   });
 
-  it("refuses a blind read, naming the boot remedy on a simulator argent did not boot", async () => {
+  it("refuses a blind read, naming the boot remedy on a simulator without the pre-boot accessibility settings", async () => {
     const empty = reply([{ index: 0, label: "App", bundleId: "com.example.app" }]);
     await expect(queryIosSimulatorFlowTree(registryWith(empty, true), device)).rejects.toThrow(
-      /is empty: argent did not boot this simulator.*boot-device/
+      /is empty: argent could not verify the simulator's pre-boot accessibility settings.*boot-device/
     );
     await expect(queryIosSimulatorFlowTree(registryWith(empty), device)).rejects.toThrow(
       /is empty: the foreground app \(com\.example\.app\) exposes no accessible elements.*restart-app/

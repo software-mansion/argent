@@ -77,6 +77,8 @@ export interface StepReport {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   durationMs?: number;
+  /** The step is from a `shutdown:` block, which runs after the test's steps. */
+  shutdown?: boolean;
 }
 
 export interface FlowReport {
@@ -86,6 +88,8 @@ export interface FlowReport {
   device: string;
   executionPrerequisite?: string;
   ok: boolean;
+  /** A `shutdown:` step failed, so the run cleaned up only partly. */
+  shutdownFailed?: boolean;
   passed: number;
   failed: number;
   skipped: number;
@@ -238,6 +242,8 @@ Options (run):
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
                          unless such a step sets updateBaselines
+  --env NAME=value       Override a script environment value for this run.
+                         Repeatable. Values may contain {{secret:NAME}}
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<test>/ — a stable path for CI artifact
@@ -260,6 +266,7 @@ Examples:
   argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
   argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
   argent e2e run .argent/e2e --recursive
+  argent e2e run checkout --env API_URL=https://staging.example.com
 `);
 }
 
@@ -274,6 +281,7 @@ const RUN_OPTIONS = {
   // run it would stop the whole batch.
   "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
+  "env": { kind: "value", repeatable: true },
 } as const satisfies OptionSpecs;
 
 const LIST_OPTIONS = {
@@ -291,6 +299,8 @@ export function parseRunArgs(argv: string[]): {
   device?: string;
   platform?: string;
   output?: string;
+  /** `--env NAME=value`, in order; a later value for a name wins. */
+  env?: Record<string, string>;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -328,10 +338,36 @@ export function parseRunArgs(argv: string[]): {
   if (options.device !== undefined) out.device = options.device as string;
   if (options.platform !== undefined) out.platform = options.platform as string;
   if (options.output !== undefined) out.output = options.output as string;
+  if (options.env !== undefined) out.env = parseEnvFlags(options.env as string[]);
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
   return out;
+}
+
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Checked here rather than left to the tool-server, which would refuse the
+ * same input once per test of a directory run.
+ */
+function parseEnvFlags(values: readonly string[]): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const entry of values) {
+    const eq = entry.indexOf("=");
+    const name = eq === -1 ? entry : entry.slice(0, eq);
+    if (eq === -1 || !ENV_NAME_RE.test(name) || name === "__proto__") {
+      throw new FlagParseException(
+        `--env takes NAME=value with a name of letters, digits and _, not starting with a digit; got ${JSON.stringify(entry)}`
+      );
+    }
+    // Deleted first, so a repeated flag moves to the end: on Windows the server
+    // folds names case-insensitively in map order, and `--env MODE=a --env
+    // mode=b --env MODE=c` must end on the last flag given.
+    delete env[name];
+    env[name] = entry.slice(eq + 1);
+  }
+  return env;
 }
 
 /**
@@ -340,6 +376,9 @@ export function parseRunArgs(argv: string[]): {
  * carries the skip glyph and its reason so it cannot read as having run.
  * Returns undefined when there is no message.
  */
+/** Printed once, above the first `shutdown:` step of a report. */
+const SHUTDOWN_HEADER = "  shutdown:";
+
 export function renderEchoLine(s: StepReport): string | undefined {
   if (!s.message) return undefined;
   const indent = stepIndent(s.depth);
@@ -451,6 +490,7 @@ export function renderArtifactLines(report: FlowReport): string[] {
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
+  let inShutdown = false;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
@@ -464,6 +504,10 @@ export function renderFailedSteps(report: FlowReport): string[] {
       scriptLog.length === 0
     ) {
       continue;
+    }
+    if (s.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      lines.push(SHUTDOWN_HEADER);
     }
     lines.push(renderStepLine(s, n, e2eTestOf(report)));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
@@ -507,16 +551,30 @@ interface FailedFlow {
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
   const unwritten = unwrittenBaselines(report);
+  const failing: { s: StepReport; n: number }[] = [];
   let n = 0;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status === "fail" || s.status === "error") {
-      const lines = s.reason ? [String(s.reason)] : [];
-      for (const line of unwritten) lines.push(`baseline not written: ${line}`);
-      const detail = lines.length ? lines.join("\n") : undefined;
-      return { headline: `step ${n} ${stepLabel(s, e2eTestOf(report))}`, detail };
+    if (s.status === "fail" || s.status === "error") failing.push({ s, n });
+  }
+  const first = failing[0];
+  if (first) {
+    const label = (f: { s: StepReport; n: number }) =>
+      `step ${f.n} ${stepLabel(f.s, e2eTestOf(report))}`;
+    const lines = first.s.reason ? [String(first.s.reason)] : [];
+    for (const line of unwritten) lines.push(`baseline not written: ${line}`);
+    // The steps' own failure leads; a cleanup that failed after it is a second
+    // thing to know, since it may have left state behind for the next run.
+    const shutdown = failing.find((f) => f.s.shutdown === true);
+    if (shutdown && shutdown !== first) {
+      const reason = shutdown.s.reason ? ` — ${String(shutdown.s.reason)}` : "";
+      lines.push(`shutdown did not finish: ${label(shutdown)}${reason}`);
     }
+    const detail = lines.length ? lines.join("\n") : undefined;
+    const headline =
+      first.s.shutdown === true ? `shutdown did not finish: ${label(first)}` : label(first);
+    return { headline, detail };
   }
   if (unwritten.length) return { headline: "baselines not written", detail: unwritten.join("\n") };
   return { headline: "failed with no failing step" };
@@ -582,7 +640,7 @@ function optionSafePath(p: string): string {
 
 /**
  * The command that runs one flow of a directory run alone, from the same
- * working directory, with the same --device, --platform and --update-baselines,
+ * working directory, with the same --device, --platform, --update-baselines and --env,
  * and an --output that exports to the directory the batch exported that flow
  * to. A flow outside that directory keeps its absolute path, since `run`
  * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
@@ -592,7 +650,10 @@ function rerunCommand(
   flowPath: string,
   rel: string,
   projectRoot: string,
-  args: Pick<ReturnType<typeof parseRunArgs>, "device" | "platform" | "output" | "updateBaselines">
+  args: Pick<
+    ReturnType<typeof parseRunArgs>,
+    "device" | "platform" | "output" | "updateBaselines" | "env"
+  >
 ): string {
   const pathArg = (p: string) => shellQuoteArg(optionSafePath(p));
   const fromCwd = path.relative(projectRoot, flowPath) || ".";
@@ -607,6 +668,9 @@ function rerunCommand(
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
   if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
+  for (const [name, value] of Object.entries(args.env ?? {})) {
+    parts.push("--env", shellQuoteArg(`${name}=${value}`));
+  }
   return parts.join(" ");
 }
 
@@ -986,7 +1050,12 @@ export function renderReport(report: FlowReport): string {
   }
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
+  let inShutdown = false;
   for (const s of report.steps) {
+    if (s.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      lines.push(SHUTDOWN_HEADER);
+    }
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) lines.push(line);
@@ -1225,6 +1294,7 @@ function buildRunPayload(
   if (args.device) payload.device = args.device;
   if (args.platform) payload.platform = args.platform;
   if (args.updateBaselines) payload.updateBaselines = true;
+  if (args.env) payload.env = args.env;
   return payload;
 }
 
@@ -2161,6 +2231,7 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // below owns the whole report.
   let liveSteps = 0;
   let liveIndex = 0;
+  let liveShutdown = false;
   const onStepReport = (event: unknown): void => {
     const s = event as StepReport;
     if (args.jsonStream) {
@@ -2169,6 +2240,10 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     }
     if (liveSteps === 0) console.log(`E2E test "${flowName}"`);
     liveSteps++;
+    if (s.shutdown === true && !liveShutdown) {
+      liveShutdown = true;
+      console.log(SHUTDOWN_HEADER);
+    }
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) console.log(line);

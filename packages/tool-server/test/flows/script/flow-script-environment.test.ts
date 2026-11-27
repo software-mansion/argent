@@ -221,6 +221,22 @@ describe("flow script executor — the environment allowlist", () => {
     expect((result.output?.env as Record<string, string>).systemroot).toBe("C:\\Windows");
   }, 30_000);
 
+  it("lets a step's value replace a host name in other casing on Windows", async () => {
+    // Node keeps the spelling that sorts first when it spawns on Windows, and
+    // the host's `TZ` sorts ahead of the step's `tz`.
+    withEnv("TZ", "Europe/Warsaw");
+    const ws = workspace();
+    const script = ws.write(
+      "env.mjs",
+      `output.tz = Object.entries(process.env).filter(([n]) => n.toLowerCase() === "tz");`
+    );
+    const result = await asWindows(() =>
+      executor().execute({ scriptPath: script, projectRoot: ws.dir, env: { tz: "UTC" } })
+    );
+
+    expect(result.output?.tz).toEqual([["tz", "UTC"]]);
+  }, 30_000);
+
   it("refuses a reserved name in non-canonical casing on Windows", async () => {
     const ws = workspace();
     const script = ws.write("env.mjs", `output.ok = true;`);

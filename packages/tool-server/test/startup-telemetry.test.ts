@@ -85,6 +85,7 @@ vi.mock("../src/blueprints/network-inspector", async (importOriginal) => ({
   pauseJsCapturesOf: vi.fn(async () => new Set<string>()),
 }));
 
+import { startUpdateChecker } from "../src/utils/update-checker";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { pauseJsCapturesOf } from "../src/blueprints/network-inspector";
 import { shutdownOwnedDevices } from "../src/utils/device-shutdown";
@@ -130,7 +131,7 @@ describe("tool-server startup telemetry", () => {
       crash_fingerprint: expect.stringMatching(/^[0-9a-f]{16}$/),
       crash_phase: "startup",
     });
-    expect(updateCheckerMock.dispose).toHaveBeenCalledOnce();
+    expect(startUpdateChecker).not.toHaveBeenCalled();
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
@@ -140,7 +141,7 @@ describe("tool-server startup telemetry", () => {
 
     expect(telemetryMock.track).toHaveBeenCalledTimes(1);
     expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
-    expect(updateCheckerMock.dispose).toHaveBeenCalledOnce();
+    expect(startUpdateChecker).not.toHaveBeenCalled();
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();

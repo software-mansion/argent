@@ -338,8 +338,9 @@ export async function queryIosSimulatorFlowTree(
   if (tree.roots.every((root) => root.children.length === 0)) {
     throw new Error(
       tree.degraded
-        ? `the accessibility tree of ${device.id} is empty: argent did not boot this simulator, so ` +
-            `its accessibility service cannot see the app. ${BOOT_REMEDY}`
+        ? `the accessibility tree of ${device.id} is empty: argent could not verify the ` +
+            `simulator's pre-boot accessibility settings, and without them its accessibility ` +
+            `service cannot see the app. ${BOOT_REMEDY}`
         : `the accessibility tree of ${device.id} is empty: the foreground app ` +
             `(${tree.foregroundApp ?? "unknown"}) exposes no accessible elements. Wait for it to ` +
             `draw, or relaunch it with \`restart-app\`, then run the e2e test again.`

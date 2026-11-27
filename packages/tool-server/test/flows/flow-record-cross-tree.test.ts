@@ -57,6 +57,7 @@ import {
   UNHINTED_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import { flowSetEnvTool } from "../../src/tools/flows/flow-set-env";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
   __resetRecordingsForTesting,
@@ -383,7 +384,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const warning = warningOf(result, "unmet");
     expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("stops the run there");
+    expect(warning).toContain("FAILS the step and stops the run there");
     expect(warning).not.toContain("replays fine");
     // Nothing was compared, so nothing may blame a tree divergence.
     expect(warning).not.toContain("neither contains the other");
@@ -1782,7 +1783,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Sign in")]));
     await recordWait("deleted", { condition: "visible", selector: { text: "Sign in" } });
 
-    // Delete the diverging step 1, the remedy `UNMET_WAIT_WARNING` offers.
+    // Delete the diverging step 1, the remedy `unmetWaitWarning` offers.
     const file = path.join(tmpDir, ".argent", "e2e", "deleted.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
@@ -1868,6 +1869,33 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Number 2 now holds the twin that AGREED, so a verdict there convicts it.
     expect(finished.summary).toHaveLength(3);
     expect(verdictsIn(finished.summary).size).toBe(0);
+    expect(finished.summary[1]).toContain('"Continue"');
+    for (const line of finished.summary) expect(line).not.toContain("warning:");
+    expect(finished.message).toContain(
+      "1 warning raised during this recording is NOT in `summary`"
+    );
+  });
+
+  it("drops the moved verdict when e2e-set-env is the call that re-reads the edit", async () => {
+    await startRecording("envtwins");
+    serveTree(iosRunnerTree([iosLabel("Ready marker")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Ready marker" } });
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Continue" } });
+    serveTree(iosRunnerTree([iosLabel("Continue")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Continue" } });
+
+    const file = path.join(tmpDir, ".argent", "e2e", "envtwins.yaml");
+    const parsed = parseFlow(await fs.readFile(file, "utf8"));
+    parsed.steps = [parsed.steps[0], parsed.steps[2]];
+    await fs.writeFile(file, serializeFlow(parsed), "utf8");
+
+    await flowSetEnvTool.execute({}, { name: "envtwins", project_root: tmpDir, env: { A: "1" } });
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "envtwins", project_root: tmpDir }
+    );
+
     expect(finished.summary[1]).toContain('"Continue"');
     for (const line of finished.summary) expect(line).not.toContain("warning:");
     expect(finished.message).toContain(

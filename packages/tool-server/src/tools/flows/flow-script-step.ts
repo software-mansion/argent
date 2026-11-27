@@ -6,14 +6,18 @@ import {
   resolveFlowRelativeFile,
   SCRIPT_FILE_NAME_PATTERN,
 } from "@argent/registry";
-import type { FlowStep } from "./flow-utils";
+import type { FlowEnv, FlowStep } from "./flow-utils";
 import {
   flowScriptExecutor,
   type FlowScriptFailure,
   type FlowScriptFailureKind,
   type FlowScriptLogBudget,
   type FlowScriptResult,
+  type FlowScriptSecret,
 } from "./script/flow-script-executor";
+import { resolveSecretPlaceholders } from "../../utils/secrets";
+import { OutputReferenceError, resolveOutputText, type FlowOutput } from "./flow-output";
+import { InvalidToolInputError } from "../../utils/capability";
 
 /**
  * One `script` step, from a path to a verdict.
@@ -45,8 +49,66 @@ interface FlowScriptStepRequest {
   flowDir: string;
   step: Extract<FlowStep, { kind: "script" }>;
   projectRoot: string;
+  /** The step's environment values, already merged across layers; placeholders unresolved. */
+  env?: FlowEnv;
+  /** The run's output document: the script's `output`, and what env references read. */
+  output?: FlowOutput;
+  /** Secrets the argent client forwarded (`ctx.clientSecrets`); they win over local sources. */
+  clientSecrets?: ReadonlyMap<string, string>;
   logBudget?: FlowScriptLogBudget;
   signal?: AbortSignal;
+}
+
+/**
+ * Replace each `{{secret:NAME}}` in `env` with its value. Secrets resolve from
+ * the run's project root, not the tool-server's working directory, which an
+ * editor sets to `/` or the home directory. An unknown name throws, naming the
+ * available secrets but never a value.
+ */
+export function resolveScriptEnv(
+  env: FlowEnv,
+  projectRoot: string,
+  clientSecrets?: ReadonlyMap<string, string>
+): { env: FlowEnv; secrets: FlowScriptSecret[] } {
+  const resolved: FlowEnv = {};
+  const secrets: FlowScriptSecret[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    const { text, secrets: found } = resolveSecretPlaceholders(value, {
+      cwd: projectRoot,
+      ...(clientSecrets ? { clientSecrets } : {}),
+    });
+    // Checked again here: a secrets file can hold a NUL the test file did not,
+    // and the operating system's refusal would quote the value.
+    if (text.includes("\0")) {
+      throw new InvalidToolInputError(
+        `The value of ${name} holds a NUL character, which an environment value cannot carry.`
+      );
+    }
+    resolved[name] = text;
+    for (const secret of found) {
+      if (!secrets.some((s) => s.name === secret.name)) secrets.push(secret);
+    }
+  }
+  return { env: resolved, secrets };
+}
+
+/**
+ * `env` with each `{{output:...}}` reference replaced. Before the secrets: a
+ * value from an output never names a secret (see `resolveOutputText`).
+ */
+function outputsInEnv(env: FlowEnv, output: FlowOutput): FlowEnv {
+  const resolved: FlowEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    try {
+      resolved[name] = resolveOutputText(value, output);
+    } catch (err) {
+      if (err instanceof OutputReferenceError) {
+        throw new InvalidToolInputError(`The value of ${name}: ${err.message}.`);
+      }
+      throw err;
+    }
+  }
+  return resolved;
 }
 
 export async function runFlowScriptStep(
@@ -104,14 +166,26 @@ export async function runFlowScriptStep(
     return { ran: "no", outcome: { status: "error", reason: refusal } };
   }
 
+  let resolved: ReturnType<typeof resolveScriptEnv> | undefined;
+  try {
+    if (request.env) {
+      const env = outputsInEnv(request.env, request.output ?? {});
+      resolved = resolveScriptEnv(env, request.projectRoot, request.clientSecrets);
+    }
+  } catch (err) {
+    return {
+      ran: "no",
+      outcome: { status: "error", reason: err instanceof Error ? err.message : String(err) },
+    };
+  }
+
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
-    output: {},
+    output: request.output ?? {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,
-    // No `secrets`: nothing resolves one into a script step yet, so there is
-    // nothing for the executor to redact out of the captured log.
+    ...(resolved ? { env: resolved.env, secrets: resolved.secrets } : {}),
     ...(request.logBudget ? { logBudget: request.logBudget } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });

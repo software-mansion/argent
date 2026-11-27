@@ -675,8 +675,8 @@ describe("flow iOS full-hierarchy source", () => {
   });
 
   it("blames the unreadable connection, not the healthy frontmost app", async () => {
-    // A second instrumented app, left suspended, fails the whole state probe even
-    // though the flow's own app is frontmost and readable.
+    // A second instrumented app, left suspended, fails the whole state probe when
+    // the only answering app is inactive.
     const api = {
       listConnectedBundleIds: () => ["com.example.driven", "com.example.stale"],
       getAppState: vi.fn(async (bundleId: string) => {
@@ -690,8 +690,8 @@ describe("flow iOS full-hierarchy source", () => {
         }
         return {
           bundleId,
-          applicationState: "active",
-          foregroundActiveSceneCount: 1,
+          applicationState: "inactive",
+          foregroundActiveSceneCount: 0,
           foregroundInactiveSceneCount: 0,
           backgroundSceneCount: 0,
           unattachedSceneCount: 0,

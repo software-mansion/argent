@@ -252,7 +252,15 @@ Use `when:` only for optional setup or an interstitial that reconverges:
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega|macos }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
+Use a UI condition (`exists`, `visible`, `hidden`, or `text`), an [output check](#pass-values-between-steps), or a platform guard (`{ platform: ios|android|chromium|vega|macos }`). A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
+
+## Shutdown
+
+Put cleanup in `shutdown:` so it runs after `steps` pass or fail. A cancellation skips any remaining cleanup. A run refused before its first step skips shutdown entirely. Independent shutdown entries continue after a failure. Group dependent steps in one `when:` block so the chain stops at its first failure.
+
+If setup can stop before writing an output, guard the cleanup with `when: { output: user.id, exists: true }` or supply a fallback the cleanup handles. A `run:` fragment queues its shutdown for the end of the run, most recently loaded first. If the fragment runs more than once, collect IDs in an output list and use `pop()` in its shutdown script. A separate `tool: e2e-execute` run performs its own cleanup.
+
+Inspect `shutdownFailed` and the steps marked `shutdown: true` before rerunning. See [Shutdown](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#shutdown).
 
 ## Composition and platform limits
 
@@ -270,11 +278,16 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+- script: { path: ../../scripts/seed-order.mjs, env: { API_TOKEN: "{{secret:API_TOKEN}}" } }
 ```
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 `path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+
+Use top-level `env` for script defaults, step `env` for one script, and `--env NAME=value` or `e2e-execute.env` for run overrides. The last layer to set a name wins. A `run:` fragment fills missing defaults. Pass overrides explicitly to a separate `tool: e2e-execute` run.
+
+Quote non-string YAML scalars, such as `PORT: "8080"`. Use `{{secret:NAME}}` for credentials and keep credentials out of logs. If a secret is missing, check the secret sources for the run's project root. See [Environment values](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#environment-values) for the value rules and redaction limits.
 
 `.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node reads a file with `import`, `export` or top-level `await` as an ES module, and each other file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
 
@@ -288,9 +301,17 @@ If the reason says that the Node.js of the tool-server cannot run TypeScript, us
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
 
+### Pass values between steps
+
+Save JSON data to the global `output`, for example `output.user = { id: "user-7" }`. Record scripts one at a time so each starts with the previous output. Inspect `e2e-add-script.outputJson` before writing a reference. A `run:` fragment shares output. For a separate `tool: e2e-execute` run, pass inputs through `env`.
+
+Quote references in YAML, such as `"{{output:user.id}}"`. Use dotted keys and indexes (`items.0.id`). If a script may be skipped, guard the use with an output check or provide a literal fallback, such as `"{{output:user.id ?? guest}}"`. For a required check, use `assert: { output: user.id, exists: true }`.
+
+Use references in selectors, typed text, equality or contains checks, tool arguments, and script-step environment values. A whole-value tool argument keeps its JSON type. Return a string when the tool expects text. Keep secret placeholders in the YAML. See [Script output](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#script-output) for supported fields and fallback syntax.
+
 ## Snapshots and CLI runs
 
-`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--env NAME=value] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
