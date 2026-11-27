@@ -56,13 +56,14 @@ vi.mock("../src/utils/ios-device-sets", async () => {
   return { ...actual, configuredAdditionalDeviceSets: () => [] };
 });
 
-import { Registry, type DeviceInfo } from "@argent/registry";
+import { Registry, ServiceState, type DeviceInfo } from "@argent/registry";
 import {
   nativeDevtoolsBlueprint,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
 } from "../src/blueprints/native-devtools";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import * as watcher from "../src/utils/simulator-watcher";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
@@ -122,5 +123,30 @@ describe("a simulator targeted while shut down", () => {
     stop();
     expect(block).toBeNull();
     expect(service.isEnvSetup()).toBe(true);
+  });
+});
+
+describe("a targeted simulator stopped while shut down", () => {
+  it("is not armed again when it boots", async () => {
+    sim.booted = true;
+    execSimctlMock.mockResolvedValue(BOOTED);
+    const { ready, stop } = watcher.startSimulatorWatcher(registry);
+    await ready;
+    await watcher.armSimulator(SIMULATOR.id);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    sim.booted = false;
+    execSimctlMock.mockResolvedValue('{"devices":{}}');
+    await vi.advanceTimersByTimeAsync(10_000);
+    const urn = nativeDevtoolsRef(SIMULATOR).urn;
+    expect(registry.getServiceState(urn)).toBe(ServiceState.IDLE);
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, { devices: [SIMULATOR.id] });
+
+    sim.booted = true;
+    execSimctlMock.mockResolvedValue(BOOTED);
+    await vi.advanceTimersByTimeAsync(10_000);
+    stop();
+    expect(registry.getServiceState(urn)).toBe(ServiceState.IDLE);
   });
 });

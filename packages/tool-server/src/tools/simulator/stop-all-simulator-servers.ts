@@ -7,6 +7,7 @@ import {
   pauseJsCapturesOf,
 } from "../../blueprints/network-inspector";
 import { forgetNativeUnavailableOf, withCaptureSweep } from "../network/network-capture";
+import { forgetSimulatorTarget } from "../../utils/simulator-watcher";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
@@ -119,6 +120,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
           // node in place as IDLE, so a device this session already stopped would
           // otherwise be reported unmatched by the next scoped call.
           if (matchedId !== undefined) matchedIds.add(matchedId.toLowerCase());
+          if (matches) forgetSimulatorTarget(urn);
           if (matches && entry.state !== ServiceState.IDLE) {
             // An ERROR node (e.g. a tvOS SimulatorServer that refused to start)
             // is disposed too, but was never a running server, so it is not

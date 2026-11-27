@@ -25,6 +25,7 @@ const ARM_WAIT_MS = 15_000;
 const NATIVE_DEVTOOLS_URN_PREFIX = `${NATIVE_DEVTOOLS_NAMESPACE}:`;
 
 let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
+let forgetTarget: (urn: string) => void = () => {};
 
 /**
  * Arms native-devtools injection on a simulator a tool is about to drive, and so
@@ -37,6 +38,11 @@ let armTarget: (udid: string) => Promise<void> = () => Promise.resolve();
  */
 export function armSimulator(udid: string): Promise<void> {
   return armTarget(udid);
+}
+
+/** Stops the watcher from re-arming the simulator of this native-devtools URN. */
+export function forgetSimulatorTarget(urn: string): void {
+  forgetTarget(urn);
 }
 
 async function getBootedUdidsInSet(
@@ -337,9 +343,12 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  /** The booted simulators a tool has targeted, under the tool's spelling. */
   function onlyTargeted(booted: Set<string>): Set<string> {
-    return new Set([...booted].flatMap((udid) => targetedUdids.get(udid.toUpperCase()) ?? []));
+    return new Set([...booted].filter((udid) => targetedUdids.has(udid.toUpperCase())));
+  }
+
+  function toolSpelling(udid: string): string {
+    return targetedUdids.get(udid.toUpperCase()) ?? udid;
   }
 
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
@@ -358,9 +367,14 @@ export function startSimulatorWatcher(registry: Registry): {
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      ({ ours: booted, claimed } = withoutForeignSimulators(
+      const split = withoutForeignSimulators(
         onlyTargeted(await getBootedUdids(stopController.signal))
-      ));
+      );
+      claimed = new Set([...split.claimed].map(toolSpelling));
+      // A provider's claim matches only simctl's spelling, so a granted one resolves under it.
+      booted = new Set(
+        [...split.ours].map((udid) => (split.claimed.has(udid) ? udid : toolSpelling(udid)))
+      );
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
         consecutiveTimeouts += 1;
@@ -431,6 +445,12 @@ export function startSimulatorWatcher(registry: Registry): {
     return arming;
   };
   armTarget = armThisWatcher;
+  const forgetThisWatcher = (urn: string): void => {
+    for (const [key, udid] of targetedUdids) {
+      if (simulatorNativeDevtoolsRef(udid).urn === urn) targetedUdids.delete(key);
+    }
+  };
+  forgetTarget = forgetThisWatcher;
 
   // Settles once the first poll has read the booted simulators, once the
   // bounded simctl call fails, or at once while Xcode's install is pending.
@@ -456,6 +476,7 @@ export function startSimulatorWatcher(registry: Registry): {
     stop: () => {
       registry.events.off("serviceStateChange", noteTargeted);
       if (armTarget === armThisWatcher) armTarget = () => Promise.resolve();
+      if (forgetTarget === forgetThisWatcher) forgetTarget = () => {};
       clearInterval(interval);
       stopController.abort();
     },
