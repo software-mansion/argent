@@ -339,7 +339,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device ID from list-devices. For iOS simulators and Android, use logicalDeviceId if capture started with it<flag:macos-apps>. For a Mac app, keep the Mac app id macos-app-<bundle id> on shared Metro and for builds started outside Argent</flag:macos-apps>."
+      "Device ID from `list-devices` (or `logicalDeviceId` if shared Metro capture used it)<flag:macos-apps>; Mac app: Mac app id `macos-app-<bundle id>`</flag:macos-apps>."
     ),
   // `.default` covers only an omitted param, and `z.coerce.number()` reads null as 0, so
   // null would return the oldest page. Agents send null for "not set": read it as "latest".
@@ -348,17 +348,14 @@ const zodSchema = z.object({
     .nullable()
     .default("latest")
     .transform((value) => value ?? "latest")
-    .describe(
-      'Zero-based page index. "latest" and null select the newest page. Each page contains up to 50 entries.'
-    ),
+    .describe('0-based page index, or `"latest"`/null for newest (50 entries/page).'),
 });
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `List captured HTTP requests from React Native JavaScript or the active Chromium tab. Use when you need to find a request or compare several calls. For native traffic, use native-network-logs.
-Returns a paginated list with request IDs, status, size and timing. Pass an ID to view-network-request-details for headers and bodies.
-On iOS simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and Android, call network-capture-start before the action and again after a reload. On Vega, read this log before the action and again after a reload to resume capture. Chromium records while Argent is attached to the page.
-Fails if the Chromium target is unreachable. A read can also fail if Argent cannot reach the debugger for an existing JS capture. If the tool returns a capture message in place of a list, follow it before retrying.`,
+  description: `List captured JS HTTP requests (React Native) or active-tab requests (Chromium). Call \`network-capture-start\` first on iOS<flag:macos-apps>/Mac apps</flag:macos-apps>/Android (on Vega, reading starts capture). Use \`native-network-logs\` for native traffic.
+Use when finding requests or comparing API calls (pass an ID to \`view-network-request-details\` for headers/bodies).
+Returns a paginated list of request IDs, status, size, and timing. Fails if Chromium or the JS debugger is unreachable.`,
   zodSchema,
   readOnly: true,
   interaction: {

@@ -268,13 +268,14 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device ID for the matching log. For JS capture on iOS simulators and Android, use the logicalDeviceId if capture started with it<flag:macos-apps>. For a Mac app, keep the Mac app id even on shared Metro</flag:macos-apps>."
+      "Device ID for the log (or `logicalDeviceId` if JS capture used it)<flag:macos-apps>; Mac app: Mac app id</flag:macos-apps>."
     ),
-  requestId: z.string().describe("Request ID from either network log or await-network-request."),
-  includeBody: z
-    .boolean()
-    .default(true)
-    .describe("Set false to omit the response body. The request body can still appear."),
+  requestId: z
+    .string()
+    .describe(
+      "Request ID from `view-network-logs`, `native-network-logs`, or `await-network-request`."
+    ),
+  includeBody: z.boolean().default(true).describe("Include response body (default true)."),
 });
 
 export const networkRequestTool: ToolDefinition<
@@ -282,9 +283,9 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Read the details of one captured request. Call this with an ID from a network log or await-network-request. Native requests need no debugger connection.
-Returns status, timing, headers and available bodies. Argent redacts sensitive headers, shows each secret exposed to Argent as its {{secret:NAME}} placeholder, and limits text previews to 1000 characters. Other credentials, such as a token the server issues, still show. If a native upload is still in progress, retry after it finishes.
-If the ID is not found, the tool returns a message. Refresh the log if that happens or after a JavaScript reload. Reloads can reuse IDs for different requests. On Vega, a JS lookup can start capture. Read view-network-logs before triggering the request.`,
+  description: `Read full details (status, timing, redacted headers, and bodies truncated to 1000 chars) for one captured HTTP request ID. Secret values exposed to Argent show as their {{secret:NAME}} placeholders; other credentials do not.
+Use when inspecting payloads or headers of a request from a network log or \`await-network-request\`.
+Returns request/response details, or a not-found message (refresh the log after JS reloads). Fails if the backing debugger/CDP target is unreachable.`,
   zodSchema,
   readOnly: true,
   interaction: {

@@ -28,12 +28,9 @@ const capability: ToolCapability = {
 
 export const networkConditionsTool: ToolDefinition<NetworkConditionsParams, Result> = {
   id: "network-conditions",
-  description: `Add latency, cap speed or simulate an offline connection. Use when testing loading states, retries or timeouts. Each call replaces the previous conditions. Omit the conditions to reset after the test.
-Returns the scope and applied conditions. A reset returns null for conditions.
-On a local iOS simulator, Argent shapes one app's intercepted HTTP traffic. While online, Argent forwards requests immediately and delays delivery to the app. Native devtools must be connected. WebSockets and the Metro port are exempt. Follow message if the result includes a status.
-On Android, Argent shapes traffic that uses the system proxy. Restart the app if existing connections bypass shaping. Throttling fails if the emulator has a proxy Argent did not set. Ethernet can prevent offline mode. Reset if a crash leaves the emulator unable to connect.
-On Chromium, Argent shapes the active page. Workers and cross-site iframes are outside its scope.
-Fails on physical devices and remote iOS simulators.`,
+  description: `Add latency, throttle bandwidth, or simulate offline mode on iOS simulators (per-app via native devtools, Metro/WS exempt), Android emulators (system proxy), or Chromium (active page). On Android, restart the app if existing connections bypass shaping, note that Ethernet can prevent offline mode, and reset if a crash leaves the emulator unable to connect. Omit all condition fields to reset.
+Use when testing loading states, retries, or timeouts (each call replaces previous conditions).
+Returns the scope and applied conditions (or null on reset), or on iOS a \`{ status, message }\` precheck block (follow \`message\` if \`status\` is present). Fails on physical devices, remote iOS simulators, or if Android has an unmanaged proxy.`,
   zodSchema: networkConditionsZodSchema,
   searchHint: "network throttle latency slow offline bandwidth 3g conditions emulate",
   interaction: {

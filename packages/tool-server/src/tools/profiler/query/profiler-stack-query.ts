@@ -421,7 +421,7 @@ const zodSchema = z.object({
   ),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
-    .describe("Query mode; see Modes in the tool description."),
+    .describe("Query mode."),
   // Without `.nullable()`, `z.coerce.number()` reads null as hang 0.
   hang_index: z.coerce
     .number()
@@ -429,31 +429,25 @@ const zodSchema = z.object({
     .nullable()
     .transform((value) => value ?? undefined)
     .optional()
-    .describe("0-based index into the hang list"),
-  function_name: z.string().optional().describe("Native function name"),
+    .describe("0-based hang index."),
+  function_name: z.string().optional().describe("Native function name."),
   thread: z
     .string()
     .optional()
     .describe(
-      "Thread filter. thread_breakdown: case-insensitive substring match. " +
-        'function_callers: exact raw thread name (e.g. ".blueskyweb.app"), or "main" for ' +
-        "the UI thread; omit to search ALL threads (each result is tagged with its thread). " +
-        "Run thread_breakdown first to see the exact raw names."
+      'Thread filter (substring for `thread_breakdown`; exact raw name or `"main"` for `function_callers`).'
     ),
-  object_type: z.string().optional().describe("Object type filter"),
-  top_n: z.coerce.number().int().positive().default(15).describe("Max results to return"),
+  object_type: z.string().optional().describe("Object type filter (`leak_stacks`)."),
+  top_n: z.coerce.number().int().positive().default(15).describe("Max results (default 15)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const profilerStackQueryTool: ToolDefinition<Params, string> = {
   id: "profiler-stack-query",
-  description: `Inspect a native profile after native-profiler-analyze or profiler-load.
-Modes:
-- hang_stacks: Full CPU context during a specific hang (by hang_index).
-- function_callers: Who calls function_name and what it calls.
-- thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details (iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only). Requires a trace with leak data.`,
+  description: `Query native profiler stacks after \`native-profiler-analyze\` or \`profiler-load\`: \`hang_stacks\` (by \`hang_index\`), \`function_callers\` (for \`function_name\`), \`thread_breakdown\`, or \`leak_stacks\` (iOS<flag:macos-apps>/Mac apps</flag:macos-apps>).
+Use when drilling into native hangs, callers, threads, or leaks.
+Returns a markdown breakdown. Fails if no native trace is loaded.`,
   zodSchema,
   readOnly: true,
   interaction: {

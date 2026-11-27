@@ -247,62 +247,43 @@ function timeoutNote(
 
 const zodSchema = z
   .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
-      ),
+    udid: z.string().min(1).describe("Target device id from `list-devices`."),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
       .describe(
-        "What to wait for. `exists`: the selector matches an element anywhere in the tree. " +
-          "`visible`: it matches one with a non-zero on-screen frame. `hidden`: it matches nothing, " +
-          "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
-          "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
-          "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
-          "narrow it to the one holding the text.<flag:macos-apps> On a Mac app, a match in an open menu comes first, " +
-          "then one in an alert, sheet or popover, then one in the window.</flag:macos-apps>"
+        "`exists`: in tree; `visible`: non-zero on-screen frame; `hidden`: absent or zero-area; " +
+          "`text`: first visible match in reading order matches `expectedText`.<flag:macos-apps> On a Mac app, open menus match before alerts/sheets and the window.</flag:macos-apps>"
       ),
     selector: selectorSchema.describe(
-      "Element to match. Give at least one field; every given field must match."
+      "Element matcher (at least one field; all given fields must match)."
     ),
     expectedText: z
       .string()
       .min(1)
       .optional()
-      .describe(
-        "Required for condition `text`: the string the checked match must contain or equal (see `textMatch`)."
-      ),
+      .describe("Required for `text`: expected substring or full string (see `textMatch`)."),
     textMatch: z
       .enum(["contains", "equals"])
       .optional()
-      .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
-      ),
+      .describe("Case-insensitive match mode for `text`: `contains` (default) or `equals`."),
     bundleId: z
       .string()
       .optional()
-      .describe(
-        "iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
-          "including physical iOS."
-      ),
+      .describe("iOS simulator only: fallback bundle id for `describe`."),
     timeoutMs: z
       .number()
       .int()
       .positive()
       .max(120_000)
       .optional()
-      .describe(
-        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
-      ),
+      .describe(`Timeout in ms (default ${DEFAULT_TIMEOUT_MS}).`),
     pollIntervalMs: z
       .number()
       .int()
       .min(50)
       .max(5000)
       .optional()
-      .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+      .describe(`Poll interval in ms (default ${DEFAULT_POLL_INTERVAL_MS}).`),
   })
   .strict()
   .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
@@ -358,9 +339,8 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
 
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
-    description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
-Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
-Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
+    description: `Block server-side until a UI element matches \`condition\` on the \`describe\` tree or times out (never poll screenshot/describe manually).
+Use when waiting for UI to appear, disappear, or update after an action. Returns { success, elapsed, note?, cause? }. On timeout (\`success: false\`), \`cause\` is \`unmet\` (live tree read and condition false; \`note\` says what was seen), \`unreadable\` (blind/failed read), or \`cancelled\`; only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos> Fails if the target backend is unreachable.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

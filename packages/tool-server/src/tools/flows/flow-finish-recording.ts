@@ -126,14 +126,8 @@ function anchoredWarnings(
 }
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
-    ),
+  name: z.string().describe("E2E test name from `e2e-start-recording`."),
+  project_root: z.string().describe("Project root from `e2e-start-recording`."),
 });
 
 export const flowFinishRecordingTool: ToolDefinition<
@@ -155,9 +149,9 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-finish-recording",
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns the final YAML and a step summary, including \`shutdownSteps\` when shutdown has entries. Runs any pending fragment cleanup first and reports it in \`fragmentShutdown\`. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
-A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
-You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
+  description: `Finalize an open e2e recording (runs pending fragment cleanup first).
+Use when all steps have been recorded and you are ready to polish or replay the YAML (check any \`warning:\` lines in \`summary\` for recorded waits).
+Returns \`{ message, path, steps, shutdownSteps?, fragmentShutdown?, summary, e2eTestFile, savedTo }\`. Fails if no recording is open for \`name\` + \`project_root\`.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-finish-recording"],

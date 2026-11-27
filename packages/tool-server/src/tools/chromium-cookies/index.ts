@@ -26,39 +26,33 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
+  udid: z.string().describe("Chromium device id (`chromium-cdp-<port>`)."),
   action: z
     .enum(["get", "set", "delete", "clear"])
     .describe(
-      "get: read cookies. set: create/update a cookie. delete: remove matching cookies. clear: remove ALL browser cookies."
+      "get: read cookies. set: create/update a cookie. delete: remove matching cookies. clear: remove ALL browser cookies across all domains (ignores url/domain)."
     ),
-  name: z.string().optional().describe("Cookie name."),
-  value: z.string().optional().describe("Cookie value."),
+  name: z.string().optional().describe("Cookie name (required for `set`/`delete`)."),
+  value: z.string().optional().describe("Cookie value (required for `set`)."),
   url: z
     .string()
     .optional()
-    .describe(
-      "get: restrict to this URL (defaults to the active page). set/delete: scope the cookie by URL."
-    ),
-  domain: z.string().optional().describe("set/delete: scope the cookie by domain."),
-  path: z.string().optional().describe("set/delete: cookie path (default /)."),
-  secure: z.boolean().optional().describe("set: mark Secure."),
-  httpOnly: z.boolean().optional().describe("set: mark HttpOnly."),
-  sameSite: z.enum(["Strict", "Lax", "None"]).optional().describe("set: SameSite policy."),
-  expires: z
-    .number()
-    .optional()
-    .describe("set: expiry as a Unix timestamp (seconds). Omit for a session cookie."),
+    .describe("URL filter for `get` (defaults to the active page) or scope for `set`/`delete`."),
+  domain: z.string().optional().describe("Domain scope (`set`/`delete`)."),
+  path: z.string().optional().describe("Path scope (default `/`)."),
+  secure: z.boolean().optional().describe("Secure flag (`set`)."),
+  httpOnly: z.boolean().optional().describe("HttpOnly flag (`set`)."),
+  sameSite: z.enum(["Strict", "Lax", "None"]).optional().describe("SameSite policy (`set`)."),
+  expires: z.number().optional().describe("Unix expiry in seconds (`set`; omit for session)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
   id: "chromium-cookies",
-  description: `Read and write cookies of a Chromium (CDP) app, HttpOnly cookies included.
-\`set\` needs \`name\`, \`value\`, and \`url\` or \`domain\`; \`delete\` needs \`name\` and \`url\` or \`domain\`.
-Use when seeding an authenticated session before an e2e test (set the session cookie, then navigate) or asserting cookie state after one.
-Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or a param that \`set\` / \`delete\` needs is missing.`,
+  description: `Read and write cookies (including HttpOnly) in a Chromium (CDP) app.
+Use when seeding an auth session or asserting cookie state (\`set\`/\`delete\` need \`url\` or \`domain\`). \`clear\` wipes ALL browser cookies across every domain (ignores \`url\`/\`domain\`); use \`get\` + \`delete\` to clear a single domain.
+Returns \`{ cookies, count }\` (\`get\`) or \`{ set }\` / \`{ deleted }\` / \`{ cleared }\`. Fails on non-Chromium targets or missing required params.`,
   zodSchema,
   searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",
   interaction: {
