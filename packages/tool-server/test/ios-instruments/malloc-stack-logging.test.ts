@@ -138,16 +138,15 @@ describe("native-profiler-start malloc_stack_logging", () => {
     }));
   }
 
-  it("waits for the simulator watcher's first poll before terminating and relaunching", async () => {
+  it("arms the simulator before terminating and relaunching", async () => {
     const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
     applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
-    let settleFirstPoll!: () => void;
-    const firstPoll = new Promise<void>((resolve) => {
-      settleFirstPoll = resolve;
+    let settleArming!: () => void;
+    const arming = new Promise<void>((resolve) => {
+      settleArming = resolve;
     });
-    vi.doMock("../../src/utils/simulator-watcher", () => ({
-      firstSimulatorPoll: () => firstPoll,
-    }));
+    const armSimulator = vi.fn(() => arming);
+    vi.doMock("../../src/utils/simulator-watcher", () => ({ armSimulator }));
     const terminated = () =>
       execFileSyncFn.mock.calls.some((c) => ((c[1] as string[]) ?? []).includes("terminate"));
 
@@ -159,10 +158,11 @@ describe("native-profiler-start malloc_stack_logging", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
 
+    expect(armSimulator).toHaveBeenCalledWith("DEVICE-UDID");
     expect(terminated()).toBe(false);
     expect(spawnFn).not.toHaveBeenCalled();
 
-    settleFirstPoll();
+    settleArming();
     await started;
 
     expect(terminated()).toBe(true);

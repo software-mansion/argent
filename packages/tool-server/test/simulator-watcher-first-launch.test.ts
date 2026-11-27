@@ -71,10 +71,11 @@ import {
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { audioDir } from "../src/utils/ios-host";
 import { SimctlTimeoutError } from "../src/utils/simctl-exec";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
+import { targetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
-const registry = {} as unknown as Registry;
+const registry = watcherRegistry();
 
 const FAKE_APP = "/Applications/Xcode-beta.app";
 const realDeveloperDir = process.env.DEVELOPER_DIR;
@@ -253,10 +254,9 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
       })
     );
 
-    const { ready, stop } = startSimulatorWatcher({
-      resolveService,
-      disposeService,
-    } as unknown as Registry);
+    const watched = watcherRegistry({ resolveService, disposeService });
+    const { ready, stop } = startSimulatorWatcher(watched);
+    targetSimulators(watched, udid);
     await ready;
     expect(resolveService).toHaveBeenCalledTimes(1);
 
@@ -333,6 +333,49 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       await realRegistry.dispose();
     });
 
+    it("arms a simulator a tool targets, and arms it again after it reboots", async () => {
+      const { ready, stop } = startSimulatorWatcher(realRegistry);
+      await ready;
+      await armSimulator(SIMULATOR.id);
+      const beforeReboot = await resolveLikeATool();
+      expectArmed(beforeReboot);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      execSimctlMock.mockResolvedValue('{"devices":{}}');
+      await vi.advanceTimersByTimeAsync(10_000);
+      execSimctlMock.mockResolvedValue(BOOTED_LIST);
+      execFileMock.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(launchctlSetenvs()).toContainEqual([
+        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
+        beforeReboot.socketPath,
+      ]);
+      const afterReboot = await resolveLikeATool();
+      stop();
+
+      expect(afterReboot).not.toBe(beforeReboot);
+      expectArmed(afterReboot);
+    });
+
+    it("re-applies the env when a poll takes up a service a tool call started", async () => {
+      execSimctlMock.mockResolvedValue('{"devices":{}}');
+      const { ready, stop } = startSimulatorWatcher(realRegistry);
+      await ready;
+      await armSimulator(SIMULATOR.id);
+      const service = await resolveLikeATool();
+      expectArmed(service);
+
+      execFileMock.mockClear();
+      execSimctlMock.mockResolvedValue(BOOTED_LIST);
+      await vi.advanceTimersByTimeAsync(10_000);
+      stop();
+
+      expect(launchctlSetenvs()).toContainEqual([
+        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
+        service.socketPath,
+      ]);
+    });
+
     it("arms a service that was refused while the install was pending, counting no failure", async () => {
       pending.value = true;
       const service = await resolveLikeATool();
@@ -346,6 +389,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
 
       pending.value = false;
       const { ready, stop } = startSimulatorWatcher(realRegistry);
+      targetSimulators(realRegistry, SIMULATOR.id);
       await ready;
       await vi.advanceTimersByTimeAsync(10_000);
       stop();
@@ -361,20 +405,22 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
       await ready;
       const service = await resolveLikeATool();
       const ensureEnvReady = vi.spyOn(service, "ensureEnvReady");
+      const reverifyEnv = vi.spyOn(service, "reverifyEnv");
+      const attempts = () => ensureEnvReady.mock.calls.length + reverifyEnv.mock.calls.length;
 
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(ensureEnvReady).not.toHaveBeenCalled();
+      expect(attempts()).toBe(0);
       expect(execSimctlMock).not.toHaveBeenCalled();
       expect(xcrunCalls()).toEqual([]);
 
       pending.value = false;
       await vi.advanceTimersByTimeAsync(20_000);
       expectArmed(service);
-      expect(ensureEnvReady).toHaveBeenCalledTimes(1);
+      expect(attempts()).toBe(1);
 
       // Armed, so it costs later polls nothing.
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(ensureEnvReady).toHaveBeenCalledTimes(1);
+      expect(attempts()).toBe(1);
       stop();
     });
 
@@ -386,6 +432,7 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
         return BOOTED_LIST;
       });
       const { ready, stop } = startSimulatorWatcher(realRegistry);
+      targetSimulators(realRegistry, SIMULATOR.id);
       await ready;
       const service = await resolveLikeATool();
       const ensureEnvReady = vi.spyOn(service, "ensureEnvReady");
@@ -413,10 +460,13 @@ describe("simulator-watcher arming a simulator once Xcode's component install is
         ensureEnvReady,
         armsEnv: true,
       };
-      return startSimulatorWatcher({
+      const watched = watcherRegistry({
         resolveService: async () => service,
         disposeService: async () => {},
-      } as unknown as Registry);
+      });
+      const watcher = startSimulatorWatcher(watched);
+      targetSimulators(watched, SIMULATOR.id);
+      return watcher;
     }
 
     it("does not retry a service that has given up", async () => {

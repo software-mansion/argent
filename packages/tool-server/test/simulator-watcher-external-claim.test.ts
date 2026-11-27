@@ -1,7 +1,7 @@
 /**
- * The watcher arms devtools injection on every booted simulator it finds, by
- * raw UDID and with no tool call behind it; the one caller that can walk past
- * a gate keyed on the `ext:` id.
+ * The watcher re-arms a targeted simulator after a reboot by raw UDID, with no
+ * tool call behind it, so it is the one caller that can walk past a gate keyed
+ * on the `ext:` id.
  *
  * The e2e device-provider tier runs under a sandbox `$HOME`, which hides the
  * default simulator set from the watcher, so this file is the only coverage.
@@ -53,15 +53,22 @@ vi.mock("../src/utils/simctl-exec", async () => {
   };
 });
 
-import type { Registry } from "@argent/registry";
+import { ServiceState, type Registry } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
-import { __resetProviderWarningsForTesting } from "../src/utils/external-devices";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import {
+  __resetProviderWarningsForTesting,
+  externalClaimForAnyId,
+} from "../src/utils/external-devices";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { targetSimulators, untargetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 /** The simulator a provider claims. */
 const CLAIMED_UDID = "11111111-1111-1111-1111-111111111111";
 /** One argent booted itself, booted alongside it. */
 const OWN_UDID = "22222222-2222-2222-2222-222222222222";
+
+/** A provider's simulator whose UDID has letters, so its case can differ. */
+const LETTERED_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
 
 /** A pid nothing can be running under, so `kill(0)` fails with ESRCH. */
 const DEAD_PID = 0x7fffffff;
@@ -87,7 +94,11 @@ function bootedListResponse(udids: string[]): { stdout: string; stderr: string }
  * it. `test/setup/ignore-device-providers.ts` disables discovery suite-wide and
  * outranks the override, so opting back in means deleting that variable.
  */
-function publishDescriptor(options: { capabilities: string[]; pid?: number }): void {
+function publishDescriptor(options: {
+  capabilities: string[];
+  pid?: number;
+  nativeId?: string;
+}): void {
   const descriptorPath = path.join(temporaryDirectory, "acme.json");
 
   fs.writeFileSync(
@@ -98,7 +109,7 @@ function publishDescriptor(options: { capabilities: string[]; pid?: number }): v
           capabilities: options.capabilities,
           kind: "simulator",
           name: "iPhone 16 Pro",
-          nativeId: CLAIMED_UDID,
+          nativeId: options.nativeId ?? CLAIMED_UDID,
           platform: "ios",
           state: "Booted",
         },
@@ -156,9 +167,16 @@ function makeRegistry(): {
 
   return {
     disposeService,
-    registry: { resolveService, disposeService } as unknown as Registry,
+    registry: watcherRegistry({ resolveService, disposeService }),
     resolveService,
   };
+}
+
+/** A watcher that both simulators have been targeted on. */
+function startTargetedWatcher(registry: Registry): ReturnType<typeof startSimulatorWatcher> {
+  const watcher = startSimulatorWatcher(registry);
+  targetSimulators(registry, CLAIMED_UDID, OWN_UDID);
+  return watcher;
 }
 
 /** The UDIDs the watcher asked the registry to resolve, in call order. */
@@ -198,7 +216,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl", "ax-service"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -209,7 +227,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -222,7 +240,7 @@ describe("simulator-watcher against a provider's simulator", () => {
 
     vi.useFakeTimers();
     try {
-      const { ready, stop } = startSimulatorWatcher(registry);
+      const { ready, stop } = startTargetedWatcher(registry);
       await ready;
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(10_000);
@@ -241,7 +259,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -267,7 +285,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     function makeHandoffRegistry(): {
       armed: NativeDevtoolsApi & { withdrawEnv: ReturnType<typeof vi.fn> };
       disposeService: ReturnType<typeof vi.fn>;
-      publish: (capabilities: string[]) => void;
+      publish: (capabilities: string[], nativeId?: string) => void;
       registry: Registry;
       resolveService: ReturnType<typeof vi.fn>;
     } {
@@ -276,17 +294,24 @@ describe("simulator-watcher against a provider's simulator", () => {
       const attaching = { ...makeApi(), armsEnv: false };
       let published = false;
 
-      const disposeService = vi.fn(async () => {});
-      const resolveService = vi.fn(async () => (published ? attaching : armed));
+      /** Like the real registry: the factory runs once until a dispose. */
+      let cached: NativeDevtoolsApi | undefined;
+      const resolveService = vi.fn(async () => (cached ??= published ? attaching : armed));
+      const disposeService = vi.fn(async (urn: string) => {
+        cached = undefined;
+        untargetSimulators(registry, urn.split(":")[1]);
+      });
+      const getServiceState = () => ServiceState.RUNNING;
+      const registry = watcherRegistry({ resolveService, disposeService, getServiceState });
 
       return {
         armed,
         disposeService,
-        publish: (capabilities: string[]) => {
-          publishDescriptor({ capabilities });
+        publish: (capabilities: string[], nativeId?: string) => {
+          publishDescriptor({ capabilities, nativeId });
           published = true;
         },
-        registry: { resolveService, disposeService } as unknown as Registry,
+        registry,
         resolveService,
       };
     }
@@ -307,7 +332,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     it("hands the environment back and re-resolves when the claim grants native-devtools", async () => {
       const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
       expect(resolvedUdids(resolveService).sort()).toEqual([CLAIMED_UDID, OWN_UDID].sort());
 
@@ -326,7 +351,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     it("hands the environment back and lets go when the claim withholds it", async () => {
       const { armed, disposeService, publish, registry, resolveService } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
 
       publish(["simctl", "ax-service"]);
@@ -339,11 +364,78 @@ describe("simulator-watcher against a provider's simulator", () => {
       expect(resolvedUdids(resolveService).filter((udid) => udid === CLAIMED_UDID)).toHaveLength(1);
     });
 
+    it("hands back an environment a tool call armed before any poll saw the simulator", async () => {
+      const { armed, publish, registry } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      await vi.runOnlyPendingTimersAsync();
+      await armSimulator(CLAIMED_UDID);
+      targetSimulators(registry, CLAIMED_UDID);
+
+      publish(["simctl", "ax-service"]);
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands back an environment a tool targeted under another case of the UDID", async () => {
+      execFileMock.mockImplementation((cmd: string) =>
+        cmd === "xcrun" ? bootedListResponse([LETTERED_UDID]) : { stdout: "", stderr: "" }
+      );
+      const { armed, publish, registry } = makeHandoffRegistry();
+
+      const { stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, LETTERED_UDID.toLowerCase());
+      await vi.runOnlyPendingTimersAsync();
+
+      publish(["simctl", "ax-service"], LETTERED_UDID);
+      await nextTick();
+      stop();
+
+      expect(armed.withdrawEnv).toHaveBeenCalledTimes(1);
+    });
+
+    it("attaches once to a granted claim a tool targeted under another case of the UDID", async () => {
+      execFileMock.mockImplementation((cmd: string) =>
+        cmd === "xcrun" ? bootedListResponse([LETTERED_UDID]) : { stdout: "", stderr: "" }
+      );
+      const withdrawEnv = vi.fn(async () => {});
+      const services = new Map<string, NativeDevtoolsApi>();
+      /** Like the real factory, which looks the claim up under the URN's spelling. */
+      const resolveService = vi.fn(async (urn: string) => {
+        const udid = urn.split(":")[1];
+        if (!services.has(urn)) {
+          services.set(urn, { ...makeApi(), withdrawEnv, armsEnv: !externalClaimForAnyId(udid) });
+        }
+        return services.get(urn)!;
+      });
+      const disposeService = vi.fn(async (urn: string) => {
+        services.delete(urn);
+        untargetSimulators(registry, urn.split(":")[1]);
+      });
+      const getServiceState = (urn: string) =>
+        services.has(urn) ? ServiceState.RUNNING : ServiceState.IDLE;
+      const registry = watcherRegistry({ resolveService, disposeService, getServiceState });
+
+      const { stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, LETTERED_UDID.toLowerCase());
+      await vi.runOnlyPendingTimersAsync();
+
+      publishDescriptor({ capabilities: ["simctl", "native-devtools"], nativeId: LETTERED_UDID });
+      await nextTick();
+      await nextTick();
+      await nextTick();
+      stop();
+
+      expect(withdrawEnv).toHaveBeenCalledTimes(1);
+    });
+
     /** Once handed over, later ticks leave the provider alone. */
     it("does not withdraw again on the ticks after the handoff", async () => {
       const { armed, publish, registry } = makeHandoffRegistry();
 
-      const { stop } = startSimulatorWatcher(registry);
+      const { stop } = startTargetedWatcher(registry);
       await vi.runOnlyPendingTimersAsync();
 
       publish(["simctl", "native-devtools"]);
@@ -356,12 +448,58 @@ describe("simulator-watcher against a provider's simulator", () => {
     });
   });
 
+  it("leaves a claimed simulator to its provider when a tool call targets it", async () => {
+    publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
+    const { registry, resolveService } = makeRegistry();
+
+    const { ready, stop } = startSimulatorWatcher(registry);
+    await ready;
+    await armSimulator(CLAIMED_UDID);
+    stop();
+
+    expect(resolvedUdids(resolveService)).not.toContain(CLAIMED_UDID);
+  });
+
+  describe.each([
+    { claimedAs: LETTERED_UDID.toLowerCase(), targetedAs: LETTERED_UDID },
+    { claimedAs: LETTERED_UDID, targetedAs: LETTERED_UDID.toLowerCase() },
+  ])("claimed as $claimedAs and targeted as $targetedAs", ({ claimedAs, targetedAs }) => {
+    beforeEach(() => {
+      execFileMock.mockImplementation((cmd: string) =>
+        cmd === "xcrun" ? bootedListResponse([LETTERED_UDID]) : { stdout: "", stderr: "" }
+      );
+      publishDescriptor({ capabilities: ["simctl"], nativeId: claimedAs });
+    });
+
+    it("leaves the simulator to its provider on a poll", async () => {
+      const { registry, resolveService } = makeRegistry();
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, targetedAs);
+      await ready;
+      stop();
+
+      expect(resolveService).not.toHaveBeenCalled();
+    });
+
+    it("leaves the simulator to its provider when a tool call targets it", async () => {
+      const { registry, resolveService } = makeRegistry();
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(targetedAs);
+      stop();
+
+      expect(resolveService).not.toHaveBeenCalled();
+    });
+  });
+
   /** The claim is only as live as the process behind it. */
   it("ignores a claim whose provider process is gone", async () => {
     publishDescriptor({ capabilities: ["simctl"], pid: DEAD_PID });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 
@@ -372,7 +510,7 @@ describe("simulator-watcher against a provider's simulator", () => {
     publishDescriptor({ capabilities: ["simctl"], pid: process.pid });
     const { registry, resolveService } = makeRegistry();
 
-    const { ready, stop } = startSimulatorWatcher(registry);
+    const { ready, stop } = startTargetedWatcher(registry);
     await ready;
     stop();
 

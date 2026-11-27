@@ -55,6 +55,7 @@ const registry = {
     if (!urn.startsWith(`${AX_SERVICE_NAMESPACE}:`)) {
       return { networkCaptureAfterLaunch: async () => undefined };
     }
+    events.push("ax");
     if (axUnavailable) throw new Error("ax-service could not start");
     return { foregroundApp };
   }),
@@ -88,6 +89,7 @@ beforeEach(() => {
   fronts = [APP];
   axUnavailable = false;
   tvOs.value = false;
+  vi.mocked(isTvOsSimulator).mockImplementation(async () => tvOs.value);
   foregroundApp.mockClear();
   __resetDepCacheForTests();
   __primeDepCacheForTests(["xcrun"]);
@@ -106,7 +108,18 @@ describe.each(tools)("$name on an iOS simulator", ({ run, ok }) => {
 
     await expect(run()).resolves.toEqual(ok);
 
-    expect(events).toEqual(["launch", `front ${PREVIOUS}`, `front ${PREVIOUS}`, `front ${APP}`]);
+    expect(events.filter((e) => e !== "ax")).toEqual([
+      "launch",
+      `front ${PREVIOUS}`,
+      `front ${PREVIOUS}`,
+      `front ${APP}`,
+    ]);
+  });
+
+  it("starts the accessibility service before the launch", async () => {
+    await expect(run()).resolves.toEqual(ok);
+
+    expect(events.indexOf("ax")).toBeLessThan(events.indexOf("launch"));
   });
 
   it("stops waiting after 5 s for an app that never comes to the front", async () => {
@@ -135,7 +148,7 @@ describe.each(tools)("$name on an iOS simulator", ({ run, ok }) => {
     "handles %s during a stalled simulator lookup",
     async (end) => {
       vi.useFakeTimers();
-      vi.mocked(isTvOsSimulator).mockImplementationOnce(() => new Promise<boolean>(() => {}));
+      vi.mocked(isTvOsSimulator).mockImplementation(() => new Promise<boolean>(() => {}));
       const controller = new AbortController();
       let settled = false;
       const result = run(controller.signal).finally(() => (settled = true));

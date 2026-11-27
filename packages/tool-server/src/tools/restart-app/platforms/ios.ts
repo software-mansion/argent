@@ -16,7 +16,7 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
-import { awaitIosAppInFront } from "../../../utils/ios-front-app";
+import { awaitIosAppInFront, startIosFrontAppReader } from "../../../utils/ios-front-app";
 import { settleWithin } from "../../../utils/timing";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
@@ -31,6 +31,7 @@ export function makeIosImpl(
   return {
     requires: ["xcrun"],
     handler: async (_services, params, device, options) => {
+      startIosFrontAppReader(registry, device);
       const { udid, bundleId } = params;
       /**
        * Same reasoning as launch-app. native-devtools is a granted mechanism,

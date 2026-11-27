@@ -9,6 +9,7 @@ import type { MacosAppApi } from "../blueprints/macos-app";
 import { isIosPhysicalDevice, resolveDevice } from "./device-info";
 import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
+import { armSimulator } from "./simulator-watcher";
 
 /**
  * One platform branch of a cross-platform tool. Only the resolved branch's
@@ -102,6 +103,7 @@ export function dispatchByPlatform<
       if (opts.ios.requires?.length) {
         await ensureDeps(opts.ios.requires);
       }
+      void armSimulator(device.id);
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }
     if (device.platform === "ios-remote") {

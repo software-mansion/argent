@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import type { DeviceInfo, Registry } from "@argent/registry";
+import type { DeviceInfo } from "@argent/registry";
 
 // An app opened from the home screen (a tap, a key, a tv-remote select) before
-// the watcher's first poll armed injection launches without the native-devtools
-// dylib. Every input to a local iOS / Apple TV simulator goes through the
-// simulator-server or tv-control service, so neither may start its backend
-// before that poll. The real watcher runs here with its first poll held open.
+// its simulator is armed launches without the native-devtools dylib. Every
+// input to a local iOS / Apple TV simulator goes through the simulator-server
+// or tv-control service, so neither may be ready before it has armed that
+// simulator. The real watcher runs here with the arming held open.
 // Devices the watcher never arms (Android, remote, provider-claimed) and
 // targets a factory rejects must not wait on it.
 
@@ -36,13 +36,25 @@ function exitingProc(): FakeProc {
   return proc;
 }
 
+/** A backend that reports ready at once. */
+function readyProc(): FakeProc {
+  const proc = new FakeProc();
+  setImmediate(() => {
+    proc.stdout.push("stream_ready http://127.0.0.1:1/stream\n");
+    proc.stdout.push("api_ready http://127.0.0.1:1\n");
+  });
+  return proc;
+}
+
+let spawnProc: () => FakeProc = exitingProc;
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: (...args: unknown[]) => {
       spawnMock(...args);
-      return exitingProc();
+      return spawnProc();
     },
     execFile: (...args: unknown[]) => {
       execFileMock(...args);
@@ -136,21 +148,23 @@ import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/c
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { simulatorServerBlueprint } from "../src/blueprints/simulator-server";
 import { tvControlBlueprint } from "../src/blueprints/tv-control";
+import { watcherRegistry } from "./helpers/watcher-registry";
 
 const ios: DeviceInfo = { id: IOS_UDID, platform: "ios", kind: "simulator" };
 const tv: DeviceInfo = { id: TV_UDID, platform: "ios", kind: "simulator" };
 
-/** Rejects with "waited on the first poll" if `started` is still pending after 1s. */
-async function settledWithPollHeld(started: Promise<unknown>): Promise<unknown> {
+/** Rejects with "waited on the arming" if `started` is still pending after 1s. */
+async function settledWithArmingHeld(started: Promise<unknown>): Promise<unknown> {
   const held = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("waited on the first poll")), 1_000)
+    setTimeout(() => reject(new Error("waited on the arming")), 1_000)
   );
   return Promise.race([started, held]);
 }
 
 let stop: (() => void) | undefined;
-/** Finishes the first poll's injection attempt for every booted simulator. */
+/** Finishes every injection attempt held so far. */
 let arm!: () => void;
+let resolveService: ReturnType<typeof vi.fn>;
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
@@ -161,12 +175,16 @@ beforeEach(() => {
   __primeDepCacheForTests(["adb"]);
   spawnMock.mockReset();
   execFileMock.mockReset();
+  spawnProc = exitingProc;
   const held: Array<() => void> = [];
   arm = () => held.forEach((resolve) => resolve());
-  const resolveService = vi.fn(
-    () => new Promise((resolve) => held.push(() => resolve({ getInitFailure: () => null })))
+  resolveService = vi.fn(
+    () =>
+      new Promise((resolve) =>
+        held.push(() => resolve({ getInitFailure: () => null, ensureEnvReady: async () => {} }))
+      )
   );
-  ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
+  ({ stop } = startSimulatorWatcher(watcherRegistry({ resolveService })));
 });
 
 afterEach(() => {
@@ -174,19 +192,29 @@ afterEach(() => {
   stop = undefined;
 });
 
-describe("simulator input waits for the watcher's first poll", () => {
-  it("simulator-server does not start for an iOS simulator until the poll armed injection", async () => {
+describe("simulator input waits until its simulator is armed", () => {
+  it("simulator-server for an iOS simulator starts its backend while arming but is not ready until armed", async () => {
+    spawnProc = readyProc;
+    let settled = false;
     const started = simulatorServerBlueprint.factory({}, ios, { device: ios });
-    started.catch(() => {});
+    started.then(
+      (instance) => {
+        settled = true;
+        return instance.dispose();
+      },
+      () => (settled = true)
+    );
     await flush();
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${IOS_UDID}`]);
+    expect(settled).toBe(false);
 
     arm();
-    await expect(started).rejects.toThrow(/before becoming ready/);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(settled).toBe(true);
   });
 
-  it("tv-control does not start for an Apple TV simulator until the poll armed injection", async () => {
+  it("tv-control does not start for an Apple TV simulator until it armed that simulator", async () => {
     const started = tvControlBlueprint.factory({}, tv, { device: tv });
     started.catch(() => {});
     await flush();
@@ -213,13 +241,13 @@ describe("simulator input waits for the watcher's first poll", () => {
       { id: CLAIMED_UDID, platform: "ios", kind: "simulator" },
       /did not publish a simulator-server endpoint/,
     ],
-  ])("simulator-server for %s does not wait on the poll", async (_name, device, reached) => {
+  ])("simulator-server for %s does not wait on the arming", async (_name, device, reached) => {
     const started = simulatorServerBlueprint.factory({}, device, { device });
-    await expect(settledWithPollHeld(started)).rejects.toThrow(reached);
+    await expect(settledWithArmingHeld(started)).rejects.toThrow(reached);
   });
 
-  it("tv-control rejects an iPhone simulator without waiting on the poll", async () => {
+  it("tv-control rejects an iPhone simulator without waiting on the arming", async () => {
     const started = tvControlBlueprint.factory({}, ios, { device: ios });
-    await expect(settledWithPollHeld(started)).rejects.toThrow(/is not a tvOS simulator/);
+    await expect(settledWithArmingHeld(started)).rejects.toThrow(/is not a tvOS simulator/);
   });
 });

@@ -34,7 +34,7 @@ import {
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
-import { firstSimulatorPoll } from "../utils/simulator-watcher";
+import { armSimulator } from "../utils/simulator-watcher";
 import {
   detectAgentSocket,
   listAgentReverseSockets,
@@ -673,6 +673,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       return buildRemoteInstance(device);
     }
 
+    let arming = Promise.resolve();
     if (device.platform === "ios") {
       // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
       // cannot drive the Apple TV focus engine: it accepts a touch and acks it
@@ -689,9 +690,8 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
             "presses, and `keyboard` to type (see the argent-tv-interact skill)"
         );
       }
-      // Input could open an app from the home screen, which must not launch
-      // before the watcher has armed native-devtools injection.
-      await Promise.all([clearAutomationEnabledOrWarn(device.id), firstSimulatorPoll()]);
+      arming = armSimulator(device.id);
+      await clearAutomationEnabledOrWarn(device.id);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).
@@ -706,6 +706,9 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
 
     const { proc, apiUrl, streamUrl, agentSocket } = await spawnWithEmulatorFallback(device);
+    // Input could open an app from the home screen, which must not launch
+    // before native-devtools injection is armed.
+    await arming;
 
     const events = new TypedEventEmitter<ServiceEvents>();
 

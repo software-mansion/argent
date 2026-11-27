@@ -46,9 +46,14 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
-import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { armSimulator, startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { targetSimulators, untargetSimulators, watcherRegistry } from "./helpers/watcher-registry";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
+/** Booted alongside, but no tool has targeted it. */
+const OTHER_UDID = "22222222-2222-2222-2222-222222222222";
+/** Has letters, so its lowercase spelling differs from what `simctl list` prints. */
+const LETTERED_UDID = "ABCDEF01-2345-4678-9ABC-DEF012345678";
 
 function bootedListResponse(udids: string[]): { stdout: string; stderr: string } {
   return {
@@ -117,7 +122,7 @@ function makeRegistry(api: NativeDevtoolsApi): {
   // return the cached api. Attempt counts only go up when the watcher itself
   // calls api.ensureEnvReady().
   let factoryRan = false;
-  const resolveService = vi.fn(async () => {
+  const resolveService = vi.fn(async (_urn: string) => {
     if (!factoryRan) {
       factoryRan = true;
       await api.ensureEnvReady().catch(() => {});
@@ -128,7 +133,7 @@ function makeRegistry(api: NativeDevtoolsApi): {
     factoryRan = false;
   });
   return {
-    registry: { resolveService, disposeService } as unknown as Registry,
+    registry: watcherRegistry({ resolveService, disposeService }),
     resolveService,
     disposeService,
   };
@@ -157,6 +162,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
     vi.useFakeTimers();
     try {
       const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, UDID);
       await ready;
 
       while ((api.getInitFailure()?.attempts ?? 0) < MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS) {
@@ -221,6 +227,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
     vi.useFakeTimers();
     try {
       const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, UDID);
       await ready;
       const callsAfterInit = calls;
 
@@ -247,6 +254,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
     vi.useFakeTimers();
     try {
       const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, UDID);
       await ready;
       expect(disposeService).not.toHaveBeenCalled();
 
@@ -254,6 +262,153 @@ describe("simulator-watcher with api-owned init failure state", () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(disposeService).toHaveBeenCalledWith(`NativeDevtools:${UDID}`);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a booted simulator no tool targeted alone", async () => {
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse([UDID, OTHER_UDID]);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, resolveService } = makeRegistry(api);
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      expect(resolveService).not.toHaveBeenCalled();
+
+      targetSimulators(registry, UDID);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(resolveService.mock.calls.map(([urn]) => urn)).toEqual([`NativeDevtools:${UDID}`]);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["in upper case", LETTERED_UDID],
+    ["in lower case", LETTERED_UDID.toLowerCase()],
+  ])("arms a simulator a tool named %s again after it reboots", async (_case, target) => {
+    let bootedUdids: string[] = [LETTERED_UDID];
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse(bootedUdids);
+      return { stdout: "", stderr: "" };
+    });
+
+    let calls = 0;
+    const { api } = makeFailingApi();
+    const counted = {
+      ...api,
+      isEnvSetup: () => true,
+      ensureEnvReady: () => {
+        calls += 1;
+        return Promise.resolve();
+      },
+    };
+    const { registry, resolveService } = makeRegistry(counted);
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, target);
+      await ready;
+      expect(calls).toBe(1);
+
+      bootedUdids = [];
+      await vi.advanceTimersByTimeAsync(10_000);
+      bootedUdids = [LETTERED_UDID];
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(calls).toBe(2);
+      expect(new Set(resolveService.mock.calls.map(([urn]) => urn))).toEqual(
+        new Set([`NativeDevtools:${target}`])
+      );
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops re-arming a simulator once a tool stopped its service", async () => {
+    let bootedUdids: string[] = [UDID];
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse(bootedUdids);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, resolveService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, UDID);
+      await ready;
+      expect(resolveService).toHaveBeenCalledTimes(1);
+
+      untargetSimulators(registry, UDID);
+      bootedUdids = [];
+      await vi.advanceTimersByTimeAsync(10_000);
+      bootedUdids = [UDID];
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(resolveService).toHaveBeenCalledTimes(1);
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the service of a simulator a tool named in lowercase while it runs", async () => {
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse([LETTERED_UDID]);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, disposeService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(LETTERED_UDID.toLowerCase());
+      targetSimulators(registry, LETTERED_UDID.toLowerCase());
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(disposeService).not.toHaveBeenCalled();
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the service of an armed simulator that no poll lists, as in a provider's own set", async () => {
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse([UDID]);
+      return { stdout: "", stderr: "" };
+    });
+
+    const { api } = makeFailingApi();
+    const { registry, disposeService } = makeRegistry({ ...api, isEnvSetup: () => true });
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(OTHER_UDID);
+      targetSimulators(registry, OTHER_UDID);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(disposeService).not.toHaveBeenCalled();
       stop();
     } finally {
       vi.useRealTimers();

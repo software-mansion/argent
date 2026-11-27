@@ -110,7 +110,7 @@ Argent never removes the file of a provider. Argent uses only the endpoints that
 
 Argent does not adopt a physical iPhone that a provider offers. Argent drives an iPhone through its own `devicectl` backend, which reaches the hardware directly and so passes the simulator-server of the provider and the grants of the descriptor. Argent refuses such a device instead and `argent providers check` reports it. Simulators and Android devices, physical ones included, are unaffected.
 
-Argent examines the booted simulators and injects its own native agent into them. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
+Argent injects its own native agent into a simulator when a tool uses the simulator. If Argent finds that the simulator shut down and booted again, Argent injects the agent again. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
 
 Argent removes that injection when it reads the new descriptor. Argent removes only its own library and its own endpoint variable. Argent keeps the entries of a different application. Then Argent uses the socket of the provider, if the provider grants `native-devtools`.
 

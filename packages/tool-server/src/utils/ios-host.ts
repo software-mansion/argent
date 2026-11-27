@@ -304,25 +304,53 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 }
 
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
-  // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
-  // the IOSSIMULATOR slice and native injection never connects.
-  const tvOs = await isTvOsSimulator(udid);
-  const bootstrapPath = await bootstrapPathFor(udid, endpoint);
-
   /**
    * These spawns install the injection env, so the native-devtools grant
    * covers them.
    */
   const { nativeId, prefix } = await simctlTargetForUdid(udid, { granted: "native-devtools" });
+  const launchctl = (args: string[]) =>
+    execFileAsync("xcrun", [...prefix, "spawn", nativeId, "launchctl", ...args], {
+      encoding: "utf8",
+      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
 
-  // Read launchctl inside the simulator rather than `simctl getenv`: the latter
-  // silently truncates past 127 bytes, corrupting the colon-separated path list
-  // and accumulating stale entries on every pass.
-  const result = await execFileAsync(
-    "xcrun",
-    [...prefix, "spawn", nativeId, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
+  await settleAllOrThrow([
+    insertInjectionDylibs(udid, endpoint, nativeId, launchctl),
+    setEndpointEnv(endpoint, launchctl),
+    ensureAccessibilityEnabled(udid),
+  ]);
+}
+
+/**
+ * Rejects with the first failure, but only once every step has settled, so no
+ * write lands after the caller has moved on, e.g. after a withdrawal.
+ */
+async function settleAllOrThrow(steps: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(steps);
+  const failure = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failure) throw failure.reason;
+}
+
+type Launchctl = (args: string[]) => Promise<{ stdout: string }>;
+
+async function insertInjectionDylibs(
+  udid: string,
+  endpoint: IosEndpoint,
+  nativeId: string,
+  launchctl: Launchctl
+): Promise<void> {
+  const [tvOs, bootstrapPath, result] = await Promise.all([
+    isTvOsSimulator(udid),
+    bootstrapPathFor(udid, endpoint),
+    // Read launchctl inside the simulator rather than `simctl getenv`: the latter
+    // silently truncates past 127 bytes, corrupting the colon-separated path list
+    // and accumulating stale entries on every pass.
+    launchctl(["getenv", "DYLD_INSERT_LIBRARIES"]).catch((e) => ({
+      stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "",
+    })),
+  ]);
 
   const existing = (result.stdout ?? "").trim();
   if (!tvOs && endpoint.transport === "unix") {
@@ -335,77 +363,41 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
   if (audioDylib) updated = appendDyldInsertLibrary(updated, audioDylib);
 
-  if (updated !== existing) {
-    await execFileAsync(
-      "xcrun",
-      [...prefix, "spawn", nativeId, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+  await Promise.all([
+    updated !== existing ? launchctl(["setenv", "DYLD_INSERT_LIBRARIES", updated]) : undefined,
+    audioDylib ? setAudioDirEnv(nativeId, launchctl) : undefined,
+  ]);
+}
+
+function setEndpointEnv(endpoint: IosEndpoint, launchctl: Launchctl): Promise<unknown> {
+  if (endpoint.transport === "unix") {
+    return launchctl(["setenv", "NATIVE_DEVTOOLS_IOS_CDP_SOCKET", endpoint.socketPath]);
+  }
+  if (endpoint.port === undefined) {
+    return Promise.reject(
+      new Error("native-devtools TCP endpoint reached host setup before its port was bound")
     );
   }
+  return launchctl(["setenv", "NATIVE_DEVTOOLS_IOS_CDP_PORT", String(endpoint.port)]);
+}
 
-  if (endpoint.transport === "tcp") {
-    if (endpoint.port === undefined) {
-      throw new Error("native-devtools TCP endpoint reached host setup before its port was bound");
-    }
-    await execFileAsync(
-      "xcrun",
-      [
-        ...prefix,
-        "spawn",
-        nativeId,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_PORT",
-        String(endpoint.port),
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-    );
-  } else {
-    await execFileAsync(
-      "xcrun",
-      [
-        ...prefix,
-        "spawn",
-        nativeId,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-        endpoint.socketPath,
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-    );
+/** Best-effort: a failure here must cost only the audio tools, not the arming. */
+async function setAudioDirEnv(nativeId: string, launchctl: Launchctl): Promise<void> {
+  try {
+    // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+    fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
+    await launchctl(["setenv", "ARGENT_AUDIO_DIR", audioDir(nativeId)]);
+  } catch (err) {
+    process.stderr.write(`[ios-host] audio setup failed for ${nativeId}: ${String(err)}\n`);
   }
-
-  if (audioDylib) {
-    // Best-effort: the injection above is in place, so a failure here must cost only the audio tools, not the arming.
-    try {
-      // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
-      fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
-      await execFileAsync(
-        "xcrun",
-        [
-          ...prefix,
-          "spawn",
-          nativeId,
-          "launchctl",
-          "setenv",
-          "ARGENT_AUDIO_DIR",
-          audioDir(nativeId),
-        ],
-        { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
-      );
-    } catch (err) {
-      process.stderr.write(`[ios-host] audio setup failed for ${nativeId}: ${String(err)}\n`);
-    }
-  }
-
-  await ensureAccessibilityEnabled(udid);
 }
 
 /**
  * The bootstrap this simulator's injection uses, whichever build applies to it.
  * Arming and withdrawing must agree on it; withdrawing by a different path
- * would leave the armed one in place.
+ * would leave the armed one in place. tvOS simulators require a
+ * TVOSSIMULATOR-platform dylib: dyld silently skips the IOSSIMULATOR slice and
+ * native injection never connects.
  */
 async function bootstrapPathFor(udid: string, endpoint: IosEndpoint): Promise<string> {
   if (await isTvOsSimulator(udid)) return bootstrapDylibPathTvos();

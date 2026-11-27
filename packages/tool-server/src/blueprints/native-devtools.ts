@@ -475,6 +475,14 @@ const WAITING_FOR_CAPTURE_STATE = "waiting for the agent to say whether capture 
 export const PROVIDER_CAPTURE_OFF =
   "the device provider has capture off for the app; argent does not turn it on, because that resets the provider's network settings: turn capture on in the provider";
 
+/** simctl's refusal to spawn into a simulator that is shut down or still booting. */
+function simulatorNotBooted(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    /device is not booted|current state:\s*(shutdown|booting)/i.test(err.message)
+  );
+}
+
 /** How the requester rejects a request on a connection that closed. */
 function closedBeforeRequest(bundleId: string, method: string): FailureError {
   return new FailureError(
@@ -831,7 +839,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (err instanceof XcodeFirstLaunchPendingError) return;
       const lastError = err instanceof Error ? err.message : String(err);
       const attempts = (initFailure?.attempts ?? 0) + 1;
-      const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
+      // A tool call can target a simulator before it boots, and booting it ends this refusal.
+      const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS && !simulatorNotBooted(err);
       initFailure = { attempts, lastError, givenUp };
 
       const message = givenUp

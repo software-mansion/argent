@@ -14,6 +14,20 @@ const IN_FRONT_TIMEOUT_MS = 5_000;
 const IN_FRONT_POLL_MS = 100;
 
 /**
+ * Start the accessibility service {@link awaitIosAppInFront} reads, so it comes
+ * up while the launch arms the simulator. An Apple TV runs none.
+ */
+export function startIosFrontAppReader(registry: Registry, device: DeviceInfo): void {
+  void isTvOsSimulator(device.id)
+    .then((tv) => {
+      if (tv) return;
+      const ref = axServiceRef(device);
+      return registry.resolveService<AXServiceApi>(ref.urn, ref.options);
+    })
+    .catch(() => {});
+}
+
+/**
  * Wait until the accessibility service names `bundleId` as the app in front of
  * an iOS simulator, for at most {@link IN_FRONT_TIMEOUT_MS}.
  *

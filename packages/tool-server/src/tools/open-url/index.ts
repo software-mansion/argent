@@ -57,8 +57,8 @@ type Params = z.infer<typeof zodSchema>;
 
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
-  // On iOS it first waits up to 15s for the simulator watcher's first poll, so a
-  // slow openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
+  // On iOS it first waits up to 15s for its simulator to be armed, so a slow
+  // openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
   longRunning: true,
   description: `Open a URL or deep-link scheme on the device.
 Use when navigating to a web page or deep-linking into an app (prefer custom schemes or \`launch-app\` over \`https://\` Universal/App Links). On Chromium, navigates the primary page (non-page schemes like \`tel:\`/\`mailto:\` fail). On physical iOS, the receiving app becomes active for automation.<flag:harmonyos> HarmonyOS opens URIs via \`aa start -U\`.</flag:harmonyos>

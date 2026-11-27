@@ -163,6 +163,7 @@ export async function scanIosSimulators(): Promise<IosSimulatorScan> {
 // A simulator's runtime kind is fixed at creation, so memoize per-UDID and keep
 // the hot describe/screenshot path off `simctl list`.
 const runtimeKindCache = new Map<string, "mobile" | "tv">();
+const runtimeKindLookups = new Map<string, Promise<"mobile" | "tv" | undefined>>();
 
 /**
  * Runtime kind of an iOS-shaped simulator UDID, or undefined when it isn't a
@@ -175,6 +176,14 @@ const runtimeKindCache = new Map<string, "mobile" | "tv">();
 export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
+  const inFlight = runtimeKindLookups.get(udid);
+  if (inFlight) return inFlight;
+  const lookup = lookUpRuntimeKind(udid).finally(() => runtimeKindLookups.delete(udid));
+  runtimeKindLookups.set(udid, lookup);
+  return lookup;
+}
+
+async function lookUpRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const kind = (await findIosSimulator(udid))?.runtimeKind;
   if (kind) runtimeKindCache.set(udid, kind);
   return kind;
@@ -223,6 +232,7 @@ export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | u
 /** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
 export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   runtimeKindCache.clear();
+  runtimeKindLookups.clear();
   foldableCache.clear();
   deviceTypeFoldableCache.clear();
   deviceTypeBundlePaths = null;
