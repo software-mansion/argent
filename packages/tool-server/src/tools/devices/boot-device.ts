@@ -2834,7 +2834,7 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Overall boot budget in ms (Android default 480000, Vega 120000<flag:harmonyos>, HarmonyOS 180000 — spans shutdown too with `force`</flag:harmonyos>)."
+      "Overall boot budget in ms (Android default 480000, Vega 120000<flag:harmonyos>, HarmonyOS 180000</flag:harmonyos>).<flag:harmonyos> On HarmonyOS with `force`, this spans shutdown too.</flag:harmonyos>"
     ),
   force: z
     .boolean()

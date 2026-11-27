@@ -155,7 +155,7 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     longRunning: true,
     description: `Read the accessibility / DOM element tree for the current screen (or focused/focusable elements on TV targets). On a physical iPhone it covers only the app started with \`launch-app\`; call \`launch-app\` \`com.apple.springboard\` first to read system dialogs.<flag:harmonyos> On HarmonyOS (\`source: "harmony-uitest"\`), each top-level child is a window whose \`identifier\` is the owning bundle; a suspended display dumps its last frame with a \`hint\`.</flag:harmonyos><flag:macos-apps> On a Mac app, frames are fractions of the app window (expanded for sheets/menus).</flag:macos-apps>
 Use when you need tap coordinates or labels and have no fresh tree: interaction tools already attach one after each action (or reference an earlier \`Tree id\`).
-Returns \`{ description, source, hint? }\`: one line per element with role, label/value/id/hint, flags, and normalized \`[0,1]\` frame \`(x,y,w,h)\` — tap at \`(x+w/2, y+h/2)\`. No z-order/occlusion info; check a screenshot if a tap hits an overlay or a text field shows its placeholder as value. Fails if the tree backend is unreachable.
+Returns \`{ description, source, hint? }\`: one line per element with role, label/value/id/hint, flags, and normalized \`[0,1]\` frame \`(x,y,w,h)\`. Tap at \`(x+w/2, y+h/2)\`. No z-order/occlusion info; check a screenshot if a tap hits an overlay or a text field shows its placeholder as value. Fails if the tree backend is unreachable.
 For UIKit view properties (iOS sim) use \`native-find-views\`; for React Native components/testIDs use \`debugger-component-tree\`.`,
     zodSchema,
     alwaysLoad: true,
