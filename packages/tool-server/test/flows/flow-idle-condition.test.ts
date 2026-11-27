@@ -197,7 +197,7 @@ describe("condition families are mutually exclusive", () => {
   it("does not offer it to assert or to a `when:` guard, which have no readiness form", () => {
     const assertMiss = (): FlowStep[] => parseSteps(`  - assert: { visble: { id: home } }\n`);
     expect(assertMiss).toThrow(
-      /assert needs exactly one condition key \(exists, visible, hidden, text\)/
+      /assert needs exactly one condition key \(exists, visible, hidden, text, output\)/
     );
     expect(assertMiss).not.toThrow(/idle/);
 
@@ -208,7 +208,7 @@ describe("condition families are mutually exclusive", () => {
     // back into the message cannot satisfy the negative assertion.
     const stray = guard("{ visble: { id: home } }");
     expect(stray).toThrow(
-      /when needs exactly one condition key \(exists, visible, hidden, text, platform\)/
+      /when needs exactly one condition key \(exists, visible, hidden, text, platform, output\)/
     );
     expect(stray).not.toThrow(/idle/);
 
