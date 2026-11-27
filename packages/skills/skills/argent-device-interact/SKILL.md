@@ -7,9 +7,9 @@ Each tool's description carries its parameters, defaults, and return shape. This
 
 ## Target Routing
 
-- Get a `udid` from `list-devices` (or `boot-device` if none is ready).
+- Get a `udid` from `list-devices` (or `boot-device` if none is ready). Full setup: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`.
 - Specialized targets — read before driving:
-  - Physical iPhone (`kind: "device"`): `argent-ios-device-interact`
+  - Physical iPhone (`kind: "device"`): `argent-ios-device-setup` and `argent-ios-device-interact`
   - Mac app (`platform: "macos"`): `argent-macos-app-interact`
   - TV (`runtimeKind: "tv"` or `platform: "vega"`): `argent-tv-interact`
   - Chromium / HarmonyOS / foldables (`foldable: true`): `references/chromium.md`, `references/harmonyos.md`, `references/foldables.md`
@@ -27,4 +27,4 @@ Each tool's description carries its parameters, defaults, and return shape. This
 - **Dialogs:** `describe` exposes simulator/emulator system & permission dialogs; prefer answering the app's dialog over `settings-permissions`.
 - **Screenshots:** keep the default downscaled capture for UI checks; do not pass `scale: 1.0` as a tapping/readability aid.
 
-Read `references/advanced.md` when you need: the full tool table, `network-conditions` reset, React Native LogBox dismissal, `await-ui-element`/`await-screen-idle` edge cases, `run-sequence` gating, `paste`/secrets rules, or Android `reinstall-app` notes.
+Read `references/advanced.md` when you need: the full tool table, `network-conditions` reset, React Native LogBox dismissal, `await-ui-element`/`await-screen-idle` edge cases, `run-sequence` gating, `paste`/secrets rules, screenshot timeouts, or Android `reinstall-app` notes.
