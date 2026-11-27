@@ -67,45 +67,41 @@ const zodSchema = z
       .string()
       .min(1)
       .optional()
-      .describe(
-        "Path to the saved baseline PNG file. Required unless captureBaseline is true; do not pass both."
-      ),
+      .describe("Saved baseline PNG path (omit when `captureBaseline: true`)."),
     currentPath: z
       .string()
       .min(1)
       .optional()
-      .describe(
-        "Path to the saved current PNG file. Required unless captureCurrent is true; do not pass both."
-      ),
+      .describe("Saved current PNG path (omit when `captureCurrent: true`)."),
     udid: z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial<flag:macos-apps>, or a Mac app id</flag:macos-apps>)."
+        "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial<flag:macos-apps>, or Mac app id</flag:macos-apps>)."
       ),
     captureBaseline: z
       .boolean()
       .optional()
       .describe(
-        "Capture the baseline screenshot live from the device, at full resolution, before diffing. Cannot be combined with captureCurrent."
+        "Capture baseline live from the device, at full resolution (mutually exclusive with `captureCurrent`)."
       ),
     captureCurrent: z
       .boolean()
       .optional()
       .describe(
-        "Capture the current screenshot live from the device, at full resolution, before diffing. Cannot be combined with captureBaseline."
+        "Capture current live from the device, at full resolution (mutually exclusive with `captureBaseline`)."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
       .describe(
-        "Orientation override for live baseline/current captures. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
+        "Orientation override for live captures.<flag:harmonyos> Rejected on HarmonyOS.</flag:harmonyos> Ignored on physical iPhones."
       ),
     outputDir: z
       .string()
       .min(1)
       .optional()
-      .describe("Directory where diff artifacts should be written (default: a temp directory)."),
+      .describe("Output directory for diff artifacts (default: temp dir)."),
   })
   .strict();
 
@@ -113,15 +109,9 @@ type Params = z.infer<typeof zodSchema>;
 
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
-  description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Each side is a saved PNG or a live capture from the device<flag:harmonyos> (iOS, Android or HarmonyOS)</flag:harmonyos>. baselinePath + captureCurrent is the common visual-regression flow.
-Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model. A size difference fails as a dimension mismatch.
-Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-Physical iPhones: live captures are device-wide and need no registered app.
-<flag:macos-apps>Mac apps: a resized window fails as a dimension mismatch.
-</flag:macos-apps>Returns { summary }, plus diffPath and contextDiffPath when pixels differ. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
-Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable.`,
+  description: `Compare two PNG screenshots (saved files or one live capture<flag:harmonyos> on iOS, Android, or HarmonyOS</flag:harmonyos>) and return a visual-diff summary (status bar ignored).
+Use when checking pixel-visible regressions (layout, spacing, color, typography, clipping, overflow). Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model.<flag:macos-apps> Mac apps: resized windows fail as a dimension mismatch.</flag:macos-apps>
+Returns \`{ summary, diffPath?, contextDiffPath? }\` with normalized [0,1] changed regions. Fails if sources are invalid, dimensions differ, files cannot be read/written, or the capture backend<flag:harmonyos> (\`hdc\` on HarmonyOS)</flag:harmonyos> is unreachable.`,
   zodSchema,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture<flag:harmonyos> harmony harmonyos</flag:harmonyos>",

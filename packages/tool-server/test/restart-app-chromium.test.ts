@@ -842,9 +842,9 @@ describe("restart-app on Chromium", () => {
     };
     const description = schema.properties.executionPrerequisite.description;
     expect(description).toContain(
-      "a leading restart-app of an app that boot-device started in this tool-server session"
+      "a leading `restart-app` of an app that `boot-device` started in this tool-server session"
     );
-    expect(description).toContain("For any other chromium app, add that step to the YAML by hand.");
+    expect(description).toContain("for any other Chromium app, add that step by hand.");
   });
 
   it("disposes the CDP service after the kill", async () => {

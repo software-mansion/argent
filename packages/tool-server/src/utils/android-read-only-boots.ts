@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { argentHomeDir } from "@argent/configuration-core";
 
 /**
  * Read-only Android emulators argent booted, by serial. One launched without
@@ -35,7 +35,7 @@ const ownRecords = new Map<string, ReadOnlyBootRecord>();
 function recordsFilePath(): string {
   return (
     process.env.ARGENT_ANDROID_READ_ONLY_BOOTS_FILE ??
-    path.join(os.homedir(), ".argent", "android-read-only-boots.json")
+    path.join(argentHomeDir(), "android-read-only-boots.json")
   );
 }
 

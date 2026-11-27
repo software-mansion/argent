@@ -36,32 +36,23 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, <flag:macos-apps>Mac app id, </flag:macos-apps><flag:harmonyos>HarmonyOS id, </flag:harmonyos>Android serial, or Chromium id)."
-    ),
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos><flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps> Chromium: any tag in the same alphabet (letters, digits, '.', '_' and '-'), echoed back."
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega interactive component app id<flag:harmonyos>, HarmonyOS bundle name</flag:harmonyos>; on Chromium any tag, echoed back)."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
-    .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used."
-    ),
+    .describe("Android only: Activity name to relaunch (default: launcher activity)."),
   launchArgs: z
     .array(z.string())
     .optional()
-    .describe(
-      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults.<flag:macos-apps> Omitted on a Mac app, the app gets the arguments of its last start.</flag:macos-apps>'
-    ),
+    .describe('Apple targets only: process launch args, e.g. `["-FeatureFlag", "YES"]`.'),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -74,10 +65,8 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     id: "restart-app",
     // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>Vega, or Chromium.
-Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that this tool-server session booted (boot-device, or an e2e run), on the same port and device id; any other Chromium runtime cannot be restarted. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, <flag:macos-apps>kind?, </flag:macos-apps>appPath?, args?, <flag:macos-apps>note?, </flag:macos-apps>networkCapture? }. If Argent started native capture, networkCapture reports whether it followed the launch or was stopped. This note applies to Android and local iOS simulators. appPath and args are the app that runs and its arguments, to confirm the restarted build: <flag:macos-apps>on a Mac app the .app, and </flag:macos-apps>on Chromium the path and \`electronArgs\` of the boot it repeats. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
-For Mac apps, kind is 'catalyst' or 'app'. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
+    description: `Terminate and relaunch an app (also refreshes native-devtools injection on iOS/tvOS).<flag:macos-apps> On a Mac app, quits and restarts the same .app in the background.</flag:macos-apps> On Chromium, relaunches only an Electron app this tool-server session booted (\`boot-device\` or an e2e run), on the same port and device id.
+Use when you need a clean in-memory app state without reinstalling. Returns { restarted, bundleId, <flag:macos-apps>kind?, </flag:macos-apps>appPath?, args?, <flag:macos-apps>note?, </flag:macos-apps>networkCapture? } (on Chromium, \`appPath\` and \`args\` are the boot's path and \`electronArgs\`). Fails if the app is not installed or fails to terminate.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

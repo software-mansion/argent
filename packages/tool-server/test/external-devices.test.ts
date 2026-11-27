@@ -214,9 +214,17 @@ describe("the contract's tool-server facade", () => {
    * is no way to catch that inside the package; here, where both are on the
    * dependency list, there is.
    */
-  it("resolves the same providers directory as the shared config paths do", () => {
-    expect(providersDirectory()).toBe(path.join(argentHomeDir(), "providers"));
-  });
+  it.each([undefined, "relative-argent-home", path.join(os.tmpdir(), "argent-home")])(
+    "resolves the same providers directory as the shared config paths do (ARGENT_HOME_DIR=%s)",
+    (home) => {
+      vi.stubEnv("ARGENT_HOME_DIR", home);
+      try {
+        expect(providersDirectory()).toBe(path.join(argentHomeDir(), "providers"));
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
 
   it("discovers a descriptor written with the exported provider schemas", () => {
     const device: ProviderDevice = providerDeviceSchema.parse(iosDevice());

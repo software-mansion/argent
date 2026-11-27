@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseDotenv } from "dotenv";
 import { findProjectRoot } from "./flags.js";
-import { isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
+import { argentHomeDir, isHomeDir, resolveHomeDir, type ConfigPathOptions } from "./paths.js";
 
 /**
  * Where `{{secret:NAME}}` values come from. The placeholder mechanism itself
@@ -179,7 +179,7 @@ export function secretSources(options: SecretSourceOptions = {}): SecretSource[]
     }
   }
   filePaths.push({
-    path: path.join(home, ".argent", SECRETS_FILE_NAME),
+    path: path.join(argentHomeDir(options), SECRETS_FILE_NAME),
     exposure: "dedicated",
   });
 
@@ -305,7 +305,7 @@ export function describeSecretSources(sources: SecretSource[]): string {
  * alternatives follow.
  */
 export function secretPlacementAdvice(name: string, options: SecretSourceOptions = {}): string {
-  const globalFile = path.join(resolveHomeDir(options), ".argent", SECRETS_FILE_NAME);
+  const globalFile = path.join(argentHomeDir(options), SECRETS_FILE_NAME);
   return (
     `To make it available, ask the user to add \`${name}=…\` to ${globalFile} ` +
     `(or to \`.argent/${SECRETS_FILE_NAME}\` in the project), add \`${SECRET_ENV_PREFIX}${name}=…\` ` +

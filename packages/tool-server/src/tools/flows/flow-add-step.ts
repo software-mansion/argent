@@ -1576,31 +1576,15 @@ const fileInputs: FileInputSpec[] = [
 ];
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
-    ),
+  name: z.string().describe("E2E test name from `e2e-start-recording`."),
+  project_root: z.string().describe("Project root from `e2e-start-recording`."),
   command: z
     .string()
     .describe(
-      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
+      'MCP tool id to run and record (e.g. "gesture-tap"; call `e2e-add-script` directly for scripts).'
     ),
-  args: z
-    .string()
-    .optional()
-    .describe(
-      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
-    ),
-  delayMs: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Milliseconds to sleep before executing this step during replay."),
+  args: z.string().optional().describe("JSON string of tool arguments (omit if none)."),
+  delayMs: z.number().int().min(0).optional().describe("Replay delay in ms before this step."),
   shutdown: z
     .boolean()
     .optional()
@@ -1625,10 +1609,9 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
 > {
   return deferredShutdownFirst({
     id: "e2e-add-step",
-    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Use \`{{output:PATH}}\` in arguments to read prior script output. The tool resolves the values for the live call and saves the references in a \`tool:\` step.
-Use \`shutdown: true\` for cleanup actions such as logging out.
-Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
+    description: `Execute one MCP tool live and append it to an open e2e recording (\`gesture-tap\` records as a portable \`tap\` selector; \`restart-app\` as \`launch\`; supports \`{{output:PATH}}\` references).
+Use when recording steps after \`e2e-start-recording\` (pass \`shutdown: true\` for cleanup steps; call recording tools like \`e2e-add-script\` directly).
+Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no recording is open or the step errors (nothing recorded).`,
     zodSchema,
     aliases: ["flow-add-step"],
     interaction: {

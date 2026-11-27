@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import { argentHomeDir } from "@argent/configuration-core";
 
 export interface RichLogEntry {
   marker: string;
@@ -84,7 +84,7 @@ export class LogFileWriter {
 
   constructor(port: number) {
     const timestamp = (lastTimestamp = Math.max(Date.now(), lastTimestamp + 1));
-    const dir = path.join(os.homedir(), ".argent", "tmp");
+    const dir = path.join(argentHomeDir(), "tmp");
     try {
       fs.mkdirSync(dir, { recursive: true });
     } catch {

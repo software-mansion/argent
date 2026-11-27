@@ -2,6 +2,7 @@ import { FAILURE_CODES, type Registry } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
+import { fillChromium } from "../../fill/chromium";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
@@ -63,22 +64,26 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         }
       );
     }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      // Chromium needs carriage-return text for Enter's default form submission.
-      ...(named.key === "Enter" ? { text: "\r" } : {}),
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    for (let i = 0; i < count; i++) {
+      await api.dispatchKeyEvent({
+        type: "keyDown",
+        // Chromium needs carriage-return text for Enter's default form submission.
+        ...(named.key === "Enter" ? { text: "\r" } : {}),
+        key: named.key,
+        code: named.code,
+        windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+      });
+      await sleep(delay);
+      await api.dispatchKeyEvent({
+        type: "keyUp",
+        key: named.key,
+        code: named.code,
+        windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+      });
+      keysPressed++;
+      if (i < count - 1) await sleep(delay);
+    }
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
@@ -89,9 +94,27 @@ export function makeChromiumImpl(
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
     handler: async (_services, params, device) => {
+      if (params.clear) {
+        if (params.text) {
+          for (const char of params.text) {
+            if (!charToChromiumKey(char)) {
+              throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
+                error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+                failure_stage: "keyboard_char_chromium",
+                error_kind: "unsupported",
+              });
+            }
+          }
+        }
+        await fillChromium(registry, device, "");
+        if (!params.text && !params.key) {
+          return { typed: "", keys: 0, cleared: true };
+        }
+      }
       const ref = chromiumCdpRef(device);
       const chromium = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-      return runChromium(chromium, params);
+      const result = await runChromium(chromium, params);
+      return params.clear ? { ...result, cleared: true } : result;
     },
   };
 }

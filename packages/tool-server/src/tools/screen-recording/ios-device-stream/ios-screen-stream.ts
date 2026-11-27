@@ -1,5 +1,4 @@
 import * as crypto from "crypto";
-import * as os from "os";
 import * as path from "path";
 import { existsSync, promises as fs } from "fs";
 import { execFile, spawn, type ChildProcess } from "child_process";
@@ -10,6 +9,7 @@ import {
   subprocessFailureMetadata,
   type FailureCode,
 } from "@argent/registry";
+import { argentHomeDir } from "@argent/configuration-core";
 
 /**
  * Frames of a cabled iPhone's screen, from a host-side helper. A physical
@@ -70,7 +70,7 @@ export function resolveSourceDir(moduleDir: string = __dirname): string {
 }
 
 function cacheRoot(): string {
-  return path.join(os.homedir(), ".argent", "ios-screen-stream");
+  return path.join(argentHomeDir(), "ios-screen-stream");
 }
 
 /**
