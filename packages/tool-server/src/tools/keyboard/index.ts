@@ -67,6 +67,15 @@ const zodSchema = z.object({
     .describe(
       "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
     ),
+  repeat: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Press `key` this many times in one call, e.g. `{ key: "backspace", repeat: 12 }`. Only valid with `key`.'
+    ),
   delayMs: z
     .number()
     .optional()
@@ -128,11 +137,18 @@ React Native: after typing, the next tap outside the field may only close the ke
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
+        if (params.text === undefined) {
+          return (params.repeat ?? 1) > 1
+            ? `Pressing a key ${params.repeat} times`
+            : "Pressing a key";
+        }
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params }) => {
+        if (params.text !== undefined) return "Entered text";
+        return (params.repeat ?? 1) > 1 ? `Pressed a key ${params.repeat} times` : "Pressed a key";
+      },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
@@ -204,6 +220,15 @@ React Native: after typing, the next tap outside the field may only close the ke
             error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
             failure_stage: "keyboard_named_key_empty",
             error_kind: "unsupported",
+          }
+        );
+      }
+      if (params.repeat !== undefined && params.key === undefined) {
+        throw new InvalidToolInputError(
+          "`repeat` only applies to `key`, not `text` or an empty request — nothing was typed. " +
+            'Pass a named `key` (e.g. { key: "backspace", repeat: 5 }), or omit `repeat`.',
+          {
+            failure_stage: "keyboard_repeat_without_key",
           }
         );
       }

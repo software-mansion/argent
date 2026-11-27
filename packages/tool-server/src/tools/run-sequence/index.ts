@@ -185,7 +185,7 @@ Allowed tools, args (? = optional) and targets. Positions and distances are 0–
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
-  keyboard: text? or key? (one per step, e.g. key "enter"), delayMs?; text may hold {{secret:<NAME>}} placeholders, resolved server-side  [all; Apple TV/Android TV: text only]
+  keyboard: text? or key? (one per step, e.g. key "enter"), repeat?, delayMs?; text may hold {{secret:<NAME>}} placeholders, resolved server-side  [all; Apple TV/Android TV: text only]
   paste: text (only where a user would paste, e.g. an OTP)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
   rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
   shake: count?  [ios sim/android emu]
