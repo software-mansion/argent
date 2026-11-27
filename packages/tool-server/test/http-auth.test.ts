@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
+import { ARGENT_HOME_HEADER, argentHomeId } from "../src/utils/argent-home-id";
 import type { Registry } from "@argent/registry";
 
 vi.mock("../src/utils/update-checker", () => ({
@@ -50,6 +51,12 @@ describe("Authorization gate", () => {
     const res = await request(handle.app).get("/tools");
     expect(res.status).toBe(401);
     expect(res.body.error).toMatch(/Authorization/i);
+  });
+
+  it("names its Argent home on a rejected request, so a peer can tell whose it is", async () => {
+    const res = await request(handle.app).get("/tools");
+    expect(res.status).toBe(401);
+    expect(res.headers[ARGENT_HOME_HEADER]).toBe(argentHomeId());
   });
 
   it("rejects with 401 when token is wrong", async () => {

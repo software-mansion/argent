@@ -75,6 +75,7 @@ import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
+import { ARGENT_HOME_HEADER, argentHomeId, isLocalConnection } from "./utils/argent-home-id";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -483,6 +484,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   if (!isLoopbackHost(bindHost) && !isWildcardHost(bindHost)) {
     allowedHostnames.add(bindHost);
   }
+
+  const homeId = argentHomeId();
+  app.use((req, res, next) => {
+    if (isLocalConnection(req.socket)) res.setHeader(ARGENT_HOME_HEADER, homeId);
+    next();
+  });
 
   // Closes the DNS-rebinding bypass, where a public origin's hostname briefly
   // resolves to 127.0.0.1 and the browser forwards that origin's cookies/CSRF
