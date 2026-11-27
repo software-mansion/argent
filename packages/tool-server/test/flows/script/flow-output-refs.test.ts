@@ -210,6 +210,36 @@ describe("a script's output in later steps", () => {
   });
 });
 
+describe("a fragment's shutdown and output", () => {
+  // The run has one document, so a fragment loaded twice cleans up with what
+  // its second load left; a list per load gives each cleanup its own value.
+  it("reads the document as the run left it, so a list gives each load its own value", async () => {
+    await write(
+      "scripts/make.mjs",
+      `output.n = (output.n ?? 0) + 1;
+const id = "u" + output.n;
+output.user = { id };
+output.users = [...(output.users ?? []), id];`
+    );
+    await write("scripts/pop.mjs", "output.popped = output.users.pop();");
+    await write(
+      ".argent/e2e/make-user.yaml",
+      `steps:
+  - script: { path: ../../scripts/make.mjs }
+shutdown:
+  - ${probe("last {{output:user.id}}")}
+  - script: { path: ../../scripts/pop.mjs }
+  - ${probe("popped {{output:popped}}")}
+`
+    );
+
+    const result = await run("two-users", ["run: make-user.yaml", "run: make-user.yaml"]);
+
+    expect(result.ok).toBe(true);
+    expect(probed()).toEqual(["last u2", "popped u2", "last u2", "popped u1"]);
+  });
+});
+
 describe("env layers other than a script step's", () => {
   // Their values reach every script, the first one included, which runs
   // before any script returned a value: a reference there would error it.

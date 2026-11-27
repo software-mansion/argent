@@ -77,6 +77,8 @@ export interface StepReport {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   durationMs?: number;
+  /** The step is from a `shutdown:` block, which runs after the test's steps. */
+  shutdown?: boolean;
 }
 
 export interface FlowReport {
@@ -86,6 +88,8 @@ export interface FlowReport {
   device: string;
   executionPrerequisite?: string;
   ok: boolean;
+  /** A `shutdown:` step failed, so the run cleaned up only partly. */
+  shutdownFailed?: boolean;
   passed: number;
   failed: number;
   skipped: number;
@@ -372,6 +376,9 @@ function parseEnvFlags(values: readonly string[]): Record<string, string> {
  * carries the skip glyph and its reason so it cannot read as having run.
  * Returns undefined when there is no message.
  */
+/** Printed once, above the first `shutdown:` step of a report. */
+const SHUTDOWN_HEADER = "  shutdown:";
+
 export function renderEchoLine(s: StepReport): string | undefined {
   if (!s.message) return undefined;
   const indent = stepIndent(s.depth);
@@ -483,6 +490,7 @@ export function renderArtifactLines(report: FlowReport): string[] {
 export function renderFailedSteps(report: FlowReport): string[] {
   const lines: string[] = [];
   let n = 0;
+  let inShutdown = false;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
@@ -496,6 +504,10 @@ export function renderFailedSteps(report: FlowReport): string[] {
       scriptLog.length === 0
     ) {
       continue;
+    }
+    if (s.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      lines.push(SHUTDOWN_HEADER);
     }
     lines.push(renderStepLine(s, n, e2eTestOf(report)));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
@@ -539,16 +551,30 @@ interface FailedFlow {
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
   const unwritten = unwrittenBaselines(report);
+  const failing: { s: StepReport; n: number }[] = [];
   let n = 0;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
-    if (s.status === "fail" || s.status === "error") {
-      const lines = s.reason ? [String(s.reason)] : [];
-      for (const line of unwritten) lines.push(`baseline not written: ${line}`);
-      const detail = lines.length ? lines.join("\n") : undefined;
-      return { headline: `step ${n} ${stepLabel(s, e2eTestOf(report))}`, detail };
+    if (s.status === "fail" || s.status === "error") failing.push({ s, n });
+  }
+  const first = failing[0];
+  if (first) {
+    const label = (f: { s: StepReport; n: number }) =>
+      `step ${f.n} ${stepLabel(f.s, e2eTestOf(report))}`;
+    const lines = first.s.reason ? [String(first.s.reason)] : [];
+    for (const line of unwritten) lines.push(`baseline not written: ${line}`);
+    // The steps' own failure leads; a cleanup that failed after it is a second
+    // thing to know, since it may have left state behind for the next run.
+    const shutdown = failing.find((f) => f.s.shutdown === true);
+    if (shutdown && shutdown !== first) {
+      const reason = shutdown.s.reason ? ` — ${String(shutdown.s.reason)}` : "";
+      lines.push(`shutdown did not finish: ${label(shutdown)}${reason}`);
     }
+    const detail = lines.length ? lines.join("\n") : undefined;
+    const headline =
+      first.s.shutdown === true ? `shutdown did not finish: ${label(first)}` : label(first);
+    return { headline, detail };
   }
   if (unwritten.length) return { headline: "baselines not written", detail: unwritten.join("\n") };
   return { headline: "failed with no failing step" };
@@ -1024,7 +1050,12 @@ export function renderReport(report: FlowReport): string {
   }
   // Number only real steps so echo narration doesn't leave gaps in the sequence.
   let n = 0;
+  let inShutdown = false;
   for (const s of report.steps) {
+    if (s.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      lines.push(SHUTDOWN_HEADER);
+    }
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) lines.push(line);
@@ -2200,6 +2231,7 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // below owns the whole report.
   let liveSteps = 0;
   let liveIndex = 0;
+  let liveShutdown = false;
   const onStepReport = (event: unknown): void => {
     const s = event as StepReport;
     if (args.jsonStream) {
@@ -2208,6 +2240,10 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     }
     if (liveSteps === 0) console.log(`E2E test "${flowName}"`);
     liveSteps++;
+    if (s.shutdown === true && !liveShutdown) {
+      liveShutdown = true;
+      console.log(SHUTDOWN_HEADER);
+    }
     if (s.kind === "echo") {
       const line = renderEchoLine(s);
       if (line) console.log(line);

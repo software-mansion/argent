@@ -868,6 +868,11 @@ export type FlowFile = {
   /** Defaults for every `script` step in this file. Absent when the file sets none. */
   env?: FlowEnv;
   steps: FlowStep[];
+  /**
+   * Steps that run after {@link steps} whatever their outcome, unless the run
+   * was cancelled. Absent when the file sets none.
+   */
+  shutdown?: FlowStep[];
 };
 
 /**
@@ -1156,6 +1161,7 @@ type YamlFlowFile = {
   executionPrerequisite?: string;
   env?: FlowEnv;
   steps: YamlStep[];
+  shutdown?: YamlStep[];
 };
 
 /**
@@ -3813,12 +3819,12 @@ export function stepOutputReferenceProblem(step: FlowStep): string | undefined {
   return undefined;
 }
 
-function assertOutputReferences(steps: FlowStep[], trail: number[] = []): void {
+function assertOutputReferences(steps: FlowStep[], trail: number[] = [], label = "Step"): void {
   steps.forEach((step, i) => {
     const at = [...trail, i + 1];
     const problem = stepOutputReferenceProblem(step);
     if (problem) {
-      throw new FailureError(`Step ${at.join(".")} (\`${step.kind}\`): ${problem}`, {
+      throw new FailureError(`${label} ${at.join(".")} (\`${step.kind}\`): ${problem}`, {
         error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
         failure_stage: "flow_output_reference",
         failure_area: "tool_server",
@@ -3826,7 +3832,7 @@ function assertOutputReferences(steps: FlowStep[], trail: number[] = []): void {
       });
     }
     const inner = blockSteps(step);
-    if (inner) assertOutputReferences(inner, at);
+    if (inner) assertOutputReferences(inner, at, label);
   });
 }
 
@@ -4273,6 +4279,7 @@ export function serializeFlow(flow: FlowFile): string {
     ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
     ...(flow.env ? { env: flow.env } : {}),
     steps: flow.steps.map(toYamlStep),
+    ...(flow.shutdown?.length ? { shutdown: flow.shutdown.map(toYamlStep) } : {}),
   };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
@@ -4291,6 +4298,7 @@ export function serializeFlow(flow: FlowFile): string {
 
 export function validateFlow(flow: FlowFile): void {
   assertOutputReferences(flow.steps);
+  if (flow.shutdown) assertOutputReferences(flow.shutdown, [], "Shutdown step");
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "An e2e test whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
@@ -4372,6 +4380,7 @@ export function parseFlow(content: string): FlowFile {
     "requires",
     "env",
     "steps",
+    "shutdown",
   ];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
@@ -4392,6 +4401,19 @@ export function parseFlow(content: string): FlowFile {
     return badEntry(raw, "step must be an object");
   });
 
+  if (parsed.shutdown !== undefined && !Array.isArray(parsed.shutdown)) {
+    throw new FailureError("Invalid e2e test file: shutdown must be a list of steps", {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_file_parse",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  const shutdown = (parsed.shutdown ?? []).map((raw) => {
+    if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
+    return badEntry(raw, "shutdown step must be an object");
+  });
+
   if (parsed.env !== undefined) {
     const problem = flowEnvProblem(parsed.env);
     if (problem) {
@@ -4409,6 +4431,7 @@ export function parseFlow(content: string): FlowFile {
     ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     ...(parsed.env === undefined ? {} : { env: parsed.env }),
     steps,
+    ...(shutdown.length > 0 ? { shutdown } : {}),
   };
   validateFlow(flow);
   if (version < FLOW_FILE_VERSION) olderFormatVersions.set(flow, version);

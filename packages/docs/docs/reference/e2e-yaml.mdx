@@ -51,11 +51,12 @@ steps:
   - await: { idle: true }
 ```
 
-The file has five top-level keys:
+The file has six top-level keys:
 
 | Key                     | Required | Description                                                                                          |
 | ----------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
 | `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                    |
+| `shutdown`              | no       | Steps that run after `steps`, also when a step failed. See [Shutdown](#shutdown)                     |
 | `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                              |
 | `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                            |
 | `env`                   | no       | Environment values for each `script` step of the file. See [Environment values](#environment-values) |
@@ -87,7 +88,40 @@ Argent skips leading `echo` and `script` steps when it classifies an e2e test. A
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
-When a step fails, Argent stops the e2e test and reports the later steps as skipped.
+A failure in `steps` skips the remaining entries in that list. Argent then runs the `shutdown` steps.
+
+### Shutdown
+
+Use `shutdown` for cleanup that should run after `steps` pass or fail. The two lists accept the same directives. Only `steps` determines whether the file is a standalone e2e test or a fragment.
+
+```yaml
+steps:
+  - script: { path: scripts/create-user.mjs }
+  - launch: com.example.app
+  - tap: { id: login }
+shutdown:
+  - when: { output: user.id, exists: true }
+    steps:
+      - script:
+          path: scripts/delete-user.mjs
+          env: { USER_ID: "{{output:user.id}}" }
+```
+
+The main steps can stop before they create the data to clean up. Guard cleanup with an output check, as above, or use a fallback the script can handle. See [References](#references).
+
+Argent attempts each top-level shutdown entry even if an earlier entry fails. A `when:` block or `run:` fragment still stops its own steps at the first failure. Put cleanup steps that depend on one another in the same block.
+
+If Argent rejects the run before the first step, it does not run or report shutdown entries. Cancelling a run skips any remaining shutdown entries with the reason `run aborted`.
+
+#### Fragments with shutdown steps
+
+Argent queues a fragment's shutdown when a `run:` step loads it. At the end of the run, Argent processes queued fragments in reverse load order, then runs the test's own shutdown. If a shutdown entry itself loads a fragment, that fragment's cleanup runs before the next entry. A `tool: e2e-execute` step runs its shutdown as part of its separate run.
+
+Each load queues cleanup, and all loads share the same output object. If a fragment can run more than once, append each item ID to an output list. In the shutdown script, use `pop()` to clean up the most recent item first.
+
+#### Find cleanup failures in the report
+
+Shutdown steps appear after the main steps in the report and count toward the totals. Each has `shutdown: true`. A failed cleanup fails the run and sets `shutdownFailed: true`. The CLI prints `shutdown did not finish:` and identifies the failed step. If a main step also failed, the report keeps it as the first failure.
 
 ### Requirements
 
@@ -195,7 +229,7 @@ Copy control identifiers and `AX` roles from `describe`. The runner uses the sam
 
 ## Directives
 
-Each step contains one directive. A failed directive stops the e2e test.
+Each step contains one directive. See [Shutdown](#shutdown) for cleanup after a failure.
 
 | Directive    | Shape                                                              | Description                                                                                          |
 | ------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -562,7 +596,7 @@ Three entries in the list give access to a credential. Each entry holds the valu
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
-A failed step stops the e2e test. The verdict names the side that caused the failure.
+The verdict identifies whether the script or the host caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                                                                             |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -650,7 +684,7 @@ A `run:` fragment shares its caller's output. A `tool: e2e-execute` step starts 
 
 Quote each YAML value containing `{{output:PATH}}`. Join keys and zero-based array indexes with dots, as in `items.0.name`. Start a key with an ASCII letter or underscore. The remaining characters can also include digits and hyphens.
 
-Argent resolves references when the step runs. A missing or `null` value causes a step error unless you supply a fallback, as in `{{output:user.role ?? guest}}`. The error identifies where the path stopped. Use a JSON number, boolean, `null`, double-quoted JSON string, or plain text as the fallback. An empty fallback produces an empty string. Keep templates and `}}` out of fallback values.
+Argent resolves references when the step runs. A missing or `null` value causes a step error unless you supply a fallback, as in `{{output:user.role ?? guest}}`. The error identifies where the path stopped. Use a JSON number, boolean, `null`, double-quoted JSON string, or plain text as the fallback. An empty fallback produces an empty string. Keep templates and `}}` out of fallback values. If a reference fails in a top-level `shutdown` entry, the next entry still runs.
 
 #### Fields that take a reference
 
