@@ -1,7 +1,13 @@
 import * as path from "node:path";
-import { MAX_RUN_DEPTH } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  MAX_RUN_DEPTH,
+  type FailureCode,
+} from "@argent/registry";
 import {
   blockSteps,
+  chromiumLaunchSpec,
   escapeInline,
   parseFlow,
   precedesLeadingLaunch,
@@ -153,10 +159,7 @@ function* nestedInvocations(
  * An unknown tool is skipped: that step already fails on its own, with a better
  * message than a missing schema could produce here.
  */
-export function findRetiredToolArg(
-  schemas: ToolSchemaLookup,
-  flow: FlowFile
-): RetiredArgUse | undefined {
+function findRetiredToolArg(schemas: ToolSchemaLookup, flow: FlowFile): RetiredArgUse | undefined {
   for (const { step, where } of walkFlow(flow)) {
     if (step.kind !== "tool") continue;
     const props = toolArgProps(schemas, step.name);
@@ -186,7 +189,7 @@ export function findRetiredToolArg(
  * CLI renderers would call that same step step 1 (see {@link walkSteps}).
  * Qualified once at the end of `use.where`, not once per nesting level.
  */
-export function retiredArgReason(use: RetiredArgUse): string {
+function retiredArgReason(use: RetiredArgUse): string {
   return `${use.where} as written (echo included) passes ${use.tool}'s retired \`${use.key}\` key${use.guidance ? `: ${use.guidance}` : ""}`;
 }
 
@@ -200,7 +203,7 @@ export function retiredArgReason(use: RetiredArgUse): string {
  * earlier steps have seeded data and driven the device, and a step under a
  * `when:` guard passes or errors by the branch the device happens to take.
  */
-export async function findUnrunnableScript(flow: FlowFile): Promise<string | undefined> {
+async function findUnrunnableScript(flow: FlowFile): Promise<string | undefined> {
   for (const { step } of walkFlow(flow)) {
     if (step.kind !== "script") continue;
     const refusal = await typeScriptScriptRefusal(step.path);
@@ -332,4 +335,129 @@ async function scanLeadingLaunch(
     if (inner !== NO_EXECUTABLE_STEP) return inner;
   }
   return NO_EXECUTABLE_STEP;
+}
+
+/** A root e2e test refused at load time: the failure code and text `e2e-execute` throws. */
+export interface PreflightRefusal {
+  code: FailureCode;
+  message: string;
+}
+
+/** The {@link findRetiredToolArg} refusal of the root e2e test `flowName`. */
+export function retiredArgRefusal(
+  schemas: ToolSchemaLookup,
+  flow: FlowFile,
+  flowName: string
+): PreflightRefusal | undefined {
+  const use = findRetiredToolArg(schemas, flow);
+  if (!use) return undefined;
+  return {
+    code: FAILURE_CODES.FLOW_FILE_INVALID,
+    message: `E2E test "${flowName}" ${retiredArgReason(use)}`,
+  };
+}
+
+/** The {@link findUnrunnableScript} refusal of the root e2e test `flowName`. */
+export async function unrunnableScriptRefusal(
+  flow: FlowFile,
+  flowName: string
+): Promise<PreflightRefusal | undefined> {
+  const reason = await findUnrunnableScript(flow);
+  if (!reason) return undefined;
+  return {
+    code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
+    message: `E2E test "${flowName}" was not run. ${reason}`,
+  };
+}
+
+/**
+ * Does this leading launch declare a chromium target — i.e. would the
+ * {@link pinnedToChromium} exemption be any use to the caller staring at the
+ * refusal? Pinned to an instance, a launch naming no chromium app doesn't
+ * attach, it errors ({@link noChromiumAppReason}), so an ios/android/vega-only
+ * launch must not advertise the pin. A multi-platform map counts: pinning is
+ * what picks chromium out of it (only the *boot* hoist demands an unambiguous
+ * one). A bare string names no platform and is the native bundle-id shape, so it
+ * counts under `--platform chromium` alone.
+ */
+function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
+  if (typeof app === "string") return platform === "chromium";
+  return chromiumLaunchSpec(app) !== null;
+}
+
+/**
+ * The refusal of a root e2e test `flowName` that declares `executionPrerequisite`
+ * while its leading `run:` chain reaches a launch ({@link leadingLaunch}).
+ * `platform` is the run's `--platform`.
+ */
+export async function leadingLaunchRefusal(
+  flow: FlowFile,
+  seed: RunStackEntry[],
+  env: LeadingLaunchEnv,
+  flowName: string,
+  platform: string | undefined
+): Promise<PreflightRefusal | undefined> {
+  const leading = await leadingLaunch(flow, seed, env);
+  if (!leading) return undefined;
+  // Offer the pin only where it is a real way out (see
+  // chromiumPinnable): the guard also fires for unpinned runs of every
+  // platform and for pinned native ones, and sending the caller of an
+  // android flow after a chromium id would only misdirect.
+  const pinRemedy = chromiumPinnable(leading.app, platform)
+    ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
+    : "";
+  return {
+    code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
+    message: `An e2e test whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
+  };
+}
+
+/** One problem `e2e-check` reports; `code` is the failure code `e2e-execute` would give. */
+export interface CheckProblem {
+  code?: string;
+  message: string;
+}
+
+/**
+ * The e2e test in `text`, or the problem that keeps it from parsing, with its code.
+ */
+export function parseForCheck(text: string): { flow: FlowFile } | { problems: CheckProblem[] } {
+  try {
+    return { flow: parseFlow(text) };
+  } catch (err) {
+    const code = getFailureSignal(err)?.error_code;
+    const message = err instanceof Error ? err.message : String(err);
+    return { problems: [{ ...(code !== undefined && { code }), message }] };
+  }
+}
+
+/**
+ * The problems `e2e-execute` would refuse the e2e test for before it touches
+ * a device, collected instead of thrown. `canonical` is the test's path where
+ * `project` has it.
+ */
+export async function checkFlow(input: {
+  flow: FlowFile;
+  flowName: string;
+  canonical: string;
+  schemas: ToolSchemaLookup;
+  project: ProjectAccess;
+}): Promise<CheckProblem[]> {
+  const { flow, flowName, canonical, schemas, project } = input;
+  const refusals = [
+    retiredArgRefusal(schemas, flow, flowName),
+    await unrunnableScriptRefusal(flow, flowName),
+    flow.executionPrerequisite
+      ? await leadingLaunchRefusal(
+          flow,
+          [{ canonical, display: flowName }],
+          { schemas, project },
+          flowName,
+          undefined
+        )
+      : undefined,
+  ];
+  return refusals.flatMap((refusal) =>
+    refusal ? [{ code: refusal.code, message: refusal.message }] : []
+  );
 }

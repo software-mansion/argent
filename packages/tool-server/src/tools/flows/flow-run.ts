@@ -79,14 +79,15 @@ import {
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import {
-  findRetiredToolArg,
-  findUnrunnableScript,
   fragmentLoadRefusal,
   leadingLaunch,
-  retiredArgReason,
+  leadingLaunchRefusal,
+  retiredArgRefusal,
   runDisplayFor,
   walkFlow,
+  unrunnableScriptRefusal,
   walkSteps,
+  type PreflightRefusal,
   type RunStackEntry,
   type ToolSchemaLookup,
 } from "./flow-preflight";
@@ -164,7 +165,7 @@ import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
 //   sees it — dropping it would silently run the saved flow instead.
 // - skipWhenSet: e2e_test_file is client-derived, so alongside e2e_test_path it is
 //   dropped; the caller never authored it.
-const fileInputs: FileInputSpec[] = [
+export const E2E_TEST_FILE_INPUTS: FileInputSpec[] = [
   {
     target: "e2e_test_path",
     path: "${e2e_test_path}",
@@ -344,6 +345,16 @@ function nestedRunArgs(
     args.updateBaselines === undefined
     ? { ...args, updateBaselines: true }
     : args;
+}
+
+/** A root e2e test refused at load time, before anything ran. */
+function preflightFailure(refusal: PreflightRefusal): FailureError {
+  return new FailureError(refusal.message, {
+    error_code: refusal.code,
+    failure_stage: "flow_run_validate",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
 }
 
 /** A nested run refused by the cycle or depth guard before anything ran. */
@@ -1246,7 +1257,7 @@ interface BootedChromium {
  * intact, and the fallbacks keep a pathological source from rendering as "" or
  * "undefined".
  */
-function displayFlowName(params: { name?: string; e2e_test_path?: string }): string {
+export function displayFlowName(params: { name?: string; e2e_test_path?: string }): string {
   const stem =
     params.e2e_test_path === undefined ? undefined : path.basename(params.e2e_test_path, ".yaml");
   return params.name || stem || params.e2e_test_path || "(unspecified)";
@@ -1309,7 +1320,7 @@ function toolSchemas(registry: Registry): ToolSchemaLookup {
  * run checks its own flow again when it starts (a `flow-add-step` call runs
  * one without this check first); `origin` words the refusal for that flow.
  */
-function assertUploadSelfContained(
+export function assertUploadSelfContained(
   registry: Registry,
   flow: FlowFile,
   closure: { project: ClientProjectAccess; rootCanonical: string } | undefined,
@@ -1546,89 +1557,22 @@ Without a link, every step kind runs.`,
         `Failed to run e2e test ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
     longRunning: true,
-    fileInputs,
+    fileInputs: E2E_TEST_FILE_INPUTS,
     services: () => ({}),
     async execute(_services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
-      const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
-        params,
-        ctx?.fileInputs?.e2e_test_file,
-        ctx?.fileInputs?.e2e_test_path
-      );
+      const root = await readRootTest(params, ctx);
+      const { filePath, flowName, viaUpload, shadowed, canonicalPath, project } = root;
+      const clientProject = root.client?.project;
       const warning = shadowed ? { warning: e2eShadowWarning(filePath, shadowed) } : {};
-      // Where the run's file references resolve: on this host, unless the
-      // root flow arrived as an upload with the files its steps reach (the
-      // members of its file input) — then in those files. A nested run gets
-      // the members of the call that runs it. A call with no link reads the
-      // file in place (viaUpload false) and stays on the host, so a run without
-      // a link never changes behavior.
-      const rootInput = viaUpload
-        ? (ctx?.fileInputs?.e2e_test_path ?? ctx?.fileInputs?.e2e_test_file)
-        : undefined;
-      const clientProject = rootInput?.members
-        ? new ClientProjectAccess(rootInput.members)
-        : undefined;
-      const project: ProjectAccess = clientProject ?? new HostProjectAccess();
       // Canonicalize the root path ONCE and derive every root anchor from it:
       // flowsDir (a relative chromium app path + snapshot baselines) and the
       // runStack seed (`run:` targets) must agree, or a symlinked root flow
       // would resolve `run:` beside its real file while the app path and
       // baselines anchored at the symlink's spelling.
-      const canonicalPath = await canonicalFlowPath(filePath);
       const flowsDir = path.dirname(canonicalPath);
-      const flow = parseFlow(await fs.readFile(canonicalPath, "utf8"));
-      if (viaUpload) {
-        assertUploadSelfContained(
-          registry,
-          flow,
-          clientProject && rootInput
-            ? {
-                project: clientProject,
-                rootCanonical: rootInput.canonical ?? rootInput.clientPath,
-              }
-            : undefined,
-          // A nested run's refusal is quoted in the step or the call that runs
-          // it, so it names its own flow, whose steps it numbers.
-          ctx?.flowStack !== undefined
-            ? {
-                subject: `The nested e2e test "${flowName}"`,
-                arrival: "the client sent it with the call",
-              }
-            : undefined
-        );
-      }
-      // Refused before the prerequisite handshake and before any step touches
-      // the device: a mid-run refusal would land after earlier steps had already
-      // driven it (see findRetiredToolArg).
-      const retiredArg = findRetiredToolArg(toolSchemas(registry), flow);
-      if (retiredArg) {
-        throw new FailureError(`E2E test "${flowName}" ${retiredArgReason(retiredArg)}`, {
-          error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-          failure_stage: "flow_run_validate",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        });
-      }
-      // Refused here for the same reason, though the file is sound: it is this
-      // host that cannot run the step (see findUnrunnableScript). A validation
-      // failure all the same, so a directory run goes on to its next e2e test.
-      const unrunnableScript = await findUnrunnableScript(flow);
-      if (unrunnableScript) {
-        throw new FailureError(`E2E test "${flowName}" was not run. ${unrunnableScript}`, {
-          error_code: FAILURE_CODES.FLOW_SCRIPT_TYPESCRIPT_UNSUPPORTED,
-          failure_stage: "flow_run_validate",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        });
-      }
-      // Before any step, and after the checks above, so a project_root they
-      // refuse is never searched for secret sources: a missing secret in the
-      // run's own values would fail every script step of the run the same way.
-      // Merged first, as every step merges them: on Windows a name given twice
-      // in different casings reaches the script once.
-      const runEnv = mergeScriptEnv(params.env);
-      resolveScriptEnv(runEnv, params.project_root, ctx?.clientSecrets);
+      const flow = parseFlow(root.text);
       // One seed for all three `run:` walks — the prerequisite guard, the
       // chromium hoist, and the executor itself — so none can accept a chain
       // another refuses. In client mode the seed is the root flow's CLIENT
@@ -1637,12 +1581,39 @@ Without a link, every step kind runs.`,
       // and that directory is on the client, not the temp dir this host
       // materialized the upload into.
       const rootEntry: RunStackEntry = {
-        canonical:
-          clientProject && rootInput
-            ? clientRootCanonical(rootInput, params.name, flow)
-            : canonicalPath,
+        canonical: rootTestCanonical(
+          registry,
+          root,
+          flow,
+          params.name,
+          // A nested run's refusal is quoted in the step or the call that runs
+          // it, so it names its own flow, whose steps it numbers.
+          ctx?.flowStack !== undefined
+            ? {
+                subject: `The nested e2e test "${flowName}"`,
+                arrival: "the client sent it with the call",
+              }
+            : undefined
+        ),
         display: flowName,
       };
+      // Refused before the prerequisite handshake and before any step touches
+      // the device: a mid-run refusal would land after earlier steps had already
+      // driven it (see findRetiredToolArg).
+      const retiredArg = retiredArgRefusal(toolSchemas(registry), flow, flowName);
+      if (retiredArg) throw preflightFailure(retiredArg);
+      // Refused here for the same reason, though the file is sound: it is this
+      // host that cannot run the step (see findUnrunnableScript). A validation
+      // failure all the same, so a directory run goes on to its next e2e test.
+      const unrunnableScript = await unrunnableScriptRefusal(flow, flowName);
+      if (unrunnableScript) throw preflightFailure(unrunnableScript);
+      // Before any step, and after the checks above, so a project_root they
+      // refuse is never searched for secret sources: a missing secret in the
+      // run's own values would fail every script step of the run the same way.
+      // Merged first, as every step merges them: on Windows a name given twice
+      // in different casings reaches the script once.
+      const runEnv = mergeScriptEnv(params.env);
+      resolveScriptEnv(runEnv, params.project_root, ctx?.clientSecrets);
       // A nested run continues the run stack of the flows that run it
       // (`ctx.flowStack`, from the `tool:` step that started it), so the cycle
       // and depth guards of execRunStep cover `run:` fragments and nested runs
@@ -1674,28 +1645,14 @@ Without a link, every step kind runs.`,
       // `launch` there is restart-app, which terminates and relaunches whatever
       // device it is handed, so those stay refused.
       if (flow.executionPrerequisite && !pinnedToChromium(params.device)) {
-        const leading = await leadingLaunch(flow, seed, {
-          schemas: toolSchemas(registry),
-          project,
-        });
-        if (leading) {
-          // Offer the pin only where it is a real way out (see
-          // chromiumPinnable): the guard also fires for unpinned runs of every
-          // platform and for pinned native ones, and sending the caller of an
-          // android flow after a chromium id would only misdirect.
-          const pinRemedy = chromiumPinnable(leading.app, params.platform)
-            ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
-            : "";
-          throw new FailureError(
-            `An e2e test whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
-            {
-              error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
-              failure_stage: "flow_run_validate",
-              failure_area: "tool_server",
-              error_kind: "validation",
-            }
-          );
-        }
+        const leading = await leadingLaunchRefusal(
+          flow,
+          seed,
+          { schemas: toolSchemas(registry), project },
+          flowName,
+          params.platform
+        );
+        if (leading) throw preflightFailure(leading);
       }
 
       // After the file checks, so an invalid test never reads as a skip, and before the
@@ -2043,19 +2000,73 @@ function pinnedToChromium(device: string | undefined): boolean {
   return device !== undefined && resolveDevice(device).platform === "chromium";
 }
 
+/** The e2e test an `e2e-execute` or `e2e-check` call names, read from where the call has it. */
+export interface RootTest {
+  filePath: string;
+  flowName: string;
+  viaUpload: boolean;
+  shadowed?: string;
+  canonicalPath: string;
+  text: string;
+  /** The uploaded root and the files the client sent with it, when it sent any. */
+  client?: { input: ResolvedFileInput; project: ClientProjectAccess };
+  project: ProjectAccess;
+}
+
+export async function readRootTest(
+  params: Parameters<typeof resolveFlowSource>[0],
+  ctx: ToolContext | undefined
+): Promise<RootTest> {
+  const source = await resolveFlowSource(
+    params,
+    ctx?.fileInputs?.e2e_test_file,
+    ctx?.fileInputs?.e2e_test_path
+  );
+  // Where the run's file references resolve: on this host, unless the
+  // root flow arrived as an upload with the files its steps reach (the
+  // members of its file input) — then in those files. A nested run gets
+  // the members of the call that runs it. A call with no link reads the
+  // file in place (viaUpload false) and stays on the host, so a run without
+  // a link never changes behavior.
+  const input = source.viaUpload
+    ? (ctx?.fileInputs?.e2e_test_path ?? ctx?.fileInputs?.e2e_test_file)
+    : undefined;
+  const client = input?.members
+    ? { input, project: new ClientProjectAccess(input.members) }
+    : undefined;
+  const canonicalPath = await canonicalFlowPath(source.filePath);
+  return {
+    ...source,
+    canonicalPath,
+    text: await fs.readFile(canonicalPath, "utf8"),
+    ...(client && { client }),
+    project: client?.project ?? new HostProjectAccess(),
+  };
+}
+
 /**
- * Does this leading launch declare a chromium target — i.e. would the
- * {@link pinnedToChromium} exemption be any use to the caller staring at the
- * refusal? Pinned to an instance, a launch naming no chromium app doesn't
- * attach, it errors ({@link noChromiumAppReason}), so an ios/android/vega-only
- * launch must not advertise the pin. A multi-platform map counts: pinning is
- * what picks chromium out of it (only the *boot* hoist demands an unambiguous
- * one). A bare string names no platform and is the native bundle-id shape, so it
- * counts under `--platform chromium` alone.
+ * The path the `run:` targets of `root` anchor to, after
+ * {@link assertUploadSelfContained} refuses an upload that lacks the files they reach.
  */
-function chromiumPinnable(app: Launch, platform: string | undefined): boolean {
-  if (typeof app === "string") return platform === "chromium";
-  return chromiumLaunchSpec(app) !== null;
+export function rootTestCanonical(
+  registry: Registry,
+  root: RootTest,
+  flow: FlowFile,
+  name: string | undefined,
+  origin?: Parameters<typeof assertUploadSelfContained>[3]
+): string {
+  if (!root.viaUpload) return root.canonicalPath;
+  const { client } = root;
+  assertUploadSelfContained(
+    registry,
+    flow,
+    client && {
+      project: client.project,
+      rootCanonical: client.input.canonical ?? client.input.clientPath,
+    },
+    origin
+  );
+  return client ? clientRootCanonical(client.input, name, flow) : root.canonicalPath;
 }
 
 /**

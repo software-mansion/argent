@@ -100,6 +100,7 @@ import { flowSetEnvTool } from "../tools/flows/flow-set-env";
 import { flowAddScriptTool } from "../tools/flows/flow-add-script";
 import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
+import { createCheckFlowTool } from "../tools/flows/flow-check";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
@@ -247,6 +248,7 @@ export function createRegistry(): Registry {
   registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
+  registry.registerTool(createCheckFlowTool(registry));
 
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);

@@ -234,6 +234,14 @@ Subcommands:
                              path and an optional warning and suite per entry,
                              plus name, legacy and shadowedBy when no dir is
                              given
+  check <test|test.yaml> [--json]
+                             Check an e2e test without a device and without
+                             running a step: parse it and apply the checks
+                             \`run\` makes before the first step. Prints each
+                             problem on stderr and exits 1 when it finds one.
+                             --json prints { "ok", "e2eTests": [...] } instead,
+                             with path, ok and problems (file, code,
+                             message) per test
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
@@ -267,6 +275,7 @@ Examples:
   argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
   argent e2e run .argent/e2e --recursive
   argent e2e run checkout --env API_URL=https://staging.example.com
+  argent e2e check checkout
 `);
 }
 
@@ -287,6 +296,10 @@ const RUN_OPTIONS = {
 const LIST_OPTIONS = {
   json: { kind: "boolean" },
   recursive: { kind: "boolean", alias: "r" },
+} as const satisfies OptionSpecs;
+
+const CHECK_OPTIONS = {
+  json: { kind: "boolean" },
 } as const satisfies OptionSpecs;
 
 export function parseRunArgs(argv: string[]): {
@@ -1200,7 +1213,11 @@ async function resolveFlowRef(
  * same-stem sibling elsewhere in the tree is a different test, not the one
  * they asked for.
  */
-async function savedFlowHint(projectRoot: string, missingPath: string): Promise<string> {
+async function savedFlowHint(
+  sub: "run" | "check",
+  projectRoot: string,
+  missingPath: string
+): Promise<string> {
   const dirs = E2E_DIRS.map((rel) => ({ rel, abs: path.resolve(projectRoot, rel) }));
   for (const { abs } of dirs) {
     const within = path.relative(abs, missingPath);
@@ -1219,10 +1236,218 @@ async function savedFlowHint(projectRoot: string, missingPath: string): Promise<
     if (!(await isRunnableFlowFile(path.join(abs, actual)))) return "";
     return (
       `\nAn e2e test named "${name}" is saved under ${rel} — ` +
-      `did you mean: argent e2e run ${name}`
+      `did you mean: argent e2e ${sub} ${name}`
     );
   }
   return "";
+}
+
+/** What an `e2e run` or `e2e check` argument names once its path guards pass, or why not (exit 2). */
+type E2eTarget =
+  | { kind: "directory"; path: string }
+  | { kind: "file"; path: string; name: string }
+  | { kind: "refused"; message: string };
+
+/**
+ * The path guards of `run` and `check`, for the path {@link resolveFlowRef}
+ * made of `ref`. `sub` names the subcommand in the recovery hints.
+ */
+async function resolveE2eTarget(
+  sub: "run" | "check",
+  ref: string,
+  { suppliedPath, fromName }: { suppliedPath: string; fromName: boolean },
+  projectRoot: string,
+  recursive: boolean
+): Promise<E2eTarget> {
+  const refuse = (message: string): E2eTarget => ({ kind: "refused", message });
+  // path.resolve collapses ".." lexically, without consulting symlinks, so a
+  // ".." following a symlinked directory would make the CLI stat and run a
+  // different file than the one the kernel opens for this string. Rejected
+  // before path.resolve — same predicate as the tool-server's flow_path_dotdot
+  // guard, and ordered before the extension/stem arms the way the server orders
+  // it, so the dishonest-path cause wins over a basename complaint. The hint
+  // realpath's the parent directory (that is where ".." and symlinks interact)
+  // but keeps the supplied basename: realpath'ing the final component would
+  // rewrite a symlinked flow to its target's name, and the basename is the
+  // flow's identity (report name, __baselines__/ key, --output dir), so the
+  // hint would quietly rename the run. A basename of ".." or "." names no flow
+  // file and gets the generic recovery.
+  if (suppliedPath.split(/[\\/]+/).includes("..")) {
+    let recovery = "Pass the fully resolved path to the e2e test's YAML.";
+    const suppliedBase = path.basename(suppliedPath);
+    if (suppliedBase !== ".." && suppliedBase !== ".") {
+      try {
+        const resolved = path.join(await fsp.realpath(path.dirname(suppliedPath)), suppliedBase);
+        // The reassembled path must itself be kernel-reachable — a hint
+        // naming nothing on disk is worse than the generic line.
+        await fsp.stat(resolved);
+        recovery = `Did you mean: argent e2e ${sub} ${shellQuoteArg(resolved)}`;
+      } catch {
+        // Parent unresolvable, or nothing at the reassembled path.
+      }
+    }
+    return refuse(
+      `E2E test path must not contain ".." segments — they are collapsed without following symlinks, ` +
+        `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
+        recovery
+    );
+  }
+  const resolvedPath = path.resolve(projectRoot, suppliedPath);
+  // Stat-first so a directory named `foo.yaml` still batches; on a failed stat
+  // without -r, fall through so the single-file messages stay identical. A name
+  // is not exempt: resolveFlowRef has already made it a path, and one dispatch
+  // for both spellings is what keeps them one run under one identity.
+  let isDirectory = false;
+  try {
+    isDirectory = (await fsp.stat(resolvedPath)).isDirectory();
+  } catch {
+    // Only a spelled-out path can be missing a directory the user meant; for a
+    // name, "directory not found" would quote a path they never typed, so that
+    // form falls through instead.
+    if (recursive && !fromName) {
+      return refuse(`E2E test directory not found: ${resolvedPath}`);
+    }
+  }
+  if (isDirectory) return { kind: "directory", path: resolvedPath };
+  if (recursive) {
+    return refuse(
+      fromName
+        ? `e2e ${sub} --recursive requires a directory path; "${ref}" is a saved test's name, ` +
+            `which always addresses the single file ${suppliedPath}.`
+        : `e2e ${sub} --recursive requires a directory path: ${suppliedPath}`
+    );
+  }
+  // A trailing separator asserts the path names a directory; the honest case
+  // already went to the directory dispatch above. From here the path is a
+  // file's, so the kernel would refuse to open "ok.yaml/" (ENOTDIR), yet
+  // path.resolve drops the separator lexically — without this guard the CLI
+  // would stat and run a file its own argument does not name. Same
+  // dishonest-path class as the ".." guard above, and like it ordered before
+  // the extension/stem arms. Ordered after that guard because its recovery (a
+  // fully resolved path) also cures a trailing separator, while stripping here
+  // would leave the ".." standing and demand a second correction.
+  const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
+  if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
+    // Trimming "checkout/" leaves a token that now reads as a saved-flow name,
+    // and offering it bare would hand back a command for a DIFFERENT file —
+    // `.argent/flows/checkout.yaml` rather than the `./checkout` this argument
+    // names. Keep the hint in the form the argument was written in.
+    const hint = SAFE_FLOW_NAME.test(separatorTrimmedPath)
+      ? `.${path.sep}${separatorTrimmedPath}`
+      : separatorTrimmedPath;
+    return refuse(
+      `E2E test path must not end in a path separator — the separator claims a directory, ` +
+        `which the kernel would refuse to open as a file, so the CLI would ${sub} a file ` +
+        `this string does not name: ${suppliedPath}\n` +
+        `Did you mean: argent e2e ${sub} ${shellQuoteArg(hint)}`
+    );
+  }
+  if (path.extname(suppliedPath) !== ".yaml") {
+    // A valid name never reaches here — resolveFlowRef already rewrote it to a
+    // .yaml path — so a token still carrying neither a separator nor an
+    // extension is a name the charset refused. Complain about the name it was
+    // meant to be, not about a ".yaml" suffix the user never intended to type.
+    // The bare ".yaml" arm goes first: naming the missing stem is the more
+    // precise of the two complaints.
+    const looksLikeName =
+      !suppliedPath.includes("/") &&
+      !suppliedPath.includes("\\") &&
+      path.extname(suppliedPath) === "";
+    if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
+      // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
+      return refuse(
+        `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+      );
+    }
+    if (looksLikeName) {
+      return refuse(
+        `E2E test name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
+          `Names ${sub} \`${E2E_DIRS.map((dir) => `${dir}/<name>.yaml`).join("` or `")}\`; pass a path ending in .yaml to ${sub} an e2e test file kept elsewhere.`
+      );
+    }
+    if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
+      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
+      return refuse(
+        `E2E test extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`
+      );
+    }
+    return refuse(`E2E test path must end in .yaml: ${suppliedPath}`);
+  }
+
+  const flowName = path.basename(suppliedPath, ".yaml");
+  if (!SAFE_FLOW_NAME.test(flowName)) {
+    return refuse(
+      `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`
+    );
+  }
+
+  const flowPath = resolvedPath;
+  try {
+    const stat = await fsp.stat(flowPath);
+    if (!stat.isFile()) {
+      return refuse(`E2E test path is not a file: ${flowPath}`);
+    }
+    await fsp.access(flowPath, fsConstants.R_OK);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const detail = code === "ENOENT" ? "E2E test file not found" : "Could not read e2e test file";
+    // Each form misses for its own reason. A name is the one form whose file
+    // the user never spelled out, so the resolved path plus `flow list` settles
+    // whether the flow is missing or the lookup went somewhere unexpected. A
+    // path that missed may instead be a saved flow the operator addressed as if
+    // it sat in the current directory — say so when it is.
+    let recovery = "";
+    if (code === "ENOENT") {
+      recovery = fromName
+        ? `\nNo e2e test named "${ref}" is saved in ${E2E_DIRS.join(" or ")} — run \`argent e2e list\` to see the saved tests.`
+        : await savedFlowHint(sub, projectRoot, flowPath);
+    }
+    return refuse(`${detail}: ${flowPath}${recovery}`);
+  }
+
+  // The stat above matched the basename by the filesystem's rules, which on a
+  // case-insensitive filesystem finds a file really named "Upper.YAML" for
+  // "upper.yaml" — every name guard above would then have validated a spelling
+  // that exists nowhere on disk, and the flow name that keys the report,
+  // __baselines__/, and --output would be one no file carries. readdir, not
+  // realpath: realpath rewrites a symlinked flow to its target's name, and
+  // `run` deliberately accepts a symlink under the link's own name. The
+  // basename is pure ASCII by this point (stem charset + ".yaml"), so
+  // Unicode-normalizing filesystems cannot make the comparison lie. A readdir
+  // failure (an execute-only parent directory lets stat through while refusing
+  // the listing) skips the check rather than refusing a file the exact-named
+  // contract may well be honoring.
+  const suppliedBase = path.basename(flowPath);
+  const siblings = await fsp.readdir(path.dirname(flowPath)).catch(() => null);
+  if (siblings !== null && !siblings.includes(suppliedBase)) {
+    const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
+    // Hint the real name only when `run` would accept it (a stem-case slip like
+    // Checkout.yaml); an invalid real name (Upper.YAML) needs a rename, and
+    // suggesting a command that will itself be refused helps no one.
+    const actualRunnable =
+      actual !== undefined &&
+      path.extname(actual) === ".yaml" &&
+      SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
+    // Answer in the form the operator used: someone who typed a name gets the
+    // name that works, not a path into a directory they never spelled out. The
+    // name is inside SHELL_SAFE_ARG by the check above, so it needs no quoting.
+    const recovery = actualRunnable
+      ? fromName
+        ? `Did you mean: argent e2e ${sub} ${path.basename(actual!, ".yaml")}`
+        : `Did you mean: argent e2e ${sub} ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
+      : actual !== undefined
+        ? `Rename ${actual} to ${suppliedBase} to ${sub} it — e2e test files must be lowercase .yaml.`
+        : "Pass the e2e test file's name exactly as it appears on disk.";
+    return refuse(
+      `E2E test path must name the file as it appears on disk — this filesystem matched ` +
+        `${JSON.stringify(suppliedBase)} case-insensitively` +
+        `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the test name ` +
+        `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
+        `${suppliedPath}\n${recovery}`
+    );
+  }
+
+  return { kind: "file", path: flowPath, name: flowName };
 }
 
 /**
@@ -1536,6 +1761,15 @@ type BatchEntry =
   | { kind: "test"; path: string; suite?: Suite; invalidManifest?: string }
   | Extract<RunPlanEntry, { kind: "invalid-suite" }>;
 
+const CHECK_TOOL_ID = "e2e-check";
+
+/** One problem `argent e2e check` reports; `code` is the failure code `argent e2e run` would give. */
+interface CheckProblem {
+  file: string;
+  code?: string;
+  message: string;
+}
+
 const INVALID_SUITE_SIGNAL = {
   error_code: FAILURE_CODES.FLOW_FILE_INVALID,
   error_kind: "validation",
@@ -1761,6 +1995,117 @@ async function runFlowDirectory(
   return exitAfterFlush(unreachable || noneRan ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** `e2e check`: the problems `e2e run` would refuse a test for before it touches a device. */
+async function e2eCheck(argv: string[], options: E2eCommandOptions): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    await printHelp();
+    return;
+  }
+  let ref: string;
+  let json: boolean;
+  try {
+    const parsed = parseCommandArgs(argv, CHECK_OPTIONS);
+    if (parsed.positionals.length > 1) {
+      throw new UsageError(
+        `unexpected argument ${JSON.stringify(parsed.positionals[1])}; e2e check takes one e2e test name or YAML file path`
+      );
+    }
+    if (!parsed.positionals[0]) {
+      throw new UsageError(
+        "argent e2e check <test|test.yaml> requires an e2e test name or a YAML file path."
+      );
+    }
+    ref = parsed.positionals[0];
+    json = parsed.options.json === true;
+  } catch (err) {
+    if (!(err instanceof UsageError)) throw err;
+    console.error(
+      argv.some((tok) => tok === "--json" || tok.startsWith("--json="))
+        ? JSON.stringify(errorRecord(err.message))
+        : `Error: ${err.message}\nRun \`argent e2e --help\`.`
+    );
+    return exitAfterFlush(2);
+  }
+  const fail = (message: string, err: unknown = message): Promise<never> => {
+    console.error(json ? JSON.stringify(errorRecord(err, message)) : message);
+    return exitAfterFlush(2);
+  };
+
+  const projectRoot = process.cwd();
+  const { suppliedPath, fromName, shadowed } = await resolveFlowRef(ref, projectRoot);
+  if (shadowed !== undefined) printWarnings([e2eShadowWarning(suppliedPath, shadowed)], json);
+  const target = await resolveE2eTarget(
+    "check",
+    ref,
+    { suppliedPath, fromName },
+    projectRoot,
+    false
+  );
+  if (target.kind === "refused") return fail(target.message);
+  if (target.kind === "directory") {
+    return fail(
+      `e2e check takes an e2e test name or a YAML file path, not a directory: ${suppliedPath}`
+    );
+  }
+
+  const client = createToolsClient({ paths: options.paths });
+  const toolError = async (err: unknown): Promise<never> => {
+    const unreachable = await toolServerUnreachable(err);
+    if (unreachable) return fail(unreachable.message, unreachable);
+    return fail(err instanceof Error ? err.message : String(err), err);
+  };
+  try {
+    if ((await client.fetchTool(CHECK_TOOL_ID)) === null) {
+      return fail(
+        `The tool-server has no ${CHECK_TOOL_ID} tool, because it runs an older Argent version. ` +
+          "Restart the local tool-server, or update Argent on the linked one."
+      );
+    }
+  } catch (err) {
+    return toolError(err);
+  }
+  let problems: CheckProblem[];
+  try {
+    const resp = await client.callTool(CHECK_TOOL_ID, {
+      e2e_test_path: target.path,
+      project_root: projectRoot,
+    });
+    const found = (resp.data as { problems: Omit<CheckProblem, "file">[] }).problems;
+    problems = found.map((problem) => ({ file: suppliedPath, ...problem }));
+  } catch (err) {
+    // A refusal of the test, for example a mis-cased file name, as `run` treats it.
+    if (!(err instanceof ToolInvocationError) || err.errorKind !== "validation") {
+      return toolError(err);
+    }
+    problems = [
+      {
+        file: suppliedPath,
+        ...(err.errorCode !== undefined && { code: err.errorCode }),
+        message: err.message.replace(/^\[Tool:[^\]]+\] /, ""),
+      },
+    ];
+  }
+
+  if (json) {
+    const ok = problems.length === 0;
+    console.log(JSON.stringify({ ok, e2eTests: [{ path: suppliedPath, ok, problems }] }, null, 2));
+  } else {
+    for (const problem of problems) {
+      console.error(`${problem.file}: ${problem.message}`);
+    }
+    console.log(
+      problems.length === 0
+        ? "OK: no problems in 1 e2e test"
+        : `${plural(problems.length, "error")} in 1 of 1 e2e test`
+    );
+  }
+  return exitAfterFlush(problems.length === 0 ? 0 : 1);
+}
+
 export async function e2e(argv: string[], options: E2eCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
@@ -1960,6 +2305,8 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     return;
   }
 
+  if (sub === "check") return e2eCheck(rest, options);
+
   if (sub !== "run") {
     console.error(`Unknown e2e subcommand "${sub}". Run \`argent e2e --help\`.`);
     return exitAfterFlush(2);
@@ -2022,205 +2369,21 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   if (shadowed !== undefined) {
     printWarnings([e2eShadowWarning(suppliedPath, shadowed)], args.json);
   }
-  // path.resolve collapses ".." lexically, without consulting symlinks, so a
-  // ".." following a symlinked directory would make the CLI stat and run a
-  // different file than the one the kernel opens for this string. Rejected
-  // before path.resolve — same predicate as the tool-server's flow_path_dotdot
-  // guard, and ordered before the extension/stem arms the way the server orders
-  // it, so the dishonest-path cause wins over a basename complaint. The hint
-  // realpath's the parent directory (that is where ".." and symlinks interact)
-  // but keeps the supplied basename: realpath'ing the final component would
-  // rewrite a symlinked flow to its target's name, and the basename is the
-  // flow's identity (report name, __baselines__/ key, --output dir), so the
-  // hint would quietly rename the run. A basename of ".." or "." names no flow
-  // file and gets the generic recovery.
-  if (suppliedPath.split(/[\\/]+/).includes("..")) {
-    let recovery = "Pass the fully resolved path to the e2e test's YAML.";
-    const suppliedBase = path.basename(suppliedPath);
-    if (suppliedBase !== ".." && suppliedBase !== ".") {
-      try {
-        const resolved = path.join(await fsp.realpath(path.dirname(suppliedPath)), suppliedBase);
-        // The reassembled path must itself be kernel-reachable — a hint
-        // naming nothing on disk is worse than the generic line.
-        await fsp.stat(resolved);
-        recovery = `Did you mean: argent e2e run ${shellQuoteArg(resolved)}`;
-      } catch {
-        // Parent unresolvable, or nothing at the reassembled path.
-      }
-    }
-    return fail(
-      `E2E test path must not contain ".." segments — they are collapsed without following symlinks, ` +
-        `so the path can name a different file than the one your shell opens: ${suppliedPath}\n` +
-        recovery,
-      2
-    );
-  }
-  const resolvedPath = path.resolve(projectRoot, suppliedPath);
-  // Stat-first so a directory named `foo.yaml` still batches; on a failed stat
-  // without -r, fall through so the single-file messages stay identical. A name
-  // is not exempt: resolveFlowRef has already made it a path, and one dispatch
-  // for both spellings is what keeps them one run under one identity.
-  let isDirectory = false;
-  try {
-    isDirectory = (await fsp.stat(resolvedPath)).isDirectory();
-  } catch {
-    // Only a spelled-out path can be missing a directory the user meant; for a
-    // name, "directory not found" would quote a path they never typed, so that
-    // form falls through instead.
-    if (args.recursive && !fromName) {
-      return fail(`E2E test directory not found: ${resolvedPath}`, 2);
-    }
-  }
-  if (isDirectory) {
+  const target = await resolveE2eTarget(
+    "run",
+    args.flowRef,
+    { suppliedPath, fromName },
+    projectRoot,
+    args.recursive
+  );
+  if (target.kind === "refused") return fail(target.message, 2);
+  if (target.kind === "directory") {
     if (args.jsonStream) {
       return fail("--json-stream supports a single e2e test; directory runs are not supported.", 2);
     }
-    return runFlowDirectory(resolvedPath, args, projectRoot, options);
+    return runFlowDirectory(target.path, args, projectRoot, options);
   }
-  if (args.recursive) {
-    return fail(
-      fromName
-        ? `e2e run --recursive requires a directory path; "${args.flowRef}" is a saved test's name, ` +
-            `which always addresses the single file ${suppliedPath}.`
-        : `e2e run --recursive requires a directory path: ${suppliedPath}`,
-      2
-    );
-  }
-  // A trailing separator asserts the path names a directory; the honest case
-  // already went to the directory dispatch above. From here the path is a
-  // file's, so the kernel would refuse to open "ok.yaml/" (ENOTDIR), yet
-  // path.resolve drops the separator lexically — without this guard the CLI
-  // would stat and run a file its own argument does not name. Same
-  // dishonest-path class as the ".." guard above, and like it ordered before
-  // the extension/stem arms. Ordered after that guard because its recovery (a
-  // fully resolved path) also cures a trailing separator, while stripping here
-  // would leave the ".." standing and demand a second correction.
-  const separatorTrimmedPath = suppliedPath.replace(/[\\/]+$/, "");
-  if (separatorTrimmedPath !== suppliedPath && separatorTrimmedPath !== "") {
-    // Trimming "checkout/" leaves a token that now reads as a saved-flow name,
-    // and offering it bare would hand back a command for a DIFFERENT file —
-    // `.argent/flows/checkout.yaml` rather than the `./checkout` this argument
-    // names. Keep the hint in the form the argument was written in.
-    const hint = SAFE_FLOW_NAME.test(separatorTrimmedPath)
-      ? `.${path.sep}${separatorTrimmedPath}`
-      : separatorTrimmedPath;
-    return fail(
-      `E2E test path must not end in a path separator — the separator claims a directory, ` +
-        `which the kernel would refuse to open as a file, so the CLI would run a file ` +
-        `this string does not name: ${suppliedPath}\n` +
-        `Did you mean: argent e2e run ${shellQuoteArg(hint)}`,
-      2
-    );
-  }
-  if (path.extname(suppliedPath) !== ".yaml") {
-    // A valid name never reaches here — resolveFlowRef already rewrote it to a
-    // .yaml path — so a token still carrying neither a separator nor an
-    // extension is a name the charset refused. Complain about the name it was
-    // meant to be, not about a ".yaml" suffix the user never intended to type.
-    // The bare ".yaml" arm goes first: naming the missing stem is the more
-    // precise of the two complaints.
-    const looksLikeName =
-      !suppliedPath.includes("/") &&
-      !suppliedPath.includes("\\") &&
-      path.extname(suppliedPath) === "";
-    if (path.basename(suppliedPath).toLowerCase() === ".yaml") {
-      // path.extname treats a bare ".yaml" as an extensionless dotfile, so name the missing stem.
-      return fail(
-        `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
-        2
-      );
-    }
-    if (looksLikeName) {
-      return fail(
-        `E2E test name must contain only letters, numbers, "_", or "-": ${suppliedPath}\n` +
-          `Names run \`${E2E_DIRS.map((dir) => `${dir}/<name>.yaml`).join("` or `")}\`; pass a path ending in .yaml to run an e2e test file kept elsewhere.`,
-        2
-      );
-    }
-    if (path.extname(suppliedPath).toLowerCase() === ".yaml") {
-      // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
-      return fail(
-        `E2E test extension must be lowercase .yaml, not ${path.extname(suppliedPath)}: ${suppliedPath}`,
-        2
-      );
-    }
-    return fail(`E2E test path must end in .yaml: ${suppliedPath}`, 2);
-  }
-
-  const flowName = path.basename(suppliedPath, ".yaml");
-  if (!SAFE_FLOW_NAME.test(flowName)) {
-    return fail(
-      `E2E test filename must have a non-empty name containing only letters, numbers, "_", or "-": ${suppliedPath}`,
-      2
-    );
-  }
-
-  const flowPath = resolvedPath;
-  try {
-    const stat = await fsp.stat(flowPath);
-    if (!stat.isFile()) {
-      return fail(`E2E test path is not a file: ${flowPath}`, 2);
-    }
-    await fsp.access(flowPath, fsConstants.R_OK);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    const detail = code === "ENOENT" ? "E2E test file not found" : "Could not read e2e test file";
-    // Each form misses for its own reason. A name is the one form whose file
-    // the user never spelled out, so the resolved path plus `flow list` settles
-    // whether the flow is missing or the lookup went somewhere unexpected. A
-    // path that missed may instead be a saved flow the operator addressed as if
-    // it sat in the current directory — say so when it is.
-    let recovery = "";
-    if (code === "ENOENT") {
-      recovery = fromName
-        ? `\nNo e2e test named "${args.flowRef}" is saved in ${E2E_DIRS.join(" or ")} — run \`argent e2e list\` to see the saved tests.`
-        : await savedFlowHint(projectRoot, flowPath);
-    }
-    return fail(`${detail}: ${flowPath}${recovery}`, 2);
-  }
-
-  // The stat above matched the basename by the filesystem's rules, which on a
-  // case-insensitive filesystem finds a file really named "Upper.YAML" for
-  // "upper.yaml" — every name guard above would then have validated a spelling
-  // that exists nowhere on disk, and the flow name that keys the report,
-  // __baselines__/, and --output would be one no file carries. readdir, not
-  // realpath: realpath rewrites a symlinked flow to its target's name, and
-  // `run` deliberately accepts a symlink under the link's own name. The
-  // basename is pure ASCII by this point (stem charset + ".yaml"), so
-  // Unicode-normalizing filesystems cannot make the comparison lie. A readdir
-  // failure (an execute-only parent directory lets stat through while refusing
-  // the listing) skips the check rather than refusing a file the exact-named
-  // contract may well be honoring.
-  const suppliedBase = path.basename(flowPath);
-  const siblings = await fsp.readdir(path.dirname(flowPath)).catch(() => null);
-  if (siblings !== null && !siblings.includes(suppliedBase)) {
-    const actual = siblings.find((name) => name.toLowerCase() === suppliedBase.toLowerCase());
-    // Hint the real name only when `run` would accept it (a stem-case slip like
-    // Checkout.yaml); an invalid real name (Upper.YAML) needs a rename, and
-    // suggesting a command that will itself be refused helps no one.
-    const actualRunnable =
-      actual !== undefined &&
-      path.extname(actual) === ".yaml" &&
-      SAFE_FLOW_NAME.test(path.basename(actual, ".yaml"));
-    // Answer in the form the operator used: someone who typed a name gets the
-    // name that works, not a path into a directory they never spelled out. The
-    // name is inside SHELL_SAFE_ARG by the check above, so it needs no quoting.
-    const recovery = actualRunnable
-      ? fromName
-        ? `Did you mean: argent e2e run ${path.basename(actual!, ".yaml")}`
-        : `Did you mean: argent e2e run ${shellQuoteArg(path.join(path.dirname(suppliedPath), actual!))}`
-      : actual !== undefined
-        ? `Rename ${actual} to ${suppliedBase} to run it — e2e test files must be lowercase .yaml.`
-        : "Pass the e2e test file's name exactly as it appears on disk.";
-    return fail(
-      `E2E test path must name the file as it appears on disk — this filesystem matched ` +
-        `${JSON.stringify(suppliedBase)} case-insensitively` +
-        `${actual !== undefined ? ` to ${JSON.stringify(actual)}` : ""}, so the test name ` +
-        `(which keys the report, __baselines__/, and --output) would be one no file carries: ` +
-        `${suppliedPath}\n${recovery}`,
-      2
-    );
-  }
+  const { path: flowPath, name: flowName } = target;
 
   const { callTool, baseUrl } = runToolsClient(args, options);
 

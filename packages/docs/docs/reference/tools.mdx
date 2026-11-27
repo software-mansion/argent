@@ -1130,6 +1130,7 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `ui-tree`                                | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                       |
 | `foreground-app`                         | Get the app in front, iOS simulator and Android                          | None                                             |
 | `fill`                                   | Set the text of the focused text field                                   | `keyboard`                                       |
+| `e2e-check`                              | Check an e2e test without a device. Use `argent e2e check` instead       | `e2e-execute`                                    |
 | `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
 | `native-describe-screen`                 | Read the app's native accessibility screen description                   | `describe`                                       |
 | `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input       | `native-view-at-point` with `hitTest: true`      |
