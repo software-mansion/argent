@@ -232,6 +232,8 @@ On Chromium, `describe` reports a zero-area frame when a rotated container fully
 
 On Chromium, `describe` shows the current value of a text field or a select element. It does not show the value of a password field, a one-time code field or a payment card field.
 
+On a Chromium app, `screenshot` without `scale` returns one image pixel for each CSS pixel. On a 2x display, a 1024×740 window gives a 1024×740 image. Argent takes a normal capture and then reduces the image, so the page and its window do not change. At browser zoom or pinch zoom, the image still shows the full window. At browser zoom, the image has the CSS width of the window. If the capture is narrower than the CSS width, Argent does not change the image. If the long side of the window is above 2000 CSS pixels, Argent does not change the image. Claude Code and model APIs reduce images of that size. Pass `scale: 1.0` for device pixels. A `scale` below 1 reduces the device pixels and needs the optional `sharp` package. Visual e2e steps always capture device pixels, so existing baselines stay valid.
+
 On Android, Chrome 158 and later does not give the page of a regular tab to the accessibility tree. In this case, `describe` reads the DOM of the visible tab through the DevTools socket of the browser:
 
 - This applies to Chrome, Chrome Beta, Dev and Canary, and Chromium. Custom Tabs and WebViews keep their accessibility tree.

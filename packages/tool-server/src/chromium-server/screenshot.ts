@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { PNG } from "pngjs";
 import type { CDPClient } from "../utils/debugger/cdp-client";
+import { boxDownscaleDecodedPng, scaleDecodedPng } from "../utils/png-scale";
 import { mediaDir } from "./cdp-session";
-import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
+import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts, ViewportSize } from "./types";
+import { readViewport } from "./viewport";
 
 interface SharpModule {
   (input: Buffer): {
@@ -64,6 +67,86 @@ interface CaptureContext {
   cdp: CDPClient;
   /** Used in the persisted filename. */
   deviceId: string;
+  /**
+   * The session's last window read, for when the renderer cannot answer. Required,
+   * so a caller that drops it does not compile.
+   */
+  getViewport: () => ViewportSize;
+}
+
+/**
+ * The async parser moves only the inflate to the thread pool. Unfiltering and
+ * the pixel conversion after it run on the event loop, in one synchronous stretch.
+ */
+function decodePng(png: Buffer): Promise<PNG> {
+  return new Promise((resolve, reject) => {
+    new PNG().parse(png, (err, decoded) => (err ? reject(err) : resolve(decoded)));
+  });
+}
+
+/** Lets other tool calls run between the synchronous steps. */
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+// Up-filter with zlib's default strategy: about half the CPU of pngjs's defaults
+// and smaller files on page screenshots (flat fills and text).
+const ENCODE_OPTIONS = { filterType: 2, deflateStrategy: 0, deflateLevel: 6 };
+
+// A capture still succeeds while the renderer cannot run JS (a navigation waiting
+// on its host, a debugger pause on an idle page). `Page.getLayoutMetrics` hangs the
+// same way during such a navigation, so no read can answer there. The wait can be
+// short because the session's last read is then almost always still right.
+const VIEWPORT_READ_TIMEOUT_MS = 150;
+
+// Claude Code scales a longer image down to this, and model APIs have similar
+// limits. Reducing a capture that stays above it would save no tokens, at the
+// highest CPU and memory cost.
+const MAX_CSS_IMAGE_LONG_SIDE = 2_000;
+
+async function devicePixelsPerCssPixel(
+  cdp: CDPClient,
+  imageWidth: number,
+  known: ViewportSize
+): Promise<number> {
+  try {
+    const viewport = await readViewport(cdp, VIEWPORT_READ_TIMEOUT_MS);
+    return imageWidth / viewport.width;
+  } catch {
+    return known.devicePixelRatio;
+  }
+}
+
+/**
+ * One image pixel per CSS pixel, made from the capture already taken, so nothing
+ * on the page or in the window changes. The ratio is the image against
+ * `innerWidth`, not `devicePixelRatio`, so the image is the window's CSS width
+ * at any browser zoom. A failed read uses the session's last ratio: if the ratio
+ * has dropped since that read, the image is smaller than the window until the next
+ * refresh. A capture that cannot be decoded stays as it came.
+ */
+async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer> {
+  try {
+    const size = readPngSize(capture);
+    if (!size) return capture;
+    const known = ctx.getViewport();
+    // One device pixel per CSS pixel as far as the session knows: no read to wait for.
+    // A last read above 1x proves nothing about a narrower capture: the window may
+    // have been resized since.
+    if (known.devicePixelRatio <= 1 && size.width <= known.width) return capture;
+    const ratio = await devicePixelsPerCssPixel(ctx.cdp, size.width, known);
+    if (ratio <= 1 || Math.max(size.width, size.height) / ratio > MAX_CSS_IMAGE_LONG_SIDE) {
+      return capture;
+    }
+    const decoded = await decodePng(capture);
+    await yieldToEventLoop();
+    const scaled =
+      Number.isInteger(ratio) && size.width % ratio === 0 && size.height % ratio === 0
+        ? boxDownscaleDecodedPng(decoded, ratio)
+        : scaleDecodedPng(decoded, 1 / ratio);
+    await yieldToEventLoop();
+    return PNG.sync.write(scaled, ENCODE_OPTIONS);
+  } catch {
+    return capture;
+  }
 }
 
 /** Capture, optionally rotate / downscale with sharp, persist under `mediaDir()`. */
@@ -84,7 +167,8 @@ export async function captureScreenshot(
       error_kind: "unknown",
     });
   }
-  let bytes = Buffer.from(cdpResult.data, "base64");
+  let bytes: Buffer = Buffer.from(cdpResult.data, "base64");
+  if (opts.cssPixels) bytes = await toCssPixels(ctx, bytes);
 
   const rotation = opts.rotation && opts.rotation !== "Portrait" ? opts.rotation : null;
   const scale = opts.scale != null && opts.scale > 0 && opts.scale < 1 ? opts.scale : null;

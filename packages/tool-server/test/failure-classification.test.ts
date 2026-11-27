@@ -302,7 +302,11 @@ describe("chromium CDP-command malformed-response classifications", () => {
 
   it("classifies a screenshot with no data as CHROMIUM_SCREENSHOT_FAILED (unknown)", async () => {
     const err = await captureError(
-      captureScreenshot({ cdp: stubCdp({}), deviceId: "chromium-cdp-9222" })
+      captureScreenshot({
+        cdp: stubCdp({}),
+        deviceId: "chromium-cdp-9222",
+        getViewport: () => ({ width: 1024, height: 740, devicePixelRatio: 1 }),
+      })
     );
     expectCode(err, FAILURE_CODES.CHROMIUM_SCREENSHOT_FAILED);
     expect(getFailureSignal(err)?.error_kind).toBe("unknown");
