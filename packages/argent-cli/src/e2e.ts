@@ -236,11 +236,12 @@ Subcommands:
                              given
   check <test|test.yaml> [--json]
                              Check an e2e test without a device and without
-                             running a step: parse it and apply the checks
-                             \`run\` makes before the first step, also to the
-                             run: fragments and e2e-execute tests its steps
-                             reach. Prints each problem on stderr and exits 1
-                             when it finds one.
+                             running a step: parse it, apply the checks \`run\`
+                             makes before the first step, and check tool names,
+                             tool arguments and script files, also in the run:
+                             fragments and e2e-execute tests its steps reach.
+                             Prints each problem on stderr and exits 1 when it
+                             finds one.
                              --json prints { "ok", "e2eTests": [...] } instead,
                              with path, ok and problems (file, at, code,
                              message) per test

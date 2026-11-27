@@ -111,11 +111,14 @@ function outputsInEnv(env: FlowEnv, output: FlowOutput): FlowEnv {
   return resolved;
 }
 
-export async function runFlowScriptStep(
-  request: FlowScriptStepRequest
-): Promise<FlowScriptStepRun> {
-  const { flowDir, step } = request;
-  const target = step.path;
+/**
+ * The file a `script:` step names, resolved against `flowDir` as the runner
+ * resolves it, or the outcome that fails the step before it runs.
+ */
+export async function locateScript(
+  flowDir: string,
+  target: string
+): Promise<{ canonical: string } | { refused: FlowScriptStepOutcome }> {
   const { canonical, spelling } = await resolveFlowRelativeFile(
     flowDir,
     target,
@@ -134,8 +137,7 @@ export async function runFlowScriptStep(
       ? `Use "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}".`
       : `Rename "${spelling.actual}" to "${suppliedBase}".`;
     return {
-      ran: "no",
-      outcome: {
+      refused: {
         status: "error",
         reason: `Script path "${target}" has the wrong letter case. ${recovery}`,
       },
@@ -145,13 +147,23 @@ export async function runFlowScriptStep(
   const missing = await scriptFileProblem(canonical);
   if (missing) {
     return {
-      ran: "no",
-      outcome: {
+      refused: {
         status: "fail",
         reason: `Script "${target}" ${missing}. Resolved path: ${canonical}.`,
       },
     };
   }
+  return { canonical };
+}
+
+export async function runFlowScriptStep(
+  request: FlowScriptStepRequest
+): Promise<FlowScriptStepRun> {
+  const { flowDir, step } = request;
+  const target = step.path;
+  const located = await locateScript(flowDir, target);
+  if ("refused" in located) return { ran: "no", outcome: located.refused };
+  const { canonical } = located;
 
   // Asked of the name the flow spells, not of `canonical`: Node picks a module's
   // format from the real path's extension, but a symlink that renames a file

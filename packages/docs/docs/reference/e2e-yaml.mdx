@@ -1141,19 +1141,31 @@ When Argent finds no e2e test and no invalid `suite.config.yaml` file, the array
 - The e2e test sets `executionPrerequisite`, and its leading `run:` chain reaches a `launch` step.
 - The tool-server is remote, and the e2e test is not self-contained. For example, the e2e test has a `script:` step.
 
+The command also finds the problems that make a step fail when it runs:
+
+- A `tool:` step names a tool that the tool-server does not have, or a tool behind a feature flag that is off.
+- A `tool:` step gives arguments that its tool rejects. For example, an argument has the wrong type, or a required argument is missing.
+- A `script:` step names a file that does not exist, or a file name with the wrong case.
+
+A `tool:` step does not need the device arguments `udid`, `device_id`, `device` and `devices`. The run sets them.
+
 The command also checks the files that the steps of the e2e test reach, at all depths and also in `when:` blocks:
 
 - For a `run:` fragment, the command finds the problems that make the `run:` step fail before the fragment runs: a missing file, a file name with the wrong case, a cycle, too many nested runs, a file that is not valid, and the argument and TypeScript problems above.
 - For an e2e test that a `tool: e2e-execute` step runs, the command does all the checks of an e2e test. The command reads only an e2e test that the step names by an absolute `e2e_test_path`, or by `name` with an absolute `project_root`.
 
+In each file that the e2e test reaches, the command also finds the problems that make a step fail.
+
 The command reports the problems of a file that the e2e test reaches more than one time only one time. The command reports a problem in a file that the e2e test reaches on the step that reaches the file.
 
-The tool-server that the CLI uses does the check. Thus the check uses the tools and the Node.js of that tool-server. For a remote tool-server, the CLI sends the e2e test, its `run:` fragments and its nested e2e tests, as `argent e2e run` does.
+The tool-server that the CLI uses does the check. Thus the check uses the tools, the feature flags and the Node.js of that tool-server. For a remote tool-server, the CLI sends the e2e test, its `run:` fragments and its nested e2e tests, as `argent e2e run` does.
 
 The command does not do the checks that depend on the target of a run:
 
 - The checks that depend on `--device` or `--platform`. For example, a run with `--device chromium-cdp-<port>` accepts a leading launch that the command reports.
 - The `requires` block, the selectors, the apps and the snapshot baselines.
+
+The command checks the tool arguments with the same rules as the tool uses in a run. The command does not check the arguments of the tools that a `run-sequence` step calls.
 
 Argent writes each problem on stderr as `<path>: <position>: <message>`, or as `<path>: <message>` when the problem has no position. The message is the same message that `argent e2e run` gives. Then Argent prints a summary line on stdout.
 

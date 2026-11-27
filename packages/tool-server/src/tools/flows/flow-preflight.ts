@@ -2,15 +2,19 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   canonicalFlowPath,
+  canonicalToolArgs,
   canonicalToolId,
   classifyOnDiskSpelling,
+  describeParamIssues,
   FAILURE_CODES,
   getFailureSignal,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
   pickE2eFile,
+  ToolParamAliasError,
   type FailureCode,
   type NestedFlowTarget,
+  type ToolDefinition,
 } from "@argent/registry";
 import {
   blockSteps,
@@ -34,10 +38,14 @@ import {
   type ProjectAccess,
   type ResolvedFlowFile,
 } from "./project-access";
-import { typeScriptScriptRefusal } from "./flow-script-step";
+import { locateScript, typeScriptScriptRefusal } from "./flow-script-step";
+import { DEVICE_BIND_KEYS, DEVICE_BIND_LIST_KEYS } from "./flow-device-keys";
 
-/** A tool's JSON `inputSchema` by tool id, or undefined for a tool this tool-server lacks. */
-export type ToolSchemaLookup = (tool: string) => Record<string, unknown> | undefined;
+/** The input schemas of a tool a `tool:` step can call. */
+type CallableTool = Pick<ToolDefinition, "inputSchema" | "zodSchema">;
+
+/** A tool's input schemas by tool id, or undefined for a tool this tool-server lacks. */
+export type ToolSchemaLookup = (tool: string) => CallableTool | undefined;
 
 interface LeadingLaunchEnv {
   schemas: ToolSchemaLookup;
@@ -120,7 +128,7 @@ function toolArgProps(
   schemas: ToolSchemaLookup,
   tool: string
 ): Record<string, unknown> | undefined {
-  return (schemas(tool) as { properties?: Record<string, unknown> } | undefined)?.properties;
+  return schemas(tool)?.inputSchema?.properties as Record<string, unknown> | undefined;
 }
 
 /** The first retired key in one invocation's args, against the properties its tool declares. */
@@ -599,6 +607,59 @@ export interface CheckProblem {
   message: string;
 }
 
+const BOUND_KEYS: readonly string[] = [...DEVICE_BIND_KEYS, ...DEVICE_BIND_LIST_KEYS];
+
+/**
+ * Why `registry.invokeTool` would refuse a `tool:` step's args, with its text,
+ * after the runner binds the device keys. A retired key is left to
+ * {@link findRetiredToolArg}.
+ */
+function toolArgsRefusal(
+  tool: string,
+  def: CallableTool,
+  stepArgs: Record<string, unknown>
+): string | undefined {
+  const toolId = canonicalToolId(tool);
+  let args: Record<string, unknown>;
+  try {
+    args = { ...canonicalToolArgs(toolId, stepArgs) };
+  } catch (err) {
+    if (!(err instanceof ToolParamAliasError)) throw err;
+    return `Invalid params for tool "${toolId}": ${err.message}`;
+  }
+  const props = (def.inputSchema?.properties ?? {}) as Record<string, unknown>;
+  for (const key of Object.keys(args)) {
+    const bound =
+      (DEVICE_BIND_KEYS as readonly string[]).includes(key) ||
+      ((DEVICE_BIND_LIST_KEYS as readonly string[]).includes(key) && !Object.hasOwn(props, key));
+    if (bound || retiredKeyGuidance(props[key]) !== undefined) delete args[key];
+  }
+  const parsed = def.zodSchema?.safeParse(args);
+  if (!parsed || parsed.success) return undefined;
+  const issues = parsed.error.issues.filter((issue) => !BOUND_KEYS.includes(String(issue.path[0])));
+  if (issues.length === 0) return undefined;
+  return `Invalid params for tool "${toolId}": ${describeParamIssues({ issues }, args)}`;
+}
+
+/**
+ * Why one step fails when it runs, for what can be told without a device: a
+ * tool this tool-server does not offer, args its tool refuses, or a missing
+ * script file. `flowDir` is the directory of the file the step is in.
+ */
+async function stepProblem(
+  walk: CheckWalk,
+  step: FlowStep,
+  flowDir: string
+): Promise<string | undefined> {
+  if (step.kind === "script") {
+    const located = await locateScript(flowDir, step.path);
+    return "refused" in located ? located.refused.reason : undefined;
+  }
+  if (step.kind !== "tool") return undefined;
+  const def = walk.schemas(step.name);
+  return def ? toolArgsRefusal(step.name, def, step.args) : `Tool "${step.name}" not found`;
+}
+
 /** What one {@link checkFlow} call shares across the files it follows. */
 interface CheckWalk {
   schemas: ToolSchemaLookup;
@@ -699,7 +760,10 @@ async function checkTest(
   await followReferences(walk, flow.steps, stack, flowName, edge?.prefix ?? [], undefined);
 }
 
-/** Follow every `run:` and nested `tool: e2e-execute` step in `steps`, `when:` blocks included. */
+/**
+ * Follow every `run:` and nested `tool: e2e-execute` step in `steps`, `when:`
+ * blocks included. A first walk (`floor` unset) also checks each step.
+ */
 async function followReferences(
   walk: CheckWalk,
   steps: FlowStep[],
@@ -708,7 +772,12 @@ async function followReferences(
   prefix: StepLevel[],
   floor: number | undefined
 ): Promise<void> {
+  const flowDir = path.dirname(stack[stack.length - 1]!.canonical);
   for (const { step, at } of walkSteps(steps, "", prefix)) {
+    if (floor === undefined) {
+      const problem = await stepProblem(walk, step, flowDir);
+      if (problem !== undefined) report(walk, at, problem);
+    }
     if (step.kind === "run") {
       await followRun(walk, step.flow, stack, rootDisplay, at, floor);
     } else if (step.kind === "tool" && canonicalToolId(step.name) === "e2e-execute") {
@@ -869,8 +938,8 @@ export function parseForCheck(text: string): { flow: FlowFile } | { problems: Ch
 /**
  * The problems `e2e-execute` would refuse the e2e test for before it touches
  * a device, and those of the `run:` fragments and nested tests its steps
- * reach, collected instead of thrown. `canonical` is the test's path where
- * `project` has it.
+ * reach, collected instead of thrown, plus the steps that would fail (see
+ * {@link stepProblem}). `canonical` is the test's path where `project` has it.
  */
 export async function checkFlow(input: {
   flow: FlowFile;

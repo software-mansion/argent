@@ -5,8 +5,14 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
+import { isFlagOffered } from "../../utils/capability";
 import { displayFlowName, E2E_TEST_FILE_INPUTS, readRootTest, rootTestCanonical } from "./flow-run";
-import { checkFlow, parseForCheck, type CheckProblem } from "./flow-preflight";
+import {
+  checkFlow,
+  parseForCheck,
+  type CheckProblem,
+  type ToolSchemaLookup,
+} from "./flow-preflight";
 
 const zodSchema = z
   .object({
@@ -40,15 +46,25 @@ const zodSchema = z
     }
   });
 
+/** A tool's input schemas, for a tool that a `tool:` step can call on this tool-server. */
+function callableSchemas(registry: Registry): ToolSchemaLookup {
+  return (tool) => {
+    const def = registry.getTool(tool);
+    if (def?.featureFlag !== undefined && !isFlagOffered(def.featureFlag)) return undefined;
+    return def;
+  };
+}
+
 export function createCheckFlowTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, { problems: CheckProblem[] }> {
   return {
     id: "e2e-check",
     description: `Check an e2e test without a device and without running a step.
-Returns { problems }: each problem that makes e2e-execute refuse the e2e test before its first step,
-in this e2e test and in the run: fragments and nested e2e tests its steps reach. Each problem holds
-at?, code? and message. at lists the steps from the e2e test to the problem, each { step, run?, e2e?, when? }.
+Returns { problems }: each problem that makes e2e-execute refuse the e2e test before its first step, and
+each step that fails when it runs for a reason a device does not change, in this e2e test and in the
+run: fragments and nested e2e tests its steps reach. Each problem holds at?, code? and message.
+at lists the steps from the e2e test to the problem, each { step, run?, e2e?, when? }.
 Pass exactly one e2e test source: name (under project_root) or e2e_test_path.`,
     zodSchema,
     readOnly: true,
@@ -85,7 +101,7 @@ Pass exactly one e2e test source: name (under project_root) or e2e_test_path.`,
         flow,
         flowName: root.flowName,
         canonical,
-        schemas: (tool) => registry.getTool(tool)?.inputSchema,
+        schemas: callableSchemas(registry),
         project: root.project,
       });
       return { problems };
