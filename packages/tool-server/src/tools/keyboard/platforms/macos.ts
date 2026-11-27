@@ -1,5 +1,6 @@
 import type { Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import { macosPressKey, macosTypeText, resolveMacosApp } from "../../../utils/macos-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
@@ -15,6 +16,13 @@ export function makeMacosImpl(
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
     handler: async (_services, params, device) => {
+      if (params.clear) {
+        throw new UnsupportedOperationError(
+          "keyboard",
+          device,
+          'clearing a field with `clear: true` is not supported on Mac apps; when a text field is focused, send `key: "command+a"` then `key: "backspace"`'
+        );
+      }
       const app = await resolveMacosApp(registry, device, "keyboard");
       // ../index.ts rejects a request carrying both, so at most one runs.
       if (params.text) {
