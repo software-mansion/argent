@@ -137,20 +137,12 @@ function makeDescribeExecute(
 }
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
-    ),
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
   bundleId: z
     .string()
     .optional()
     .describe(
-      "App bundle ID, used as a target hint on iOS when the AX-service returns no elements " +
-        "and describe falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on every other platform, " +
-        "including a physical iOS device."
+      "iOS simulator only: fallback bundle id when AX-service returns empty (auto-detects frontmost if omitted)."
     ),
 });
 
@@ -161,20 +153,10 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     id: "describe",
     // Android's device probes plus the tree dump can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Get the accessibility / DOM element tree for the current screen.
-Use when you need element frames or labels and have no fresh tree: most interaction tools (not shake) already return one after each action, or name an identical earlier one by its tree id.
-On iOS it reads the AXRuntime accessibility service, so it sees whatever is visible, including system dialogs and permission prompts. While a system dialog is visible it returns the dialog's elements (buttons, text); otherwise the foreground app's. On a physical iOS device it covers only the app started with launch-app; to read system dialogs there, launch-app \`com.apple.springboard\` first. On a local iOS simulator a text field shows its placeholder as its value, with no label, so an empty field reads like one holding that text. A text field with no accessibility label or identifier (e.g. the Settings search field) can also be missing from the tree, even with text typed in it. Check a screenshot in both cases.
-On Android it reads the tree through Argent's UiAutomation helper, falling back to \`uiautomator dump\`. On Chromium it walks the DOM over the Chrome DevTools Protocol: every visible element with its ARIA role, accessible name and the visible part of its bounding rect; content scrolled or clipped out of view, or skipped by a closed \`<details>\` or \`content-visibility: hidden\`, has a zero-area frame.
-On Vega (Fire TV) it reads the on-device automation toolkit; \`[focused]\`/\`[selected]\` mark the D-pad cursor, which you move with \`tv-remote\` (Vega has no touch).<flag:harmonyos>
-On HarmonyOS it runs the device's \`uitest dumpLayout\` (\`source: "harmony-uitest"\`); each top-level child is a window whose \`identifier\` (not its label) is the owning bundle, so an app plus the status bar reads as two windows. A suspended display still dumps its last frame, so the result then carries a \`hint\`, as it does for an empty dump.</flag:harmonyos><flag:macos-apps>
-On a Mac app it reads the app's accessibility tree with web view content and React Native testIDs merged in; frames are fractions of the app window, grown to include sheets and menus past it.</flag:macos-apps>
-On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind 'tv') it returns the FOCUSED element and the FOCUSABLE elements instead, since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\`, then read where focus landed from the tree in its result, or call describe again when it is missing.
-
-Returns \`{ description, source }\`: \`description\` renders the tree one line per element, with its role, label/value/id, VoiceOver hint (iOS simulator), interactivity flags and frame. Frames are normalized [0,1] fractions of the screen / window width and height (not pixels); tap an element at the centre of its frame. The tree has no z-order or occlusion information: an element may be covered by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
-Fails if the tree cannot be read, e.g. on a physical iOS device before launch-app has started an app.
-
-For UIKit properties of a view (class name, accessibilityIdentifier), use native-find-views (iOS simulator only).
-For React Native component names, or a testID describe does not list, use debugger-component-tree.`,
+    description: `Read the accessibility / DOM element tree for the current screen (or focused/focusable elements on TV targets).
+Use when you need tap coordinates or labels and have no fresh tree: interaction tools already attach one after each action (or reference an earlier \`Tree id\`).
+Returns \`{ description, source, hint? }\`: one line per element with role, label/value/id/hint, flags, and normalized \`[0,1]\` frame \`(x,y,w,h)\` — tap at \`(x+w/2, y+h/2)\`. No z-order/occlusion info; check a screenshot if a tap hits an overlay or a text field shows its placeholder as value. Fails if the tree backend is unreachable.
+For UIKit view properties (iOS sim) use \`native-find-views\`; for React Native components/testIDs use \`debugger-component-tree\`.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
