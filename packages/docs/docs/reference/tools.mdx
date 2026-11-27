@@ -13,24 +13,24 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Mac apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators                      |
-| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app, or start a Mac app                                            |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                                     |
-| `restart-app`                | Terminate then relaunch an app                                                                                                                               |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                                       |
-| `open-url`                   | Open a URL or URL scheme on the device                                                                                                                       |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                                                |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                                                                                   |
-| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                                                    |
-| `shake`                      | Shake the device                                                                                                                                             |
-| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                                                 |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                                                |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                                           |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                                             |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, network capture and its requests (not on Vega), the Android throttle proxy |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                                             |
+| Tool                         | Description                                                                                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Mac apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators                                |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app, or start a Mac app                                                      |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                                               |
+| `restart-app`                | Terminate then relaunch an app                                                                                                                                         |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                                                 |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                                                                 |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                                                          |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                                                             |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                                                              |
+| `shake`                      | Shake the device                                                                                                                                                       |
+| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                                                           |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                                                          |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                                                     |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                                                       |
+| `stop-all-simulator-servers` | Stop the services Argent runs for a device: simulator servers, native devtools, TV daemons, network capture and its requests (not on Vega), the Android throttle proxy |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                                                       |
 
 `list-devices` returns `devices` and, when one applies, `notes`. Each device has a `platform`, a `kind` and a `state`:
 

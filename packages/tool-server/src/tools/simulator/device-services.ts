@@ -1,6 +1,14 @@
-import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
+import { ServiceState } from "@argent/registry";
+import type { Registry } from "@argent/registry";
+import {
+  SIMULATOR_SERVER_NAMESPACE,
+  type SimulatorServerApi,
+} from "../../blueprints/simulator-server";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../blueprints/ios-device-runner";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  NATIVE_DEVTOOLS_NAMESPACE,
+  type NativeDevtoolsApi,
+} from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 import { ANDROID_NETWORK_SHAPER_NAMESPACE } from "../../blueprints/android-network-shaper";
 import { ANDROID_CHROME_CDP_NAMESPACE } from "../../blueprints/android-chrome-cdp";
@@ -19,11 +27,7 @@ import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profile
 import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
-import {
-  externalClaimForNativeId,
-  externalNativeId,
-  isExternalDeviceUrn,
-} from "../../utils/external-devices";
+import { externalNativeId, isExternalDeviceUrn, isExternalId } from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -224,17 +228,32 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
 }
 
 /**
- * Whether `urn` is a device provider's service, which a teardown drops without
- * shutting anything down. An `ext:`-keyed URN is one. A native devtools URN holds
- * the udid under both of the device's names, and on a device a provider claims,
- * that service only attaches to the agent the provider lends.
+ * Whether `urn` is a native devtools service that attaches to the agent a
+ * provider lends rather than running Argent's own. Its `dispose()` only hangs
+ * up Argent's connection: the agent, with any network capture in it, keeps
+ * running. So a teardown drops it without listing it as stopped. Every other
+ * service of such a device (its accessibility service, TV-control daemons, ...)
+ * is Argent's own and a teardown lists it like any other. Its borrowed
+ * simulator-server is left out by {@linkcode isBorrowedSimulatorServer}.
+ *
+ * Read from the running instance (`api.armsEnv`) for the same reasons and under
+ * the same rules as {@linkcode isBorrowedSimulatorServer}: the factory chose
+ * between attaching and running Argent's own when it built it, and the
+ * provider's claim can change in between.
  */
-export function isProviderOwnedUrn(urn: string): boolean {
-  if (isExternalDeviceUrn(urn)) return true;
+async function isLentNativeDevtools(registry: Registry, urn: string): Promise<boolean> {
   const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
   if (portion === undefined) return false;
   const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
-  return externalClaimForNativeId(portion.slice(0, portion.length - suffix.length)) !== undefined;
+  if (isExternalId(portion.slice(0, portion.length - suffix.length))) return true;
+
+  try {
+    if (registry.getServiceState(urn) !== ServiceState.RUNNING) return false;
+    const api = await registry.resolveService<NativeDevtoolsApi>(urn);
+    return api.armsEnv === false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -256,4 +275,68 @@ export function isProviderOwnedUrn(urn: string): boolean {
  */
 export function unnameableSessionUrns(urns: readonly string[]): string[] {
   return urns.filter((urn) => isLogicalKeyedDevice(deviceIdOfUrn(urn, PORT_KEYED_NAMESPACES)));
+}
+
+/**
+ * Whether `urn` is a simulator-server Argent borrowed from an external provider
+ * rather than spawned itself. Its `dispose()` is a no-op by design, so both
+ * stop tools drop the cached handle but never report it as stopped. The
+ * device's lent native devtools is left out too (see
+ * {@linkcode isLentNativeDevtools}); every other service of it is Argent's own
+ * and is reported like any other.
+ *
+ * Read from the running instance (`api.external`), which the factory set when
+ * it built it, rather than from the provider's claim at stop time. The claim
+ * can change in between (a provider claims a simulator Argent already drives or
+ * withdraws one Argent attached to) and the instance is what `dispose()` will
+ * act on. Reading it also makes the answer independent of how the caller
+ * spelled the id.
+ *
+ * An `ext:` URN counts as borrowed by its spelling alone, also while it is
+ * still STARTING: Argent reaches an `ext:` device only through its provider.
+ * Any other URN is borrowed only when its RUNNING instance says so. A node that
+ * is not RUNNING has no instance to read, and this never starts one. Call it
+ * BEFORE disposing the URN.
+ */
+export async function isBorrowedSimulatorServer(registry: Registry, urn: string): Promise<boolean> {
+  if (!urn.startsWith(`${SIMULATOR_SERVER_NAMESPACE}:`)) return false;
+  if (isExternalDeviceUrn(urn)) return true;
+
+  try {
+    if (registry.getServiceState(urn) !== ServiceState.RUNNING) return false;
+    const api = await registry.resolveService<SimulatorServerApi>(urn);
+    return api.external === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Of `urns`, the ones a stop disposes without listing as stopped, because what
+ * they run belongs to a device provider and keeps running: borrowed
+ * simulator-servers (see {@linkcode isBorrowedSimulatorServer}) and the native
+ * devtools connections a provider lends (see {@linkcode isLentNativeDevtools}).
+ * Call it right after taking the snapshot the URNs come from, before awaiting
+ * any disposal: tool calls are not serialized, so another call can dispose a
+ * borrowed server while this one waits. Its node is then IDLE and a later check
+ * would count it as Argent's own and report it stopped although it keeps
+ * running. A RUNNING node resolves without yielding to another request, so this
+ * reads the same moment as the snapshot.
+ */
+export async function providerOwnedUrns(
+  registry: Registry,
+  urns: Iterable<string>
+): Promise<Set<string>> {
+  const owned = new Set<string>();
+
+  for (const urn of urns) {
+    if (
+      (await isLentNativeDevtools(registry, urn)) ||
+      (await isBorrowedSimulatorServer(registry, urn))
+    ) {
+      owned.add(urn);
+    }
+  }
+
+  return owned;
 }

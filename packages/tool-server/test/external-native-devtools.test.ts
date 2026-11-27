@@ -38,7 +38,7 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: Object.assign(execFile, { [promisify.custom]: execFileAsync }) };
 });
 
-import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
+import { nativeDevtoolsBlueprint, nativeDevtoolsRef } from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
 import {
@@ -171,7 +171,14 @@ async function startLentAgent({
     connections++;
     if (!deferHandshake) sendHandshake(socket);
 
-    readline.createInterface({ input: socket }).on("line", (raw) => {
+    const lines = readline.createInterface({ input: socket });
+    /**
+     * Argent can hang up with frames still unread, which Linux reports to this
+     * end as ECONNRESET. `readline` re-emits it on the interface. A provider
+     * outlives its clients, so the agent ignores it.
+     */
+    lines.on("error", () => {});
+    lines.on("line", (raw) => {
       const message = JSON.parse(raw);
       received.push(message);
 
@@ -1318,10 +1325,10 @@ describe("a provider that lends its native-devtools agent", () => {
               bundleId: BUNDLE_ID,
             })
           ).header,
-        stopAll: (devices: string[]) =>
+        stopAll: (devices?: string[]) =>
           registry.invokeTool<{ stopped: string[]; unmatched?: string[] }>(
             "stop-all-simulator-servers",
-            { devices }
+            devices ? { devices } : {}
           ),
         liveNativeUrns: () =>
           [...registry.getSnapshot().services]
@@ -1378,5 +1385,91 @@ describe("a provider that lends its native-devtools agent", () => {
         await agent.close();
       }
     );
+
+    /**
+     * Whether the service attaches to the provider's agent or runs Argent's
+     * own is chosen when it is built and the claim can change after that. A
+     * stop follows the service, not the claim it reads at stop time.
+     */
+    describe("when the claim changes after the service was built", () => {
+      const OTHER = "0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0";
+      const URN = `NativeDevtools:${IOS_UDID}`;
+
+      async function startByUdid(registry: Awaited<ReturnType<typeof toolRegistry>>["registry"]) {
+        const { urn, options } = nativeDevtoolsRef(resolveDevice(IOS_UDID));
+        return registry.resolveService<{ armsEnv: boolean; socketPath: string }>(urn, options);
+      }
+
+      function withdrawDescriptor(): void {
+        delete process.env.ARGENT_DEVICE_PROVIDERS;
+        __resetExternalDeviceCacheForTesting();
+      }
+
+      it.each([
+        { scope: "nothing", devices: undefined },
+        { scope: "the udid", devices: [IOS_UDID] },
+      ])(
+        "does not list the lent connection while the provider claims the device, scoped to $scope",
+        async ({ devices }) => {
+          const agent = await startLentAgent();
+          publishDescriptor({ socketPath: agent.socketPath });
+          const tools = await toolRegistry();
+
+          expect((await startByUdid(tools.registry)).armsEnv).toBe(false);
+
+          expect(await tools.stopAll(devices)).toEqual({ stopped: [] });
+          expect(tools.liveNativeUrns()).toEqual([]);
+
+          await tools.registry.dispose();
+          await agent.close();
+        }
+      );
+
+      it.each([
+        { scope: "nothing", devices: undefined, result: { stopped: [] } },
+        {
+          scope: "another id and the udid",
+          devices: [OTHER, IOS_UDID],
+          result: { stopped: [], unmatched: [OTHER] },
+        },
+      ])(
+        "does not list the lent connection after the provider withdraws the device, scoped to $scope",
+        async ({ devices, result }) => {
+          const agent = await startLentAgent();
+          publishDescriptor({ socketPath: agent.socketPath });
+          const tools = await toolRegistry();
+
+          await startByUdid(tools.registry);
+          withdrawDescriptor();
+
+          expect(await tools.stopAll(devices)).toEqual(result);
+          expect(tools.liveNativeUrns()).toEqual([]);
+          /**
+           * Only Argent's connection closed: the provider's agent still
+           * listens.
+           */
+          expect(fs.existsSync(agent.socketPath)).toBe(true);
+
+          await tools.registry.dispose();
+          await agent.close();
+        }
+      );
+
+      it("lists Argent's own server when a provider claims the device later", async () => {
+        const tools = await toolRegistry();
+        const own = await startByUdid(tools.registry);
+        expect(own.armsEnv).toBe(true);
+
+        const agent = await startLentAgent();
+        publishDescriptor({ socketPath: agent.socketPath });
+        __resetExternalDeviceCacheForTesting();
+
+        expect(await tools.stopAll()).toEqual({ stopped: [URN] });
+        expect(fs.existsSync(own.socketPath)).toBe(false);
+
+        await tools.registry.dispose();
+        await agent.close();
+      });
+    });
   });
 });
