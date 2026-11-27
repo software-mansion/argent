@@ -2268,9 +2268,10 @@ async function runType(
  * container warning, when the result rests on `subtreeText`, which holds only
  * the elements before the cut: an `equals` or `matches` that passes on it and
  * not on the element's own text, or a check that fails on it. A `contains` that
- * passes stays true whatever the cut left out. On Chromium the walk marks the
- * containers it cut (`cutInside`), so only those warn; the native walkers have
- * one flag for many cut points, so there each container warns.
+ * passes stays true whatever the cut left out. On Chromium the walk marks each
+ * container whose text the cut shortened (`cutInside`), so only those warn;
+ * the native walkers have one flag for many cut points, so there each
+ * container warns.
  */
 function cutConditionWarning(
   data: DescribeTreeData,

@@ -67,10 +67,10 @@ export interface FlatNode<T> {
    */
   shield: boolean;
   /**
-   * The source cut its walk while inside this node (Chromium's `cutInside`):
-   * the text of its subtree holds only what came before the cut. Carried to
-   * the leaf whose `subtreeText` that text gives, the node's own or its
-   * nearest ancestor leaf's, which the source marks too.
+   * A cut of the source's walk left out text of this node's subtree
+   * (Chromium's `cutInside`): the text holds only what came before the cut.
+   * Carried to the leaf whose `subtreeText` that text gives, the node's own
+   * or its nearest ancestor leaf's, which the source marks too.
    */
   cutInside?: boolean;
 }

@@ -81,10 +81,12 @@ export interface DescribeNode {
   // the e2e conditions do not see it. Set by the e2e runner's tree adapters only; the
   // describe tool leaves it unset.
   keyboard?: boolean;
-  // The walk was cut (a size limit) while it was inside this element, so the
-  // element is missing descendants: its `subtreeText` holds only those before
-  // the cut. Set by the Chromium walk and carried by the flow flatten to the
-  // leaf whose `subtreeText` it gives.
+  // A cut of the walk (a size limit) left out text that this element's flow
+  // text holds: its `subtreeText` holds only what came before the cut. A cut
+  // only inside a descendant with an id or a password does not count, since
+  // the flow flatten keeps that text off this element. Set by the Chromium
+  // walk and carried by the flow flatten to the leaf whose `subtreeText` it
+  // gives.
   cutInside?: boolean;
 }
 

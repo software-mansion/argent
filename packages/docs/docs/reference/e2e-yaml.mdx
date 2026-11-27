@@ -253,7 +253,7 @@ A cut tree alone does not change the result of a step. When the part past the cu
 More rules:
 
 - A `text` condition warns only for an `equals` or `matches` check that passes on the text of the container, and for a check that fails. A `contains` check that passes gets no warning. A check that passes on the own text of the element gets no warning.
-- On Chromium, only a container that the cut came inside gets the container warning. On the other platforms, each container on a cut tree gets it.
+- On Chromium, only a container whose text the cut shortened gets the container warning. On the other platforms, each container on a cut tree gets it.
 - An exact match of a `text` selector gets no warning. A second exact match past the cut is not in the tree.
 - When a dialog, a sheet or an alert covers the target, the reason says that the target is covered, not that the tree was cut.
 - A version 1 e2e test on an iOS simulator does not get these warnings.

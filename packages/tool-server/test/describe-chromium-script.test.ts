@@ -6889,10 +6889,44 @@ describe("DESCRIBE_DOM_SCRIPT cuts", () => {
     expect(depthCut).toBe(true);
     expect(valuesOf(tree)).toEqual(expect.arrayContaining(["B1", "SIBLING", "AFTER"]));
     expect(valuesOf(tree)).not.toContain("DEEP");
-    // The ancestors of the cut point, not a container walked whole.
+    // The ancestors of the cut point, not a container walked whole. Not past
+    // #deep either: the flow flatten keeps the text of an element with an id
+    // off its ancestors, so the cut shortened no text of theirs.
     expect(findById(tree, "deep")!.cutInside).toBe(true);
-    expect((tree as Record<string, unknown>).cutInside).toBe(true);
+    expect((tree as Record<string, unknown>).cutInside).toBeUndefined();
     expect(findById(tree, "before")!.cutInside).toBeUndefined();
+  });
+
+  it("marks a container whose own text the cut shortened, not one whose cut is in a child with an id", () => {
+    const { tree } = run([
+      el({
+        attrs: { id: "A" },
+        rect: BOX,
+        children: [
+          el({ text: "Hello", rect: BOX }),
+          el({
+            attrs: { id: "B" },
+            rect: BOX,
+            children: [nested(70, el({ text: "X", rect: BOX }))],
+          }),
+        ],
+      }),
+      el({
+        attrs: { id: "C" },
+        rect: BOX,
+        children: [
+          el({ text: "Hello", rect: BOX }),
+          // A wrapper with no id: its text is C's text.
+          el({
+            rect: BOX,
+            children: [nested(70, el({ text: "X", rect: BOX })), el({ text: "Y", rect: BOX })],
+          }),
+        ],
+      }),
+    ]) as Cut;
+    expect(findById(tree, "B")!.cutInside).toBe(true);
+    expect(findById(tree, "A")!.cutInside).toBeUndefined();
+    expect(findById(tree, "C")!.cutInside).toBe(true);
   });
 
   it.each([
@@ -6930,6 +6964,25 @@ describe("DESCRIBE_DOM_SCRIPT cuts", () => {
     expect(depthCut).toBe(false);
     expect(findById(tree, "list")!.cutInside).toBe(true);
     expect(findById(tree, "before")!.cutInside).toBeUndefined();
+  });
+
+  it("marks a container that lost a later child to the node budget, past a child with an id", () => {
+    // MAX_NODES is 5000: the budget runs out inside #list, and #after is never walked.
+    const rows = Array.from({ length: 5100 }, (_, i) => el({ text: "R" + i, rect: BOX }));
+    const { tree, truncated } = run([
+      el({
+        attrs: { id: "outer" },
+        rect: BOX,
+        children: [
+          el({ attrs: { id: "list" }, rect: BOX, children: rows }),
+          el({ text: "AFTER", rect: BOX }),
+        ],
+      }),
+    ]) as Cut;
+    expect(truncated).toBe(true);
+    expect(valuesOf(tree)).not.toContain("AFTER");
+    expect(findById(tree, "list")!.cutInside).toBe(true);
+    expect(findById(tree, "outer")!.cutInside).toBe(true);
   });
 });
 

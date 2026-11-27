@@ -43,8 +43,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // An element the walk would emit was past MAX_DEPTH: the walk left it out
   // and went on with its siblings.
   let depthCut = false;
-  // Cut points so far, of either kind. A walk that saw this grow while it ran
-  // is an ancestor of a cut point, and its node is marked \`cutInside\`.
+  // Cut points so far: a depth cut, the element where the node budget ran out,
+  // and each element the walk skipped after that. A node is marked
+  // \`cutInside\` when its text lost something to a cut (see \`walk\`).
   let cutCount = 0;
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -1233,6 +1234,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const cuts = [];
   // Each emitted node's unclipped extent and the scrollers measured against it.
   const extents = nodeMap();
+  // Each emitted node's cut points: those that came while its walk ran.
+  const cutsIn = nodeMap();
 
   // An element's parent in the flat tree: its slot, else its parent, a shadow root's host.
   function flatParent(n) {
@@ -2202,7 +2205,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   function walk(el, depth, clips = NO_CLIP, unseenSlot = false, base = IDENTITY) {
-    if (truncated) return null;
+    if (truncated) {
+      cutCount++;
+      return null;
+    }
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
     if (depth > MAX_DEPTH) {
@@ -2234,6 +2240,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       nodeBudget--;
     }
     const cutsBefore = cutCount;
+    // Whether a cut left out text this node's flow text holds: a child the cut
+    // dropped, a cut a promoted child does not account for, or a child whose own
+    // text lost some. Not a child with an id or a password: the flow flatten keeps
+    // its text off this node, so a cut inside it shortens only its own.
+    let lostText = false;
+    const took = (c, before) => {
+      const cuts = cutCount - before;
+      if (cuts === 0) return;
+      if (!c || cuts > (cutsIn.get(c) || 0)) lostText = true;
+      else if (c.cutInside && !c.identifier && !c.password) lostText = true;
+    };
 
     if (inTopLayer(el, style)) clips = NO_CLIP;
     let clip = ownClip(clips, style);
@@ -2261,7 +2278,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (shadow) {
       for (const child of shadow.children) {
         const kidClips = legendClips.has(child) ? legendClips.get(child) : inner;
+        const before = cutCount;
         const c = walk(child, depth + 1, kidClips, false, t);
+        took(c, before);
         if (c) shadowResults.push(c);
       }
     }
@@ -2295,7 +2314,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
                 ? slotClips.get(slot)
                 : unwalked || inner;
       const kidBase = slot ? linears.get(slot) : t;
+      const before = cutCount;
       const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot, kidBase);
+      took(c, before);
       if (c) childResults.push(c);
     }
     childResults.push(...shadowResults);
@@ -2430,8 +2451,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       frame: selfFrame,
       children: childResults,
     };
-    // A cut came while this walk ran: the node is missing what was past it.
-    if (cutCount > cutsBefore) node.cutInside = true;
+    // The node's text holds only what came before a cut.
+    if (lostText) node.cutInside = true;
+    if (cutCount > cutsBefore) cutsIn.set(node, cutCount - cutsBefore);
     if (scs && r) extents.set(node, { r, scs });
     if (clipBounds) {
       node.clipBounds = clipBounds;
