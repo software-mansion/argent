@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   screenRecordingSessionRef,
@@ -10,10 +12,17 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
+import {
+  setPointerTrail,
+  setPointerVisible,
+  startServerRecording,
+  stopServerRecording,
+} from "../../utils/simulator-client";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
-import { startCapture, type PanelFollow, type PointerControl } from "./capture";
+import { startCapture, type PanelFollow } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
+import type { PointerControl } from "./pointer-control";
+import type { ServerRecordingControl } from "./server-capture";
 import type { StartRecordingResult } from "./session-guards";
 import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
 import { startMacosCapture } from "./capture-macos";
@@ -25,6 +34,9 @@ const MAX_TIME_LIMIT_SECONDS = 600;
 const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
+/** Stop muxes the mp4 before it answers, so it gets the larger budget. */
+const RECORDING_START_TIMEOUT_MS = 10_000;
+const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
 const capability = {
   // A cabled iPhone records through a host-side CoreMediaIO helper, not
@@ -67,7 +79,7 @@ export function createScreenRecordingStartTool(
   return {
     id: "screen-recording-start",
     description: `Start an MP4 recording of the device screen<flag:macos-apps> or Mac app window</flag:macos-apps>. Use when capturing video of an interaction or animation (use \`screenshot\` for a still image).
-Continues until \`screen-recording-stop\` or \`timeLimitSeconds\` (always retrieve via \`screen-recording-stop\`). Requires \`ffmpeg\` on simulators, Android, and wired iPhones (needs \`transportType: "wired"\` and camera access for \`ios-screen-stream\`). Unsupported on tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega.<flag:macos-apps> Mac apps: needs a visible window on one display, no capture protection, no Screen Recording permission or ffmpeg; on \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>
+Continues until \`screen-recording-stop\` or \`timeLimitSeconds\` (always retrieve via \`screen-recording-stop\`). Requires \`ffmpeg\` on foldable simulators, Android on a Linux or Windows host, and wired iPhones (needs \`transportType: "wired"\` and camera access for \`ios-screen-stream\`). Unsupported on tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega.<flag:macos-apps> Mac apps: needs a visible window on one display, no capture protection, no Screen Recording permission or ffmpeg; on \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>
 Returns \`{ outputFile }\` on the tool-server host. Fails if target is unavailable or already recording.`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
@@ -193,8 +205,8 @@ Returns \`{ outputFile }\` on the tool-server host. Fails if target is unavailab
         }
       }
 
-      // capture.ts arms the visualizer once the encoder is live and restores it
-      // to off when the recording ends. The toggles are best-effort: a failure
+      // The capture arms the visualizer once the recording is live and restores
+      // it to off when the recording ends. The toggles are best-effort: a failure
       // only costs the overlay, surfaced as a warning at stop.
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
@@ -206,6 +218,14 @@ Returns \`{ outputFile }\` on the tool-server host. Fails if target is unavailab
         watermark,
         trimStatic: params.trimStatic ?? true,
         pointer,
+        // Only the macOS simulator-server records for itself (VideoToolbox). A
+        // foldable records here, where the capture follows the live panel. A
+        // provider's server is outside the endpoint allowlist, and its video
+        // path is on another host.
+        server:
+          process.platform !== "darwin" || followPanel || simulator.external
+            ? undefined
+            : makeServerRecordingControl(simulator),
         followPanel,
       });
       return warning !== undefined ? { ...started, warning } : started;
@@ -251,6 +271,31 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
       const pending = enabling;
       if (pending) await pending.catch(() => {});
       await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+    },
+  };
+}
+
+export function makeServerRecordingControl(simulator: SimulatorServerApi): ServerRecordingControl {
+  const stop = (id: string) =>
+    stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
+  return {
+    async start(opts) {
+      const id = `argent-recording-${randomUUID()}`;
+      try {
+        await startServerRecording(
+          simulator,
+          id,
+          opts,
+          AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
+        );
+      } catch (err) {
+        // A start that timed out may be recording anyway, and only this id ends it.
+        void stop(id)
+          .then((result) => fs.rm(result.path, { force: true }))
+          .catch(() => {});
+        throw err;
+      }
+      return () => stop(id);
     },
   };
 }

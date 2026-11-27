@@ -16,6 +16,8 @@ interface ActiveScreenRecording {
   status: ScreenRecordingStatus;
   /** Why the capture ended; interpolated mid-sentence, so a readable clause. */
   finalizedReason?: string;
+  /** The video is inside simulator-server and is lost if that server exits. */
+  serverSide: boolean;
 }
 
 const activeRecordings = new Map<string, ActiveScreenRecording>();
@@ -23,13 +25,15 @@ const activeRecordings = new Map<string, ActiveScreenRecording>();
 export function registerActiveScreenRecording(
   deviceId: string,
   startedAtMs: number,
-  timeLimitSeconds: number
+  timeLimitSeconds: number,
+  serverSide = false
 ): void {
   activeRecordings.set(deviceId, {
     deviceId,
     startedAtMs,
     timeLimitSeconds,
     status: "recording",
+    serverSide,
   });
 }
 
@@ -78,9 +82,13 @@ export function buildScreenRecordingNote(
   const lines = recordings.map((r) => {
     const stopCall = `call \`screen-recording-stop\` with { "udid": "${r.deviceId}" }`;
     if (r.status === "finalized") {
-      return `NOTE: The screen recording on device ${r.deviceId} already ended (${
+      const ended = `The screen recording on device ${r.deviceId} already ended (${
         r.finalizedReason ?? "the capture stopped on its own"
-      }) but its video has not been retrieved yet — ${stopCall} to get the file.`;
+      })`;
+      return r.serverSide
+        ? `NOTE: ${ended}. Its video is inside simulator-server and not yet retrieved — ` +
+            `${stopCall} to copy it out while that server is still up.`
+        : `NOTE: ${ended} but its video has not been retrieved yet — ${stopCall} to get the file.`;
     }
     return (
       `NOTE: A screen recording is still running on device ${r.deviceId} ` +

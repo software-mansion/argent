@@ -12,16 +12,18 @@ import { promises as fs } from "fs";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { clearActiveScreenRecording } from "../utils/screen-recording-reminder";
 import { recordReapedSession } from "../utils/reaped-sessions";
+import type { ServerRecordingResult } from "../utils/simulator-client";
 import { parseMacosAppBundleId, stripRemotePrefix } from "../utils/device-info";
 import { macosAppBlueprint } from "./macos-app";
 
 // Session for the `screen-recording-*` tools, one shape for every platform.
-// Local iOS/Android captures pace simulator-server's MJPEG stream into an
-// ffmpeg child that writes the mp4 host-side, so there is nothing device-side
-// to clean up; remote (`remote:`) simulators record on the runner instead and
-// leave a buffer there that a teardown has to end (`remote.end`), and a Mac
-// app records inside the app, which a teardown has to end too (`macos.end`).
-// Mirrors the native-profiler session.
+// On a macOS host simulator-server records the video itself (`serverStop`
+// ends it), except for foldables and provider devices; otherwise its MJPEG
+// stream is paced into an ffmpeg child that writes the mp4 host-side. Remote (`remote:`)
+// simulators record on the runner instead and leave a buffer there that a
+// teardown has to end (`remote.end`), and a Mac app records inside the app,
+// which a teardown has to end too (`macos.end`). Mirrors the native-profiler
+// session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";
 
 type ScreenRecordingSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -119,8 +121,16 @@ export interface ScreenRecordingSessionApi {
    * `captureProcess` is success-only.
    */
   pendingChild: ChildProcess | null;
-  /** Host path ffmpeg is writing the video to. */
+  /** Host path the finished video lands at. */
   outputFile: string | null;
+  /**
+   * Finalizes the recording simulator-server is running. Null while a stop
+   * owns it, so it does not say which side holds the video; `serverCapture`
+   * does.
+   */
+  serverStop: (() => Promise<ServerRecordingResult>) | null;
+  /** True from a server-side start until the session is reset to startable. */
+  serverCapture: boolean;
   /** Temp copy of the watermark logo ffmpeg reads; removed when the capture ends. */
   logoFile: string | null;
   /** Why the watermark was requested but not drawn; surfaced by stop's warning. */
@@ -189,6 +199,7 @@ export interface ScreenRecordingSessionApi {
 // finalize contract.
 const DISPOSE_FINALIZE_GRACE_MS = 1_500;
 const DISPOSE_REAP_MS = 1_000;
+export const DISPOSE_SERVER_STOP_MS = 1_500;
 // How long a teardown waits for a recording made elsewhere to end. A remote
 // release ends the runner-side recording and downloads it, which can take
 // minutes; once the stop has reached the runner it finishes there anyway and
@@ -219,6 +230,8 @@ function clearLiveState(state: ScreenRecordingSessionApi): void {
   state.pendingRetrieval = false;
   state.captureProcess = null;
   state.pendingChild = null;
+  state.serverStop = null;
+  state.serverCapture = false;
   state.frameStream = null;
   state.lastFrameStreamError = null;
   if (state.panelPollTimer) {
@@ -297,6 +310,8 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
       pendingRetrieval: false,
       captureProcess: null,
       pendingChild: null,
+      serverStop: null,
+      serverCapture: false,
       outputFile: null,
       logoFile: null,
       watermarkSkipped: null,
@@ -332,11 +347,16 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
         // instead of spawning an orphan the teardown below can no longer reap.
         state.disposed = true;
         // Decided BEFORE the teardown below clears the flags it reads: a
-        // capture still encoding, a start mid-flight and one waiting to be
-        // handed over all owe the caller a video.
+        // capture still encoding, a start or server stop mid-flight and one
+        // waiting to be handed over all owe the caller a video. A host stop
+        // still returns its video.
         const hadUnretrievedCapture =
-          state.recordingActive || state.startPending || state.pendingRetrieval;
+          state.recordingActive ||
+          state.startPending ||
+          state.pendingRetrieval ||
+          (state.stopPending && state.serverCapture);
         const abandonedOutput = state.outputFile;
+        const serverCapture = state.serverCapture;
         const abandonedRemote = state.remote;
         const abandonedMacos = state.macos;
         if (state.recordingTimeout) {
@@ -380,6 +400,17 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           await disable().catch(() => {});
         }
 
+        // A server recording outlives this process; end it, but do not hold
+        // the teardown to a slow mux.
+        if (state.serverStop) {
+          const stop = state.serverStop;
+          state.serverStop = null;
+          await Promise.race([
+            stop().catch(() => {}),
+            new Promise<void>((resolve) => setTimeout(resolve, DISPOSE_SERVER_STOP_MS)),
+          ]);
+        }
+
         // A start still mid-readiness has a live child `captureProcess`
         // (success-only) can't see — reap it here or it records forever.
         if (state.pendingChild) {
@@ -420,25 +451,35 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
           // resolve builds a session that has never heard of this capture, and
           // nothing else would say the salvaged file exists.
           if (hadUnretrievedCapture) {
-            recordReapedSession(
-              "screen-recording",
-              state.deviceId,
-              abandonedOutput
-                ? abandonedRemote
-                  ? `The runner-side recording was ended and its download started, so the ` +
-                    `video captured up to that point is at ${abandonedOutput} if the download ` +
-                    `finished. Otherwise the remote machine keeps it until the machine is ` +
-                    `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
-                    `<FILE> --recording ${abandonedRemote.recordingId}\`.`
-                  : abandonedMacos
-                    ? `The app was asked to end the recording and write it out first, so the ` +
-                      `video captured up to that point is at ${abandonedOutput} if the app ` +
-                      `finished writing it.`
-                    : `ffmpeg was given a moment to finalize the container first, so the video ` +
-                      `captured up to that point is usually playable at ${abandonedOutput} — ` +
-                      `check it before re-recording.`
-                : undefined
-            );
+            let salvage: string | undefined;
+            if (abandonedOutput) {
+              if (abandonedRemote) {
+                salvage =
+                  `The runner-side recording was ended and its download started, so the ` +
+                  `video captured up to that point is at ${abandonedOutput} if the download ` +
+                  `finished. Otherwise the remote machine keeps it until the machine is ` +
+                  `released: \`sim-remote screen-record fetch ${stripRemotePrefix(state.deviceId)} ` +
+                  `<FILE> --recording ${abandonedRemote.recordingId}\`.`;
+              } else if (abandonedMacos) {
+                salvage =
+                  `The app was asked to end the recording and write it out first, so the ` +
+                  `video captured up to that point is at ${abandonedOutput} if the app ` +
+                  `finished writing it.`;
+              } else if (serverCapture) {
+                // Only stop copies a server recording out, so its host path was
+                // never written.
+                salvage =
+                  `The video was inside simulator-server and went with the recording this ` +
+                  `teardown ended, so nothing was written to ${abandonedOutput} — re-record ` +
+                  `rather than looking for it.`;
+              } else {
+                salvage =
+                  `ffmpeg was given a moment to finalize the container first, so the video ` +
+                  `captured up to that point is usually playable at ${abandonedOutput} — ` +
+                  `check it before re-recording.`;
+              }
+            }
+            recordReapedSession("screen-recording", state.deviceId, salvage);
           }
         }
       },
