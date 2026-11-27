@@ -58,7 +58,7 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "true: move the pointer out of the window, which ends the hover, to see the un-hovered state. Takes no x, y or durationMs."
+        "true: move the pointer out of the window, so nothing in the app is hovered. Takes no x, y or durationMs."
       ),
   })
   .refine(
@@ -76,9 +76,10 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureHoverTool: ToolDefinition<Params, Result> = {
   id: "gesture-hover",
-  description: `Move the mouse pointer to a point of a Mac app and keep it there, so the app shows its hover state: a highlighted row, a button that appears on mouse-over, a submenu that opens. x/y are fractions of the area describe reports, as in gesture-tap.
-Use when a control appears or changes only while the pointer is over something, e.g. a delete button on a hovered row.
-The hover stays until the next gesture-tap, gesture-drag, gesture-scroll or gesture-hover (the pointer then hovers at that point), or until the user clicks, scrolls or types in the app. Check the hover effect in the returned element tree and screenshot, or wait for it with await-ui-element. Pass leave: true to see the un-hovered state. Tooltips do not appear (not supported).
+  description: `Move argent's mouse pointer to a point of a Mac app. x/y are fractions of the area describe reports, as in gesture-tap.
+Use when a control appears or changes only while the pointer is over it, e.g. a highlighted row or a delete button on a hovered row.
+argent has one pointer in the app. It stays where the last gesture-hover, gesture-tap, gesture-drag or gesture-scroll put it, and the app shows the hover state of whatever is under it. Hover another point to move it there (the old point stops being hovered); leave: true moves it out of the window, so nothing is hovered. Check the effect in the returned element tree and screenshot, or with await-ui-element. Tooltips do not appear.
+When the user clicks, scrolls or types in the app, the pointer is theirs again; describe says so after a hover.
 Returns { hovered: true, timestampMs }, or { left: true, timestampMs } for leave. Fails with \`MACOS_APP_LIBRARY_OUTDATED\` when the app's argent library cannot hover: run restart-app, then hover again.`,
   zodSchema,
   searchHint:

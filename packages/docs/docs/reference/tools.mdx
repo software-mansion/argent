@@ -696,19 +696,18 @@ On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`
 | `udid`       | Mac app device ID.                                                                                                                                          |
 | `x`, `y`     | The point, as fractions from 0 to 1 of the area that `describe` reports. Required unless `leave` is `true`.                                                 |
 | `durationMs` | The time in milliseconds that the pointer takes to move from its last position, from 0 to 2000. The default is 150. With 0, the pointer jumps to the point. |
-| `leave`      | `true` moves the pointer out of the window, and the hover ends. Do not send `x`, `y`, or `durationMs` with it.                                              |
+| `leave`      | `true` moves the pointer out of the window. Then no element shows its hover state. Do not send `x`, `y`, or `durationMs` with it.                           |
 
 The pointer moves along a path, as a real mouse does. Thus a menu that reacts to the route of the pointer behaves as with a real mouse. After the move, Argent waits a short time. Then the result contains the screenshot and the element tree, as for `gesture-tap`.
 
-The hover stays until one of these events occurs:
+Argent has one pointer in the app. The pointer stays at the point of the last `gesture-hover`, `gesture-tap`, `gesture-drag`, or `gesture-scroll`. The app shows the hover state of the element under the pointer.
 
-- Argent sends the next pointer action: `gesture-tap`, `gesture-drag`, `gesture-scroll`, or `gesture-hover`. The pointer then hovers at the point of that action.
-- `gesture-hover` with `leave: true`.
-- The user clicks, scrolls, or presses a key in the app.
+- To hover over a different element, send `gesture-hover` with its point. The element at the old point loses its hover state.
+- To remove all hover states, send `gesture-hover` with `leave: true`.
 
-`gesture-tap`, `gesture-drag`, and `gesture-scroll` also move the pointer of Argent to their point. Thus the app sees the pointer arrive before a click, as with a real mouse. To use a control that shows only on hover, such as the delete button of a row, hover over the row, then tap the control.
+`gesture-tap`, `gesture-drag`, and `gesture-scroll` move the pointer before they click, drag, or scroll. Thus the app sees the pointer arrive, as with a real mouse. To use a control that shows only on hover, such as the delete button of a row, hover over the row, then tap the control.
 
-While Argent holds the pointer, the app ignores the movement of the real mouse over the window. Thus the movement of the user does not end the hover of Argent. The clicks, scrolls, and keys of the user always work. The first of them gives the pointer back to the user. Then `describe` contains a hint that the user took the pointer back and the hover ended. The element tree of a later result contains it too, until the next pointer action of Argent. After a tap or a drag, the hint does not appear.
+While Argent holds the pointer, the app ignores the movement of the real mouse over the window. Thus the movement of the user does not end the hover of Argent. The clicks, scrolls, and keys of the user always work. The first of them gives the pointer back to the user. Then `describe` contains a hint that the user took the pointer back. The element tree of a later result contains it too, until the next pointer action of Argent. After a tap or a drag, the hint does not appear.
 
 Tooltips do not appear on hover.
 
