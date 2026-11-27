@@ -837,9 +837,10 @@ async function openSimulatorWindow(udid: string): Promise<string | undefined> {
  * - Uses `sim-remote simctl` for boot/shutdown/bootstatus (no local xcrun).
  * - Pre-warms the native-devtools blueprint so the dylib injection env is set
  *   inside the remote sim before the app launches. Accessibility defaults are
- *   applied lazily by the ax-service blueprint's `bootstrapAx` over the
- *   orchestrator's generic spawn — we have no filesystem access to the remote
- *   sim, so there is no pre-boot plist write.
+ *   applied lazily, by launch-app and restart-app before a launch and by the
+ *   ax-service blueprint's `bootstrapAx`, over the orchestrator's generic spawn
+ *   — we have no filesystem access to the remote sim, so there is no pre-boot
+ *   plist write.
  */
 async function bootIosRemote(
   id: string,

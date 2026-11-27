@@ -92,7 +92,9 @@ function simctlCalls(command: "xcrun" | "sim-remote", subcommand: "launch" | "te
 function expectTerminateBeforeLaunch(command: "xcrun" | "sim-remote") {
   const subcommands = execFileMock.mock.calls
     .filter(([executable, args]) => executable === command && args[0] === "simctl")
-    .map(([, args]) => args[1]);
+    .map(([, args]) => args[1])
+    // The accessibility defaults are written through `simctl spawn`, alongside the terminate.
+    .filter((subcommand) => subcommand !== "spawn");
   expect(subcommands).toEqual(["terminate", "launch"]);
   expect(simctlCalls(command, "terminate")[0]?.[1]).toEqual([
     "simctl",

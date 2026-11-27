@@ -212,7 +212,7 @@ interface SpawnResult {
  */
 export async function simctlSpawn(
   udid: string,
-  opts: { binPath?: string; args?: string[]; detach?: boolean }
+  opts: { binPath?: string; args?: string[]; detach?: boolean; timeoutMs?: number }
 ): Promise<SpawnResult> {
   const cmd = ["spawn", stripRemotePrefix(udid)];
   if (opts.binPath) cmd.push("--bin", opts.binPath);
@@ -222,8 +222,8 @@ export async function simctlSpawn(
   cmd.push("--json");
   const args = opts.args ?? [];
   if (args.length > 0) cmd.push("--", ...args);
-  // Allow for a binary upload.
-  const { stdout } = await run(cmd, { timeoutMs: 60_000 });
+  // Allow for a binary upload, unless the caller has a tighter budget.
+  const { stdout } = await run(cmd, { timeoutMs: opts.timeoutMs ?? 60_000 });
   try {
     const parsed = JSON.parse(stdout) as {
       pid?: number | null;

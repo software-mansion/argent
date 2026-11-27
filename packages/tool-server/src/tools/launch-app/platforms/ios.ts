@@ -12,6 +12,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
 import { externalClaimForAnyId } from "../../../utils/external-devices";
+import { enableAppAccessibilityBeforeLaunch } from "../../../utils/ios-host";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
@@ -43,11 +44,14 @@ export function makeIosImpl(
        * not depending only on which of its names was used.
        */
       let nativeDevtools: NativeDevtoolsApi | undefined;
+      let accessibility: Promise<void> | undefined;
       if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
         nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
         const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
         if (blocked) return blocked;
+        // Alongside the terminate below, when there is one: the launch needs both done, neither needs the other.
+        accessibility = enableAppAccessibilityBeforeLaunch(device);
       }
       // A plain launch only foregrounds an app that is already running, so the
       // arguments would be dropped. Terminate first to apply them.
@@ -75,6 +79,7 @@ export function makeIosImpl(
           }
         }
       }
+      await accessibility;
       try {
         await execFileAsync(
           "xcrun",

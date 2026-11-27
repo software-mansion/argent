@@ -1,5 +1,11 @@
-import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type DeviceInfo,
+} from "@argent/registry";
 import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
+import { enableAppAccessibilityBeforeLaunch } from "../../../utils/ios-host";
 import { SIM_REMOTE_TIMEOUT_MS, simRemoteExecError } from "../../../utils/sim-remote";
 import {
   SIMCTL_NOTHING_TO_TERMINATE,
@@ -11,10 +17,13 @@ import type { LaunchAppIosServices, LaunchAppParams, LaunchAppResult } from "../
 export function buildIosLaunchHandler(backend: SimctlBackend) {
   return async (
     services: LaunchAppIosServices,
-    params: LaunchAppParams
+    params: LaunchAppParams,
+    device: DeviceInfo
   ): Promise<LaunchAppResult> => {
     const blocked = await precheckNativeDevtools(services.nativeDevtools, params.udid);
     if (blocked) return blocked;
+    // Alongside the terminate below, when there is one: the launch needs both done, neither needs the other.
+    const accessibility = enableAppAccessibilityBeforeLaunch(device);
     // A plain launch only foregrounds an app that is already running, so the
     // arguments would be dropped. Terminate first to apply them.
     if (params.launchArgs?.length) {
@@ -42,6 +51,7 @@ export function buildIosLaunchHandler(backend: SimctlBackend) {
         );
       }
     }
+    await accessibility;
     try {
       await backend.launch(params.udid, params.bundleId, params.launchArgs);
     } catch (err) {
