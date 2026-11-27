@@ -41,19 +41,15 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
     ),
-  url: z
-    .string()
-    .describe(
-      "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0)."
-    ),
+  url: z.string().describe("URL or custom scheme (e.g. https://example.com, myapp://path)."),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .optional()
     .describe(
-      "Physical iOS only: the app that receives the URL. Defaults to Safari for http(s); required for any other scheme."
+      "Physical iOS only: receiving app (defaults to Safari for http/https; required otherwise)."
     ),
 });
 
@@ -64,12 +60,9 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   // On iOS it first waits up to 15s for its simulator to be armed, so a slow
   // openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
   longRunning: true,
-  description: `Open a URL or URL scheme on the device.
-Use when navigating to a web page or deep-linking into an app. On Chromium, this navigates the primary renderer to the given URL; a URL that does not load a page, start a download or run as javascript:, such as tel:, mailto:, an unknown scheme or no scheme, fails there.
-Cross-platform schemes on native devices: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.<flag:harmonyos> HarmonyOS resolves any scheme through \`aa start -U\`.</flag:harmonyos>
-An https:// link opens the native app only if that app is verified for the link's domain (Universal Links / App Links); even then, an iOS simulator may open Safari. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app.
-On a physical iPhone, the app that receives the URL becomes the app under automation.
-Returns { opened, url, note? }. \`note\` explains the routing caveat when a web URL was opened on a native device<flag:harmonyos>; on HarmonyOS every result carries one, since success only means the system accepted the URI</flag:harmonyos>. Fails if no app is registered to handle the URI (iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>) or the renderer rejects the navigation (Chromium).`,
+  description: `Open a URL or deep-link scheme on the device.
+Use when navigating to a web page or deep-linking into an app (prefer custom schemes or \`launch-app\` over \`https://\` Universal/App Links). On Chromium, navigates the primary page (non-page schemes like \`tel:\`/\`mailto:\` fail). On physical iOS, the receiving app becomes active for automation.<flag:harmonyos> HarmonyOS opens URIs via \`aa start -U\`.</flag:harmonyos>
+Returns \`{ opened, url, note? }\`. Fails if no handler is registered<flag:harmonyos> (iOS/Android/HarmonyOS)</flag:harmonyos> or Chromium rejects navigation.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Opening ${safeDestination(params.url)}`,

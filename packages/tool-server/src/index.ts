@@ -1,6 +1,6 @@
 import * as path from "node:path";
-import { homedir } from "node:os";
 import {
+  argentHomeDir,
   getAndroidAdbServerPort,
   isFeatureEnabled,
   isFlagEnabled,
@@ -193,7 +193,7 @@ export function start(): void {
   let eventLog: ReturnType<typeof createToolServerEventLog> | null = null;
   if (isFlagEnabled("tool-server-event-log")) {
     const eventLogPath =
-      process.env.ARGENT_EVENT_LOG || path.join(homedir(), ".argent", "tool-server-events.jsonl");
+      process.env.ARGENT_EVENT_LOG || path.join(argentHomeDir(), "tool-server-events.jsonl");
     try {
       eventLog = createToolServerEventLog({ filePath: eventLogPath });
     } catch (err) {
@@ -445,7 +445,9 @@ export function start(): void {
   identityWarm
     .then(() => {
       if (shuttingDown) return;
-      server = httpHandle.app.listen(PORT, HOST, () => {
+      server = httpHandle.app.listen(PORT, HOST, (err?: Error) => {
+        // Express 5 also calls back with a bind error; the `error` handler below owns it.
+        if (err) return;
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
         const serverActivity = {

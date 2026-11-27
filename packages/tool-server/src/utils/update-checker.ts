@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import semver from "semver";
 import { version as currentVersion } from "../../package.json";
@@ -9,14 +8,14 @@ import {
   fetchRegistryInfo,
   pickInstallableTarget,
 } from "@argent/update-core";
-import { getConfigValueByKey } from "@argent/configuration-core";
+import { argentHomeDir, isAutoUpdateEnabled } from "@argent/configuration-core";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24;
 
 function getSuppressionFilePath(): string {
-  return path.join(os.homedir(), ".argent", "update-suppression.json");
+  return path.join(argentHomeDir(), "update-suppression.json");
 }
 
 function loadSuppressUntil(): number {
@@ -143,7 +142,7 @@ async function check(options: UpdateCheckerOptions, generation: number): Promise
 
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
-    if (getConfigValueByKey("autoUpdate.enabled") === true) {
+    if (isAutoUpdateEnabled()) {
       options.onAutoUpdate?.(target.version);
     }
   } else if (updateAvailable && minReleaseAgeMs > 0) {

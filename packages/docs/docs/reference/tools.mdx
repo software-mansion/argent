@@ -255,24 +255,24 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 
 ## Interacting
 
-| Tool                     | Description                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                    |
-| `gesture-swipe`          | Smooth swipe or drag between two points                                            |
-| `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app  |
-| `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                  |
-| `gesture-pinch`          | Pinch to zoom around a center point                                                |
-| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content                             |
-| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                    |
-| `keyboard`               | Type text or press special keys (with optional `repeat` for `key`)                 |
-| `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app |
-| `run-sequence`           | Execute several interaction steps in a single call                                 |
-| `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
-| `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
+| Tool                     | Description                                                                                  |
+| ------------------------ | -------------------------------------------------------------------------------------------- |
+| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                              |
+| `gesture-swipe`          | Smooth swipe or drag between two points                                                      |
+| `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app            |
+| `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                            |
+| `gesture-pinch`          | Pinch to zoom around a center point                                                          |
+| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content                                       |
+| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                              |
+| `keyboard`               | Type text, clear the focused field, or press special keys (with optional `repeat` for `key`) |
+| `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app           |
+| `run-sequence`           | Execute several interaction steps in a single call                                           |
+| `screen-recording-start` | Start recording the screen to an h264 mp4                                                    |
+| `screen-recording-stop`  | Stop the recording and retrieve the video                                                    |
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
-In `keyboard`, pass `repeat` with a named `key` to press that key from 1 to 100 times in one call. Argent rejects `repeat` when `key` is omitted.
+In `keyboard`, pass `repeat` with a named `key` to press that key from 1 to 100 times in one call. Argent rejects `repeat` when `key` is omitted. Pass `clear: true` to clear the focused text field before Argent types `text`, or pass `clear: true` alone to empty the field. Argent rejects `clear: true` with `key`. TV targets, Vega, Mac apps, and HarmonyOS do not support `clear: true`. On physical iPhones, `clear: true` deletes up to 100 characters before the caret without readback verification and omits `cleared: true`.
 
 In `run-sequence`, Argent waits for the element tree to stop changing after some steps:
 

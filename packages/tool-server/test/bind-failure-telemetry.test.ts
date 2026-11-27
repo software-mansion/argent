@@ -175,6 +175,24 @@ describe("tool-server bind-failure telemetry", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  it("prints no listening banner when the bind fails", async () => {
+    const bindError = Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" });
+    // Express 5 hands the bind error to the listen callback as well as to `error`.
+    httpHandleMock.app.listen.mockImplementationOnce(((...args: unknown[]) => {
+      const done = args.at(-1) as (err?: Error) => void;
+      queueMicrotask(() => done(bindError));
+      return serverMock;
+    }) as never);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await startAndEmitBindError(bindError);
+      await vi.waitFor(() => expect(exitSpy).toHaveBeenCalled());
+      expect(stdout.mock.calls.some(([chunk]) => String(chunk).includes("listening"))).toBe(false);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("defers cleanly (exit 0, reason 'deferred', no crash fields) when a healthy argent peer owns the port", async () => {
     probeMock.probeArgentToolServer.mockResolvedValue(true);
 

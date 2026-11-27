@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { isHomeDir } from "../src/paths.js";
+import { argentHomeDir, configFilePath, isHomeDir } from "../src/paths.js";
+import { getFlagsPath } from "../src/flags.js";
+import { secretSources } from "../src/secrets.js";
 
 let homeDir: string;
 let linkedHome: string;
@@ -57,5 +59,47 @@ describe("isHomeDir", () => {
     fs.symlinkSync(homeDir, linkedHome);
     expect(isHomeDir(homeDir, { homeDir: linkedHome })).toBe(true);
     expect(isHomeDir(linkedHome, { homeDir })).toBe(true);
+  });
+});
+
+describe("argentHomeDir", () => {
+  beforeEach(() => {
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("USERPROFILE", homeDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("is ~/.argent when ARGENT_HOME_DIR is unset or blank", () => {
+    vi.stubEnv("ARGENT_HOME_DIR", undefined);
+    expect(argentHomeDir()).toBe(path.join(homeDir, ".argent"));
+    vi.stubEnv("ARGENT_HOME_DIR", "  ");
+    expect(argentHomeDir()).toBe(path.join(homeDir, ".argent"));
+  });
+
+  it("moves every global file to ARGENT_HOME_DIR", () => {
+    const relocated = path.join(otherDir, "state");
+    vi.stubEnv("ARGENT_HOME_DIR", relocated);
+    expect(argentHomeDir()).toBe(relocated);
+    expect(configFilePath("global")).toBe(path.join(relocated, "config.json"));
+    expect(getFlagsPath("global")).toBe(path.join(relocated, "flags.json"));
+    expect(secretSources({ cwd: otherDir }).map((s) => s.label)).toContain(
+      path.join(relocated, "secrets.env")
+    );
+  });
+
+  it("resolves a relative ARGENT_HOME_DIR against the working directory", () => {
+    vi.stubEnv("ARGENT_HOME_DIR", "state");
+    expect(argentHomeDir()).toBe(path.resolve("state"));
+  });
+
+  it("lets an explicit homeDir option win over ARGENT_HOME_DIR", () => {
+    vi.stubEnv("ARGENT_HOME_DIR", path.join(otherDir, "state"));
+    expect(argentHomeDir({ homeDir: otherDir })).toBe(path.join(otherDir, ".argent"));
+    expect(getFlagsPath("global", { homeDir: otherDir })).toBe(
+      path.join(otherDir, ".argent", "flags.json")
+    );
   });
 });

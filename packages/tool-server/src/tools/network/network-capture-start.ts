@@ -79,10 +79,9 @@ export function createNetworkCaptureStartTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StartedLayer>> {
   return {
     id: "network-capture-start",
-    description: `Start HTTP capture on iOS simulators, Android<flag:macos-apps>, Mac apps</flag:macos-apps> and Chromium. Call this before the action you want to inspect. Each start keeps existing requests and opens a new window for await-network-request. On Chromium, start attaches to the tab if needed and marks the window in its log.
-Returns each layer's readiness in armed. Follow reason if a layer is still waiting or unavailable. Native capture can arm when the app connects on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. On Android, it can attach when Argent launches the app. JS capture needs the app's Metro port. Start it again after a reload or relaunch.<flag:macos-apps> For a React Native Mac app launched from Xcode, select layer js. If the reason lists other targets for a Mac app, verify the app's Metro port and Debug build.</flag:macos-apps>
-Stop capture with network-capture-stop when you have the requests. Native capture can affect timing.
-Fails with NETWORK_CAPTURE_UNAVAILABLE or TOOL_DEPENDENCY_MISSING when every requested layer is unavailable.`,
+    description: `Start HTTP capture (JS and/or native) on iOS simulators, Android<flag:macos-apps>, Mac apps</flag:macos-apps>, and Chromium, opening a new window for \`await-network-request\`.
+Use when preparing to inspect or assert network traffic before triggering an action (stop with \`network-capture-stop\` afterward; re-call after reload/relaunch for JS capture).<flag:macos-apps> Xcode-launched RN Mac apps: pass \`layer: "js"\`.</flag:macos-apps>
+Returns \`{ status: "ok", layers }\` with each layer's \`armed\` state and any \`reason\`. Fails if every requested layer is unavailable.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {

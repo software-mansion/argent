@@ -10,6 +10,7 @@ const { claude, codex } = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/configuration-core", () => ({
+  argentHomeDir: () => "/nonexistent/.argent",
   isFlagEnabled: vi.fn(),
   getRememberedAgent: vi.fn(),
   setRememberedAgent: vi.fn(),

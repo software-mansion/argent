@@ -42,6 +42,23 @@ describe("consent", () => {
     return {};
   }
 
+  it("keeps a ~/.argent opt-out under ARGENT_HOME_DIR", () => {
+    const restore = snapshotEnv(["ARGENT_HOME_DIR"]);
+    try {
+      delete process.env.ARGENT_HOME_DIR;
+      writeConsentFlag(false);
+      process.env.ARGENT_HOME_DIR = path.join(tmp(), "relocated");
+      _resetConsentCacheForTest();
+      expect(getConsentState(emptyEnv(), tmp())).toMatchObject({
+        enabled: false,
+        source: { detail: `${path.join(tmp(), ".argent", "config.json")} (user)` },
+      });
+    } finally {
+      restore();
+      _resetConsentCacheForTest();
+    }
+  });
+
   it("defaults to enabled in an empty env / no config file", () => {
     const restore = restoreEnv();
     try {

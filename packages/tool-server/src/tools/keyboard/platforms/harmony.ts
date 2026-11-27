@@ -1,6 +1,6 @@
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, type DeviceInfo } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { InvalidToolInputError } from "../../../utils/capability";
+import { InvalidToolInputError, UnsupportedOperationError } from "../../../utils/capability";
 import { harmonyConnectKey } from "../../../utils/device-info";
 import {
   HARMONY_INTERACTION_TIMEOUT_MS,
@@ -75,10 +75,18 @@ function resolveHarmonyKeycode(key: string): number {
 }
 
 async function typeHarmony(
+  device: DeviceInfo,
   connectKey: string,
   params: KeyboardParams,
   signal?: AbortSignal
 ): Promise<KeyboardResult> {
+  if (params.clear) {
+    throw new UnsupportedOperationError(
+      "keyboard",
+      device,
+      "clearing a field with `clear: true` is not supported on HarmonyOS"
+    );
+  }
   // Validate before any device round trip, so an unreachable device cannot
   // mask a 400.
   const keycode = params.key ? resolveHarmonyKeycode(params.key) : null;
@@ -122,5 +130,5 @@ async function typeHarmony(
 export const harmonyImpl: PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> = {
   requires: ["hdc"],
   handler: (_services, params, device, options) =>
-    typeHarmony(harmonyConnectKey(device.id), params, options?.signal),
+    typeHarmony(device, harmonyConnectKey(device.id), params, options?.signal),
 };
