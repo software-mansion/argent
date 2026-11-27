@@ -1120,6 +1120,8 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 | `update-argent`  | Apply a pending Argent update                                               |
 | `dismiss-update` | Postpone the update reminder and the automatic update for a number of hours |
 
+Argent hides these tools and the update reminder when `ARGENT_DISABLE_UPDATE_CHECK` is `1` or `true`. See [Tool-server environment variables](/docs/reference/configuration#tool-server).
+
 ## SDK-only tools
 
 Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
