@@ -32,6 +32,8 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPortField } from "../../utils/debugger/metro-port";
+import type { SecretRedactor } from "../../utils/secrets";
+import { networkSecretRedactor, redactNetworkResult } from "./network-secrets";
 import {
   isRedirect,
   jsCaptureDebuggerRef,
@@ -112,10 +114,25 @@ function cutMarker(fullSize: string, mimeType?: string, shown = MAX_BODY_SIZE): 
   return `[TRUNCATED: first ${shown} chars shown, full size: ${fullSize}${mime}]`;
 }
 
-function truncateBody(body: string, mimeType: string): string {
+/**
+ * The first `shown` chars of a body the preview cuts, with each secret value
+ * replaced. The redaction runs on the shown text, after the cut, so a value it
+ * ends inside leaves no start of it.
+ */
+function shownText(text: string, shown: number, redact: SecretRedactor): string {
+  return redact(text.slice(0, shown), { cut: true });
+}
+
+/**
+ * Every body is redacted where it is built, cut or whole, and so is the app
+ * text in the notes around it (a MIME type, a Content-Encoding). The redaction
+ * of the whole result skips it: a second pass would rewrite the numbers in the
+ * preview's own header, such as `first 1000 chars shown`, with a short value.
+ */
+function truncateBody(body: string, mimeType: string, redact: SecretRedactor): string {
   return body.length > MAX_BODY_SIZE
-    ? `${cutMarker(`${body.length} chars`, mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
-    : body;
+    ? `${cutMarker(`${body.length} chars`, redact(mimeType))}\n${shownText(body, MAX_BODY_SIZE, redact)}...`
+    : redact(body);
 }
 
 /**
@@ -160,11 +177,16 @@ function utf8Text(bytes: Buffer): string | Buffer {
 }
 
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
-function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
+function truncatePostData(
+  postData: string | undefined,
+  truncated: boolean | undefined,
+  redact: SecretRedactor
+): string | undefined {
   // A body the interceptor cut is always longer than MAX_BODY_SIZE.
-  if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
+  if (postData == null) return postData;
+  if (postData.length <= MAX_BODY_SIZE) return redact(postData);
   const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
-  return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
+  return `${cutMarker(fullSize)}\n${shownText(postData, MAX_BODY_SIZE, redact)}...`;
 }
 
 interface RawEntry {
@@ -261,7 +283,7 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Read full details (status, timing, redacted headers, and bodies truncated to 1000 chars) for one captured HTTP request ID.
+  description: `Read full details (status, timing, redacted headers, and bodies truncated to 1000 chars) for one captured HTTP request ID. Secret values exposed to Argent show as their {{secret:NAME}} placeholders; other credentials do not.
 Use when inspecting payloads or headers of a request from a network log or \`await-network-request\`.
 Returns request/response details, or a not-found message (refresh the log after JS reloads). Fails if the backing debugger/CDP target is unreachable.`,
   zodSchema,
@@ -300,171 +322,189 @@ Returns request/response details, or a not-found message (refresh the log after 
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
-  async execute(services, params) {
-    if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
-      const found = findAndroidNativeRecord(params.requestId);
-      return found
-        ? nativeRequestDetails(found.record, found.inspector, params.includeBody)
-        : nativeNotFound(params.requestId, params.device_id, "android");
-    }
-    if (IOS_NATIVE_REQUEST_ID.test(params.requestId)) {
-      const found = findIosNativeRecord(params.requestId);
-      return found
-        ? nativeRequestDetails(found.record, found.records, params.includeBody)
-        : nativeNotFound(params.requestId, params.device_id, "ios");
-    }
-    if (MACOS_NATIVE_REQUEST_ID.test(params.requestId)) {
-      const found = findMacosNativeRecord(params.requestId);
-      return found
-        ? nativeRequestDetails(found.record, found.records, params.includeBody)
-        : nativeNotFound(params.requestId, params.device_id, "macos");
-    }
-
-    const device = resolveDevice(params.device_id);
-    if (device.platform === "chromium") {
-      const chromium = services.chromium as ChromiumCdpApi;
-      const rec = chromium.server.network.get(params.requestId);
-      if (!rec) {
-        return `Request ${params.requestId} not found. Use view-network-logs to list available requests.`;
-      }
-      const details: NetworkRequestDetails = {
-        requestId: rec.requestId,
-        state: rec.failed ? "failed" : rec.status != null ? "complete" : "pending",
-        resourceType: rec.resourceType,
-        durationMs: rec.durationMs != null ? Math.round(rec.durationMs) : undefined,
-        encodedDataLength: rec.encodedDataLength,
-        errorText: rec.errorText,
-        initiator: rec.initiator,
-      };
-      if (rec.url) {
-        details.request = {
-          url: rec.url,
-          method: rec.method,
-          headers: redactHeaders(rec.requestHeaders),
-          postData: truncatePostData(rec.postData),
-        };
-      }
-      if (rec.status != null) {
-        const resp: NetworkRequestDetails["response"] = {
-          status: rec.status,
-          statusText: rec.statusText ?? "",
-          headers: redactHeaders(rec.responseHeaders),
-          mimeType: rec.mimeType ?? "",
-        };
-        if (params.includeBody) {
-          const out = await chromiumResponseBody(chromium.cdp, rec);
-          if (out) {
-            const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
-            if (typeof body !== "string") {
-              resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
-            } else {
-              resp.body = truncateBody(body, resp.mimeType);
-            }
-          }
-        }
-        details.response = resp;
-      }
-      return details;
-    }
-
-    const nativePlatform = nativeIdPlatform(params.requestId);
-    if (nativePlatform) return nativeNotFound(params.requestId, params.device_id, nativePlatform);
-
-    let cdp: CDPClient;
-    let noLog: string | undefined;
-    if (device.platform === "vega") {
-      const api = services.inspector as NetworkInspectorApi;
-      // Idempotent: the script no-ops if already installed.
-      await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
-      cdp = api.cdp;
-    } else {
-      const port = jsReadPort(params);
-      const deviceId = canonicalDeviceId(params.device_id)!;
-      const dbg = services.debugger as JsRuntimeDebuggerApi | undefined;
-      const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
-      if (!dbg || !capture) {
-        return jsNotStarted(
-          deviceId,
-          port,
-          "list the requests with view-network-logs",
-          `Request ${params.requestId} not found. `
-        );
-      }
-      cdp = dbg.cdp;
-      noLog = `Request ${params.requestId} not found. ${jsNoLog(capture)}`;
-    }
-
-    const script = makeNetworkDetailReadScript(params.requestId);
-    const raw = await cdp.evaluate(script);
-    const data = JSON.parse(raw as string) as RawEntry | { error: string; installed?: false };
-
-    if ("error" in data) {
-      if (data.installed === false && noLog) return noLog;
-      return `${data.error}. Use view-network-logs to list available requests.`;
-    }
-
-    const entry = data as RawEntry;
-
-    const details: NetworkRequestDetails = {
-      requestId: entry.requestId,
-      state: entry.state,
-      resourceType: entry.resourceType,
-      durationMs: entry.durationMs,
-      encodedDataLength: entry.encodedDataLength,
-      errorText: entry.errorText,
-    };
-
-    if (entry.request) {
-      details.request = {
-        url: entry.request.url,
-        method: entry.request.method,
-        headers: redactHeaders(entry.request.headers),
-        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated),
-      };
-    }
-
-    if (entry.response) {
-      const resp: NetworkRequestDetails["response"] = {
-        status: entry.response.status,
-        statusText: reasonPhrase(entry.response.status),
-        headers: redactHeaders(entry.response.headers),
-        mimeType: entry.response.mimeType,
-      };
-      if (isRedirect(entry.request?.url, entry.response.url)) {
-        resp.redirectedTo = entry.response.url;
-      }
-
-      if (params.includeBody && entry.bodyOmitted) {
-        // A length in characters, of a binary body read as text, is close to its size in bytes.
-        const size =
-          entry.encodedDataLength != null
-            ? `, ${entry.encodedDataLength} bytes`
-            : entry.bodyLength != null
-              ? `, ~${entry.bodyLength} bytes`
-              : "";
-        resp.body = `[body omitted: binary ${entry.response.mimeType || "data"}${size}]`;
-      } else if (params.includeBody && entry.responseBody != null) {
-        const body = entry.responseBody;
-        if (body.length > MAX_BODY_SIZE) {
-          const fullSize = !entry.bodyTruncated
-            ? `${body.length} chars`
-            : entry.encodedDataLength != null
-              ? `${entry.encodedDataLength} bytes`
-              : entry.bodyLength != null
-                ? `${entry.bodyLength} chars`
-                : `more than ${body.length} chars`;
-          resp.body = `${cutMarker(fullSize, entry.response.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`;
-        } else {
-          resp.body = body;
-        }
-      }
-
-      details.response = resp;
-    }
-
-    return details;
+  async execute(services, params, ctx) {
+    const redact = networkSecretRedactor(ctx);
+    const details = await readDetails(services, params, redact);
+    // A string is argent's own message, which quotes no app data.
+    if (typeof details === "string") return details;
+    // Argent's own id and state, which a short secret value must not break.
+    return redactNetworkResult(details, redact, [
+      "requestId",
+      "state",
+      "request.postData",
+      "response.body",
+    ]);
   },
 };
+
+async function readDetails(
+  services: Record<string, unknown>,
+  params: z.infer<typeof zodSchema>,
+  redact: SecretRedactor
+): Promise<NetworkRequestDetails | string> {
+  if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
+    const found = findAndroidNativeRecord(params.requestId);
+    return found
+      ? nativeRequestDetails(found.record, found.inspector, params.includeBody, redact)
+      : nativeNotFound(params.requestId, params.device_id, "android");
+  }
+  if (IOS_NATIVE_REQUEST_ID.test(params.requestId)) {
+    const found = findIosNativeRecord(params.requestId);
+    return found
+      ? nativeRequestDetails(found.record, found.records, params.includeBody, redact)
+      : nativeNotFound(params.requestId, params.device_id, "ios");
+  }
+  if (MACOS_NATIVE_REQUEST_ID.test(params.requestId)) {
+    const found = findMacosNativeRecord(params.requestId);
+    return found
+      ? nativeRequestDetails(found.record, found.records, params.includeBody, redact)
+      : nativeNotFound(params.requestId, params.device_id, "macos");
+  }
+
+  const device = resolveDevice(params.device_id);
+  if (device.platform === "chromium") {
+    const chromium = services.chromium as ChromiumCdpApi;
+    const rec = chromium.server.network.get(params.requestId);
+    if (!rec) {
+      return `Request ${params.requestId} not found. Use view-network-logs to list available requests.`;
+    }
+    const details: NetworkRequestDetails = {
+      requestId: rec.requestId,
+      state: rec.failed ? "failed" : rec.status != null ? "complete" : "pending",
+      resourceType: rec.resourceType,
+      durationMs: rec.durationMs != null ? Math.round(rec.durationMs) : undefined,
+      encodedDataLength: rec.encodedDataLength,
+      errorText: rec.errorText,
+      initiator: rec.initiator,
+    };
+    if (rec.url) {
+      details.request = {
+        url: rec.url,
+        method: rec.method,
+        headers: redactHeaders(rec.requestHeaders),
+        postData: truncatePostData(rec.postData, false, redact),
+      };
+    }
+    if (rec.status != null) {
+      const resp: NetworkRequestDetails["response"] = {
+        status: rec.status,
+        statusText: rec.statusText ?? "",
+        headers: redactHeaders(rec.responseHeaders),
+        mimeType: rec.mimeType ?? "",
+      };
+      if (params.includeBody) {
+        const out = await chromiumResponseBody(chromium.cdp, rec);
+        if (out) {
+          const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
+          if (typeof body !== "string") {
+            resp.body = `[body omitted: binary ${redact(resp.mimeType) || "data"}, ${body.length} bytes]`;
+          } else {
+            resp.body = truncateBody(body, resp.mimeType, redact);
+          }
+        }
+      }
+      details.response = resp;
+    }
+    return details;
+  }
+
+  const nativePlatform = nativeIdPlatform(params.requestId);
+  if (nativePlatform) return nativeNotFound(params.requestId, params.device_id, nativePlatform);
+
+  let cdp: CDPClient;
+  let noLog: string | undefined;
+  if (device.platform === "vega") {
+    const api = services.inspector as NetworkInspectorApi;
+    // Idempotent: the script no-ops if already installed.
+    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+    cdp = api.cdp;
+  } else {
+    const port = jsReadPort(params);
+    const deviceId = canonicalDeviceId(params.device_id)!;
+    const dbg = services.debugger as JsRuntimeDebuggerApi | undefined;
+    const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
+    if (!dbg || !capture) {
+      return jsNotStarted(
+        deviceId,
+        port,
+        "list the requests with view-network-logs",
+        `Request ${params.requestId} not found. `
+      );
+    }
+    cdp = dbg.cdp;
+    noLog = `Request ${params.requestId} not found. ${jsNoLog(capture)}`;
+  }
+
+  const script = makeNetworkDetailReadScript(params.requestId);
+  const raw = await cdp.evaluate(script);
+  const data = JSON.parse(raw as string) as RawEntry | { error: string; installed?: false };
+
+  if ("error" in data) {
+    if (data.installed === false && noLog) return noLog;
+    return `${data.error}. Use view-network-logs to list available requests.`;
+  }
+
+  const entry = data as RawEntry;
+
+  const details: NetworkRequestDetails = {
+    requestId: entry.requestId,
+    state: entry.state,
+    resourceType: entry.resourceType,
+    durationMs: entry.durationMs,
+    encodedDataLength: entry.encodedDataLength,
+    errorText: entry.errorText,
+  };
+
+  if (entry.request) {
+    details.request = {
+      url: entry.request.url,
+      method: entry.request.method,
+      headers: redactHeaders(entry.request.headers),
+      postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated, redact),
+    };
+  }
+
+  if (entry.response) {
+    const resp: NetworkRequestDetails["response"] = {
+      status: entry.response.status,
+      statusText: reasonPhrase(entry.response.status),
+      headers: redactHeaders(entry.response.headers),
+      mimeType: entry.response.mimeType,
+    };
+    if (isRedirect(entry.request?.url, entry.response.url)) {
+      resp.redirectedTo = entry.response.url;
+    }
+
+    if (params.includeBody && entry.bodyOmitted) {
+      // A length in characters, of a binary body read as text, is close to its size in bytes.
+      const size =
+        entry.encodedDataLength != null
+          ? `, ${entry.encodedDataLength} bytes`
+          : entry.bodyLength != null
+            ? `, ~${entry.bodyLength} bytes`
+            : "";
+      resp.body = `[body omitted: binary ${redact(entry.response.mimeType) || "data"}${size}]`;
+    } else if (params.includeBody && entry.responseBody != null) {
+      const body = entry.responseBody;
+      if (body.length > MAX_BODY_SIZE) {
+        const fullSize = !entry.bodyTruncated
+          ? `${body.length} chars`
+          : entry.encodedDataLength != null
+            ? `${entry.encodedDataLength} bytes`
+            : entry.bodyLength != null
+              ? `${entry.bodyLength} chars`
+              : `more than ${body.length} chars`;
+        resp.body = `${cutMarker(fullSize, redact(entry.response.mimeType))}\n${shownText(body, MAX_BODY_SIZE, redact)}...`;
+      } else {
+        resp.body = redact(body);
+      }
+    }
+
+    details.response = resp;
+  }
+
+  return details;
+}
 
 function isNativeRequestId(requestId: string): boolean {
   return (
@@ -514,7 +554,8 @@ interface NativeBodies {
 async function nativeRequestDetails(
   record: NativeNetworkRecord,
   bodies: NativeBodies,
-  includeBody: boolean
+  includeBody: boolean,
+  redact: SecretRedactor
 ): Promise<NetworkRequestDetails> {
   const { wireHeaders } = record.request;
   /**
@@ -534,14 +575,18 @@ async function nativeRequestDetails(
   const headersNote = requestHeadersNote(record);
   if (headersNote) request.headersNote = headersNote;
   if (record.request.hasPostData) {
-    request.postData = await readNativeBody(() => bodies.requestPostData(record.id), {
-      contentType: requestHeader("content-type"),
-      contentEncoding: requestHeader("content-encoding"),
-      wholeSize: sizeInBytes(
-        Number(requestHeader("content-length") || NaN),
-        "as the app sent them"
-      ),
-    });
+    request.postData = await readNativeBody(
+      () => bodies.requestPostData(record.id),
+      {
+        contentType: requestHeader("content-type"),
+        contentEncoding: requestHeader("content-encoding"),
+        wholeSize: sizeInBytes(
+          Number(requestHeader("content-length") || NaN),
+          "as the app sent them"
+        ),
+      },
+      redact
+    );
   }
 
   const details: NetworkRequestDetails = {
@@ -577,16 +622,20 @@ async function nativeRequestDetails(
     };
     if (record.response.fromCache) resp.fromCache = true;
     if (includeBody) {
-      resp.body = await readNativeBody(() => bodies.responseBody(record.id), {
-        mimeType: record.response.mimeType,
-        contentType: headerValue(record.response.headers, "content-type"),
-        // An iOS or Mac app response body is read decoded, so its Content-Encoding is not applied again.
-        contentEncoding:
-          record.layer === "ios-native" || record.layer === "macos-native"
-            ? ""
-            : headerValue(record.response.headers, "content-encoding"),
-        wholeSize: sizeInBytes(record.encodedDataLength ?? NaN, "as the app received them"),
-      });
+      resp.body = await readNativeBody(
+        () => bodies.responseBody(record.id),
+        {
+          mimeType: record.response.mimeType,
+          contentType: headerValue(record.response.headers, "content-type"),
+          // An iOS or Mac app response body is read decoded, so its Content-Encoding is not applied again.
+          contentEncoding:
+            record.layer === "ios-native" || record.layer === "macos-native"
+              ? ""
+              : headerValue(record.response.headers, "content-encoding"),
+          wholeSize: sizeInBytes(record.encodedDataLength ?? NaN, "as the app received them"),
+        },
+        redact
+      );
     }
     details.response = resp;
   }
@@ -625,43 +674,44 @@ interface NativeBodyFraming {
 
 async function readNativeBody(
   read: () => Promise<NativeNetworkBody>,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  redact: SecretRedactor
 ): Promise<string> {
   const mimeType = framing.mimeType ?? framing.contentType.split(";")[0]!.trim();
   let body: NativeNetworkBody;
   try {
     body = await read();
   } catch (err) {
-    return `[unavailable: ${err instanceof Error ? err.message : String(err)}]`;
+    return `[unavailable: ${redact(err instanceof Error ? err.message : String(err))}]`;
   }
-  if (!body.available) return `[unavailable: ${body.reason ?? "no body"}]`;
+  if (!body.available) return `[unavailable: ${redact(body.reason ?? "no body")}]`;
   // A request body that the upload cut has no known whole size.
   if (body.incomplete) framing = { ...framing, wholeSize: undefined };
   if (body.inlineChars !== undefined) {
-    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
+    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing, redact);
   }
   const asSent = (): string => {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
-      : truncateBody(text, mimeType);
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, redact, body.incomplete)
+      : truncateBody(text, mimeType, redact);
   };
   // A text body with no Content-Encoding reads as it came, with no copy of its bytes.
   if (!body.base64Encoded && contentCodings(framing.contentEncoding).length === 0) return asSent();
   // A body sent as text has the body's own bytes as UTF-8, so its Content-Encoding applies to them.
   const kept = Buffer.from(body.body, body.base64Encoded ? "base64" : "utf8");
   const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
-  if (!bytes) return decodesTooLarge(framing);
+  if (!bytes) return decodesTooLarge(framing, redact);
   if (!body.base64Encoded && bytes === kept) return asSent();
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
-      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
-      : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
+      ? `[body omitted: binary ${redact(mimeType) || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
+      : `[body omitted: binary ${redact(mimeType) || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
-    : truncateBody(text, mimeType);
+    ? cutByAgent(text, mimeType, kept.length, framing, redact, body.incomplete)
+    : truncateBody(text, mimeType, redact);
 }
 
 /**
@@ -692,35 +742,37 @@ function inlineBody(
   wholeChars: number,
   truncated: boolean,
   mimeType: string,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  redact: SecretRedactor
 ): string {
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
-    return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
+    return `[body omitted: binary ${redact(mimeType)}, ${framing.wholeSize ?? "size unknown"}]`;
   }
   // A body with no Content-Encoding reads as it came, with no copy of its bytes.
   const sent = contentCodings(framing.contentEncoding).length ? Buffer.from(text, "utf8") : null;
   const bytes = sent && decodeContent(sent, framing.contentEncoding, truncated);
-  if (sent && !bytes) return decodesTooLarge(framing);
+  if (sent && !bytes) return decodesTooLarge(framing, redact);
   const encoded = bytes && bytes !== sent ? bytes : null;
   const decoded = encoded
     ? decodeText(encoded, charsetOf(framing.contentType), truncated)
     : inDeclaredCharset(text, framing.contentType, truncated);
   if (decoded === null) {
     const size = truncated ? (framing.wholeSize ?? "size unknown") : `${encoded!.length} bytes`;
-    return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
+    return `[body omitted: binary ${redact(mimeType) || "data"}, ${size}]`;
   }
-  if (!truncated) return truncateBody(decoded, mimeType);
+  if (!truncated) return truncateBody(decoded, mimeType, redact);
   // In another charset, or under a Content-Encoding, the whole body has more chars than its kept start.
   const fullSize =
     !encoded && namesUtf8(framing.contentType)
       ? `${wholeChars} chars`
       : `more than ${decoded.length} chars`;
   const shown = Math.min(decoded.length, MAX_BODY_SIZE);
-  return `${cutMarker(fullSize, mimeType, shown)}\n${decoded.slice(0, shown)}${decoded.length > shown ? "..." : ""}`;
+  // The host kept only the start, so the text ends at a cut even when all of it shows.
+  return `${cutMarker(fullSize, redact(mimeType), shown)}\n${shownText(decoded, shown, redact)}${decoded.length > shown ? "..." : ""}`;
 }
 
-function decodesTooLarge(framing: NativeBodyFraming): string {
-  return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
+function decodesTooLarge(framing: NativeBodyFraming, redact: SecretRedactor): string {
+  return `[unavailable: the ${redact(framing.contentEncoding.trim())} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
 }
 
 /**
@@ -733,11 +785,13 @@ function cutByAgent(
   mimeType: string,
   keptBytes: number,
   framing: NativeBodyFraming,
+  redact: SecretRedactor,
   incomplete?: boolean
 ): string {
   const shown = Math.min(text.length, MAX_BODY_SIZE);
   const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
-  return `${cutMarker(fullSize, mimeType, shown)}\n${text.slice(0, shown)}${text.length > shown ? "..." : ""}`;
+  // The agent kept only the start, so the text ends at a cut even when all of it shows.
+  return `${cutMarker(fullSize, redact(mimeType), shown)}\n${shownText(text, shown, redact)}${text.length > shown ? "..." : ""}`;
 }
 
 function agentKept(keptBytes: number, incomplete?: boolean): string {

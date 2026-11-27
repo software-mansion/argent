@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { networkSecretRedactor, redactNetworkResult } from "../network/network-secrets";
 import {
   FAILURE_CODES,
   FailureError,
@@ -143,89 +144,95 @@ Returns recent requests oldest-first with capture status in \`header\` (or a pre
       const ref = nativeDevtoolsRef(device);
       return live(ref.urn) ? { nativeDevtools: ref } : {};
     },
-    async execute(services, params) {
-      const device = resolveDevice(params.udid);
-      const port = metroPort({ device_id: params.udid, port: params.port });
-      if (device.platform === "macos") {
-        const app = requireMacosAppOfBundle(
-          services,
-          device,
-          "native-network-logs",
-          params.bundleId
-        );
-        // network-capture-start fails for an Apple app, so pointing at it would loop.
-        if (!isInjectableBundleId(params.bundleId)) throw macosNotInjectable(params.bundleId);
-        return listMacosNative(
-          app,
-          params,
-          port,
-          nativeUnavailableReason(device.id, params.bundleId)
-        );
-      }
-
-      if (device.platform === "android") {
-        const api = services.androidNetwork as AndroidNetworkInspectorApi | undefined;
-        if (!api || (!api.isStarted() && !api.isStopped())) {
-          const reason =
-            api?.unavailableReason() ?? nativeUnavailableReason(device.id, params.bundleId);
-          return reason
-            ? {
-                ...unavailableListing("android-native", reason),
-                capture: "unavailable",
-                captureDetail: reason,
-              }
-            : notStarted("android-native", params.bundleId);
-        }
-        return listAndroidNative(api, params, port);
-      }
-
-      // Start never captures one, so pointing at it would loop.
-      if (!isInjectableBundleId(params.bundleId)) throw nonInjectableError(params.bundleId);
-      const api = services.nativeDevtools as NativeDevtoolsApi | undefined;
-      const unavailable = nativeUnavailableReason(device.id, params.bundleId);
-      if (api?.isNetworkCaptureStopped(params.bundleId)) {
-        return listStopped(
-          "ios-native",
-          api.networkRecords(params.bundleId),
-          params,
-          port,
-          stoppedDetail(liveIosNetworkCaptures(params.udid).includes(params.bundleId), unavailable)
-        );
-      }
-      if (!api?.isNetworkCaptureStarted(params.bundleId)) {
-        return unavailable
-          ? unavailableListing("ios-native", unavailable)
-          : notStarted("ios-native", params.bundleId);
-      }
-
-      await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-      const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-      if (blocked) return blocked;
-
+    async execute(services, params, ctx) {
       /**
-       * `{count: 0}` reads as "the screen made no requests", so say when the
-       * truth is "nothing is capturing them", as the hierarchy tools do.
+       * The request lines are app data. The rest is argent's own text and the
+       * in-app agent's capture state, as network-capture-start returns it, and
+       * holds numbers a short secret value would replace, such as a pid.
        */
-      if (!api.isConnected(params.bundleId)) throw notConnected(api, params.bundleId);
-      await api.refreshLentNetworkCapture(params.bundleId);
-      const store = api.networkRecords(params.bundleId);
-      if (!store) throw notConnected(api, params.bundleId);
-
-      const all = store.records(port);
-      const state = store.state();
-      const detail: string[] = [];
-      if (state.pid !== undefined) detail.push(`pid ${state.pid}`);
-      if (state.note) detail.push(state.note);
-      if (api.takeCaptureGap(params.bundleId)) detail.push(captureGapNote(api.armsEnv));
-      const listing = listNative("ios-native", all, params.limit, {
-        armed: state.armed,
-        state: state.armed ? "armed" : "not armed",
-        detail,
-      });
-      if (params.clear) store.clear();
-      return listing;
+      return redactNetworkResult(await readListing(services, params), networkSecretRedactor(ctx), [
+        "status",
+        "header",
+        "capture",
+        "captureDetail",
+        "requests.*.id",
+        "requests.*.state",
+      ]);
     },
   };
+}
+
+async function readListing(services: Record<string, unknown>, params: Params): Promise<Result> {
+  const device = resolveDevice(params.udid);
+  const port = metroPort({ device_id: params.udid, port: params.port });
+  if (device.platform === "macos") {
+    const app = requireMacosAppOfBundle(services, device, "native-network-logs", params.bundleId);
+    // network-capture-start fails for an Apple app, so pointing at it would loop.
+    if (!isInjectableBundleId(params.bundleId)) throw macosNotInjectable(params.bundleId);
+    return listMacosNative(app, params, port, nativeUnavailableReason(device.id, params.bundleId));
+  }
+
+  if (device.platform === "android") {
+    const api = services.androidNetwork as AndroidNetworkInspectorApi | undefined;
+    if (!api || (!api.isStarted() && !api.isStopped())) {
+      const reason =
+        api?.unavailableReason() ?? nativeUnavailableReason(device.id, params.bundleId);
+      return reason
+        ? {
+            ...unavailableListing("android-native", reason),
+            capture: "unavailable",
+            captureDetail: reason,
+          }
+        : notStarted("android-native", params.bundleId);
+    }
+    return listAndroidNative(api, params, port);
+  }
+
+  // Start never captures one, so pointing at it would loop.
+  if (!isInjectableBundleId(params.bundleId)) throw nonInjectableError(params.bundleId);
+  const api = services.nativeDevtools as NativeDevtoolsApi | undefined;
+  const unavailable = nativeUnavailableReason(device.id, params.bundleId);
+  if (api?.isNetworkCaptureStopped(params.bundleId)) {
+    return listStopped(
+      "ios-native",
+      api.networkRecords(params.bundleId),
+      params,
+      port,
+      stoppedDetail(liveIosNetworkCaptures(params.udid).includes(params.bundleId), unavailable)
+    );
+  }
+  if (!api?.isNetworkCaptureStarted(params.bundleId)) {
+    return unavailable
+      ? unavailableListing("ios-native", unavailable)
+      : notStarted("ios-native", params.bundleId);
+  }
+
+  await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+  const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+  if (blocked) return blocked;
+
+  /**
+   * `{count: 0}` reads as "the screen made no requests", so say when the
+   * truth is "nothing is capturing them", as the hierarchy tools do.
+   */
+  if (!api.isConnected(params.bundleId)) throw notConnected(api, params.bundleId);
+  await api.refreshLentNetworkCapture(params.bundleId);
+  const store = api.networkRecords(params.bundleId);
+  if (!store) throw notConnected(api, params.bundleId);
+
+  const all = store.records(port);
+  const state = store.state();
+  const detail: string[] = [];
+  if (state.pid !== undefined) detail.push(`pid ${state.pid}`);
+  if (state.note) detail.push(state.note);
+  if (api.takeCaptureGap(params.bundleId)) detail.push(captureGapNote(api.armsEnv));
+  const listing = listNative("ios-native", all, params.limit, {
+    armed: state.armed,
+    state: state.armed ? "armed" : "not armed",
+    detail,
+  });
+  if (params.clear) store.clear();
+  return listing;
 }
 
 const STOPPED_DETAIL =

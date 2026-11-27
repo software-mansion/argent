@@ -41,7 +41,7 @@ Ask the agent to check that an action sends the expected request. For example, c
 
 ## Read request details
 
-The agent can read a request's URL, status, duration, headers, and available bodies. Argent redacts sensitive header values, but URLs and bodies can contain secrets. Treat the log as app data.
+The agent can read a request's URL, status, duration, headers, and available bodies. Argent redacts sensitive header values. Where a [secret](/docs/reference/configuration#secrets) you gave Argent appears, the agent sees its placeholder, such as `{{secret:APP_PASSWORD}}`, in place of the value. Other credentials still show, for example a token that the server issues. Treat the log as app data.
 
 Capture keeps a recent history and shows previews of large bodies. Read native bodies before the app exits or restarts if you need them for a comparison.
 

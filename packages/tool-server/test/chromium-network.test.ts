@@ -1,3 +1,4 @@
+import type { ToolContext } from "@argent/registry";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
@@ -492,5 +493,144 @@ describe("view-network-request-details (chromium branch)", () => {
 
     expect(result.success).toBe(true);
     expect(result.data?.includeBody).toBe(value);
+  });
+});
+
+describe("secret values on the Chromium branch", () => {
+  const clientSecrets = new Map([
+    ["TOKEN", "stored-token-0123456789"],
+    ["PIN", "4821"],
+  ]);
+
+  it("view-network-logs redacts the path and the error, and keeps the id and the duration", async () => {
+    const requests = [
+      rec({
+        requestId: "4821",
+        method: "GET",
+        url: "https://x.test/v1/stored-token-0123456789/profile",
+        status: 200,
+        statusText: "OK",
+        encodedDataLength: 4821,
+        durationMs: 4821,
+      }),
+      rec({
+        requestId: "2",
+        url: "https://x.test/pin/4821",
+        failed: true,
+        errorText: "net::ERR_FAILED stored-token-0123456789",
+      }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      { artifacts: {}, clientSecrets } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 4821} "GET /v1/{{secret:TOKEN}}/profile" 200 OK');
+    expect(out).toContain("4821 ms");
+    expect(out).toContain('"GET /pin/{{secret:PIN}}" net::ERR_FAILED {{secret:TOKEN}}');
+    expect(out).not.toContain("stored-token");
+  });
+
+  it("view-network-logs redacts a secret that is a whole URL, which the shortened path would hide", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: webhook, status: 200, statusText: "OK" }),
+      rec({ requestId: "2", method: "GET", url: "https://x.test/other", status: 200 }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([["WEBHOOK_URL", webhook]]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 200 OK');
+    expect(out).toContain('{id: 2} "GET /other"');
+    expect(out).not.toContain("tok3n");
+  });
+
+  it("view-network-logs redacts a whole-URL secret sent with a query, and leaves the query out", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: `${webhook}?wait=true`, status: 204 }),
+      rec({
+        requestId: "2",
+        method: "GET",
+        url: "https://hooks.test/v1/feed?key=stored-key-0123456789&page=2",
+        status: 200,
+      }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([
+          ["WEBHOOK_URL", webhook],
+          ["KEY", "stored-key-0123456789"],
+        ]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).toContain('{id: 2} "GET /v1/feed" 200');
+    expect(out).not.toMatch(/tok3n|wait=|stored-key|page=/);
+  });
+
+  it("view-network-logs leaves a query out after a secret that holds the query's own `?`", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ?wait=true";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: `${webhook}&trace=private-id`, status: 204 }),
+      rec({ requestId: "2", method: "POST", url: `${webhook}#frag`, status: 204 }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([["WEBHOOK_URL", webhook]]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).toContain('{id: 2} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).not.toMatch(/tok3n|trace|private-id|frag/);
+  });
+
+  it("view-network-request-details redacts a copy, so the record's initiator keeps its URL", async () => {
+    const record = rec({
+      requestId: "4821",
+      method: "POST",
+      url: "https://x.test/api?t=stored-token-0123456789",
+      status: 200,
+      mimeType: "application/json",
+      postData: '{"pin":"4821","count":14821}',
+      initiator: { type: "script", url: "https://x.test/app.js?t=stored-token-0123456789" },
+    });
+    const send = vi.fn(async () => ({ body: '{"pin":"4821"}', base64Encoded: false }));
+    const services = {
+      chromium: { cdp: { send }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, requestId: "4821", includeBody: true },
+      { artifacts: {}, clientSecrets } as unknown as ToolContext
+    )) as {
+      requestId: string;
+      initiator: { url: string };
+      request: { url: string; postData: string };
+      response: { body: string };
+    };
+
+    expect(details.requestId).toBe("4821");
+    expect(details.request.url).toBe("https://x.test/api?t={{secret:TOKEN}}");
+    expect(details.request.postData).toBe('{"pin":"{{secret:PIN}}","count":14821}');
+    expect(details.response.body).toBe('{"pin":"{{secret:PIN}}"}');
+    expect(details.initiator.url).toBe("https://x.test/app.js?t={{secret:TOKEN}}");
+    expect(record.initiator?.url).toBe("https://x.test/app.js?t=stored-token-0123456789");
   });
 });

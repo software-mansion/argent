@@ -1,3 +1,4 @@
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { createContext, runInContext, type Context } from "node:vm";
@@ -999,5 +1000,101 @@ describe("the JS layer and a teardown under way", () => {
       readable: false,
       note: "stop-all-simulator-servers or the tool-server's exit is ending the app's capture",
     });
+  });
+});
+
+describe("secret values in the result", () => {
+  const TOKEN = "stored-token-0123456789";
+  /** The number of the records below, so a short secret could break their ids. */
+  const REC = "11";
+  const options = {
+    clientSecrets: new Map([
+      ["TOKEN", TOKEN],
+      ["REC", REC],
+    ]),
+  };
+  const waitWith = (params: Record<string, unknown> & { url: string }) =>
+    registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 150, ...params },
+      options
+    );
+
+  it("matches on the record as sent and shows the placeholder in match.url, keeping the id", async () => {
+    await startIos();
+    ios.add(11, { url: `/v1/login?token=${TOKEN}`, status: 200 });
+
+    // The pattern holds the token as sent, which only the record as sent contains.
+    const result = await waitWith({ url: `token=${TOKEN}`, status: 200 });
+
+    expect(result.match).toMatchObject({
+      id: "ios-t7-11",
+      url: `${API}/v1/login?token={{secret:TOKEN}}`,
+    });
+    expect(ios.records[0]!.request.url).toBe(`${API}/v1/login?token=${TOKEN}`);
+  });
+
+  it("redacts a secret first typed while the wait polls, and one removed from the sources meanwhile", async () => {
+    await startIos();
+    const typed = "typed-late-secret-42";
+    const pending = registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 3000, url: "/v1/late" },
+      options
+    );
+    // After the first polls: another call types a new secret, and the app sends it.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    noteTypedSecrets(IOS, [{ name: "LATE", value: typed }]);
+    ios.add(11, { url: `/v1/late?t=${typed}&s=${TOKEN}`, status: 200 });
+    options.clientSecrets.delete("TOKEN");
+
+    try {
+      const result = await pending;
+      expect(result.match?.url).toBe(`${API}/v1/late?t={{secret:LATE}}&s={{secret:TOKEN}}`);
+    } finally {
+      options.clientSecrets.set("TOKEN", TOKEN);
+      __resetTypedSecretsForTesting();
+    }
+  });
+
+  it("redacts a whole URL typed while the wait polls, though a secret known at the start is part of it", async () => {
+    await startIos();
+    const hook = `${API}/v1/hook/T0/tok3nLate`;
+    const own = { clientSecrets: new Map([["HOST", "api.test"]]) };
+    const pending = registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 3000, url: "/v1/hook" },
+      own
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    noteTypedSecrets(IOS, [{ name: "HOOK", value: hook }]);
+    ios.add(11, { url: "/v1/hook/T0/tok3nLate", status: 200 });
+
+    try {
+      const result = await pending;
+      expect(result.match?.url).toBe("{{secret:HOOK}}");
+      expect(JSON.stringify(result)).not.toContain("tok3n");
+    } finally {
+      __resetTypedSecretsForTesting();
+    }
+  });
+
+  it("redacts a near miss's URL and error before the note cuts them, keeping ids and counts", async () => {
+    await startIos();
+    // The token spans characters 114 to 137 of the URL, across the note's 120-character cut.
+    const url = `/${"p".repeat(90)}?token=${TOKEN}`;
+    ios.add(11, { url, status: 500 });
+    ios.add(12, { url: "/other", state: "failed", errorText: `refused ${TOKEN}` });
+
+    const result = await waitWith({ url: "/v1/login" });
+
+    expect(result.success).toBe(false);
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "ios-t7-12"]);
+    expect(result.nearMisses?.[0]?.url).toBe(`${API}/${"p".repeat(90)}?token={{secret:TOKEN}}`);
+    expect(result.nearMisses?.[1]?.errorText).toBe("refused {{secret:TOKEN}}");
+    expect(result.note).toContain("[ios-native ios-t7-11]");
+    expect(result.note).toContain("ios-native 2");
+    expect(result.note).not.toMatch(/stored|token-0/);
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 });

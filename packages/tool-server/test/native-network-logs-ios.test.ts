@@ -1,3 +1,4 @@
+import type { ToolContext } from "@argent/registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as net from "node:net";
 import { Registry } from "@argent/registry";
@@ -616,5 +617,37 @@ describe("native-network-logs limit", () => {
 
   it.each(inputs)("defaults limit to 50 on %s input", (_platform, input) => {
     expect(schema.safeParse(input)).toMatchObject({ success: true, data: { limit: 50 } });
+  });
+});
+
+describe("native-network-logs: secret values", () => {
+  it("shows a URL's secret as its placeholder and keeps the ids, whatever their number", async () => {
+    await withService(async (api) => {
+      const app = await launchApp(api);
+      completeRequest(app, "r1", "https://api.example.com/items?token=stored-token-0123456789");
+      await recorded(api, 1);
+      const raw = await list(api);
+      // A short secret equal to the record's number, which ends its id.
+      const number = String(raw.requests[0]!.id).split("-").at(-1)!;
+      const clientSecrets = new Map([
+        ["TOKEN", "stored-token-0123456789"],
+        ["REC", number],
+      ]);
+
+      const listing = (await tool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE, limit: 50, clear: false },
+        { artifacts: {}, clientSecrets } as unknown as ToolContext
+      )) as unknown as Listing;
+
+      expect(listing.requests[0]).toMatchObject({
+        id: raw.requests[0]!.id,
+        url: "https://api.example.com/items?token={{secret:TOKEN}}",
+      });
+      expect(api.networkRecords(BUNDLE)?.records(1)[0]?.request.url).toBe(
+        "https://api.example.com/items?token=stored-token-0123456789"
+      );
+      app.close();
+    });
   });
 });

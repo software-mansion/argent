@@ -17,6 +17,7 @@ import {
   type UnmetWaitCause,
 } from "../../utils/wait-result";
 import { CAPTURE_CAPABILITY } from "../network/network-capture";
+import { networkRedactorOf, networkSecrets } from "../network/network-secrets";
 import { assertMacosAppBundle } from "../native-devtools/macos-view-hierarchy";
 import { markedLayers, type LayerRead, type MarkedLayer } from "./layers";
 import {
@@ -44,12 +45,7 @@ const zodSchema = z
       .describe(
         "`bundleId` used in `network-capture-start` (Chromium: placeholder like `argent.capture`)."
       ),
-    url: z
-      .string()
-      .min(1)
-      .describe(
-        "URL text/regex to match (no `{{secret:...}}` placeholders; full URL is returned)."
-      ),
+    url: z.string().min(1).describe("URL text/regex to match (no `{{secret:...}}` placeholders)."),
     urlMatch: z
       .enum(["contains", "equals", "matches"])
       .optional()
@@ -90,7 +86,7 @@ const zodSchema = z
         code: z.ZodIssueCode.custom,
         path: ["url"],
         message:
-          "url takes no {{secret:...}} placeholder: a matcher never resolves secrets, and the match is returned in the result. Match on another part of the URL.",
+          "url takes no {{secret:...}} placeholder: a matcher never resolves secrets. Match on another part of the URL.",
       });
     }
     if (params.urlMatch === "matches") {
@@ -205,6 +201,30 @@ Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`m
       if (layers.length === 0) throw notStartedError(params);
 
       const criteria = criteriaOf(params);
+      /**
+       * The records are matched as read, and what the result shows of them is
+       * redacted: the app text of a record (method, URL, error) and the layer
+       * notes, which can quote an agent or the app. The ids and counts are
+       * argent's own and stay, and so does the agent's own pattern in the note.
+       */
+      const atStart = networkSecrets(ctx);
+      let redact: (text: string) => string = networkRedactorOf(atStart);
+      /**
+       * The secrets are read again when the result is built, since a value can
+       * be typed while the wait polls. The values read at the start stay, in
+       * case one leaves the sources meanwhile. One redactor takes both, so a
+       * new value that holds an old one, such as a URL on a secret host, is
+       * still found whole.
+       */
+      const readSecretsAgain = () => {
+        redact = networkRedactorOf([...networkSecrets(ctx), ...atStart]);
+      };
+      const shown = <T extends WaitRecord>(record: T): T => ({
+        ...record,
+        method: redact(record.method),
+        url: redact(record.url),
+        ...(record.errorText !== undefined ? { errorText: redact(record.errorText) } : {}),
+      });
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
       const start = Date.now();
@@ -252,15 +272,16 @@ Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`m
       };
 
       const success = (match: WaitRecord): WaitResult => {
+        readSecretsAgain();
         // What the reads in this call said of each layer, as a reload that left
         // requests out, so that the match may not be the first request.
         const notes = [...notesSeen].flatMap(([layer, seen]) =>
-          [...seen].map((note) => `${layer}: ${note}`)
+          [...seen].map((note) => `${layer}: ${redact(note)}`)
         );
         return {
           success: true,
           elapsed: elapsed(),
-          match,
+          match: shown(match),
           ...(notes.length > 0 ? { note: notes.join("; ") } : {}),
         };
       };
@@ -339,6 +360,7 @@ Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`m
       return timedOut(fresh ? "unmet" : "unreadable", false);
 
       function timedOut(cause: UnmetWaitCause, allStopped: boolean): WaitResult {
+        readSecretsAgain();
         const summaries: LayerSummary[] = layers.map(({ layer }) => {
           const last = latest.get(layer);
           const readable = latestReadable.get(layer);
@@ -348,11 +370,12 @@ Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`m
             readable: readable !== undefined,
             ...(last?.stopped ? { stopped: true as const } : {}),
             requests: readable?.records.length ?? 0,
-            ...(last?.note ? { note: last.note } : {}),
+            ...(last?.note ? { note: redact(last.note) } : {}),
           };
         });
         const seen = [...latestReadable.values()].flatMap((read) => read.records);
-        const misses = nearMisses(criteria, seen);
+        // Redacted before describeRecord cuts a URL, so a cut value leaves no start of it.
+        const misses = nearMisses(criteria, seen).map(shown);
         const counts = summaries
           .map(
             (s) =>

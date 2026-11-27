@@ -1,4 +1,6 @@
 import { STATUS_CODES } from "node:http";
+import type { SecretRedactor } from "../../utils/secrets";
+import { networkSecretRedactor } from "./network-secrets";
 import { z } from "zod";
 import bytesUtil from "bytes";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -193,39 +195,83 @@ export function isRedirect(requestUrl: string | undefined, finalUrl: string | un
   return comparableUrl(finalUrl) !== comparableUrl(requestUrl);
 }
 
+// Whether `url` is on another host than `from`. False without `from`.
+function onOtherHost(url: URL, from?: string): boolean {
+  if (from === undefined) return false;
+  try {
+    return new URL(from).host !== url.host;
+  } catch {
+    return true;
+  }
+}
+
 // The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.
 function shortName(url: string, from?: string): string {
   try {
     const parsed = new URL(url);
     const path = parsed.pathname === "/" ? "" : parsed.pathname;
-    let sameHost = true;
-    try {
-      sameHost = from === undefined || new URL(from).host === parsed.host;
-    } catch {
-      sameHost = false;
-    }
-    if (sameHost) return path || parsed.hostname;
+    if (!onOtherHost(parsed, from)) return path || parsed.hostname;
     return parsed.host + path;
   } catch {
     return url;
   }
 }
 
-function formatEntry(entry: LogEntry): string {
-  const method = entry.request?.method ?? "???";
+/**
+ * The short name of a URL with its secrets redacted. A secret can reach past
+ * the short name, such as a whole webhook URL, and its path alone is a piece no
+ * redaction finds. So a URL that holds a secret is redacted whole and cut at
+ * its own query or fragment, or past a secret that holds that `?` or `#`. The
+ * short name is then taken from that text: a marker has no `/` or `@`.
+ */
+function redactedName(url: string, redact: SecretRedactor, from?: string): string {
+  const owner = redact.claims(url);
+  if (redact.render(url, owner) === url) return redact(shortName(url, from));
+  const query = url.search(/[?#]/);
+  let end = query === -1 ? url.length : query;
+  const claimed = (i: number) => redact.render(url[i]!, owner.subarray(i, i + 1)) !== url[i];
+  if (end > 0 && end < url.length && claimed(end - 1) && owner[end] === owner[end - 1]) {
+    while (end < url.length && owner[end] === owner[end - 1]) end++;
+  }
+  const beforeQuery = redact.render(url.slice(0, end), owner.subarray(0, end));
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(beforeQuery)?.[0];
+  // A marker in place of the scheme: the secret begins the URL.
+  if (scheme === undefined) return beforeQuery;
+  const rest = beforeQuery.slice(scheme.length);
+  const slash = rest.indexOf("/");
+  const authority = slash === -1 ? rest : rest.slice(0, slash);
+  const host = authority.slice(authority.lastIndexOf("@") + 1);
+  const path = slash === -1 || rest.slice(slash) === "/" ? "" : rest.slice(slash);
+  let otherHost = from !== undefined;
+  try {
+    otherHost = onOtherHost(new URL(url), from);
+  } catch {
+    // Unparsable: shown with its host.
+  }
+  return otherHost ? host + path : path || host;
+}
+
+/**
+ * One line of the log. The parts that hold app text (method, path, redirect
+ * target, error and status text) are redacted one by one, so a short secret
+ * value never replaces the id, a size or a duration.
+ */
+function formatEntry(entry: LogEntry, redact: SecretRedactor): string {
+  const method = redact(entry.request?.method ?? "???");
   const url = entry.request?.url ?? "unknown";
-  const name = shortName(url);
+  const name = redactedName(url, redact);
   const finalUrl = entry.response?.url;
-  const redirect = finalUrl && isRedirect(url, finalUrl) ? `→ ${shortName(finalUrl, url)}` : "";
+  const redirect =
+    finalUrl && isRedirect(url, finalUrl) ? `→ ${redactedName(finalUrl, redact, url)}` : "";
 
   let status: string;
   if (entry.state === "failed") {
-    status = entry.errorText ?? "failed";
+    status = entry.errorText ? redact(entry.errorText) : "failed";
   } else if (entry.response) {
     // A response whose body has not completed.
     status = [
       entry.response.status,
-      entry.response.statusText,
+      redact(entry.response.statusText),
       entry.state === "pending" ? "(pending)" : "",
     ]
       .filter((part) => part !== "")
@@ -269,7 +315,8 @@ function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
 /** Same output format as the RN path. */
 function renderChromiumPage(
   records: NetworkRequestRecord[],
-  pageIndexParam: number | "latest"
+  pageIndexParam: number | "latest",
+  redact: SecretRedactor
 ): string {
   const total = records.length;
   if (total === 0) {
@@ -283,7 +330,7 @@ function renderChromiumPage(
   const start = pageIndex * ITEMS_PER_PAGE;
   const lines = records
     .slice(start, start + ITEMS_PER_PAGE)
-    .map((r, i) => formatEntry(recordToLogEntry(r, start + i)));
+    .map((r, i) => formatEntry(recordToLogEntry(r, start + i), redact));
   return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${total} total) ===\n\n${lines.join("\n")}`;
 }
 
@@ -330,11 +377,12 @@ Returns a paginated list of request IDs, status, size, and timing. Fails if Chro
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
+    const redact = networkSecretRedactor(ctx);
     const device = resolveDevice(params.device_id);
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
-      return renderChromiumPage(chromium.server.network.requests(), params.pageIndex);
+      return renderChromiumPage(chromium.server.network.requests(), params.pageIndex, redact);
     }
     const port = jsReadPort(params);
 
@@ -345,7 +393,7 @@ Returns a paginated list of request IDs, status, size, and timing. Fails if Chro
         () => undefined,
         (err: unknown) => (err instanceof Error ? err.message : String(err))
       );
-      return renderJsLog(api.cdp, port, params.pageIndex, {
+      return renderJsLog(api.cdp, port, params.pageIndex, redact, {
         noLog: () => notInstalled(installError),
         empty:
           "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before capture started (at the first network-tool call).",
@@ -357,7 +405,7 @@ Returns a paginated list of request IDs, status, size, and timing. Fails if Chro
     const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
     if (!dbg || !capture) return jsNotStarted(deviceId, port);
     const stopped = capture.intent === "stopped";
-    return renderJsLog(dbg.cdp, port, params.pageIndex, {
+    return renderJsLog(dbg.cdp, port, params.pageIndex, redact, {
       noLog: () => jsNoLog(capture),
       empty: stopped
         ? `No network traffic captured: network capture is stopped for ${capture.bundleId} (network-capture-stop). Call network-capture-start to capture again, then repeat the action.`
@@ -378,6 +426,7 @@ async function renderJsLog(
   cdp: CDPClient,
   port: number,
   pageIndexParam: number | "latest",
+  redact: SecretRedactor,
   texts: {
     noLog: () => string;
     empty: string;
@@ -422,7 +471,8 @@ async function renderJsLog(
             ...entry,
             response: { ...entry.response, statusText: reasonPhrase(entry.response.status) },
           }
-        : entry
+        : entry,
+      redact
     )
   );
 
