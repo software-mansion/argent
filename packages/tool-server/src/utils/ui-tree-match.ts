@@ -114,8 +114,8 @@ export function nodeText(node: DescribeNode): string {
 // Text a `text` condition reads (and its failure messages quote). Prefers
 // `subtreeText` — hoisted from descendants by the flow adapters — so a check
 // against a testID container reads the text it visibly wraps rather than its
-// own (empty) label. Selector matching stays on `nodeText`, so `tap`/`{ text }`
-// targeting is unaffected.
+// own (empty) label. Selector matching tests the label and the value one at a
+// time and never reads `subtreeText`.
 export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
@@ -569,12 +569,13 @@ export function evaluateCondition(
           ? uiTreeMatchInternals.createRegExp(expectedText).test(field)
           : textMatches(field, expectedText, textMatch);
       }
-      // An element with no text at all reads as "", so `matches: '^$'` or a
-      // negative lookahead can check an empty field. Selector matching still
-      // skips empty text, or `.*` would select every unlabeled view. Not an
-      // iOS text field: a secure field's text is never read, so a filled one
-      // reads "" there (an empty field reads its placeholder). Nor a Mac app's
-      // password field, whose text argent never reads.
+      // An element with no text at all reads as "", so `matches: '^$'` can
+      // check it. Selector matching still skips empty text, or `.*` would
+      // select every unlabeled view. Not an iOS text field: the simulator's
+      // view tree never holds a secure field's text, so a filled one without
+      // a label or child text reads "" there (an empty field reads its
+      // placeholder). The role check also covers a physical iPhone's fields.
+      // Nor a Mac app's password field, whose text argent never reads.
       if (
         textMatch === "matches" &&
         (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&

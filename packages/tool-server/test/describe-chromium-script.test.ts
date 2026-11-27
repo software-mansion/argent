@@ -389,6 +389,16 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
+// A <textarea>: `text` is its default text (the child text node), `value` the
+// live value the user typed.
+function textareaEl(opts: Opts & { value?: string; placeholder?: string }) {
+  const node = el({ ...opts, tag: "textarea" }) as MockElement & Record<string, unknown>;
+  Object.setPrototypeOf(node, MockHTMLTextAreaElement.prototype);
+  if (opts.value) node.value = opts.value;
+  if (opts.placeholder) node.placeholder = opts.placeholder;
+  return node;
+}
+
 // `pageGlobals` are globals a page script defines, in scope while the script evaluates;
 // `documentProps` are the document's own properties, as a named <form> shadows a method.
 function run(
@@ -2962,11 +2972,117 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     }
   });
 
-  it("still reads a non-password input's value as its accessible name", () => {
+  it("still reads a non-password input's or textarea's value as its accessible name", () => {
     const { tree } = run([
       inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
+      textareaEl({ value: "typed text", attrs: { id: "ta" }, rect: BOX }),
     ]);
     expect(findById(tree, "txt")!.label).toBe("typed text");
+    expect(findById(tree, "ta")!.label).toBe("typed text");
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads a field's aria-label, aria-labelledby or placeholder and then its value, skips an aria-labelledby that names no element, reads an element's title, and reads a label once when its text is the same", () => {
+    const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX });
+    const field = { type: "text", value: "abc", rect: BOX };
+    const { tree } = run([
+      inputEl({ ...field, attrs: { "id": "aria", "aria-label": "Name" } }),
+      inputEl({ ...field, attrs: { "id": "lb", "aria-labelledby": "lbl" } }),
+      labelEl,
+      inputEl({ ...field, placeholder: "Type here", attrs: { id: "ph" } }),
+      inputEl({
+        ...field,
+        placeholder: "Search",
+        attrs: { "id": "dangling", "aria-labelledby": "nope" },
+      }),
+      textareaEl({ value: "abc", placeholder: "Notes", attrs: { id: "ta-ph" }, rect: BOX }),
+      inputEl({ attrs: { id: "titled", title: "Hint" }, rect: BOX }),
+      el({
+        attrs: { "id": "editor", "contenteditable": "true", "aria-label": "Compose" },
+        rect: BOX,
+      }),
+      el({ text: "Hello", attrs: { id: "tip", title: "Tip" }, rect: BOX }),
+      el({ text: "Close", attrs: { "id": "same", "aria-label": "Close" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "aria")).toMatchObject({ label: "Name", value: "abc" });
+    expect(findById(tree, "lb")).toMatchObject({ label: "Email", value: "abc" });
+    expect(findById(tree, "ph")).toMatchObject({ label: "Type here", value: "abc" });
+    expect(findById(tree, "dangling")).toMatchObject({ label: "Search", value: "abc" });
+    expect(findById(tree, "ta-ph")).toMatchObject({ label: "Notes", value: "abc" });
+    expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
+    expect(findById(tree, "editor")).toMatchObject({ label: "Compose" });
+    expect(findById(tree, "tip")).toMatchObject({ label: "Tip", value: "Hello" });
+    expect(findById(tree, "same")).toMatchObject({ label: "Close" });
+    expect(findById(tree, "same")?.value).toBeUndefined();
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("cuts each label and text at 200 characters, so a label the same as a longer text is read twice", () => {
+    const long = "a".repeat(250);
+    const cut = long.slice(0, 200);
+    const target = el({ text: long, attrs: { id: "long-target" }, rect: BOX });
+    const img = el({ tag: "img", attrs: { id: "long-alt" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
+    img.alt = long;
+    const { tree } = run([
+      el({ text: long, attrs: { "id": "same-long", "aria-label": long }, rect: BOX }),
+      el({ text: long, attrs: { id: "plain-long" }, rect: BOX }),
+      target,
+      inputEl({ attrs: { "id": "long-labelledby", "aria-labelledby": "long-target" }, rect: BOX }),
+      inputEl({ placeholder: long, attrs: { id: "long-placeholder" }, rect: BOX }),
+      inputEl({ value: long, attrs: { id: "long-value" }, rect: BOX }),
+      img,
+      el({ attrs: { id: "long-title", title: long }, rect: BOX }),
+    ]);
+    expect(findById(tree, "same-long")).toMatchObject({ label: cut, value: cut });
+    expect(findById(tree, "plain-long")).toMatchObject({ value: cut });
+    expect(findById(tree, "plain-long")?.label).toBeUndefined();
+    for (const id of [
+      "long-labelledby",
+      "long-placeholder",
+      "long-value",
+      "long-alt",
+      "long-title",
+    ]) {
+      expect(findById(tree, id)?.label, id).toBe(cut);
+    }
+  });
+
+  it("reads a textarea's typed text, never its default text, so a cleared one reads no text", () => {
+    const { tree } = run([
+      textareaEl({ text: "Draft", attrs: { id: "cleared" }, rect: BOX }),
+      textareaEl({
+        text: "Draft",
+        value: "Final",
+        placeholder: "Notes",
+        attrs: { id: "edited" },
+        rect: BOX,
+      }),
+    ]);
+    const cleared = findById(tree, "cleared")!;
+    expect([cleared.label, cleared.value]).toEqual([undefined, undefined]);
+    expect(findById(tree, "edited")).toMatchObject({ label: "Notes", value: "Final" });
+    expect(JSON.stringify(tree)).not.toContain("Draft");
+  });
+
+  it("reads a checkbox, radio, range or color input's value and an img's alt before its title", () => {
+    const img = el({ tag: "img", attrs: { id: "logo", title: "Tip" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
+    img.alt = "Logo";
+    const { tree } = run([
+      inputEl({ type: "checkbox", value: "on", attrs: { id: "cb" }, rect: BOX }),
+      inputEl({ type: "radio", value: "on", attrs: { id: "rd" }, rect: BOX }),
+      inputEl({ type: "range", value: "50", attrs: { id: "rg" }, rect: BOX }),
+      inputEl({ type: "color", value: "#000000", attrs: { id: "col" }, rect: BOX }),
+      img,
+    ]);
+    expect(findById(tree, "cb")).toMatchObject({ label: "on" });
+    expect(findById(tree, "rd")).toMatchObject({ label: "on" });
+    expect(findById(tree, "rg")).toMatchObject({ label: "50" });
+    expect(findById(tree, "col")).toMatchObject({ label: "#000000" });
+    expect(findById(tree, "logo")).toMatchObject({ label: "Logo" });
   });
 
   // ---- input focus (the flow type directive's focus wait reads this) ----
