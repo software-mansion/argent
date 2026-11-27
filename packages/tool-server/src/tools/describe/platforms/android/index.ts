@@ -65,7 +65,8 @@ export async function describeAndroid(
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
       const [{ xml }, size] = await Promise.all([
-        devtools.getHierarchy(),
+        // clearCache: a cached node keeps stale text until its app emits a content-change event.
+        devtools.getHierarchy({ clearCache: true }),
         devtools.getScreenSize(),
       ]);
       const capture = (x: string): Capture => ({
@@ -74,7 +75,7 @@ export async function describeAndroid(
       });
       const read = await awaitWebViewPublished(
         capture(xml),
-        async () => capture((await devtools.getHierarchy()).xml),
+        async () => capture((await devtools.getHierarchy({ clearCache: true })).xml),
         size,
         readTab
       );
