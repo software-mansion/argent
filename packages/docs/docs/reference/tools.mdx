@@ -344,6 +344,8 @@ The audio tool needs an iOS simulator on the same Mac as the tool-server or on A
 - The simulator must be booted. For a shut-down or unknown simulator, `audio-input` fails with `AUDIO_SIMULATOR_NOT_BOOTED`. Boot it with `boot-device` first.
 - Without `libArgentAudio.dylib` in the install, `audio-input` fails with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
 
+On Android 10 or later, `keyboard` and `button` take an optional `displayId` to send their input to a secondary display, such as a scrcpy virtual display. List the ids with `adb shell dumpsys display`. Argent passes the id as `adb shell input -d <id>`. Without it, Android sends key events to the focused display. Taps, swipes, screenshots, and `describe` still use the default display. On an older Android version, a call with `displayId` fails and sends nothing. `keyboard` on Android TV and other platforms ignore `displayId`.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                                                                                                        |

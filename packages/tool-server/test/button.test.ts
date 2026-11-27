@@ -104,7 +104,12 @@ describe("button tool — per-platform validation", () => {
       buttonTool.execute(services, { udid: androidUdid, button: "back" })
     ).resolves.toEqual({ pressed: "back" });
     // Routed to adb (not the HID sim-server path) so a stripped AVD can't drop it.
-    expect(injectAndroidKeycode).toHaveBeenCalledWith(androidUdid, ANDROID_BUTTON_KEYCODES.back);
+    // No `displayId` given, so none is passed on: the default routing is unchanged.
+    expect(injectAndroidKeycode).toHaveBeenCalledWith(
+      androidUdid,
+      ANDROID_BUTTON_KEYCODES.back,
+      undefined
+    );
     // adb is preflighted so a missing binary fails with a 424 install hint
     // rather than a generic 500 from deeper in the adb path.
     expect(ensureDep).toHaveBeenCalledWith("adb");
@@ -130,11 +135,35 @@ describe("button tool — per-platform validation", () => {
       });
       expect(injectAndroidKeycode).toHaveBeenCalledWith(
         androidUdid,
-        ANDROID_BUTTON_KEYCODES[button]
+        ANDROID_BUTTON_KEYCODES[button],
+        undefined
       );
       // Every Android button goes over adb only — never the sim-server HID path.
       expect(sendCommand).not.toHaveBeenCalled();
     }
+  });
+
+  it("passes `displayId` through to the Android keycode injection", async () => {
+    vi.mocked(injectAndroidKeycode).mockClear();
+    await expect(
+      buttonTool.execute(services, { udid: androidUdid, button: "back", displayId: 117 })
+    ).resolves.toEqual({ pressed: "back" });
+    expect(injectAndroidKeycode).toHaveBeenCalledWith(
+      androidUdid,
+      ANDROID_BUTTON_KEYCODES.back,
+      117
+    );
+  });
+
+  it("accepts a non-negative integer `displayId` and nothing else", () => {
+    const parse = (displayId: unknown) =>
+      buttonTool.zodSchema!.safeParse({ udid: androidUdid, button: "back", displayId }).success;
+    expect(parse(0)).toBe(true);
+    expect(parse(117)).toBe(true);
+    expect(parse(undefined)).toBe(true);
+    expect(parse(-1)).toBe(false);
+    expect(parse(1.5)).toBe(false);
+    expect(parse("117")).toBe(false);
   });
 
   it("preflights adb before injecting so a missing binary surfaces as 424, not 500", async () => {

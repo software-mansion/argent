@@ -3,6 +3,7 @@ import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
+import { androidDisplayIdSchema } from "../../utils/android-input";
 import {
   SECRET_PLACEHOLDER_MARKER,
   redactSecretsFromError,
@@ -73,6 +74,7 @@ const zodSchema = z.object({
     .describe(
       "Delay in ms between key presses (default 50). Ignored on Android phones/tablets, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega, Apple TV / Android TV and physical iOS, which type the whole string in one shot or at their own cadence."
     ),
+  displayId: androidDisplayIdSchema,
 });
 
 type Params = z.infer<typeof zodSchema>;
