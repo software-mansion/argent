@@ -445,6 +445,17 @@ const CASES = {
       target: "../shared/seed.mjs",
     },
   ],
+  "output-check": [
+    {
+      // Spelled `assert:` in the file, so the summary says so.
+      step: {
+        kind: "output-check",
+        check: { path: "user.role", test: "equals", expected: "admin" },
+      },
+      summary: '1. assert: output user.role equals "admin"',
+      target: 'output user.role equals "admin"',
+    },
+  ],
 } satisfies CaseTable;
 
 const CASE_LIST: [string, Case][] = Object.entries(CASES).flatMap(([kind, cases]) =>

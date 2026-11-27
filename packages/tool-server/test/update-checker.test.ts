@@ -55,6 +55,7 @@ describe("update-checker", () => {
     vi.setSystemTime(NOW);
     vi.resetModules();
     vi.clearAllMocks();
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", undefined);
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
@@ -71,6 +72,7 @@ describe("update-checker", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("detects an available, installable update on startup", async () => {
@@ -360,6 +362,22 @@ describe("update-checker", () => {
 
     handle1.dispose();
     handle2.dispose();
+  });
+
+  it("never queries the registry or updates automatically when ARGENT_DISABLE_UPDATE_CHECK is set", async () => {
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", "1");
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    mockGetConfigValueByKey.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24 * 2);
+
+    expect(mockFetchRegistryInfo).not.toHaveBeenCalled();
+    expect(getUpdateState().updateInstallable).toBe(false);
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+
+    handle.dispose();
   });
 });
 

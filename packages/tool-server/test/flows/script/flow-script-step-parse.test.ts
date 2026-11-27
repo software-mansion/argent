@@ -68,12 +68,6 @@ describe("script step rejections", () => {
     );
   });
 
-  it("refuses `env`, whose release has not landed", () => {
-    expect(() => step("{ path: seed.mjs, env: { TOKEN: abc } }")).toThrow(
-      /script has unknown key `env`/
-    );
-  });
-
   it("refuses a missing, empty or non-string path", () => {
     for (const body of [
       "{ timeout: 1000 }",
@@ -142,7 +136,9 @@ describe("script step rejections", () => {
 
   it("refuses a body that is not a map", () => {
     for (const body of ["", "[seed.mjs]", "42"]) {
-      expect(() => step(body), body).toThrow(/script needs \{ path, timeout\? \}|takes a map/);
+      expect(() => step(body), body).toThrow(
+        /script needs \{ path, timeout\?, env\? \}|takes a map/
+      );
     }
   });
 });

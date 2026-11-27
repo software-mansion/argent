@@ -86,33 +86,29 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id), shared across all steps."
-    ),
+  udid: z.string().describe("Target device id from `list-devices`, shared across all steps."),
   steps: z
     .array(
       z.object({
-        tool: z.string().describe("Tool name: one of the allowed tools listed in the description."),
+        tool: z.string().describe("Allowed tool name (see description)."),
         args: z
           .record(z.string(), z.unknown())
-          .describe("Tool arguments (excluding udid, which is injected automatically)"),
+          .describe("Tool arguments (omit `udid`, injected automatically)."),
         delayMs: z
           .number()
           .optional()
           .describe(
-            `Wait time in ms after this step (and after the settle wait) before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
+            `Extra pause in ms after step settle (default ${DEFAULT_INTER_STEP_DELAY_MS}).`
           ),
       })
     )
     .min(1)
-    .describe("Ordered list of interaction steps to execute sequentially"),
+    .describe("Ordered steps to execute."),
   settle: z
     .boolean()
     .optional()
     .describe(
-      `Wait up to ${SETTLE_TIMEOUT_MS}ms after a screen-changing step for the element tree to settle before the next step. Default true; set false on a screen that never stops changing.`
+      `Wait up to ${SETTLE_TIMEOUT_MS}ms for tree settle between screen-changing steps (default true).`
     ),
 });
 
@@ -170,29 +166,26 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Run several device interaction steps in one call.
-Use when every step is known in advance (e.g. several scrolls, or typing then enter). If a step depends on what an earlier one shows, make separate calls.
-Steps run in order. After a step that can change the screen, the next one waits up to 1000ms for the element tree to settle (see \`settle\`); keep an await-ui-element before a step that needs the new screen.
-If a step fails (an error, a tool not allowed or not supported on the target, or a wait step that returns success=false), the sequence stops there. Returns { completed, total, steps } with a result or error for each step that ran.
-One screenshot and element tree are captured after the last step, not per step. A \`{{secret:...}}\` in any step skips that capture, so type and submit a secret in one sequence.
+    description: `Run multiple interaction steps in one call, with one screenshot + tree captured after the last step.
+Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Stops at the first error or unmet wait (\`success=false\`) and returns \`{ completed, total, steps }\` normally; compare \`completed\` with \`total\` to check for partial failure. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
 
-Allowed tools, args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles in degrees, durations in ms.
-  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right", modifiers? ["control"|"option"|"shift"|"command"] (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: x, y, deltaX?, deltaY? (positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+Allowed tools (coords are [0,1] screen fractions; ? = optional):
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button?, modifiers?</flag:macos-apps>
+  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?
+  gesture-scroll: x, y, deltaX?, deltaY?, durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?  [ios/android]
-  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
-  button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
-  keyboard: text? or key? (one per step, e.g. key "enter"), delayMs?; text may hold {{secret:<NAME>}} placeholders, resolved server-side  [all; Apple TV/Android TV: text only]
-  paste: text (only where a user would paste, e.g. an OTP)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
-  rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
-  shake: count?  [ios sim/android emu]
-  fold: posture? "closed"|"half-open"|"open" or angle? 0–180 (later steps land on the new panel)  [foldable ios sim/android emu]
-  tv-remote: button (one, or an array run as a path), repeat?  [apple tv/android tv/vega]
-  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?  [all]
-  await-network-request: bundleId, url, plus the standalone tool's optional args. Call network-capture-start before the sequence.  [ios sim/android/chromium<flag:macos-apps>/macos</flag:macos-apps>]`,
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?
+  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?
+  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX+radiusY), durationMs?
+  button: button ("home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton")<flag:harmonyos>  [harmony: home/back/power]</flag:harmonyos>
+  keyboard: text? or key? (one per step), repeat?, delayMs?
+  paste: text (real paste flows only)
+  rotate: orientation ("Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown")
+  shake: count?
+  fold: posture? ("closed"|"half-open"|"open") or angle? (0–180)
+  tv-remote: button (string or string[]), repeat?
+  await-ui-element: condition ("exists"|"visible"|"hidden"|"text"), selector, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?
+  await-network-request: bundleId, url, plus optional args (start capture first)`,
     zodSchema,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",

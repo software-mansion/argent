@@ -168,4 +168,29 @@ describe("describe native adapter", () => {
     expect(result.children[0]?.role).toBe("AXButton");
     expect(result.children[0]?.children).toEqual([]);
   });
+
+  it("omits iOS scroll bar indicators when formatting native-devtools trees while keeping real sliders", () => {
+    const base = {
+      frame: { x: 0, y: 0, width: 10, height: 100 },
+      tapPoint: { x: 5, y: 50 },
+      normalizedFrame: { x: 0.95, y: 0.1, width: 0.02, height: 0.5 },
+      normalizedTapPoint: { x: 0.96, y: 0.35 },
+      traits: ["adjustable"],
+    };
+    const root = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [
+        { ...base, label: "Vertical scroll bar, 4 pages", value: "0%" },
+        { ...base, label: "Horizontal scroll bar, 1 page", value: "0%" },
+        { ...base, label: "Brightness", value: "50%" },
+      ],
+    } satisfies NativeDescribeScreenResult);
+
+    // Preserved in DescribeNode.children so empty-tree checks still see a non-empty screen.
+    expect(root.children).toHaveLength(3);
+
+    const rendered = formatDescribeTree(root, { source: "native-devtools" });
+    expect(rendered).not.toContain("scroll bar");
+    expect(rendered).toContain('AXAdjustable "Brightness" value="50%"');
+  });
 });

@@ -134,13 +134,9 @@ async function tapHarmony(
 }
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
-    ),
-  x: z.number().min(0).max(1).describe("Horizontal position: 0 = left edge, 1 = right edge."),
-  y: z.number().min(0).max(1).describe("Vertical position: 0 = top edge, 1 = bottom edge."),
+  udid: z.string().describe("Target device id from `list-devices`."),
+  x: z.number().min(0).max(1).describe("Horizontal screen fraction [0,1]."),
+  y: z.number().min(0).max(1).describe("Vertical screen fraction [0,1]."),
   clickCount: z
     .number()
     .int()
@@ -148,26 +144,18 @@ const zodSchema = z.object({
     .max(10)
     .optional()
     .describe(
-      "Number of taps/clicks dispatched as ONE gesture inside the OS double-tap window (2 = double-tap / " +
-        "double-click), which two separate tap calls cannot guarantee. On physical iOS, higher counts " +
-        "loop single taps, which a double-tap recognizer may pair.<flag:harmonyos> On HarmonyOS they " +
-        "land as separate taps.</flag:harmonyos> Default 1."
+      "Tap/click count as one OS gesture (2 = double-tap; default 1). On physical iOS, higher counts loop single taps, which a double-tap recognizer may pair."
     ),
   button: z
     .enum(["left", "right"])
     .optional()
-    .describe(
-      'Mouse button, Mac app only: "right" is a right-click, for example to open a context menu; ' +
-        'any other device refuses it. Default "left".'
-    )
+    .describe('Mac app only: mouse button ("left" default, or "right").')
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
   modifiers: z
     .array(z.enum(MACOS_MODIFIERS))
     .max(MACOS_MODIFIERS.length)
     .optional()
-    .describe(
-      "Keys held throughout a click or multi-click gesture. Mac apps only. An empty list leaves the click unmodified."
-    )
+    .describe("Mac app only: modifier keys held during click.")
     .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
 });
 
@@ -175,11 +163,8 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.
-If a modifier click returns \`MACOS_APP_LIBRARY_OUTDATED\`, the tool stopped before clicking. Run \`restart-app\` to reload the library, then retry. If the error persists, use an Argent build with modifier-click support.</flag:macos-apps>
-Use when tapping a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
-Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
+  description: `Press (tap, or click on Chromium<flag:macos-apps>/Mac</flag:macos-apps>) at normalized [0,1] coordinates taken from \`describe\`.
+Use when tapping a button, link, or control. Returns { tapped: true, timestampMs, reactivated?, warning? } (on physical iOS, \`reactivated: true\` means re-fronted; re-describe). Fails if the device backend is unreachable.`,
   zodSchema,
   alwaysLoad: true,
   // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
