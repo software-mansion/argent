@@ -12,6 +12,7 @@ describe("precedesLeadingLaunch", () => {
   const CAN_PRECEDE_A_LEADING_LAUNCH: Record<FlowStep["kind"], boolean> = {
     "echo": true,
     "script": true,
+    "output-check": true,
     "launch": false,
     "run": false,
     "when": false,
@@ -51,6 +52,7 @@ describe("precedesLeadingLaunch", () => {
     "rotate": { kind: "rotate", by: 90 },
     "fold": { kind: "fold", posture: "open" },
     "snapshot": { kind: "snapshot", name: "s" },
+    "output-check": { kind: "output-check", check: { path: "a", test: "exists", expected: true } },
   };
 
   it("classifies every step kind", () => {

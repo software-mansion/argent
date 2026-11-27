@@ -168,6 +168,28 @@ export interface InvokeToolOptions {
   flowSecret?: { typed?: boolean };
   /** The caller's session from the header `x-argent-session`. Absent for a caller without one. */
   session?: string;
+  /**
+   * Internal: the output document of a recording, which the recorder shares
+   * with an e2e test it runs to record as a `run:` step, so the scripts of
+   * that test read and set it as a replay's would. Only the call that sets it
+   * carries it: a sub-tool call never passes it on. The run leaves `doc` as
+   * its steps left it, since a replay runs that test's `shutdown:` at its own
+   * end, and puts the document after its shutdown in `shutdownDoc`. With
+   * `deferShutdown`, the run does not run its queued `shutdown:` blocks: it
+   * sets `deferredShutdown`, which runs them later, in the call it is given,
+   * against the document it is given, and appends their step reports to
+   * `reports`, numbered on from those already there.
+   */
+  flowOutput?: {
+    doc: Record<string, unknown>;
+    shutdownDoc?: Record<string, unknown>;
+    deferShutdown?: boolean;
+    deferredShutdown?: (
+      ctx: ToolContext | undefined,
+      output: { doc: Record<string, unknown> },
+      reports: object[]
+    ) => Promise<void>;
+  };
 }
 
 /**
