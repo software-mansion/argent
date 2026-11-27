@@ -226,6 +226,7 @@ export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   foldableCache.clear();
   deviceTypeFoldableCache.clear();
   deviceTypeBundlePaths = null;
+  deviceTypeReread = null;
 }
 
 // ─── Foldable simulators ───────────────────────────────────────────────
@@ -234,9 +235,11 @@ export function __resetSimulatorRuntimeKindCacheForTesting(): void {
  * Whether a device type is foldable, memoized by identifier: the profile is
  * static for the selected Xcode, and `list-devices` is called often.
  */
-const deviceTypeFoldableCache = new Map<string, boolean>();
+const deviceTypeFoldableCache = new Map<string, Promise<boolean>>();
 /** Device-type identifier → `.simdevicetype` bundle path, from `simctl list devicetypes`. */
 let deviceTypeBundlePaths: Promise<Map<string, string>> | null = null;
+/** The re-read under way for identifiers the listing did not know. */
+let deviceTypeReread: Promise<Map<string, string>> | null = null;
 /** Per-UDID verdict, filled by every listing and by {@link isFoldableSimulator}. */
 const foldableCache = new Map<string, boolean>();
 
@@ -266,14 +269,21 @@ async function listDeviceTypeBundlePaths(): Promise<Map<string, string>> {
  * The bundle path of a device type. The listing is memoized for the process,
  * and re-read once for an identifier it does not know — a device type added
  * by an Xcode switch since the first listing — before that type is given up on.
+ * Identifiers that miss while a re-read is under way share it.
  */
 async function deviceTypeBundlePath(identifier: string): Promise<string | undefined> {
   deviceTypeBundlePaths ??= listDeviceTypeBundlePaths();
-  let paths = await deviceTypeBundlePaths;
+  const paths = await deviceTypeBundlePaths;
   if (paths.has(identifier)) return paths.get(identifier);
-  deviceTypeBundlePaths = listDeviceTypeBundlePaths();
-  paths = await deviceTypeBundlePaths;
-  return paths.get(identifier);
+  if (!deviceTypeReread) {
+    const reread = listDeviceTypeBundlePaths();
+    deviceTypeReread = reread;
+    deviceTypeBundlePaths = reread;
+    void reread.finally(() => {
+      if (deviceTypeReread === reread) deviceTypeReread = null;
+    });
+  }
+  return (await deviceTypeReread).get(identifier);
 }
 
 /**
@@ -302,15 +312,32 @@ async function countIntegratedDisplays(bundlePath: string): Promise<number> {
  * Whether a device type is foldable: its profile lists more than one
  * integrated display. False for any type whose profile cannot be read, so an
  * unreadable profile degrades to the single-panel behaviour every device had
- * before there were foldables.
+ * before there were foldables. Asked once per type: callers that ask while
+ * the answer is on its way wait for the same one.
  */
-export async function isFoldableDeviceType(identifier: string): Promise<boolean> {
-  const cached = deviceTypeFoldableCache.get(identifier);
-  if (cached !== undefined) return cached;
-  const bundlePath = await deviceTypeBundlePath(identifier);
-  const foldable = bundlePath ? (await countIntegratedDisplays(bundlePath)) > 1 : false;
-  deviceTypeFoldableCache.set(identifier, foldable);
+export function isFoldableDeviceType(identifier: string): Promise<boolean> {
+  let foldable = deviceTypeFoldableCache.get(identifier);
+  if (!foldable) {
+    foldable = deviceTypeBundlePath(identifier).then(async (bundlePath) =>
+      bundlePath ? (await countIntegratedDisplays(bundlePath)) > 1 : false
+    );
+    deviceTypeFoldableCache.set(identifier, foldable);
+  }
   return foldable;
+}
+
+/**
+ * The device types known to be foldable, for a remote simulator. Its profile
+ * is on the runner, and the runner's listing does not say whether the type is
+ * foldable. This machine's Xcode may not know the type, or not be there at all.
+ */
+export const KNOWN_FOLDABLE_DEVICE_TYPES: ReadonlySet<string> = new Set([
+  "com.apple.CoreSimulator.SimDeviceType.iPhone-Duo",
+]);
+
+/** Whether a remote simulator of this device type is foldable, as far as this machine can tell. */
+export async function isRemoteFoldableDeviceType(identifier: string): Promise<boolean> {
+  return KNOWN_FOLDABLE_DEVICE_TYPES.has(identifier) || (await isFoldableDeviceType(identifier));
 }
 
 /**

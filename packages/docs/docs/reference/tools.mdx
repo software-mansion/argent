@@ -151,6 +151,12 @@ To move a full-screen app into Split View on an open iPhone Duo simulator, use o
 5. Keep y = 0.5. Send `Up` at the same point after 200 ms.
 6. Check that the app occupies the requested half and the Home Screen occupies the other half.
 
+On a remote iOS simulator:
+
+- The machine that hosts the simulator folds it and moves the input, the stream and a recording to the active panel.
+- The `fold` result does not give the size of the panel.
+- A fold made outside Argent must go through `sim-remote fold`.
+
 On an Android emulator:
 
 - The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.

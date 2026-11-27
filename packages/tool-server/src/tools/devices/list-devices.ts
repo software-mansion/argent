@@ -12,6 +12,8 @@ import {
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
+  isFoldableDeviceType,
+  KNOWN_FOLDABLE_DEVICE_TYPES,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -78,6 +80,8 @@ type IosRemoteDevice = {
   state: string;
   runtime: string;
   runtimeKind?: "mobile" | "tv";
+  /** Present, and true, for a foldable simulator. */
+  foldable?: true;
 };
 
 type AndroidDevice = {
@@ -292,6 +296,35 @@ function readinessRank(d: ListedDevice): number {
   return d.state === "Booted" ? 0 : 1; // ios + ios-remote
 }
 
+// Asking this machine's Xcode about a device type takes seconds on a cold
+// cache. The listing does not wait longer than this for all of them: a type
+// still unanswered counts as not foldable this time, and its answer is cached
+// for the next listing.
+const REMOTE_FOLDABLE_LOOKUP_MS = 5_000;
+// What the lookup leaves of the branch's deadline, so that a listing that
+// came late is still handed back.
+const REMOTE_LISTING_MARGIN_MS = 2_000;
+
+/** The foldable ones among `deviceTypes`, as far as `budgetMs` tells. */
+async function remoteFoldableTypes(
+  deviceTypes: Set<string>,
+  budgetMs: number
+): Promise<Set<string>> {
+  const foldable = new Set<string>();
+  const asked: Promise<void>[] = [];
+  for (const type of deviceTypes) {
+    if (KNOWN_FOLDABLE_DEVICE_TYPES.has(type)) foldable.add(type);
+    else asked.push(isFoldableDeviceType(type).then((is) => void (is && foldable.add(type))));
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const gaveUp = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, budgetMs);
+  });
+  await Promise.race([Promise.allSettled(asked), gaveUp]);
+  clearTimeout(timer);
+  return new Set(foldable);
+}
+
 /**
  * Remote iOS simulators via `sim-remote`, with the CLI's state. A missing CLI or
  * a logged-out session lists nothing and is reported through a note, not as an
@@ -302,24 +335,37 @@ async function listRemoteIosSimulators(): Promise<{
   cloud: CloudState;
 }> {
   try {
+    const started = Date.now();
     const result = await simctlListDevices();
-    const out: IosRemoteDevice[] = [];
-    for (const [runtime, devices] of Object.entries(result.devices)) {
+    const listed = Object.entries(result.devices).flatMap(([runtime, devices]) => {
       const runtimeKind = simulatorRuntimeKind(runtime);
-      if (!runtimeKind) continue;
-      for (const d of devices) {
-        if (d.isAvailable === false) continue;
-        out.push({
-          platform: "ios-remote",
-          kind: "simulator",
-          udid: withRemotePrefix(d.udid),
-          name: d.name,
-          state: d.state,
-          runtime,
-          runtimeKind,
-        });
-      }
-    }
+      if (!runtimeKind) return [];
+      return devices
+        .filter((d) => d.isAvailable !== false)
+        .map((d) => ({ runtime, runtimeKind, d }));
+    });
+    const mobileTypes = new Set(
+      listed.flatMap(({ runtimeKind, d }) =>
+        runtimeKind === "mobile" && d.deviceTypeIdentifier ? [d.deviceTypeIdentifier] : []
+      )
+    );
+    const left = BRANCH_DEADLINE_MS - REMOTE_LISTING_MARGIN_MS - (Date.now() - started);
+    const foldableTypes = await remoteFoldableTypes(
+      mobileTypes,
+      Math.max(0, Math.min(REMOTE_FOLDABLE_LOOKUP_MS, left))
+    );
+    const out: IosRemoteDevice[] = listed.map(({ runtime, runtimeKind, d }) => ({
+      platform: "ios-remote",
+      kind: "simulator",
+      udid: withRemotePrefix(d.udid),
+      name: d.name,
+      state: d.state,
+      runtime,
+      runtimeKind,
+      ...(runtimeKind === "mobile" && foldableTypes.has(d.deviceTypeIdentifier ?? "")
+        ? { foldable: true as const }
+        : {}),
+    }));
     return { devices: out, cloud: "logged-in" };
   } catch (err) {
     if ((simRemoteExecError(err) as { code?: unknown }).code === "ENOENT") {

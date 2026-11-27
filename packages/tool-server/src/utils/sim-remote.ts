@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,6 +25,8 @@ export function simRemoteExecError(err: unknown): { killed?: boolean } {
 interface SimRemoteOptions {
   timeoutMs?: number;
   stdin?: string;
+  /** Kills the CLI when it aborts. */
+  signal?: AbortSignal;
 }
 
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
@@ -33,6 +36,7 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
       input: options?.stdin,
+      signal: options?.signal,
     } as Parameters<typeof execFileAsync>[2]);
     return { stdout: typeof stdout === "string" ? stdout : stdout.toString("utf8") };
   } catch (err) {
@@ -62,6 +66,7 @@ interface SimRemoteListDevicesResult {
 
 export async function simctlListDevices(options?: {
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<SimRemoteListDevicesResult> {
   const { stdout } = await run(["simctl", "list", "devices", "--json"], options);
   try {
@@ -362,6 +367,44 @@ export async function screenRecordFetch(
     ],
     { timeoutMs: RECORDING_DOWNLOAD_TIMEOUT_MS }
   );
+}
+
+/** What `sim-remote fold --json` prints. */
+const remoteFoldSchema = z.object({
+  /** The angle the hinge was moved to, in degrees. */
+  hinge_angle: z.number(),
+  /** Screen id of the panel the device renders to; null when the runner could not tell. */
+  live_screen: z.number().nullable(),
+  warning: z.string().optional(),
+});
+export type RemoteFold = z.infer<typeof remoteFoldSchema>;
+
+// The first sweep after a simulator-server starts can take it 30 s to begin,
+// and the runner then waits for the device to hand over to the other panel.
+const FOLD_TIMEOUT_MS = 60_000;
+
+/**
+ * Fold a remote foldable to `target`: a posture, or an angle in degrees.
+ * `signal` stops the wait for the CLI; a fold the runner has begun is still
+ * carried through there.
+ */
+export async function fold(
+  udid: string,
+  target: string,
+  signal?: AbortSignal
+): Promise<RemoteFold> {
+  const args = ["fold", stripRemotePrefix(udid), target, "--json"];
+  const { stdout } = await run(args, { timeoutMs: FOLD_TIMEOUT_MS, signal });
+  try {
+    return remoteFoldSchema.parse(JSON.parse(stdout));
+  } catch (err) {
+    throw new Error(
+      `sim-remote fold printed something other than a fold: ${(err as Error).message}`,
+      {
+        cause: err,
+      }
+    );
+  }
 }
 
 export interface MoqInfo {
