@@ -8,6 +8,8 @@ export interface KeyboardParams {
   key?: string;
   /** Clear the focused field before typing `text` (or alone). Rejected alongside `key` in ./index.ts. */
   clear?: boolean;
+  /** Number of times to press `key` (1–100, default 1). Rejected without `key` in ./index.ts. */
+  repeat?: number;
   delayMs?: number;
 }
 

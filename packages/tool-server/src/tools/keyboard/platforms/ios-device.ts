@@ -76,9 +76,7 @@ export function makeIosDeviceImpl(
       let reactivated = false;
 
       if (params.clear) {
-        // fillByDeviceKeys sends 100 XCTest deletes before the caret with no
-        // forward delete or readback verification, so `cleared` is intentionally
-        // omitted on physical iOS — the caller should read the field before trusting it.
+        // No `cleared` here: 100 deletes before the caret and nothing reads the field back.
         const cleared = await fillByDeviceKeys(registry, device, "");
         reactivated ||= cleared.reactivated;
         if (!params.text) {
@@ -101,16 +99,22 @@ export function makeIosDeviceImpl(
         keys += params.text.length;
       }
 
+      const count = params.repeat ?? 1;
+
       if (key === "enter") {
-        const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
-        reactivated ||= pressed.reactivated;
-        keys += 1;
+        for (let i = 0; i < count; i++) {
+          const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
+          reactivated ||= pressed.reactivated;
+          keys += 1;
+        }
       }
 
       if (key === "backspace") {
-        const pressed = await mapNotFocused(pressKeyboardDelete(api, bundleId));
-        reactivated ||= pressed.reactivated;
-        keys += 1;
+        for (let i = 0; i < count; i++) {
+          const pressed = await mapNotFocused(pressKeyboardDelete(api, bundleId));
+          reactivated ||= pressed.reactivated;
+          keys += 1;
+        }
       }
 
       return {

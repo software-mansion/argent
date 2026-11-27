@@ -23,8 +23,11 @@ async function runVega(device: DeviceInfo, params: KeyboardParams): Promise<Keyb
     keysPressed += [...params.text].length;
   }
   if (params.key) {
-    await injectVegaNamedKey(params.key);
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    for (let i = 0; i < count; i++) {
+      await injectVegaNamedKey(params.key);
+      keysPressed++;
+    }
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }

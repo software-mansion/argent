@@ -64,22 +64,26 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
         }
       );
     }
-    await api.dispatchKeyEvent({
-      type: "keyDown",
-      // Chromium needs carriage-return text for Enter's default form submission.
-      ...(named.key === "Enter" ? { text: "\r" } : {}),
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    await sleep(delay);
-    await api.dispatchKeyEvent({
-      type: "keyUp",
-      key: named.key,
-      code: named.code,
-      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
-    });
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    for (let i = 0; i < count; i++) {
+      await api.dispatchKeyEvent({
+        type: "keyDown",
+        // Chromium needs carriage-return text for Enter's default form submission.
+        ...(named.key === "Enter" ? { text: "\r" } : {}),
+        key: named.key,
+        code: named.code,
+        windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+      });
+      await sleep(delay);
+      await api.dispatchKeyEvent({
+        type: "keyUp",
+        key: named.key,
+        code: named.code,
+        windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+      });
+      keysPressed++;
+      if (i < count - 1) await sleep(delay);
+    }
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };

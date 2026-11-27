@@ -115,8 +115,11 @@ async function typeHarmony(
         keysPressed += [...params.text].length;
       }
       if (keycode !== null) {
-        await ui.keyEvent(String(keycode));
-        keysPressed++;
+        const count = params.repeat ?? 1;
+        for (let i = 0; i < count; i++) {
+          await ui.keyEvent(String(keycode));
+          keysPressed++;
+        }
       }
     },
     signal

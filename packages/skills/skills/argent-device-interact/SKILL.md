@@ -1,103 +1,30 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or iPhone, Android emulator or phone, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Drive iOS, Android, or Chromium apps with Argent MCP tools. Use when tapping, swiping, typing, launching apps, waiting for UI, or taking screenshots (not for TV targets).
 ---
 
-Each tool's own description carries its parameters, defaults, return shape and examples. This skill covers choosing between tools and the gotchas those descriptions don't state.
+Each tool's description carries its parameters, defaults, and return shape. This skill covers routing and gotchas those descriptions don't state.
 
-## 1. Before You Start
+## Target Routing
 
-- Get a target id from `list-devices`; if none is ready, `boot-device` one. Full setup flow: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`. The same tool names drive iOS, Android and Chromium; each takes the `udid` from `list-devices`.
-- Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. Only the tools it lists exist there, and `describe` sees only the app `launch-app` registered.
-- Mac app (`platform: "macos"`): read `argent-macos-app-interact` first.
-- Read the matching reference before driving these targets: `references/chromium.md` for a `chromium` target, `references/harmonyos.md` for a `harmony` target, `references/foldables.md` for a device `list-devices` marks `foldable: true` (or before calling `fold`).
-- Load a deferred tool's schema with ToolSearch before its first call (e.g. `gesture-pinch`, `gesture-rotate`, `gesture-custom`); without it, numbers go out as strings and fail validation.
-- If you delegate device tasks to sub-agents, make sure they have MCP permissions.
+- Get a `udid` from `list-devices` (or `boot-device` if none is ready). Full setup: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`.
+- Before driving a specialized target, read the matching instructions below:
+  - Physical iPhone (`kind: "device"`): `argent-ios-device-setup` and `argent-ios-device-interact`
+  - Mac app (`platform: "macos"`): `argent-macos-app-interact`
+  - TV (`runtimeKind: "tv"` or `platform: "vega"`): `argent-tv-interact`
+  - Chromium / HarmonyOS / foldables (`foldable: true`): `references/chromium.md`, `references/harmonyos.md`, `references/foldables.md`
+- Load any deferred tool's schema (e.g. `gesture-custom`, `gesture-pinch`, `gesture-rotate`) before its first call so numbers don't serialize as strings.
+- If delegating device tasks to sub-agents, ensure they have MCP permissions.
 
-## 2. Choosing the Right Tool
+## Core Rules
 
-| Action                         | Tool                 | Notes                                                          |
-| ------------------------------ | -------------------- | -------------------------------------------------------------- |
-| Several known steps            | `run-sequence`       | One call, one screenshot at the end (§5)                       |
-| Open an app                    | `launch-app`         | **Never tap home-screen icons**                                |
-| Restart an app                 | `restart-app`        | Clean in-memory state                                          |
-| Open URL / deep link           | `open-url`           | Web pages, deep links, URL schemes                             |
-| Tap                            | `gesture-tap`        | Buttons, links, checkboxes                                     |
-| Scroll / swipe                 | `gesture-swipe`      | Touch targets; not Chromium                                    |
-| Scroll (Chromium)              | `gesture-scroll`     | Mouse wheel                                                    |
-| Drag (Chromium)                | `gesture-drag`       | Sliders, drag-and-drop, text selection                         |
-| Long press, drag & drop        | `gesture-custom`     | Also any other non-linear touch sequence                       |
-| Pinch / zoom                   | `gesture-pinch`      |                                                                |
-| Two-finger rotation            | `gesture-rotate`     |                                                                |
-| Hardware key                   | `button`             | Home, back, power, volume, appSwitch, actionButton             |
-| Type text or press a named key | `keyboard`           | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`              | Only where a user would paste (§6). Sim/emu, Mac app           |
-| Rotate device                  | `rotate`             | Orientation changes                                            |
-| Fold device                    | `fold`               | Foldables only: `references/foldables.md`                      |
-| Shake device                   | `shake`              | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
-| Slow or offline network        | `network-conditions` | iOS simulator app, Android emulator, or Chromium tab           |
-| Wait for UI                    | `await-ui-element`   | Block until an element is visible/hidden/exists/contains text  |
-| Wait for idle                  | `await-screen-idle`  | Block until a non-empty tree holds for `minStableMs` (§4)      |
+- **Open apps directly:** use `launch-app` or `open-url`, never tap home-screen icons. Use `restart-app` for clean in-memory state.
+- **Use the returned element tree:** interaction tools already attach a downscaled screenshot and `--- Elements after action (describe) ---` with normalized `[0,1]` tap frames. Call `describe` only when no fresh tree covers the current screen. Never derive routine tap coordinates from pixels.
+- **Tree & screenshot IDs:** full trees/screenshots carry a `Tree id` / `Screenshot id`. When unchanged or slightly changed, a later result references that id (unchanged note or `-`/`+` diff); call `describe` or `screenshot` if that earlier result isn't in context. An identical tree does not mean the action did nothing.
+- **Batch known steps:** use `run-sequence` when multiple consecutive steps are known ahead of time (scroll sweeps, type + enter, form fill + submit).
+- **Text entry:** tap the field first (`keyboard` with no focus is a silent no-op). `keyboard` takes either `text` or `key`, not both. Keep `keyboard` as default; reserve `paste` for real paste flows (OTP, long tokens). Use `{{secret:<NAME>}}` placeholders for credentials and navigate/submit before capturing non-secure fields.
+- **Wait server-side:** never poll `screenshot` or `describe` in a loop. Use `await-ui-element`, or use `await-screen-idle` before tapping moving UI.
+- **Dialogs:** `describe` exposes simulator/emulator system & permission dialogs; prefer answering the app's dialog over `settings-permissions`.
+- **Screenshots:** keep the default downscaled capture for UI checks; do not pass `scale: 1.0` as a tapping/readability aid.
 
-After a network test, call `network-conditions` with the same target and omit the conditions to reset. On Android, this brings an offline emulator back online. If an Argent crash leaves an emulator's proxy active, reset before retrying.
-
-## 3. Finding Tap Targets
-
-After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each full tree has a `Tree id`, and each full screenshot has a `Screenshot id`. When the tree or screenshot matches an earlier one (or only a few tree lines changed), the result names that id in place of repeating it (an unchanged note, or `-` gone / `+` new lines against it): refer back to the named result, and call `describe` or `screenshot` if it is not in your context. An identical tree does not mean the action did nothing.
-
-| Need                                           | Tool                                                                                                                           |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
-| UIKit properties of a view (iOS simulator)     | `native-find-views` (needs `bundleId` and a class, id, label, tag or `nativeID` to match)                                      |
-| What sits at a known raw point (iOS simulator) | `native-view-at-point` (the visually deepest view; `hitTest: true` for the view that receives touch)                           |
-| Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
-
-If `describe` returns an empty tree, follow its `hint`; with no hint, the screen is blank, loading or unlabeled: check the attached screenshot and retry once content has loaded.
-
-For a React Native testID or component name that `describe` does not show, use `debugger-component-tree`; take tap points from `describe`.
-
-**React Native:** LogBox toasts sit over the bottom of the screen and catch taps meant for what is under them. Argent hides them when a `debugger-*` tool connects and after `debugger-reload-metro`; after `restart-app`, call a `debugger-*` tool again. After any other reload they come back: close each by tapping the right end of its `describe` frame (the X), not its middle.
-
-**System and permission dialogs:** on a simulator or emulator, `describe` returns a visible dialog's buttons with tap coordinates; keep using it for in-app modals too. Fall back to `screenshot` only if it does not expose the controls: then tap one obvious button (`Allow`, `OK`, `Don't Allow`, `Not Now`, `Continue`) at a time, check the returned screenshot, and go back to `describe` once the dialog is gone.
-
-> **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it is the real user path. Use `settings-permissions` only when you can't make the change through the app: set a permission _before_ the app asks, re-enable one the user denied (iOS won't re-prompt), or reset it so the prompt reappears. See `argent-settings-permissions`.
-
-## 4. Waiting: `await-ui-element` and `await-screen-idle`
-
-**Never poll `screenshot`/`describe` in a loop to wait for something.** `await-ui-element` blocks server-side on the same tree `describe` reads. It has no bare-timer mode; for a plain pause, use your own harness sleep. Its description covers conditions, selector matching and defaults. What it does not tell you:
-
-- A `hidden` check that succeeds **immediately** may be a false pass: its `note` then says the selector never matched anything. Treat that as a failed check and fix the selector; it does not mean "the element went away".
-- The synthetic `ROOT` container `describe` prints is never matched, so a `role` like `AXGroup`/`html` won't trivially "match the screen".
-- To disambiguate a loose selector, pin `role` to a text role like `StaticText`; that skips a same-named button.
-
-`await-screen-idle` is for live diagnosis after a launch or navigation, before a raw tap on an element that may still be moving. Continue only when `settled: true`, and pair it with an `await-ui-element` for the destination: stillness does not identify a screen, and the tool can return during a presentation-layer animation. Do not record it in an e2e test; tests use `await: { idle: true }`, which also compares pixels.
-
-## 5. Action Sequencing with `run-sequence`
-
-Use `run-sequence` when every step is known in advance; if a step depends on what the previous one shows, use separate calls. Its description lists the allowed tools and their arguments. Typical batches:
-
-- "scroll to bottom", "scroll until X": 3-5 swipes
-- "clear and retype a field": triple-tap to select all, then type the new value
-- typing then submitting: a `keyboard` text step, then a `keyboard` `enter` step (one call cannot carry both)
-- "submit form": fill every field, then tap submit
-- "go back to X": a known tap path
-
-Use `await-ui-element` to gate a step on a screen transition. To gate on a request, start capture before the sequence and put `await-network-request` after the triggering action. A failed step, including a wait with `success: false`, stops the sequence and returns partial results.
-
-## 6. Text Entry and Secrets
-
-- Tap the field first. Typing or pasting with no focused field is a silent no-op.
-- `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry. Use `paste` only where a real user would paste: a 2FA / OTP code from another app, a long link or token, or testing how the app handles pasted input. That it can carry text `keyboard` can't type on a platform (multi-line text, non-ASCII on Android) is not a reason on its own.
-- **Credentials:** type them as a `{{secret:<NAME>}}` placeholder in `text` (`keyboard`, `paste`, `run-sequence` keyboard steps, e2e `type` steps), never as plaintext, and never ask the user for the value. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret: submit or navigate away first, then verify the resulting screen.
-
-## 7. Screenshots
-
-Interaction tools already attach a screenshot. Call `screenshot` for the initial state, for a baseline before you change visible UI, to check state after a delay, or when the attached capture shows a transitional or loading frame.
-
-Keep the default downscaled capture for UI context and state checks; do not use `scale: 1.0` as a readability or tapping aid. Full resolution is only for saving baseline/current PNGs for comparison (`scale: 1.0` with `includeImageInContext: false`); for visual regression checks use the `argent-screenshot-diff` skill.
-
-If `screenshot` times out, restart the device transport with `stop-simulator-server`.
-
-## 8. Android notes
-
-- **First-launch permission prompts**: `reinstall-app` on Android installs with `-g`, so runtime permissions are pre-granted on first launch.
+Read `references/advanced.md` when you need: the full tool table, `network-conditions` reset, React Native LogBox dismissal, an empty `describe` tree or a `screenshot` timeout, `await-ui-element`/`await-screen-idle` edge cases, `run-sequence` gating, `paste`/secrets rules, or Android `reinstall-app` notes.
