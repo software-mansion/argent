@@ -813,4 +813,135 @@ describe("formatDescribeTree", () => {
     expect(raw).toContain("  List (0,0.1,1,0.2)");
     expect(raw).toContain('      Image "Wikipedia" (0.1,0.12,0.3,0.04)');
   });
+
+  it("uses whole-part matching on AXGroup so enclosing container labels do not drop unrelated child text", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        // Contacts-style full-screen AXGroup "Toolbar" enclosing single-letter section headers
+        leaf({
+          role: "AXGroup",
+          label: "Toolbar",
+          identifier: "Toolbar",
+          frame: { x: 0, y: 0, width: 1, height: 1 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "A",
+          frame: { x: 0.045, y: 0.144, width: 0.025, height: 0.021 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "B",
+          frame: { x: 0.045, y: 0.262, width: 0.024, height: 0.021 },
+        }),
+        // Safari-style web area AXGroup enclosing an infobox title
+        leaf({
+          role: "AXGroup",
+          label: "Statue of Charles Marion Russell - Wikipedia",
+          frame: { x: 0, y: 0.071, width: 1, height: 0.929 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "Charles Marion Russell",
+          frame: { x: 0.256, y: 0.811, width: 0.488, height: 0.027 },
+        }),
+        // Comma-separated AXGroup row still drops its exact comma parts
+        leaf({
+          role: "AXGroup",
+          label: "Wi-Fi, OfficeNet",
+          frame: { x: 0.05, y: 0.5, width: 0.9, height: 0.06 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "OfficeNet",
+          frame: { x: 0.6, y: 0.51, width: 0.2, height: 0.03 },
+        }),
+      ],
+    };
+
+    const lines = elementLines(formatDescribeTree(root, { source: "ax-service" }));
+    expect(lines.some((l) => l.includes('AXStaticText "A"'))).toBe(true);
+    expect(lines.some((l) => l.includes('AXStaticText "B"'))).toBe(true);
+    expect(lines.some((l) => l.includes('AXStaticText "Charles Marion Russell"'))).toBe(true);
+    expect(lines.some((l) => l.includes('AXStaticText "OfficeNet"'))).toBe(false);
+  });
+
+  it("keeps wrappers with selected/disabled/hint state or dialog roles while still pruning bare leaves", () => {
+    const androidRoot: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "ScrollView",
+          focused: true,
+          frame: { x: 0, y: 0, width: 0.417, height: 0.185 },
+          children: [
+            leaf({
+              role: "StaticText",
+              label: "Network",
+              frame: { x: 0, y: 0, width: 0.417, height: 0.093 },
+            }),
+            {
+              role: "FrameLayout",
+              selected: true,
+              frame: { x: 0, y: 0.093, width: 0.417, height: 0.093 },
+              children: [
+                leaf({
+                  role: "StaticText",
+                  label: "Display",
+                  frame: { x: 0, y: 0.093, width: 0.417, height: 0.093 },
+                }),
+              ],
+            },
+            // Empty leaf with only `selected` stays pruned.
+            leaf({
+              role: "FrameLayout",
+              selected: true,
+              frame: { x: 0, y: 0.2, width: 0.1, height: 0.05 },
+            }),
+          ],
+        },
+      ],
+    };
+    const androidOut = formatDescribeTree(androidRoot, { source: "uiautomator" });
+    expect(androidOut).toContain("FrameLayout [selected]");
+    expect(androidOut).not.toContain("(0,0.2,0.1,0.05)");
+
+    const chromiumRoot: DescribeNode = {
+      role: "document",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "fieldset",
+          disabled: true,
+          frame: { x: 0, y: 0.1, width: 0.5, height: 0.1 },
+          children: [
+            leaf({
+              role: "button",
+              value: "Apply coupon",
+              clickable: true,
+              frame: { x: 0.1, y: 0.12, width: 0.2, height: 0.05 },
+            }),
+          ],
+        },
+        {
+          role: "dialog",
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.2 },
+          children: [
+            leaf({
+              role: "button",
+              value: "Delete",
+              clickable: true,
+              frame: { x: 0.12, y: 0.38, width: 0.1, height: 0.03 },
+            }),
+          ],
+        },
+      ],
+    };
+    const chromiumOut = formatDescribeTree(chromiumRoot, { source: "cdp-dom" });
+    expect(chromiumOut).toContain("  fieldset [disabled]");
+    expect(chromiumOut).toContain("  dialog (0.1,0.3,0.8,0.2)");
+  });
 });

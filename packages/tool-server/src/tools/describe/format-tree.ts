@@ -251,7 +251,11 @@ function pruneFlatDuplicates(nodes: DescribeNode[]): DescribeNode[] {
         frameContains(a.frame, b.frame)
       ) {
         const bNorm = normalizeLabel(b.label);
-        if (bNorm && aNorm.includes(bNorm)) {
+        const covered =
+          a.role === "AXGroup"
+            ? bNorm === aNorm || a.label.split(", ").map(normalizeLabel).includes(bNorm)
+            : ` ${aNorm} `.includes(` ${bNorm} `);
+        if (bNorm && covered) {
           drop2.add(j);
         }
       }
@@ -283,6 +287,11 @@ function isRedundantChildImage(parent: DescribeNode, child: DescribeNode): boole
   return normalizeLabel(child.label) === normalizeLabel(parent.label);
 }
 
+// Modal/dialog containers separate foreground controls from the page behind
+// them even without a label; collapsing them would merge modal buttons with
+// background siblings.
+const STRUCTURAL_CONTAINER_ROLES = new Set(["dialog", "alertdialog"]);
+
 function renderNested(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
@@ -302,7 +311,12 @@ function renderNested(
     if (!raw && parent && isRedundantChildImage(parent, node)) {
       continue;
     }
-    const meaningful = shouldEmit(node, contentRoles) || Boolean(node.focused || node.password);
+    const meaningful =
+      shouldEmit(node, contentRoles) ||
+      Boolean(node.focused || node.password) ||
+      (node.children.length > 0 &&
+        (STRUCTURAL_CONTAINER_ROLES.has(node.role) ||
+          Boolean(node.selected || node.disabled || node.hint)));
     const emit = raw ? shouldEmit(node, contentRoles) || node.children.length > 0 : meaningful;
     if (emit) {
       lines.push(formatLine(node, depth, source));

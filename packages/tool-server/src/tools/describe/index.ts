@@ -80,7 +80,7 @@ function makeDescribeExecute(
       handler: async (_services, params, device) =>
         // Probe tvOS once here, then pass the verdict into describeIos.
         (await isTvOsSimulator(device.id))
-          ? describeTv(registry, device)
+          ? describeTv(registry, device, params.raw)
           : withDescription(
               withBootCaveatOncePerDevice(
                 device.id,
@@ -114,7 +114,7 @@ function makeDescribeExecute(
         // Resolve the form factor once and thread the known `isTv: false`
         // through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
-          ? describeTv(registry, device)
+          ? describeTv(registry, device, params.raw)
           : withDescription(
               await describeAndroid(registry, params.udid, params.bundleId, false),
               params.raw

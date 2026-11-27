@@ -439,9 +439,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           content = [...content, { type: "text" as const, text: screenshotIdLine(id) }];
         }
       }
-      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+      if (
+        udid &&
+        autoDescribeOn &&
+        canonicalToolId(params.name) === "describe" &&
+        params.arguments?.raw !== true
+      ) {
         // The agent now has this tree, so the next action's tree is compared
-        // with it. The id lets a later note name it.
+        // with it. The id lets a later note name it. Raw describes are skipped
+        // so the next pruned auto-describe stays diffed against the last pruned
+        // tree instead of emitting spurious removals for pruned lines.
         const tree = describedTree(result);
         if (tree !== undefined) {
           treeUdid = udid;
