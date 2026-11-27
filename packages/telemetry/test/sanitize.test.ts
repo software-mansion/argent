@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
-import { DEBUGGER_TOOL_OUTCOMES, DEVICE_KINDS, EVENT_NAMES, PLATFORMS } from "../src/events.js";
+import {
+  DEBUGGER_TOOL_OUTCOMES,
+  DEVICE_KINDS,
+  EVENT_NAMES,
+  INVALID_PARAM_ISSUES,
+  PLATFORMS,
+} from "../src/events.js";
 
 describe("sanitize", () => {
   describe("event allowlist", () => {
@@ -667,6 +673,26 @@ describe("sanitize", () => {
         invalid_params: ["a".repeat(65)],
       });
       expect("invalid_params" in out).toBe(false);
+    });
+  });
+
+  describe("tool:fail invalid_param_issues validator", () => {
+    const base = { tool: "await-ui-element", duration_ms: 1 };
+
+    it("accepts every value the emit side can send, so no real rejection is voided", () => {
+      const all = [...INVALID_PARAM_ISSUES];
+      expect(all).toContain("missing");
+      const out = sanitize("tool:fail", { ...base, invalid_param_issues: all });
+      expect(out.invalid_param_issues).toEqual(all);
+    });
+
+    it("drops the whole property when a value is outside INVALID_PARAM_ISSUES", () => {
+      const out = sanitize("tool:fail", {
+        ...base,
+        // Identifier-shaped, so only the closed vocabulary rejects it.
+        invalid_param_issues: ["too_big", "password"],
+      });
+      expect("invalid_param_issues" in out).toBe(false);
     });
   });
 

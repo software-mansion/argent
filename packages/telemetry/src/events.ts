@@ -199,7 +199,36 @@ interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
    * from Argent's own schemas only — never values, never user-typed keys.
    */
   invalid_params?: string[];
+  /**
+   * The rejection's zod issue codes, deduped across the call, with "missing"
+   * for a required field the call left out, at any depth (a custom rule on it
+   * keeps "custom"). Tells e.g. `too_big` from `invalid_type`, which
+   * `invalid_params` cannot.
+   */
+  invalid_param_issues?: InvalidParamIssue[];
 }
+
+/** Zod 4's issue codes: a closed vocabulary, so nothing user-typed reaches telemetry. */
+const ZOD_ISSUE_CODES = [
+  "invalid_type",
+  "too_big",
+  "too_small",
+  "invalid_format",
+  "not_multiple_of",
+  "unrecognized_keys",
+  "invalid_union",
+  "invalid_key",
+  "invalid_element",
+  "invalid_value",
+  "custom",
+] as const;
+
+export type ZodIssueCode = (typeof ZOD_ISSUE_CODES)[number];
+
+/** Zod reports an omitted parameter as one of its codes, so "missing" is added. */
+export const INVALID_PARAM_ISSUES = [...ZOD_ISSUE_CODES, "missing"] as const;
+
+export type InvalidParamIssue = (typeof INVALID_PARAM_ISSUES)[number];
 
 /**
  * Reasons debugger-status / debugger-log-registry return a structured

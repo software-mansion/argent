@@ -5,8 +5,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
  * callback wired in src/index.ts picks meta fields EXPLICITLY (it does not
  * spread), so a new meta field silently vanishes unless it is forwarded. This
  * asserts the `tool:fail` event actually EMITTED via track() carries
- * invalid_params — not just that the HTTP layer put it on the meta object
- * (test/http-dep-gate.test.ts covers that half).
+ * invalid_params and invalid_param_issues — not just that the HTTP layer put
+ * them on the meta object (test/http-dep-gate.test.ts covers that half).
  */
 
 const telemetryMock = vi.hoisted(() => ({
@@ -80,7 +80,7 @@ const ZOD_SIGNAL = {
   error_kind: "validation",
 } as const;
 
-describe("tool:fail emission carries invalid_params", () => {
+describe("tool:fail emission carries invalid_params and invalid_param_issues", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -141,6 +141,54 @@ describe("tool:fail emission carries invalid_params", () => {
     expect(toolFailProps.length).toBeGreaterThanOrEqual(2);
     for (const props of toolFailProps) {
       expect("invalid_params" in props).toBe(false);
+    }
+  });
+
+  it("forwards meta.invalid_param_issues into the emitted tool:fail event", async () => {
+    const { start } = await import("../src/index");
+    start();
+
+    const calls = vi.mocked(createHttpApp).mock.calls;
+    const options = calls[calls.length - 1]![1]!;
+
+    options.recordFailure!(
+      "await-ui-element",
+      { platform: "ios", invalid_params: ["timeoutMs"], invalid_param_issues: ["too_big"] },
+      { ...ZOD_SIGNAL },
+      12
+    );
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "tool:fail",
+      expect.objectContaining({
+        tool: "await-ui-element",
+        invalid_params: ["timeoutMs"],
+        invalid_param_issues: ["too_big"],
+      })
+    );
+  });
+
+  it("omits invalid_param_issues entirely when the meta has none (or an empty list)", async () => {
+    const { start } = await import("../src/index");
+    start();
+
+    const calls = vi.mocked(createHttpApp).mock.calls;
+    const options = calls[calls.length - 1]![1]!;
+
+    options.recordFailure!("gesture-tap", { platform: "android" }, { ...ZOD_SIGNAL }, 3);
+    options.recordFailure!(
+      "gesture-tap",
+      { platform: "android", invalid_param_issues: [] },
+      { ...ZOD_SIGNAL },
+      3
+    );
+
+    const toolFailProps = telemetryMock.track.mock.calls
+      .filter(([event]) => event === "tool:fail")
+      .map(([, props]) => props as Record<string, unknown>);
+    expect(toolFailProps.length).toBeGreaterThanOrEqual(2);
+    for (const props of toolFailProps) {
+      expect("invalid_param_issues" in props).toBe(false);
     }
   });
 });

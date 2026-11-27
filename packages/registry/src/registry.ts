@@ -511,6 +511,16 @@ function valueAtPath(root: unknown, path: readonly PropertyKey[]): unknown {
 }
 
 /**
+ * Whether `issue` is about a field `params` left out. Decided from the input:
+ * Zod reports an omitted enum as `invalid_value` and an omitted string as
+ * `invalid_type`, as if a bad value had been sent. A `custom` issue never
+ * counts: it states its own rule.
+ */
+export function isOmittedParamIssue(issue: ZodIssue, params: unknown): boolean {
+  return issue.code !== "custom" && valueAtPath(params, issue.path) === undefined;
+}
+
+/**
  * Cap on the branch reasons a union's message enumerates. A union branch that
  * is an array yields one issue per element, so the count follows the caller's
  * input, not the schema.
@@ -531,15 +541,10 @@ export function describeParamIssues(
   const truncated = allKeys.length > supplied.length;
   const parts = error.issues.map((issue) => {
     const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
-    // First, so the absence check below cannot rewrite an author-written
-    // message anchored on an omitted field into "`expectedText` is required".
     if (issue.code === "custom") {
       return issue.path.length > 0 ? `\`${at}\`: ${issue.message}` : issue.message;
     }
-    // Decide "missing" from the input, not the issue code: Zod reports an
-    // omitted enum as `invalid_value` ("Invalid option: expected one of …"),
-    // which reads as if a bad value had been sent.
-    if (valueAtPath(params, issue.path) === undefined) {
+    if (isOmittedParamIssue(issue, params)) {
       const expected = (issue as { expected?: unknown }).expected;
       const kind = typeof expected === "string" ? ` (${expected})` : "";
       return `\`${at}\` is required${kind} and was not provided`;
