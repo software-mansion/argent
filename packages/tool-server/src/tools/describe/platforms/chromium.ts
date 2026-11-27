@@ -123,12 +123,37 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       ? docElementsFromPoint.call(root, x, y)
       : root.elementsFromPoint(x, y);
   }
+  // .labels is a per-class accessor (HTMLInputElement/TextArea/Select), so capture each
+  // class's own getter; typeof guards cover the test harness's partial mock DOM.
+  const inputLabels =
+    typeof HTMLInputElement === "undefined" ? null : protoGetter(HTMLInputElement.prototype, "labels");
+  const textAreaLabels =
+    typeof HTMLTextAreaElement === "undefined" ? null : protoGetter(HTMLTextAreaElement.prototype, "labels");
+  const selectLabels =
+    typeof HTMLSelectElement === "undefined" ? null : protoGetter(HTMLSelectElement.prototype, "labels");
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
     if (r) return r;
     const t = getTagName.call(el).toLowerCase();
     return t;
+  }
+
+  // Text of the <label for=...> / wrapping <label> elements associated with a form control.
+  function controlLabelText(el) {
+    let get = null;
+    if (inputLabels && el instanceof HTMLInputElement) get = inputLabels;
+    else if (textAreaLabels && el instanceof HTMLTextAreaElement) get = textAreaLabels;
+    else if (selectLabels && el instanceof HTMLSelectElement) get = selectLabels;
+    if (!get) return "";
+    const labels = get.call(el);
+    if (!labels) return "";
+    const parts = [];
+    for (const l of labels) {
+      const txt = labelText(l, el).trim();
+      if (txt) parts.push(txt);
+    }
+    return parts.join(" ");
   }
 
   // Per document or shadow root, aria-labelledby id -> its target and, once read, its
@@ -170,6 +195,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     const aria = (getAttr.call(el, "aria-label") || "").trim();
     if (aria) return aria.slice(0, NAME_MAX);
+    const lbl = controlLabelText(el);
+    if (lbl) return lbl.slice(0, NAME_MAX);
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, NAME_MAX);
       // Chrome never names a text field by its value; describe does, so a filled one reads.

@@ -380,12 +380,26 @@ function el(opts: Opts = {}): MockElement {
 // (accessibleName's placeholder/value fallbacks, isPassword, isChecked): built
 // like el(), then re-prototyped onto the mock input class with the live
 // .type/.value/.placeholder properties those branches read directly.
-function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: string }) {
+function inputEl(
+  opts: Opts & {
+    type?: string;
+    value?: string;
+    placeholder?: string;
+    labels?: (string | Record<string, unknown>)[];
+  }
+) {
   const node = el({ ...opts, tag: "input" }) as MockElement & Record<string, unknown>;
   Object.setPrototypeOf(node, MockHTMLInputElement.prototype);
   if (opts.type) node.type = opts.type;
   if (opts.value) node.value = opts.value;
   if (opts.placeholder) node.placeholder = opts.placeholder;
+  // .labels is the NodeList of <label for>/wrapping <label> elements; the script reads
+  // each one's text nodes.
+  if (opts.labels) {
+    node.labels = opts.labels.map((t) =>
+      typeof t === "string" ? el({ tag: "label", text: t, rect: ZERO }) : t
+    );
+  }
   return node;
 }
 
@@ -2888,6 +2902,40 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pw!.password).toBe(true);
     expect(pw!.label).toBeUndefined();
     expect(JSON.stringify(tree)).not.toContain("hunter2");
+  });
+
+  it("names a field by its <label for> text rather than its placeholder", () => {
+    const { tree } = run([
+      inputEl({ placeholder: "Ph", labels: ["Lbl"], attrs: { id: "q" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "q")!.label).toBe("Lbl");
+  });
+
+  it("names a field by its <label for> text when it has no placeholder", () => {
+    const { tree } = run([inputEl({ labels: ["Email"], attrs: { id: "e" }, rect: BOX })]);
+    expect(findById(tree, "e")!.label).toBe("Email");
+  });
+
+  it("names a control wrapped in its label by the label text, not the control's own value", () => {
+    const txt = (data: string) => ({ nodeType: 3, nodeValue: data });
+    const named = (id: string, value: string, y: number) => {
+      const c = inputEl({ value, attrs: { id }, rect: { x: 0, y, w: 200, h: 30 } });
+      const label = Object.assign(el({ tag: "label", rect: ZERO }), {
+        childNodes: [txt(id === "c" ? "Country " : "Notes "), c],
+      });
+      c.labels = [label];
+      return c;
+    };
+    const { tree } = run([named("c", "US CA", 0), named("n", "typed body", 200)]);
+    expect(findById(tree, "c")!.label).toBe("Country");
+    expect(findById(tree, "n")!.label).toBe("Notes");
+  });
+
+  it("still prefers aria-label over an associated <label>", () => {
+    const { tree } = run([
+      inputEl({ labels: ["Lbl"], attrs: { "id": "a", "aria-label": "Aria" }, rect: BOX }),
+    ]);
+    expect(findById(tree, "a")!.label).toBe("Aria");
   });
 
   it("reads a form control's current value beside its placeholder name, never a secret's", () => {
