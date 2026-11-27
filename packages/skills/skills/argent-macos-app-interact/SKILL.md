@@ -1,6 +1,6 @@
 ---
 name: argent-macos-app-interact
-description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Catalyst) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
+description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Catalyst) with Argent. Use when targeting platform "macos" or a native macOS app, never iOS or Electron/Chromium.
 ---
 
 `argent-device-interact` still applies for everything not listed here (`run-sequence`, `await-ui-element`, secrets).
