@@ -10,7 +10,15 @@ import {
   readProviderDevices,
   readProviderFile,
 } from "../src/index.js";
-import { androidDevice, classify, descriptor, iosDevice, IOS_UDID } from "./fixtures.js";
+import {
+  androidDevice,
+  classify,
+  descriptor,
+  iosDevice,
+  IOS_UDID,
+  IPHONE_UDID,
+  relayedIphone,
+} from "./fixtures.js";
 
 let home: string;
 let providersDir: string;
@@ -168,17 +176,28 @@ describe("readProviderDevices", () => {
     expect(readProviderDevices(discoverProviders()[0]!, classify)).toEqual([]);
   });
 
-  it("rejects a physical iPhone, which argent would drive past the provider", () => {
+  it("rejects a physical iPhone without a usbmuxd endpoint, which argent would drive past the provider", () => {
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
     write(
       "acme.json",
       descriptor({
-        devices: [iosDevice({ kind: "device", nativeId: "00008110-000978540290401E" })],
+        devices: [iosDevice({ kind: "device", nativeId: IPHONE_UDID })],
       })
     );
 
     expect(readProviderDevices(discoverProviders()[0]!, classify)).toEqual([]);
+  });
+
+  it("adopts a physical iPhone that comes with a usbmuxd endpoint, endpoint included", () => {
+    write("acme.json", descriptor({ devices: [relayedIphone()] }));
+
+    const [device] = readProviderDevices(discoverProviders()[0]!, classify);
+
+    expect(device!.nativeId).toBe(IPHONE_UDID);
+    expect(device!.kind).toBe("device");
+    expect(device!.usbmuxd).toBe("127.0.0.1:15038");
+    expect(Array.from(device!.capabilities)).toEqual(["usbmuxd"]);
   });
 
   it("filters unknown capability tokens out of the adopted device", () => {
