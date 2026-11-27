@@ -1971,7 +1971,12 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
       } else if (foldStep) {
         step = foldStep;
       } else if (runTarget?.flow) {
-        step = { kind: "run", flow: runTarget.flow };
+        // The live call's zod schema already checked and coerced the port.
+        step = {
+          kind: "run",
+          flow: runTarget.flow,
+          ...(args.metroPort !== undefined ? { metroPort: Number(args.metroPort) } : {}),
+        };
       } else {
         warning = waitWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the

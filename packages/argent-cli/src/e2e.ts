@@ -244,6 +244,12 @@ Options (run):
                          unless such a step sets updateBaselines
   --env NAME=value       Override a script environment value for this run.
                          Repeatable. Values may contain {{secret:NAME}}
+  --metro-port <port>    Metro port for every step that talks to Metro, also
+                         in run: fragments and in tests that tool: e2e-execute
+                         steps run, unless that run: or tool: e2e-execute step
+                         sets metroPort. It replaces a port the test file
+                         wrote; without it each step keeps its own port, else
+                         the device's (8081)
   --output <dir>         Also write failed snapshot images (baseline/current/diff)
                          and failed-step screenshots (step-<n>-screen.png)
                          under <dir>/<test>/ — a stable path for CI artifact
@@ -267,6 +273,7 @@ Examples:
   argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
   argent e2e run .argent/e2e --recursive
   argent e2e run checkout --env API_URL=https://staging.example.com
+  argent e2e run checkout --metro-port 8096
 `);
 }
 
@@ -282,6 +289,7 @@ const RUN_OPTIONS = {
   "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
   "env": { kind: "value", repeatable: true },
+  "metro-port": { kind: "value" },
 } as const satisfies OptionSpecs;
 
 const LIST_OPTIONS = {
@@ -301,6 +309,7 @@ export function parseRunArgs(argv: string[]): {
   output?: string;
   /** `--env NAME=value`, in order; a later value for a name wins. */
   env?: Record<string, string>;
+  metroPort?: number;
   updateBaselines: boolean;
   recursive: boolean;
   json: boolean;
@@ -339,6 +348,9 @@ export function parseRunArgs(argv: string[]): {
   if (options.platform !== undefined) out.platform = options.platform as string;
   if (options.output !== undefined) out.output = options.output as string;
   if (options.env !== undefined) out.env = parseEnvFlags(options.env as string[]);
+  if (options["metro-port"] !== undefined) {
+    out.metroPort = parseMetroPort(options["metro-port"] as string);
+  }
   if (out.json && out.jsonStream) {
     throw new FlagParseException("--json and --json-stream cannot be combined");
   }
@@ -346,6 +358,20 @@ export function parseRunArgs(argv: string[]): {
 }
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Checked here for the same reason as `--env`: the tool-server would refuse a
+ * bad port once per test of a directory run.
+ */
+function parseMetroPort(value: string): number {
+  const port = /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new FlagParseException(
+      `--metro-port takes a port from 1 to 65535; got ${JSON.stringify(value)}`
+    );
+  }
+  return port;
+}
 
 /**
  * Checked here rather than left to the tool-server, which would refuse the
@@ -640,7 +666,7 @@ function optionSafePath(p: string): string {
 
 /**
  * The command that runs one flow of a directory run alone, from the same
- * working directory, with the same --device, --platform, --update-baselines and --env,
+ * working directory, with the same --device, --platform, --update-baselines, --env and --metro-port,
  * and an --output that exports to the directory the batch exported that flow
  * to. A flow outside that directory keeps its absolute path, since `run`
  * refuses ".." segments, and a path with a leading "-" gets "./" so the parser
@@ -652,7 +678,7 @@ function rerunCommand(
   projectRoot: string,
   args: Pick<
     ReturnType<typeof parseRunArgs>,
-    "device" | "platform" | "output" | "updateBaselines" | "env"
+    "device" | "platform" | "output" | "updateBaselines" | "env" | "metroPort"
   >
 ): string {
   const pathArg = (p: string) => shellQuoteArg(optionSafePath(p));
@@ -667,6 +693,7 @@ function rerunCommand(
   if (args.device) parts.push("--device", shellQuoteArg(args.device));
   if (args.platform) parts.push("--platform", shellQuoteArg(args.platform));
   if (args.updateBaselines) parts.push("--update-baselines");
+  if (args.metroPort !== undefined) parts.push("--metro-port", String(args.metroPort));
   if (args.output) parts.push("--output", pathArg(path.join(args.output, path.dirname(rel))));
   for (const [name, value] of Object.entries(args.env ?? {})) {
     parts.push("--env", shellQuoteArg(`${name}=${value}`));
@@ -1295,6 +1322,7 @@ function buildRunPayload(
   if (args.platform) payload.platform = args.platform;
   if (args.updateBaselines) payload.updateBaselines = true;
   if (args.env) payload.env = args.env;
+  if (args.metroPort !== undefined) payload.metroPort = args.metroPort;
   return payload;
 }
 

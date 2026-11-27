@@ -87,7 +87,7 @@ Reach each screen through the app's UI. Do not replace tested navigation with `o
 
 For every action:
 
-1. **Discover without mutation.** Use `describe`, iOS native discovery, or `screenshot`. Do not record discovery or `debugger-*` calls: `port` is not a device-bind key, so a recorded one replays against whatever Metro owns that port.
+1. **Discover without mutation.** Use `describe`, iOS native discovery, or `screenshot`. Do not record discovery calls. A recorded `debugger-*` step keeps the `port` you passed, and replays against whatever Metro owns that port unless the run gives `metroPort` (`--metro-port`), which replaces it. When Metro is not on 8081, give the user the run command with `--metro-port`.
 2. **Choose a durable target.** Prefer a stable id, then stable text or an accessibility label. On iOS, use native discovery for ids that trimmed accessibility output omits; on Android React Native, `debugger-component-tree`.
 3. **Add an echo.** Name the current state, action, and expected outcome before the action can fail.
 4. **Execute through `e2e-add-step`.** Inspect the result and the `recorded` line immediately.
@@ -265,7 +265,7 @@ Resolve every hit and confirm:
 
 ## Replay
 
-Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
+Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`. When Metro is not on 8081, pass `metroPort` on every replay call.
 
 Over `argent link` or `ARGENT_TOOLS_URL`, the client uploads the test and the files its steps need. `e2e-execute`'s description lists what travels and which steps a linked run rejects (`script:`, recording tools, directory, app or output-directory arguments such as `reinstall-app`'s, relative or non-`.png`/`.yaml` file arguments, file paths built from several arguments). Beyond that list:
 

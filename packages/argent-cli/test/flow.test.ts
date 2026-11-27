@@ -322,6 +322,32 @@ describe("parseRunArgs", () => {
     expect(() => parseRunArgs(["checkout.yaml", "--env", entry])).toThrow(/--env takes NAME=value/);
   });
 
+  it.each([
+    [["--metro-port", "8096"], 8096],
+    [["--metro-port=8096"], 8096],
+    [["--metro-port", "1"], 1],
+    [["--metro-port", "65535"], 65535],
+  ])("parses %j as the number %d", (flag, port) => {
+    expect(parseRunArgs(["checkout.yaml", ...flag]).metroPort).toBe(port);
+  });
+
+  it("leaves metroPort out without the flag", () => {
+    expect(parseRunArgs(["checkout.yaml"])).not.toHaveProperty("metroPort");
+  });
+
+  it.each(["", "0", "65536", "80811", "80.5", "8e3", "+8096", " 8096", "0x1f90", "abc"])(
+    "refuses --metro-port %j",
+    (value) => {
+      expect(() => parseRunArgs(["checkout.yaml", `--metro-port=${value}`])).toThrow(
+        FlagParseException
+      );
+    }
+  );
+
+  it("refuses --metro-port with no value", () => {
+    expect(() => parseRunArgs(["checkout.yaml", "--metro-port"])).toThrow(/--metro-port/);
+  });
+
   it("accepts the --flag=value form for every value-taking flag", () => {
     expect(
       parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform=ios", "--output=dir"])
@@ -4142,6 +4168,29 @@ describe("argent e2e run <dir>", () => {
     expect(logs.join("\n")).toContain(
       `    re-run: argent e2e run ${path.join(suiteDir, "one.yaml")} --env MODE=fast --env 'KEY={{secret:API_KEY}}'`
     );
+  });
+
+  it("forwards --metro-port to e2e-execute as a number and repeats it in the re-run line", async () => {
+    const suiteDir = path.join(tempRoot, "metro-suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "one.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended"));
+
+    await expect(flow(["run", suiteDir, "--metro-port", "8096"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({ metroPort: 8096 });
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent e2e run ${path.join(suiteDir, "one.yaml")} --metro-port 8096`
+    );
+  });
+
+  it("exits 2 on a bad --metro-port before calling the tool-server", async () => {
+    await expect(flow(["run", "checkout.yaml", "--metro-port", "80811"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
   it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {

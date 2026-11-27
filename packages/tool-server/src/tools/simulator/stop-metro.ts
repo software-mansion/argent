@@ -7,6 +7,7 @@ import {
   subprocessFailureMetadata,
   type ToolDefinition,
 } from "@argent/registry";
+import { markMetroPort } from "../../utils/debugger/metro-port";
 
 /**
  * Deduped PIDs *listening* on `port`, parsed out of `netstat -ano` (Windows).
@@ -177,7 +178,11 @@ function listeningPids(port: number): number[] {
 }
 
 const zodSchema = z.object({
-  port: z.number().int().min(1).max(65535).default(8081).describe("TCP port Metro is listening on"),
+  // Its own field, not metroPortField: it defaults to 8081 and never reads a
+  // provider's port. Marked so an e2e run's metroPort stops the run's Metro.
+  port: markMetroPort(
+    z.number().int().min(1).max(65535).default(8081).describe("TCP port Metro is listening on")
+  ),
 });
 
 export const stopMetroTool: ToolDefinition<

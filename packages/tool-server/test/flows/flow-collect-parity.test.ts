@@ -174,6 +174,11 @@ describe("the client's walk and the runner's parse name the same run: targets", 
         "    'steps':\n      - \"run\": 'sub/quoted'\n",
     ],
     [
+      "the map form, with and without a metroPort",
+      "steps:\n  - run: { path: login, metroPort: 8096 }\n  - run:\n      path: sub/mapped.yaml\n" +
+        "  - when: { platform: ios }\n    steps:\n      - run: { path: sub/in-when, metroPort: 8097 }\n",
+    ],
+    [
       "flow style",
       "{ steps: [{ run: login }, { when: { platform: ios }, steps: [{ run: sub/flow }] }] }\n",
     ],

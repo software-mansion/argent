@@ -803,7 +803,8 @@ export type FlowStep =
   | { kind: "echo"; message: string }
   | { kind: "launch"; app: Launch }
   // `flow` is the as-written YAML path, resolved against the containing file's directory.
-  | { kind: "run"; flow: string }
+  // `metroPort` is the fragment's Metro port, over the run's (`run: { path, metroPort }`).
+  | { kind: "run"; flow: string; metroPort?: number }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
   | {
       kind: "tap";
@@ -1161,7 +1162,7 @@ type YamlOutputCheck = { output: string } & Record<string, unknown>;
 type YamlStep =
   | { echo: string }
   | { launch: Launch }
-  | { run: string }
+  | { run: string | { path: string; metroPort: number } }
   | { when: YamlWhenBody; steps: YamlStep[] }
   | { tool: string; args?: Record<string, unknown>; delayMs?: number }
   | { tap: TapBody }
@@ -1655,7 +1656,9 @@ function toYamlStep(step: FlowStep): YamlStep {
     case "launch":
       return { launch: step.app };
     case "run":
-      return { run: step.flow };
+      return step.metroPort === undefined
+        ? { run: step.flow }
+        : { run: { path: step.flow, metroPort: step.metroPort } };
     case "when": {
       const when: YamlWhenBody =
         step.condition.kind === "platform"
@@ -3230,6 +3233,41 @@ export function runTargetName(target: string): string {
 }
 
 /**
+ * A `run:` step: a path, or a `{ path, metroPort }` map. `metroPort` replaces
+ * the run's Metro port for the fragment's steps, as a `tool: e2e-execute`
+ * step's own `metroPort` does for the e2e test it runs.
+ */
+function parseRunStep(raw: unknown, body: unknown): FlowStep {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { kind: "run", flow: parseRunTarget(raw, body) };
+  }
+  const map = body as Record<string, unknown>;
+  const allowed = ["path", "metroPort"] as const;
+  const extras = Object.keys(map).filter((k) => !(allowed as readonly string[]).includes(k));
+  if (extras.length > 0) {
+    badEntry(raw, `a \`run\` map has ${describeUnknownKeys(extras, allowed)}`);
+  }
+  if (!("path" in map)) {
+    badEntry(raw, "a `run` map needs a `path`, e.g. `run: { path: fragments/login.yaml }`");
+  }
+  const flow = parseRunTarget(raw, map.path);
+  const { metroPort } = map;
+  if (metroPort === undefined) return { kind: "run", flow };
+  if (
+    typeof metroPort !== "number" ||
+    !Number.isInteger(metroPort) ||
+    metroPort < 1 ||
+    metroPort > 65535
+  ) {
+    badEntry(
+      raw,
+      `a \`run\` step's \`metroPort\` must be a port from 1 to 65535, got ${JSON.stringify(metroPort)}`
+    );
+  }
+  return { kind: "run", flow, metroPort };
+}
+
+/**
  * Shape-check a `run:` value: a relative, forward-slashed path whose final
  * segment is a flow name, with the `.yaml` extension optional (see
  * {@link completeRunExtension}). `..` is deliberately legal — shared fragments
@@ -4061,7 +4099,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
-  if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
+  if ("run" in raw) return parseRunStep(raw, raw.run);
   if ("when" in raw) return parseWhenStep(entry, blockDepth);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);

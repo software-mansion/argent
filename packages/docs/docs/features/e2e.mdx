@@ -102,6 +102,7 @@ The e2e tests in a directory without a `suite.config.yaml` file are independent.
 ## Limits
 
 - A replay runs on one booted device. When more than one device is booted, name the device in the instruction. A physical iPhone is never chosen automatically, even when nothing else is booted: name it in the instruction.
+- A recorded step can keep the Metro port of the recording. When the replay uses Metro on a different port, name the port in the instruction. The [E2E YAML reference](/docs/reference/e2e-yaml#the-metro-port) gives the rules.
 - A recorded tap with coordinates breaks when the layout changes. Give the element a stable text or identifier, then record the step again.
 - An e2e test does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the e2e test with a launch of the app or with a step that restores a known state.
 - The agent records a launch step for iOS, Android, Vega and [Mac](/docs/features/mac-apps) apps. For a Chromium or Electron app, add the launch step to the file by hand.

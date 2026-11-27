@@ -126,7 +126,8 @@ export function collectFlowRequests(doc: unknown): {
     seen.add(steps);
     for (const step of steps) {
       if (!isRecord(step)) continue;
-      const run = step.run;
+      // A path, or the `{ path, metroPort }` map.
+      const run = isRecord(step.run) ? step.run.path : step.run;
       if (
         typeof run === "string" &&
         !run.includes("\\") &&

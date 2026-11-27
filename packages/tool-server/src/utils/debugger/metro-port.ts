@@ -10,6 +10,35 @@ import { canonicalDeviceId } from "./device-alias";
 const DEFAULT_METRO_PORT = 8081;
 
 /**
+ * The schemas {@linkcode markMetroPort} marked. A WeakSet, not zod metadata:
+ * `.meta()` would be printed into every tool's advertised JSON Schema.
+ */
+const METRO_PORT_SCHEMAS = new WeakSet<z.ZodType>();
+
+/**
+ * Mark a schema as a Metro port, so an e2e run's `metroPort` replaces it (see
+ * `bindRunArgs` in flows/flow-device). Only for a field that means the Metro
+ * server port on every platform the tool runs on: `boot-device`'s `port` is an
+ * emulator console port and stays unmarked.
+ */
+export function markMetroPort<T extends z.ZodType>(schema: T): T {
+  METRO_PORT_SCHEMAS.add(schema);
+  return schema;
+}
+
+/**
+ * Whether `schema` is a marked Metro port or a clone of one. `.describe()`
+ * returns a clone whose `_zod.parent` is the schema it was cloned from, so a
+ * tool that rewords {@linkcode metroPortField} still counts.
+ */
+export function isMetroPortSchema(schema: unknown): boolean {
+  for (let s = schema as z.ZodType | undefined; s; s = s._zod.parent as z.ZodType | undefined) {
+    if (METRO_PORT_SCHEMAS.has(s)) return true;
+  }
+  return false;
+}
+
+/**
  * The shared `port` parameter of every tool that keys a Metro session on
  * `(port, device_id)`: the debugger family, the network inspector and the
  * React profiler. That pair names the CDP service in its URN and the captured
@@ -23,18 +52,34 @@ const DEFAULT_METRO_PORT = 8081;
  * optional also makes every raw read a type error until it goes through that
  * function.
  */
-export const metroPortField = z.coerce
-  .number()
-  .int()
-  .min(1)
-  .max(65535)
-  .optional()
-  /**
-   * No mention of providers: twenty tools ship this field's text, in every
-   * session. "Omit it" is also safer, an agent told the default is 8081 passes
-   * 8081, which counts as explicit and beats a provider's port.
-   */
-  .describe("Metro port (omit to use this device's port, default 8081; ignored on Chromium).");
+export const metroPortField = markMetroPort(
+  z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(65535)
+    .optional()
+    /**
+     * No mention of providers: twenty tools ship this field's text, in every
+     * session. "Omit it" is also safer, an agent told the default is 8081 passes
+     * 8081, which counts as explicit and beats a provider's port.
+     */
+    .describe("Metro port (omit to use this device's port, default 8081; ignored on Chromium).")
+);
+
+/**
+ * `e2e-execute`'s `metroPort`: a number, or a decimal string for the callers
+ * that send numbers as text. Stricter than {@linkcode metroPortField}, whose
+ * `z.coerce` turns `true` into 1 and `[8097]` into 8097: this value replaces
+ * the port of every Metro step in the run, so a typo must fail the run rather
+ * than pick a port.
+ */
+export const runMetroPortField = z
+  .preprocess(
+    (value) => (typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value),
+    z.number().int().min(1).max(65535)
+  )
+  .optional();
 
 /**
  * The Metro port this call should use: caller, then provider, then the React

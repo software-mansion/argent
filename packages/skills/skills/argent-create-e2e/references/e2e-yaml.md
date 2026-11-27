@@ -290,7 +290,7 @@ Use references in selectors, typed text, equality or contains checks, tool argum
 
 ## Snapshots and CLI runs
 
-`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--env NAME=value] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--env NAME=value] [--metro-port <port>] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure. `--metro-port` (`e2e-execute.metroPort`) replaces the `port` of every step whose tool takes a Metro port, in `run:` fragments too and in a `tool: e2e-execute` run, unless that `run: { path, metroPort }` or `tool: e2e-execute` step sets its own `metroPort`, which wins (the recorder writes a live `e2e-execute` call with `metroPort` as such a `run:`); without it each step keeps its own `port`, else the device's port (8081).
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 
