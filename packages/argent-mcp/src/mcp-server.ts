@@ -48,6 +48,7 @@ import { listDevicesText } from "./list-devices-text.js";
 import { nativeNetworkLogsText } from "./native-network-logs-text.js";
 import { debuggerLogRegistryText } from "./debugger-log-registry-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
+import { showsImages } from "./client-images.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
@@ -272,7 +273,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           type: "text" as const,
           text: `--- Screen after action ---\n${screenshotIdLine(shown.id!)}`,
         },
-        ...blocks,
+        ...(showsImages(server.getClientVersion()?.name)
+          ? blocks.filter((b) => b.type === "image")
+          : blocks),
       ];
     } catch {
       return []; /* best-effort */

@@ -894,6 +894,38 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(content.at(-1)!.text).toContain("button Done");
   });
 
+  it("leaves the Saved: line out of the auto-screenshot for a client that shows images, not of a screenshot call", async () => {
+    const shows = await connect(
+      {
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      },
+      { clientName: "claude-code", captureTimeoutMs: CAPTURE_MS }
+    );
+    const firstLines = (result: Result) =>
+      (result.content as Array<{ type: string; text?: string }>).map((c) =>
+        c.type === "image" ? "image" : c.text!.split("\n")[0]
+      );
+    try {
+      const tapped = await shows.callTool({
+        name: "gesture-tap",
+        arguments: { udid: "u", x: 0.5, y: 0.5 },
+      });
+      const shot = await shows.callTool({ name: "screenshot", arguments: { udid: "u" } });
+
+      expect(firstLines(tapped)).toEqual([
+        '{"tapped":true}',
+        "--- Screen after action ---",
+        "image",
+        "--- Elements after action (describe) ---",
+      ]);
+      expect(firstLines(shot)).toContain("Saved: /tmp/shot.png");
+    } finally {
+      await shows.close();
+    }
+  });
+
   it("appends the screenshot and the focus view after a TV remote press", async () => {
     vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "");
     const result = await client.callTool({
