@@ -71,6 +71,20 @@ export const metroPortField = markMetroPort(
 );
 
 /**
+ * `e2e-execute`'s `metroPort`: a number, or a decimal string for the callers
+ * that send numbers as text. Stricter than {@linkcode metroPortField}, whose
+ * `z.coerce` turns `true` into 1 and `[8097]` into 8097: this value replaces
+ * the port of every Metro step in the run, so a typo must fail the run rather
+ * than pick a port.
+ */
+export const runMetroPortField = z
+  .preprocess(
+    (value) => (typeof value === "string" && /^\d+$/.test(value) ? Number(value) : value),
+    z.number().int().min(1).max(65535)
+  )
+  .optional();
+
+/**
  * The Metro port this call should use: caller, then provider, then the React
  * Native default. An explicit port wins so a second bundler stays addressable.
  *

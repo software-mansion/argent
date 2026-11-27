@@ -99,7 +99,7 @@ import {
   toolTakesMetroPort,
   type FlowPlatform,
 } from "./flow-device";
-import { metroPortField } from "../../utils/debugger/metro-port";
+import { runMetroPortField } from "../../utils/debugger/metro-port";
 import { isNestedOrchestratorTool } from "./flow-nested-outcome";
 import { uprightLegacyPoints } from "./flow-legacy-points";
 import { inCoordinateSpace } from "../../utils/ios-ui-orientation";
@@ -1677,7 +1677,7 @@ const zodSchema = z
       .describe(
         "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
       ),
-    metroPort: metroPortField.describe(
+    metroPort: runMetroPortField.describe(
       "Metro port for the whole run, also its run: fragments and the e2e tests that tool: e2e-execute steps run, unless that run: or tool: e2e-execute step sets metroPort itself. It replaces the port of every step whose tool takes a Metro port, also a port the test file wrote. Omit it to keep each step's own port, else this device's port, 8081 by default. The runner never tries another port."
     ),
     prerequisiteAcknowledged: z
@@ -2787,9 +2787,16 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     if (step.kind !== "script" && JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) {
       state.secret.typed = true;
     }
+    // The run's Metro port replaces the step's first, so a port written as an
+    // output reference this machine's outputs cannot fill does not stop a step
+    // whose port the run names anyway.
+    const bound =
+      step.kind === "tool"
+        ? { ...step, args: bindRunArgs(state.registry, step.name, step.args, scope.metroPort) }
+        : step;
     let leaf: typeof step;
     try {
-      leaf = resolveStepOutputs(step, state.output.doc);
+      leaf = resolveStepOutputs(bound, state.output.doc);
     } catch (err) {
       if (!(err instanceof OutputReferenceError)) throw err;
       pushReport(state, {
@@ -3500,11 +3507,13 @@ async function execLeafStep(
       // the cleanup-flow case `bindDeviceArgs` guards by keeping whatever the
       // recording scoped — as it does with a device resolved, unless the caller
       // named it.
-      const args = bindRunArgs(
+      // execSteps already bound the run's Metro port (`bindRunArgs`).
+      const args = bindDeviceArgs(
         registry,
         step.name,
-        bindDeviceArgs(registry, step.name, device?.id ?? "", step.args, state.deviceIsExplicit),
-        scope.metroPort
+        device?.id ?? "",
+        step.args,
+        state.deviceIsExplicit
       );
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {

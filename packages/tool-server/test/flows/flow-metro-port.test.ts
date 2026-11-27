@@ -188,6 +188,42 @@ describe("a run with metroPort", () => {
     expect(calls).toEqual([]);
   });
 
+  it.each([true, [8097], null, " 8097", "0x1f91"])(
+    "refuses metroPort %j, which coercion would turn into a port",
+    async (metroPort) => {
+      await expect(run(registry(), "steps", { metroPort })).rejects.toThrow(/metroPort/);
+      expect(calls).toEqual([]);
+    }
+  );
+
+  it("replaces a port written as an output reference, which then need not resolve", async () => {
+    await writeTest(
+      "ref",
+      `steps:\n  - tool: metro-tool\n    args: { port: "{{output:metro.port}}", label: ref }\n`
+    );
+    const without = await run(registry(), "ref");
+    expect(without.ok).toBe(false);
+    expect(without.steps[0]).toMatchObject({ status: "error" });
+    expect(without.steps[0]!.reason).toMatch(/metro\.port/);
+    expect(calls).toEqual([]);
+
+    const result = await run(registry(), "ref", { metroPort: 8097 });
+    expect(result.ok).toBe(true);
+    expect(portsOf("metro-tool")).toEqual([8097]);
+    expect(result.steps[0]!.args).toEqual({ port: 8097, label: "ref" });
+  });
+
+  it("still resolves the step's other output references", async () => {
+    await writeTest(
+      "ref",
+      `steps:\n  - tool: metro-tool\n    args: { port: "{{output:metro.port}}", label: "{{output:who}}" }\n`
+    );
+    const result = await run(registry(), "ref", { metroPort: 8097 });
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]!.reason).toMatch(/who/);
+    expect(calls).toEqual([]);
+  });
+
   it("reaches run: fragments and shutdown: steps", async () => {
     await writeTest("frag", `steps:\n  - tool: metro-tool\n    args: { port: 8096 }\n`);
     await writeTest(
@@ -230,6 +266,20 @@ describe("a nested tool: e2e-execute", () => {
     expect(result.ok).toBe(true);
     expect(portsOf("metro-tool")).toEqual(["absent", 8099]);
   });
+
+  it.each(["true", "[8097]"])(
+    "fails a step whose metroPort is %s before the nested test runs a step",
+    async (value) => {
+      await writeTest(
+        "bad",
+        `steps:\n  - tool: e2e-execute\n    args: { name: inner, project_root: ${JSON.stringify(root)}, metroPort: ${value} }\n`
+      );
+      const result = await run(registry(), "bad", { metroPort: 8097 });
+      expect(result.ok).toBe(false);
+      expect(result.steps[0]!.reason).toMatch(/metroPort/);
+      expect(calls.filter((c) => c.tool === "metro-tool")).toEqual([]);
+    }
+  );
 });
 
 describe("a run: step with its own metroPort", () => {

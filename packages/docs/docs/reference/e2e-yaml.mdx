@@ -986,7 +986,7 @@ A recorded step keeps the Metro `port` that the agent gave to the tool, for exam
 3. The `port` that the e2e test file gives for the step.
 4. The default port of the tool. For most tools, this is the port of the device: 8081, unless a device provider publishes a different port. `stop-metro` always uses 8081.
 
-`--metro-port` applies only to a tool whose `port` is a Metro port. Thus a `stop-metro` step stops the Metro of the run. The `port` of `boot-device` is the console port of an emulator, so Argent does not change it.
+`--metro-port` applies only to a tool whose `port` is a Metro port. Thus a `stop-metro` step stops the Metro of the run. When the file gives the `port` as an output reference, `--metro-port` replaces the reference, and Argent does not resolve it. The `port` of `boot-device` is the console port of an emulator, so Argent does not change it.
 
 The `run:` fragments of the e2e test use the same port. An e2e test that a `tool: e2e-execute` step runs also uses the same port. When the `run:` step or the `tool: e2e-execute` step sets `metroPort`, Argent uses the value of the step. An e2e test can use a second Metro in this way. When you record a call of `e2e-execute` with `metroPort`, the recorder writes a `run:` step with that `metroPort`.
 
