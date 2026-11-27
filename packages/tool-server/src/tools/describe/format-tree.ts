@@ -1,8 +1,9 @@
 import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
 
-// Token-efficient text rendering of an already-pruned DescribeNode tree: the
-// per-platform adapters (and the Android v2 trimmer in uiautomator-parser) do
-// the pruning, this layer only formats.
+// Token-efficient text rendering of a DescribeNode tree. Most pruning happens
+// in the per-platform adapters (and the Android v2 trimmer in uiautomator-parser);
+// this layer also omits display-only noise like iOS scroll indicators that stay
+// in the tree for empty-read checks.
 //
 // Render mode comes from `source`, not the tree silhouette — a single
 // accidental grandchild used to flip an ax-service response into nested mode,
@@ -128,18 +129,14 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
-// UIKit exposes every UIScrollView's vertical and horizontal scroll indicators
-// as adjustable elements ("Vertical scroll bar, 1 page" value="0%"), even for
-// single-page containers and inside table cells. They are non-actionable
-// targets (scroll with `gesture-swipe`), matching macOS and HarmonyOS, which
-// already drop scroll bars. English-locale simulators only: other locales
-// localize the label and may format percentages with a non-breaking space, so
-// those indicators stay in the tree. Omitting them here (rather than in the
-// iOS adapters) keeps the DescribeNode tree non-empty on screens whose only
-// accessible elements are scroll indicators, so empty-tree checks in
-// describeIos, await-ui-element, and await-screen-idle keep working. Real
-// adjustable controls (sliders, steppers) and anything with an explicit
-// identifier or hint stay.
+// UIKit exposes every UIScrollView's scroll indicators as adjustable elements
+// ("Vertical scroll bar, 1 page" value="0%"), even for single-page containers
+// and inside table cells. Scrolling goes through `gesture-swipe`, and macOS and
+// HarmonyOS already drop scroll bars. Only the text omits them, so the
+// DescribeNode tree keeps them for the empty-read checks. English-locale
+// simulators only: other locales translate the label and may put a
+// non-breaking space before `%`. Real adjustable controls (sliders, steppers)
+// and anything with an identifier or hint stay.
 const IOS_SCROLL_BAR_LABEL = /^(Vertical|Horizontal) scroll bar, .+\bpages?$/;
 const PERCENT_VALUE = /^\d+(?:\.\d+)?%$/;
 
