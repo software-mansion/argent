@@ -277,6 +277,24 @@ function formatJsonNode(rootValue: unknown, rootTopLevel: boolean): FormattedNod
   return { text: "null", multiline: false };
 }
 
+// C0 control characters other than tab and newline, plus DEL and the C1 range.
+// C1 holds the 8-bit CSI (U+009B). A reader cannot see these characters. A
+// terminal that prints the result may also act on an escape sequence they form.
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/**
+ * Write control characters as `\uXXXX`, as `JSON.stringify` does for C0. This is
+ * for text sent without JSON escaping, such as a page label in an element tree.
+ */
+export function escapeControlChars(text: string): string {
+  return text.replace(CONTROL_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+function stringifyForText(value: unknown): string {
+  return escapeControlChars(formatForText(value));
+}
+
 /**
  * Format a tool result for an MCP text block without wasting tokens on JSON
  * escaping or indentation while keeping structured data easy for models to read:
@@ -285,8 +303,9 @@ function formatJsonNode(rootValue: unknown, rootTopLevel: boolean): FormattedNod
  *   `description`, profiler `report`) emit compact JSON metadata first — so
  *   warnings/paths stay at the top — followed by each multi-line field raw.
  * - Everything else uses compact line-broken JSON (`formatJsonNode`).
+ * `stringifyForText` then escapes control characters in all three.
  */
-function stringifyForText(value: unknown): string {
+function formatForText(value: unknown): string {
   if (typeof value === "string") {
     // Avoid emitting an empty MCP text block, which some model APIs reject.
     return value.length > 0 ? value : '""';
