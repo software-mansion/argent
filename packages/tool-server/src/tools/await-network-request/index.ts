@@ -223,7 +223,17 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
        * notes, which can quote an agent or the app. The ids and counts are
        * argent's own and stay, and so does the agent's own pattern in the note.
        */
-      const redact = networkSecretRedactor(ctx);
+      const atStart = networkSecretRedactor(ctx);
+      let redact: (text: string) => string = atStart;
+      /**
+       * The secrets are read again when the result is built, since a value can
+       * be typed while the wait polls. The values read at the start stay, in
+       * case one leaves the sources meanwhile.
+       */
+      const readSecretsAgain = () => {
+        const now = networkSecretRedactor(ctx);
+        redact = (text) => now(atStart(text));
+      };
       const shown = <T extends WaitRecord>(record: T): T => ({
         ...record,
         method: redact(record.method),
@@ -277,6 +287,7 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
       };
 
       const success = (match: WaitRecord): WaitResult => {
+        readSecretsAgain();
         // What the reads in this call said of each layer, as a reload that left
         // requests out, so that the match may not be the first request.
         const notes = [...notesSeen].flatMap(([layer, seen]) =>
@@ -364,6 +375,7 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
       return timedOut(fresh ? "unmet" : "unreadable", false);
 
       function timedOut(cause: UnmetWaitCause, allStopped: boolean): WaitResult {
+        readSecretsAgain();
         const summaries: LayerSummary[] = layers.map(({ layer }) => {
           const last = latest.get(layer);
           const readable = latestReadable.get(layer);

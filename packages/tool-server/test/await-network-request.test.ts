@@ -1,3 +1,4 @@
+import { __resetTypedSecretsForTesting, noteTypedSecrets } from "../src/utils/typed-secrets";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { createContext, runInContext, type Context } from "node:vm";
@@ -1031,6 +1032,29 @@ describe("secret values in the result", () => {
       url: `${API}/v1/login?token={{secret:TOKEN}}`,
     });
     expect(ios.records[0]!.request.url).toBe(`${API}/v1/login?token=${TOKEN}`);
+  });
+
+  it("redacts a secret first typed while the wait polls, and one removed from the sources meanwhile", async () => {
+    await startIos();
+    const typed = "typed-late-secret-42";
+    const pending = registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 3000, url: "/v1/late" },
+      options
+    );
+    // After the first polls: another call types a new secret, and the app sends it.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    noteTypedSecrets(IOS, [{ name: "LATE", value: typed }]);
+    ios.add(11, { url: `/v1/late?t=${typed}&s=${TOKEN}`, status: 200 });
+    options.clientSecrets.delete("TOKEN");
+
+    try {
+      const result = await pending;
+      expect(result.match?.url).toBe(`${API}/v1/late?t={{secret:LATE}}&s={{secret:TOKEN}}`);
+    } finally {
+      options.clientSecrets.set("TOKEN", TOKEN);
+      __resetTypedSecretsForTesting();
+    }
   });
 
   it("redacts a near miss's URL and error before the note cuts them, keeping ids and counts", async () => {

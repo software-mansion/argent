@@ -532,6 +532,26 @@ describe("secret values on the Chromium branch", () => {
     expect(out).not.toContain("stored-token");
   });
 
+  it("view-network-logs redacts a secret that is a whole URL, which the shortened path would hide", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: webhook, status: 200, statusText: "OK" }),
+      rec({ requestId: "2", method: "GET", url: "https://x.test/other", status: 200 }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([["WEBHOOK_URL", webhook]]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 200 OK');
+    expect(out).toContain('{id: 2} "GET /other"');
+    expect(out).not.toContain("tok3n");
+  });
+
   it("view-network-request-details redacts a copy, so the record's initiator keeps its URL", async () => {
     const record = rec({
       requestId: "4821",

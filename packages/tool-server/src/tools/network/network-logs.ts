@@ -214,18 +214,38 @@ function shortName(url: string, from?: string): string {
 }
 
 /**
+ * The short name of a URL with its secrets redacted. A secret that reaches
+ * past the short name, such as a whole webhook URL, would show as its path, a
+ * piece no redaction finds, so then the whole URL is shown, redacted.
+ */
+function redactedName(url: string, redact: SecretRedactor, from?: string): string {
+  const short = shortName(url, from);
+  let base: string;
+  try {
+    const { href, search, hash } = new URL(url);
+    base = href.slice(0, href.length - search.length - hash.length);
+  } catch {
+    return redact(short);
+  }
+  const shown = redact(short);
+  const redactedBase = redact(base);
+  if (redactedBase === base) return shown;
+  const head = base.slice(0, base.length - short.length);
+  return base.endsWith(short) && redactedBase === head + shown ? shown : redact(url);
+}
+
+/**
  * One line of the log. The parts that hold app text (method, path, redirect
  * target, error and status text) are redacted one by one, so a short secret
- * value never replaces the id, a size or a duration. The path is redacted
- * after `shortName`, which would percent-encode a marker's braces.
+ * value never replaces the id, a size or a duration.
  */
 function formatEntry(entry: LogEntry, redact: SecretRedactor): string {
   const method = redact(entry.request?.method ?? "???");
   const url = entry.request?.url ?? "unknown";
-  const name = redact(shortName(url));
+  const name = redactedName(url, redact);
   const finalUrl = entry.response?.url;
   const redirect =
-    finalUrl && isRedirect(url, finalUrl) ? `→ ${redact(shortName(finalUrl, url))}` : "";
+    finalUrl && isRedirect(url, finalUrl) ? `→ ${redactedName(finalUrl, redact, url)}` : "";
 
   let status: string;
   if (entry.state === "failed") {
