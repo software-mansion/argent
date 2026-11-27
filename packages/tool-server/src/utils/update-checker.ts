@@ -8,12 +8,7 @@ import {
   fetchRegistryInfo,
   pickInstallableTarget,
 } from "@argent/update-core";
-import {
-  argentHomeDir,
-  getConfigValueAtScope,
-  getConfigValueByKey,
-  resolveHomeDir,
-} from "@argent/configuration-core";
+import { argentHomeDir, isAutoUpdateEnabled } from "@argent/configuration-core";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
@@ -125,14 +120,6 @@ interface UpdateCheckerOptions {
   onAutoUpdate?: (version: string) => void;
 }
 
-// The global install is shared by every Argent home, so an opt-out in ~/.argent
-// also holds for a server whose home is moved with ARGENT_HOME_DIR.
-function autoUpdateEnabled(): boolean {
-  if (getConfigValueByKey("autoUpdate.enabled") !== true) return false;
-  const userHome = { homeDir: resolveHomeDir() };
-  return getConfigValueAtScope("autoUpdate.enabled", "global", userHome) !== false;
-}
-
 async function check(options: UpdateCheckerOptions, generation: number): Promise<void> {
   const info = await fetchRegistryInfo(REGISTRY_URL);
   if (generation !== lifecycleGeneration || info === null) return;
@@ -155,7 +142,7 @@ async function check(options: UpdateCheckerOptions, generation: number): Promise
 
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
-    if (autoUpdateEnabled()) {
+    if (isAutoUpdateEnabled()) {
       options.onAutoUpdate?.(target.version);
     }
   } else if (updateAvailable && minReleaseAgeMs > 0) {

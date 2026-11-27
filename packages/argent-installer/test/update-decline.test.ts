@@ -443,6 +443,23 @@ describe.skipIf(process.platform === "win32")("automatic global updates", () => 
     expect(killToolServerForInstallDir).not.toHaveBeenCalled();
   });
 
+  it("skips the install when ~/.argent opts out under a moved ARGENT_HOME_DIR", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".argent"));
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "config.json"),
+      JSON.stringify({ autoUpdate: { enabled: false } })
+    );
+    const movedHome = path.join(tmpDir, "moved-home");
+    fs.mkdirSync(movedHome);
+    fs.writeFileSync(
+      path.join(movedHome, "config.json"),
+      JSON.stringify({ autoUpdate: { enabled: true } })
+    );
+    vi.stubEnv("ARGENT_HOME_DIR", movedHome);
+    await update(["--yes", "--global", "--version", "99.0.0"]);
+    expect(npmCalls().some(([, args]) => args.includes("install"))).toBe(false);
+  });
+
   it("refreshes the global skills and leaves the project's skills alone", async () => {
     const runner = path.join(tmpDir, "npx");
     fs.writeFileSync(runner, "", { mode: 0o755 });

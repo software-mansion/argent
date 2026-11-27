@@ -267,6 +267,18 @@ export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number
   return typeof value === "number" ? value : null;
 }
 
+const AUTO_UPDATE_ENABLED_KEY = "autoUpdate.enabled";
+
+/**
+ * Whether automatic updates are on. The global install is shared by every Argent
+ * home, so an opt-out in ~/.argent also holds when ARGENT_HOME_DIR moves the home.
+ */
+export function isAutoUpdateEnabled(): boolean {
+  if (getConfigValueByKey(AUTO_UPDATE_ENABLED_KEY) !== true) return false;
+  const userHome = { homeDir: resolveHomeDir() };
+  return getConfigValueAtScope(AUTO_UPDATE_ENABLED_KEY, "global", userHome) !== false;
+}
+
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**
