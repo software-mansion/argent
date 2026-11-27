@@ -16,6 +16,8 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { awaitIosAppInFront } from "../../../utils/ios-front-app";
+import { settleWithin } from "../../../utils/timing";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -28,7 +30,7 @@ export function makeIosImpl(
 ): PlatformImpl<Record<string, unknown>, RestartAppParams, RestartAppResult> {
   return {
     requires: ["xcrun"],
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       const { udid, bundleId } = params;
       /**
        * Same reasoning as launch-app. native-devtools is a granted mechanism,
@@ -40,12 +42,10 @@ export function makeIosImpl(
        * fail on a grant the provider withheld, so one device would launch or
        * not depending only on which of its names was used.
        */
+      let nativeDevtools: NativeDevtoolsApi | undefined;
       if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
-        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-          ndRef.urn,
-          ndRef.options
-        );
+        nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
         const blocked = await precheckNativeDevtools(nativeDevtools, udid);
         if (blocked) return blocked;
       }
@@ -94,7 +94,18 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      return { restarted: true, bundleId };
+      await awaitIosAppInFront(registry, device, bundleId, options?.signal);
+      // A cancelled call stops waiting for the new process to be armed.
+      const capture = nativeDevtools
+        ? await settleWithin(
+            nativeDevtools.networkCaptureAfterLaunch(bundleId),
+            undefined,
+            options?.signal
+          )
+        : undefined;
+      if (capture?.type === "error") throw capture.cause;
+      const networkCapture = capture?.type === "value" ? capture.value : undefined;
+      return { restarted: true, bundleId, ...(networkCapture ? { networkCapture } : {}) };
     },
   };
 }

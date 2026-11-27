@@ -87,8 +87,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The text the runner hands the YAML parser for a flow file: whitespace around
+ * the content is dropped, but the line breaks before it are kept, so a parse
+ * error names the file's own line.
+ */
+export function flowYamlSource(content: string): string {
+  return content.replace(/^\s+/, (lead) => lead.replace(/[^\n]/g, "")).trimEnd();
+}
+
+/**
  * The project files a parsed flow document makes the runner read: the `run:`
- * targets of its steps and of the steps of its block directives (`when:`),
+ * targets of its steps and its `shutdown:` steps, and of the steps of its
+ * block directives (`when:`),
  * taken or not, spelled as the runner keeps them (extension completed), the
  * names of its `snapshot` steps, whose baselines the run reads or writes, and
  * its `tool:` steps, whose file arguments the run reads (which arguments are
@@ -138,7 +148,11 @@ export function collectFlowRequests(doc: unknown): {
       visit(step.steps, depth + 1);
     }
   };
-  if (isRecord(doc)) visit(doc.steps, 0);
+  if (isRecord(doc)) {
+    visit(doc.steps, 0);
+    // A `shutdown:` list runs in the same run and reads the same kinds of files.
+    visit(doc.shutdown, 0);
+  }
   return { runTargets: [...runTargets], snapshots: [...snapshots], toolSteps, nested };
 }
 

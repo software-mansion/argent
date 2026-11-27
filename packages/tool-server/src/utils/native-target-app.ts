@@ -1,4 +1,4 @@
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../blueprints/native-devtools";
 
 type NativeTargetResolutionSource =
@@ -9,10 +9,12 @@ interface ResolvedNativeTargetApp {
   source: NativeTargetResolutionSource;
 }
 
+function isForegroundActive(app: NativeAppState): boolean {
+  return app.applicationState === "active" || app.foregroundActiveSceneCount > 0;
+}
+
 export function chooseFrontmostConnectedApp(apps: NativeAppState[]): NativeAppState | null {
-  const strongCandidates = apps.filter(
-    (app) => app.applicationState === "active" || app.foregroundActiveSceneCount > 0
-  );
+  const strongCandidates = apps.filter(isForegroundActive);
   if (strongCandidates.length === 1) {
     return strongCandidates[0];
   }
@@ -28,10 +30,30 @@ export function chooseFrontmostConnectedApp(apps: NativeAppState[]): NativeAppSt
 }
 
 export async function inspectConnectedNativeApps(
-  api: NativeDevtoolsApi
+  api: NativeDevtoolsApi,
+  bundleIds = api.listConnectedBundleIds()
 ): Promise<NativeAppState[]> {
-  const bundleIds = api.listConnectedBundleIds();
-  const appStates = await Promise.all(bundleIds.map((bundleId) => api.getAppState(bundleId)));
+  let timeout: Error | undefined;
+  const responses = await Promise.all(
+    bundleIds.map(async (bundleId) => {
+      try {
+        return await api.getAppState(bundleId);
+      } catch (err) {
+        if (
+          !(err instanceof Error) ||
+          getFailureSignal(err)?.error_code !== FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT
+        ) {
+          throw err;
+        }
+        timeout ??= err;
+        return null;
+      }
+    })
+  );
+  const appStates = responses.filter((state) => state !== null);
+  // A suspended sibling cannot answer. With partial results, only a unique
+  // foreground-active response is enough evidence to select an app.
+  if (timeout && appStates.filter(isForegroundActive).length !== 1) throw timeout;
   return appStates.sort((a, b) => a.bundleId.localeCompare(b.bundleId));
 }
 
@@ -43,7 +65,8 @@ export async function resolveNativeTargetApp(
     return { bundleId, source: "explicit" };
   }
 
-  const connectedApps = await inspectConnectedNativeApps(api);
+  const bundleIds = api.listConnectedBundleIds();
+  const connectedApps = await inspectConnectedNativeApps(api, bundleIds);
   if (connectedApps.length === 0) {
     throw new FailureError(
       "No native-devtools-connected apps are available for auto-targeting. " +
@@ -58,7 +81,7 @@ export async function resolveNativeTargetApp(
   }
 
   const frontmost = chooseFrontmostConnectedApp(connectedApps);
-  if (connectedApps.length === 1) {
+  if (bundleIds.length === 1) {
     if (frontmost) {
       return {
         bundleId: connectedApps[0].bundleId,

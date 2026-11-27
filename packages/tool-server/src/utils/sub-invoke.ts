@@ -16,16 +16,18 @@ import type { InvokeToolOptions, Registry, ResolvedFileInput, ToolContext } from
  * to propagate this is a pass-through.
  *
  * The abort `signal` is forwarded on both paths so a client disconnect cancels a
- * sub-tool that would otherwise poll on to its own timeout, and so is
+ * sub-tool that would otherwise poll on to its own timeout, and so are
  * `flowStack`, the chain of enclosing flow runs a nested `flow-execute` checks
- * itself against, and so are `clientSecrets`, which a nested `type:` step
- * resolves against. `extra` is what a dispatcher decided for this one call, and
- * a key in it wins over the same key of `ctx`: `fileInputs`, the outcome of
- * the file boundary it applied to `args` itself (a `tool:` step whose files
- * are on the client, or a nested `flow-execute` whose flow and files the
- * client sent with the outer call), forwarded as an HTTP call forwards it; and
- * `flowStack`. `ctx.fileInputs` and `ctx.linked` are never forwarded on
- * their own: a sub-tool call is not an HTTP call.
+ * itself against, `flowSecret`, the secret holder it shares with them, and
+ * `clientSecrets`, which a nested `type:` step resolves against. `extra` is
+ * what a dispatcher decided for this one call, and a key in it wins over the
+ * same key of `ctx`: `fileInputs`, the outcome of the file boundary it applied
+ * to `args` itself (a `tool:` step's file arguments, read from the client or,
+ * without a link, from this host, or a nested `flow-execute` whose flow and
+ * files the client sent with the outer call),
+ * forwarded as an HTTP call forwards it; `flowStack`; and `flowSecret`.
+ * `ctx.fileInputs` and `ctx.linked` are never forwarded on their own: a
+ * sub-tool call is not an HTTP call.
  */
 export async function invokeSubTool<T = unknown>(
   registry: Registry,
@@ -35,14 +37,19 @@ export async function invokeSubTool<T = unknown>(
   extra?: {
     fileInputs?: Record<string, ResolvedFileInput>;
     flowStack?: InvokeToolOptions["flowStack"];
+    flowSecret?: InvokeToolOptions["flowSecret"];
+    flowOutput?: InvokeToolOptions["flowOutput"];
   }
 ): Promise<T> {
   const signal = ctx?.signal;
   const recordChildInvocation = ctx?.recordChildInvocation;
   const flowStack = extra?.flowStack ?? ctx?.flowStack;
+  const flowSecret = extra?.flowSecret ?? ctx?.flowSecret;
   const forwarded = {
     ...(extra?.fileInputs ? { fileInputs: extra.fileInputs } : {}),
     ...(flowStack ? { flowStack } : {}),
+    ...(flowSecret ? { flowSecret } : {}),
+    ...(extra?.flowOutput ? { flowOutput: extra.flowOutput } : {}),
     ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
   };
   if (!recordChildInvocation) {

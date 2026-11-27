@@ -13,7 +13,10 @@ import {
   modify as modifyJsonc,
   parse as parseJsonc,
   type JSONPath,
+  type ParseError,
+  type ParseOptions,
 } from "jsonc-parser";
+import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
 
 // Re-exported so existing `./utils.js` import sites keep resolving after these
@@ -22,6 +25,8 @@ export {
   formatShellCommand,
   shellQuotePath,
   detectPackageManager,
+  detectGlobalPackageManager,
+  globalCommandOptions,
   detectProjectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
@@ -32,6 +37,8 @@ export {
 export type { PackageManager, ShellCommand } from "./package-manager.js";
 export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
 export {
+  getRemainingGlobalBinaryPath,
+  isArgentOnPath,
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,
@@ -275,13 +282,15 @@ const PROJECT_ROOT_MARKERS = [
 // The walk never climbs into the home directory: `~/.claude`, `~/.cursor`,
 // `~/.codex`, … are the editors' global config dirs, not project markers, so
 // matching them would resolve every markerless project under home to home.
+// Home is matched by canonical path: process.cwd() is physical, while $HOME may
+// run through a symlink (Fedora Atomic's /home -> /var/home).
 export function resolveProjectRoot(startDir: string, homeDir: string = os.homedir()): string {
   const initialDir = path.resolve(startDir);
-  const home = path.resolve(homeDir);
+  const home = canonicalPath(homeDir);
   let currentDir = initialDir;
 
   while (true) {
-    if (currentDir === home && currentDir !== initialDir) {
+    if (currentDir !== initialDir && canonicalPath(currentDir) === home) {
       return initialDir;
     }
 
@@ -428,6 +437,40 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
     Record<string, unknown> | undefined;
   return parsed ?? {};
+}
+
+function tomlSyntaxErrorLine(raw: string): number | null {
+  try {
+    parseToml(raw);
+    return null;
+  } catch (err) {
+    return (err as { line?: number }).line ?? 1;
+  }
+}
+
+function yamlSyntaxErrorLine(raw: string): number | null {
+  const first = parseDocument(raw, { uniqueKeys: false }).errors[0];
+  return first ? (first.linePos?.[0].line ?? 1) : null;
+}
+
+export function findConfigSyntaxErrorLine(
+  filePath: string,
+  jsonOptions: ParseOptions
+): number | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  if (raw.trim() === "") return null;
+  if (filePath.endsWith(".toml")) return tomlSyntaxErrorLine(raw);
+  if (/\.ya?ml$/.test(filePath)) return yamlSyntaxErrorLine(raw);
+  const errors: ParseError[] = [];
+  parseJsonc(raw, errors, jsonOptions);
+  const first = errors[0];
+  return first ? raw.slice(0, first.offset).split("\n").length : null;
 }
 
 /**
@@ -723,22 +766,6 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
   }
   childEnv.GIT_CONFIG_COUNT = String(count);
   return childEnv;
-}
-
-// `cwd`: where the `skills` command will run - `npx --no-install` resolves a
-// project-local bin from it.
-export function isSkillsCliAvailable(cwd?: string): boolean {
-  try {
-    execSync("npx --force --no-install skills --version", {
-      env: npxChildEnv(),
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: PROBE_TIMEOUT_MS,
-      ...(cwd ? { cwd } : {}),
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {

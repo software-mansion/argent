@@ -18,3 +18,4 @@ export {
 } from "@argent/configuration-core";
 export { telemetry } from "./telemetry.js";
 export { providers } from "./providers.js";
+export { doctor } from "./doctor.js";

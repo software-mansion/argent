@@ -2,6 +2,7 @@
 sidebar_position: 6
 sidebar_label: E2E YAML
 title: E2E YAML reference
+description: "Reference for the Argent e2e test file: the YAML shape, the selectors, the directives and the argent e2e command."
 sidebar_custom_props:
   icon: scroll-text
 ---
@@ -50,14 +51,16 @@ steps:
   - await: { idle: true }
 ```
 
-The file has four top-level keys:
+The file has six top-level keys:
 
-| Key                     | Required | Description                                                                                        |
-| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
-| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
-| `version`               | no       | The file format version. The value is `2`. Argent writes it. A file without `version` is version 1 |
+| Key                     | Required | Description                                                                                          |
+| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                    |
+| `shutdown`              | no       | Steps that run after `steps`, also when a step failed. See [Shutdown](#shutdown)                     |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                              |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                            |
+| `env`                   | no       | Environment values for each `script` step of the file. See [Environment values](#environment-values) |
+| `version`               | no       | The file format version. The value is `2`. Argent writes it. A file without `version` is version 1   |
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
@@ -85,7 +88,52 @@ Argent skips leading `echo` and `script` steps when it classifies an e2e test. A
 
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
-When a step fails, Argent stops the e2e test and reports the later steps as skipped.
+A failure in `steps` skips the remaining entries in that list. Argent then runs the `shutdown` steps.
+
+### Shutdown
+
+Use `shutdown` for cleanup that should run after `steps` pass or fail. The two lists accept the same directives. Only `steps` determines whether the file is a standalone e2e test or a fragment.
+
+```yaml
+steps:
+  - script: { path: scripts/create-user.mjs }
+  - launch: com.example.app
+  - tap: { id: login }
+shutdown:
+  - when: { output: user.id, exists: true }
+    steps:
+      - script:
+          path: scripts/delete-user.mjs
+          env: { USER_ID: "{{output:user.id}}" }
+```
+
+The main steps can stop before they create the data to clean up. Guard cleanup with an output check, as above, or use a fallback the script can handle. See [References](#references).
+
+Argent attempts each top-level shutdown entry even if an earlier entry fails. A `when:` block or `run:` fragment still stops its own steps at the first failure. Put cleanup steps that depend on one another in the same block.
+
+If Argent rejects the run before the first step, it does not run or report shutdown entries. Cancelling a run skips any remaining shutdown entries with the reason `run aborted`.
+
+#### Fragments with shutdown steps
+
+Argent queues a fragment's shutdown when a `run:` step loads it. At the end of the run, Argent processes queued fragments in reverse load order, then runs the test's own shutdown. If a shutdown entry itself loads a fragment, that fragment's cleanup runs before the next entry. A `tool: e2e-execute` step runs its shutdown as part of its separate run.
+
+Each load queues cleanup, and all loads share the same output object. If a fragment can run more than once, append each item ID to an output list. In the shutdown script, use `pop()` to clean up the most recent item first.
+
+#### Find cleanup failures in the report
+
+Shutdown steps appear after the main steps in the report and count toward the totals. Each has `shutdown: true`. A failed cleanup fails the run and sets `shutdownFailed: true`. The CLI prints `shutdown did not finish:` and identifies the failed step. If a main step also failed, the report keeps it as the first failure.
+
+#### Record shutdown steps
+
+Pass `shutdown: true` to `e2e-add-step`, `e2e-add-script`, or `e2e-add-echo`. Record the main steps first. Cleanup actions and scripts run during recording. They can change the device or remove test data.
+
+A shutdown script receives output from the main steps and earlier shutdown steps. It passes its changes only to later shutdown steps.
+
+A fragment recorded as a `run:` in the main list normally defers its cleanup. Later main steps can use the state the fragment created. Deferred cleanup runs in reverse order before the first `e2e-add-step` or `e2e-add-script` call with `shutdown: true`. If neither call occurs, `e2e-finish-recording` runs the cleanup. Restarting the recording also runs deferred cleanup from the recording it replaces.
+
+A fragment cleans up within its own call when you record it in the shutdown list, upload it over a link, or start a Chromium app that closes at the end of the call. Check the tool message for whether cleanup already ran.
+
+If cancellation interrupts deferred cleanup, the affected fragments stay queued for another shutdown call or for finish. If finish is cancelled while cleanup remains queued, the recording stays open. Check the tool result before retrying. Cleanup can run even if the tool then refuses the new step.
 
 ### Requirements
 
@@ -193,7 +241,7 @@ Copy control identifiers and `AX` roles from `describe`. The runner uses the sam
 
 ## Directives
 
-Each step contains one directive. A failed directive stops the e2e test.
+Each step contains one directive. See [Shutdown](#shutdown) for cleanup after a failure.
 
 | Directive    | Shape                                                              | Description                                                                                          |
 | ------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
@@ -211,12 +259,14 @@ Each step contains one directive. A failed directive stops the e2e test.
 | `wait`       | `<milliseconds>`                                                   | Pause for a fixed time                                                                               |
 | `snapshot`   | `<name>` or `{ name, maxMismatch, cropOn }`                        | Compare a screenshot with a stored baseline. See [Snapshots](#snapshots)                             |
 | `run`        | `<path>`                                                           | Run another e2e test file inline. See [Composition](#composition)                                    |
-| `script`     | `{ path, timeout }`                                                | Run a local JavaScript or TypeScript file in a new Node process. See [Local scripts](#local-scripts) |
+| `script`     | `{ path, timeout, env }`                                           | Run a local JavaScript or TypeScript file in a new Node process. See [Local scripts](#local-scripts) |
 | `when`       | `{ <condition> }` or `{ platform }`, with `steps:`                 | Run the nested steps only when the condition holds. See [Optional steps](#optional-steps)            |
 | `echo`       | `<message>`                                                        | Print a message in the report                                                                        |
 | `tool`       | `<tool name>`, with `args:` and optional `delayMs:`                | Call any Argent tool with the given arguments                                                        |
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
+
+On Chromium, when a nested scroller cuts the `scroll-to` target along the scroll direction, Argent scrolls inside that scroller. When the scrolls stop moving the target, the step passes with the target still cut.
 
 The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Argent supports it only on a Mac app. On other platforms, the step fails before the runner reads the tree. To open a context menu on iOS or Android, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
 
@@ -357,6 +407,26 @@ After a `fold` step:
 - On iOS, a fold between two angles that are not 0 or 180 can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 - On Android, the report names the device state that Android committed, for example `CLOSED`.
 
+### Network checks
+
+Use `tool: await-network-request` to check that an action sends a request. Start capture after launch and before the action. Stop capture after the last network check.
+
+```yaml
+- launch: com.example.app
+- await: { visible: { id: login-button } }
+- tool: network-capture-start
+  args: { bundleId: com.example.app }
+- tap: { id: login-button }
+- tool: await-network-request
+  args: { bundleId: com.example.app, method: POST, url: /v1/auth/login, status: 200 }
+- tool: network-capture-stop
+  args: { bundleId: com.example.app }
+```
+
+The runner supplies the device ID. Keep the `tool:` form. Argent rejects secret placeholders in `url`. Match on a URL fragment that contains no secret. The result includes the full matched URL.
+
+The step reports `fail` when the wait returns `success: false`. The failure reason includes any near misses and the criteria they missed. The step reports `error` if capture has no start for the target. A failed step skips the remaining steps. If replay skips the stop, stop capture before you rerun the test. See [Wait for a request](/docs/reference/tools#wait-for-a-request).
+
 ## Conditions
 
 ```yaml
@@ -374,6 +444,8 @@ After a `fold` step:
 | `hidden`  | No visible element matches the selector                          |
 | `text`    | The text of the element in `in` satisfies exactly one comparator |
 
+An `assert` can also check a value that a script returned. See [Check an output](#check-an-output).
+
 The `text` comparators:
 
 | Comparator | Match                           |
@@ -381,6 +453,8 @@ The `text` comparators:
 | `contains` | Case-insensitive substring      |
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
+
+On Chromium, `matches` reads text in the letter case that the page shows. For example, the CSS `text-transform: uppercase` makes `Save` read as `SAVE`.
 
 `matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
 
@@ -432,7 +506,7 @@ On HarmonyOS, the runner has no UI tree, so `idle` cannot run. The step errors i
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, an [`output` check](#check-an-output), or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
 
 ## Composition
 
@@ -463,6 +537,20 @@ A `tool: e2e-execute` step runs a different e2e test as a nested run. `run:` ste
 
 A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
 
+Before the capture, the step waits until the screen stops changing:
+
+| Device                                                                            | The step waits until                      |
+| --------------------------------------------------------------------------------- | ----------------------------------------- |
+| Local iOS simulator or Android emulator, without `cropOn`                         | Two screenshots 100 ms apart are the same |
+| Other devices, a remote simulator, an Apple TV simulator, or a step with `cropOn` | Two reads of the UI tree are the same     |
+| HarmonyOS                                                                         | The step does not wait                    |
+
+On a local iOS simulator or an Android emulator, a step without `cropOn` also waits until a quiet time has passed. The quiet time is 300 ms on iOS and 400 ms on Android. It starts at the start of the test and again at the end of each step that can change the screen. The steps `await`, `assert`, `wait`, `echo` and `snapshot` do not change the screen.
+
+For 2 seconds after the start of the test or after a step that can change the screen, two screenshots that differ slightly are not enough. The step also compares the newest screenshot with a screenshot from at least 300 ms earlier. Thus the step waits for most fades that start slowly.
+
+The step compares screenshots for a maximum of 3 seconds. In portrait, the status bar and the home indicator do not count as a change. A caret or a spinner counts as a change for the first 300 ms only.
+
 Baselines live in `__baselines__/<test>/` beside the e2e test file, for example `.argent/e2e/__baselines__/checkout/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent e2e run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
 
 Mac snapshots capture the app window and attached dialogs or menus at one pixel per point. Baseline names include `macos` and the capture size, such as `summary__macos-900x640.png`. Keep the window size consistent between runs. After an intentional resize, update and review the baseline.
@@ -478,6 +566,7 @@ Use a snapshot for layout, color, spacing, typography, clipping and icons. Do no
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+- script: { path: ../../scripts/seed-order.mjs, env: { ORDER_COUNT: "3" } }
 ```
 
 Use a `script` step for setup or cleanup that device steps cannot do. The script must be a local file with one of these extensions:
@@ -493,7 +582,7 @@ Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-A `script` step needs no device. An e2e test of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the e2e test resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+Scripts and output checks can run without a device. A test that calls a fragment with `run:` or uses a UI or platform guard still needs a target.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
@@ -501,6 +590,7 @@ The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 | --------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`    | yes      | An `.mjs`, `.mts`, `.js` or `.ts` file, relative to the e2e test file that holds the step. Write the extension in lowercase, and match the letter case on disk |
 | `timeout` | no       | The time limit of the step in milliseconds. The minimum is 100, and the default is 30000                                                                       |
+| `env`     | no       | Environment values for this step only. See [Environment values](#environment-values)                                                                           |
 
 Argent runs the script with the project root as the working directory. Argent gives the script an allowlist of environment names. Argent copies each value from the tool-server, not from the shell that starts the run. The tool-server is a long-lived process, so the values are the ones it held when it started. A variable you export now reaches a script only after you restart the tool-server. See [Environment variables](/docs/reference/configuration#environment-variables). The allowlist holds these groups:
 
@@ -512,13 +602,13 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The adb server names `ANDROID_ADB_SERVER_PORT`, `ANDROID_ADB_SERVER_ADDRESS` and `ADB_SERVER_SOCKET`. Thus `adb` in a script uses the same adb server as the tool-server. This includes a server that [`android.adbServerPort`](/docs/reference/configuration#available-keys) selects
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
-Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.
+Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. To give the script more names, see [Environment values](#environment-values).
 
 Three entries in the list give access to a credential. Each entry holds the value of the tool-server. `SSH_AUTH_SOCK` reaches the SSH agent of the session that started the tool-server. An `npm_config_` name can hold a registry token. `HOME` is the home directory of that session, so the script reads `~/.npmrc`, `~/.aws/credentials` and `~/.argent/` from there. Run a script only when you trust it.
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
-A failed step stops the e2e test. The verdict names the side that caused the failure.
+The verdict identifies whether the script or the host caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                                                                             |
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -538,6 +628,104 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs before Argent restarts the app.
 
 On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
+
+### Environment values
+
+Set `env` in the e2e test file for defaults, or in a `script` step for values specific to that step. The script reads them from `process.env`.
+
+```yaml
+env:
+  API_URL: https://staging.example.com
+steps:
+  - script:
+      path: ../../scripts/seed-order.mjs
+      env:
+        PORT: "8080"
+        API_TOKEN: "{{secret:API_TOKEN}}"
+```
+
+For each name, Argent applies values in this order. The last value wins.
+
+1. The tool-server environment allowlist.
+2. The e2e test file's `env`.
+3. The script step's `env`.
+4. The run's `--env NAME=value` options or the `env` argument of `e2e-execute`.
+
+On Windows, variable names are case-insensitive.
+
+A fragment called with `run:` inherits the caller's defaults. Its own `env` fills missing defaults for that fragment and any fragments it calls. A `tool: e2e-execute` step starts a separate run. Pass its overrides explicitly in the tool's `env` argument.
+
+Use names that match `[A-Za-z_][A-Za-z0-9_]*`, except `__proto__`. Quote YAML values such as `"8080"` or `"true"` to keep them as strings. Values cannot contain NUL characters. The script runner rejects reserved names such as `NODE_OPTIONS` and lists them in the error.
+
+To pass a value from an earlier script, put an [output reference](#script-output) in the script step's `env`. File defaults and run overrides support `{{secret:NAME}}` as their only placeholder.
+
+#### Set values while recording
+
+- Pass `env` to `e2e-start-recording` to set the file's defaults. Starting again under the same name replaces the file and its defaults.
+- Call `e2e-set-env` to update the defaults in an active recording. Use `null` to remove a name. If you remove the last name, Argent removes the top-level `env` key.
+- Pass `env` to `e2e-add-script` to override defaults for that step. Argent uses the values when it runs the script during recording and saves the overrides on the step.
+
+Invalid input or an unresolved secret stops the call before it writes the environment values. If the recording file is invalid, fix it before retrying `e2e-add-script`. Argent checks the file before it runs the script.
+
+#### Secrets in environment values
+
+Use `{{secret:NAME}}` for credentials. A placeholder can be the whole value or part of a longer string. Argent looks up the name using the run's project root. See [Secrets](/docs/reference/configuration#secrets).
+
+If a secret is missing from the file or step environment, the script step errors before it starts. If a run override refers to a missing secret, Argent rejects the run before the first step.
+
+Argent replaces resolved secrets with their placeholders in script logs and failure details. It matches raw, URL-encoded, and JSON-escaped forms. Argent also matches fragments of six or more characters. Unrelated text that matches a fragment can be redacted too. For shorter secrets, Argent matches the full value. Plain-text credentials and encodings such as base64 or hex can still appear in logs. Keep credentials out of script logs.
+
+### Script output
+
+Scripts share one JSON object per run through the global `output`. A successful script can add, change, or delete values. Assigning to `output` replaces the object. A failed script leaves it unchanged. The object can hold up to 1 MiB of JSON data. Convert values such as a `Date` to strings before storing them.
+
+For example, a script that creates a user can save the ID as `output.user = { id: user.id }`. Later steps can check the ID and pass it to another script.
+
+```yaml
+steps:
+  - script: { path: ../../scripts/create-user.mjs }
+  - assert: { output: user.id, exists: true }
+  - script:
+      path: ../../scripts/delete-user.mjs
+      env: { USER_ID: "{{output:user.id}}" }
+```
+
+A `run:` fragment shares its caller's output. A `tool: e2e-execute` step starts with an empty output object and keeps its results in that run. Pass inputs to it through its `env` argument.
+
+#### References
+
+Quote each YAML value containing `{{output:PATH}}`. Join keys and zero-based array indexes with dots, as in `items.0.name`. Start a key with an ASCII letter or underscore. The remaining characters can also include digits and hyphens.
+
+Argent resolves references when the step runs. A missing or `null` value causes a step error unless you supply a fallback, as in `{{output:user.role ?? guest}}`. The error identifies where the path stopped. Use a JSON number, boolean, `null`, double-quoted JSON string, or plain text as the fallback. An empty fallback produces an empty string. Keep templates and `}}` out of fallback values. If a reference fails in a top-level `shutdown` entry, the next entry still runs.
+
+#### Fields that take a reference
+
+Use references in tool arguments, selectors and their scopes, `type` text, `equals` or `contains` comparisons, and a script step's `env` values.
+
+- When a tool argument is exactly one reference, Argent keeps its JSON type. Return a string from the script if the argument requires text. The `env` argument of `tool: e2e-execute` accepts a reference to a whole map or references in individual values.
+- In text fields, Argent converts numbers and booleans to text. A fallback uses its written form, so `1.10` remains `"1.10"`. Reference a scalar inside an object or list to use it as text.
+- After substitution, each selector value needs a visible character. The `type` text and `contains` value must be non-empty.
+
+Use literal values for `echo`, `launch`, `run`, `snapshot.cropOn`, and `matches` regular expressions. For `tool: e2e-execute`, only `env` accepts references.
+
+#### Check an output
+
+Use `assert: { output: user.role, equals: admin }` to require a value, or use the same condition with `when` to guard a block. Write the path without braces and supply one comparator.
+
+- `exists: true` requires a value. `exists: false` requires a missing or `null` value.
+- `equals`, `contains`, and `matches` compare strings, numbers, and booleans as case-sensitive text. Quote comparison values such as `"3"`. The `matches` comparator uses a JavaScript regular expression.
+
+Output checks need no device. To check the screen against a script value, use a UI assertion such as `assert: { text: { in: { id: user-name }, equals: "{{output:user.name}}" } }`. The UI comparison is case-insensitive.
+
+#### Secrets in output
+
+Argent redacts resolved secrets from output strings using the same rules as script logs. Object keys can still expose secrets. Argent errors if substituting an output reference would create a secret placeholder. Put secret placeholders directly in the e2e test file.
+
+#### Record a script output
+
+Record scripts one at a time so each script sees the previous script's output. `e2e-add-script` returns the updated object in `outputJson` and resolves its `env` references against prior output. If `outputTruncated` is true, the response shows only part of the object. Later steps still have the full object.
+
+`e2e-add-step` resolves references before running the call, then saves the original references in a `tool:` step. If a reference fails to resolve, the tool runs and records nothing. A call recorded as a `run:` fragment shares the recording's output. Editing the YAML during recording does not update the output object.
 
 ### Module type
 
@@ -651,7 +839,7 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                      |
 | `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                                 |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                              |
+| `argent e2e run <dir>`       | Run the e2e tests in the directory. Only a suite has a set order. See [Suites](#suites)                               |
 | `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                                          |
 | `argent e2e list <dir>`      | List the e2e tests that `argent e2e run <dir>` runs. The path must not contain `..`                                   |
 | `argent e2e list <dir> -r`   | List the e2e tests that `argent e2e run <dir> -r` runs                                                                |
@@ -663,7 +851,16 @@ Without these options, `tsc` rejects an import that ends in `.ts` or `.mts`, and
 
 `argent e2e list` writes a warning on stderr for an empty file and for a file with a YAML syntax error, for example `warning: <path> is empty`. Stdout holds only the paths.
 
-When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
+`argent e2e list` prints the e2e tests of a [suite](#suites) in the run order of the suite. Stdout does not hold an e2e test file that `tests` does not name, or an e2e test of a suite with an invalid `suite.config.yaml` file. `argent e2e list` reports them on stderr:
+
+- An e2e test file that `tests` does not name gets the same warning as in a directory run.
+- A suite with an invalid `suite.config.yaml` file gets one warning with the reason of the rejection. A `not listed: <path>` line follows for each e2e test of the suite.
+
+Argent writes no file warning, such as `is empty`, for an e2e test that stdout does not hold.
+
+The exit code stays 0. When Argent leaves all e2e tests out of stdout, Argent writes only the warnings.
+
+When neither `.argent/e2e` nor `.argent/flows` exists, `argent e2e list` writes `warning: no .argent/e2e or .argent/flows directory in the current working directory` on stderr. When the directories hold no e2e test and no invalid `suite.config.yaml` file, `argent e2e list` writes `No e2e tests found in .argent/e2e or .argent/flows` on stderr. In both cases, stdout is empty and the exit code is 0. When one of the directories exists but Argent cannot read it, `argent e2e list` writes `Could not read e2e test directory: <dir>` on stderr and gives exit code 2.
 
 `argent e2e list <dir>` prints paths relative to the current directory for a relative `<dir>`, and absolute paths for an absolute `<dir>`. `argent e2e run` accepts each printed path. Argent puts `./` in front of a printed path that starts with `-`, so that `argent e2e run` does not read the path as an option.
 
@@ -677,29 +874,31 @@ Argent writes an error on stderr and gives exit code 2 when `<dir>`:
 
 When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires a directory path` on stderr and gives exit code 2.
 
-When Argent finds no e2e test in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
+When Argent finds no e2e test and no invalid `suite.config.yaml` file in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
-| Option               | Description                                                                                                                                                                   |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                   |
-| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
-| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                             |
-| `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                 |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                               |
-| `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                     |
+| Option               | Description                                                                                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                                     |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either                      |
+| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines`                   |
+| `--env NAME=value`   | Override a script environment value for this run. The value starts after the first `=`. Repeat for more names. For one name, the last value wins. See [Environment values](#environment-values) |
+| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                                             |
+| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                                               |
+| `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                                   |
+| `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                                                 |
+| `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                                       |
 
 ```bash
 argent e2e run checkout --platform ios
 argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
 argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
 argent e2e run .argent/e2e --recursive
+argent e2e run checkout --env API_URL=https://staging.example.com
 ```
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
-When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. The rule also counts the steps of nested `tool: e2e-execute` runs and of the runs around them. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of an e2e test run shows the time of the run. The summary of a directory run shows the time of all e2e tests, for example `(1m 32s)`.
 
@@ -723,16 +922,21 @@ The outcome line of an e2e test that produced a report gives the result, the ste
 | `did not finish (run error)`        | The run failed before it produced a report                                                |
 | `did not finish (no run report)`    | The tool-server answered without a run report                                             |
 | `not run (batch stopped)`           | An earlier failure ended the directory run. Directory runs only                           |
+| `skipped (earlier test failed)`     | An earlier e2e test of the same suite failed. Directory runs only                         |
+| `skipped (invalid suite config)`    | The e2e test is in a suite with an invalid `suite.config.yaml` file. Directory runs only  |
+| `not run (invalid suite config)`    | The outcome line of an invalid `suite.config.yaml` file. Directory runs only              |
 | `not run (tool-server unreachable)` | The CLI did not connect to the tool-server that `argent link` or `ARGENT_TOOLS_URL` names |
 
 The `Failed e2e tests` section has one entry for each e2e test that failed. Each entry holds these items:
 
 - The e2e test path.
 - The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
-- The reason of that step, or the error message of an e2e test without a report.
-- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform` and `--update-baselines` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
+- The reason of that step, or the error message of an e2e test without a report. Then each baseline that the CLI could not write, with the path and the reason.
+- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform`, `--update-baselines` and `--env` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
+
+The section also has one entry for each invalid `suite.config.yaml` file. See [Suites](#suites).
 
 This is the end of the output of `argent e2e run ./e2e --recursive --platform chromium`:
 
@@ -754,35 +958,157 @@ When a single e2e test run fails its steps, Argent prints the first step that fa
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and an `e2eTests` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` puts the same two fields on its `error` record. An entry with the status `skip` holds neither. An entry that Argent skipped for its `requires` block holds `reason`. `ok` is `false` when the directory run skipped all e2e tests.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and an `e2eTests` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test of the run, and one entry for each invalid `suite.config.yaml` file. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` puts the same two fields on its `error` record. An entry with the status `skip` holds neither. An entry that Argent skipped for its `requires` block or for its suite holds `reason`. `ok` is `false` when the directory run skipped all e2e tests.
 
 A single e2e test run with `--json` writes the report of that e2e test. The report holds `e2eTest`, the name of the e2e test, and `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step holds `e2eTest`, the e2e test or fragment that the step belongs to. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
 
 With `--json`, Argent writes these objects on stderr, one on each line. Argent writes one object for each of these errors:
 
 - an e2e test in a directory run that failed without a report
+- an invalid `suite.config.yaml` file in a directory run
 - a usage error, such as an unknown flag
 
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
 
+### Suites
+
+A suite is a directory with a `suite.config.yaml` file. The e2e tests of a suite run in a set order. By default, when an e2e test of a suite fails, Argent skips the later e2e tests of the suite. Use a suite when an e2e test needs the state that an earlier e2e test makes. For example, an e2e test deletes the post that an earlier e2e test adds.
+
+```text
+.argent/e2e/
+  login.yaml
+  posts/
+    suite.config.yaml
+    add-post.yaml
+    edit-post.yaml
+    delete-post.yaml
+```
+
+```yaml
+# .argent/e2e/posts/suite.config.yaml
+continueOnFailure: false
+tests:
+  - add-post
+  - edit-post
+  - delete-post
+```
+
+A suite holds only the e2e test files directly in its directory. A subdirectory is a suite only when it has its own `suite.config.yaml` file.
+
+| Key                 | Default                                                 | Description                                                                      |
+| ------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `tests`             | All e2e test files of the directory, in file name order | The names of the e2e tests of the suite, in run order. A name can end in `.yaml` |
+| `continueOnFailure` | `false`                                                 | `true` runs the later e2e tests of the suite after a failure                     |
+
+Both keys are optional. An empty `suite.config.yaml` file makes the directory a suite with the default values.
+
+:::note
+
+YAML reads an unquoted name such as `2024` or `true` as a number or a boolean. Put such a name in quotes in `tests`, for example `- "2024"`.
+
+:::
+
+#### Order
+
+Argent runs the e2e tests of a suite one after the other. Argent does not guarantee the order of the suites in a run. Without a `suite.config.yaml` file, the e2e tests in a directory are independent. They have no set order, and a failed e2e test does not skip the others.
+
+`argent e2e run <name>` and `argent e2e run <path>.yaml` run one e2e test. They ignore the `suite.config.yaml` file. `argent e2e list` prints the e2e tests of a suite in run order. See [The `argent e2e` command](#the-argent-e2e-command).
+
+#### Files that `tests` does not name
+
+When `tests` is set, an e2e test file in the directory that `tests` does not name does not run. Before the first e2e test, Argent writes one warning on stderr for each such file:
+
+```text
+warning: posts/draft.yaml is not listed in the tests of posts/suite.config.yaml and does not run
+```
+
+With `--json`, each warning is a warning object: `{ "event": "warning", "warning": <text> }`. The `e2eTests` array and the counts do not include the file.
+
+#### Failures in a suite
+
+An e2e test of a suite fails in these cases:
+
+- The e2e test fails its steps.
+- The tool-server rejects the e2e test with a validation error, for example an invalid file.
+- The CLI cannot write a baseline of the e2e test.
+
+Argent then skips the later e2e tests of the suite. The outcome line of each one is `skipped (earlier test failed)`. The next line names the e2e test that failed:
+
+```text
+[3/4] posts/edit-post.yaml
+  · skipped (earlier test failed)
+    earlier test failed: posts/add-post.yaml
+```
+
+With `--json`, the `reason` of the entry is `earlier test failed: <path>`. The e2e tests outside the suite still run. With `continueOnFailure: true`, the later e2e tests of the suite also run.
+
+An e2e test that Argent skips for its `requires` block is not a failure. The suite continues.
+
+The `re-run:` command of a failed e2e test runs only that e2e test, without the earlier e2e tests of the suite. To run the suite again, run the suite directory.
+
+#### Invalid `suite.config.yaml` file
+
+Argent rejects a `suite.config.yaml` file in these cases:
+
+- Argent cannot read the file, or the file is not valid YAML.
+- The file is not a YAML map. An empty file is valid.
+- The file has a key that is not `tests` or `continueOnFailure`.
+- `continueOnFailure` is not `true` or `false`.
+- `tests` is not a list, or the list is empty.
+- An entry in `tests` is not a string.
+- An entry in `tests` is not a valid e2e test name, for example a name with a `/`.
+- `tests` names the same e2e test two times.
+- An entry in `tests` names no e2e test file directly in the directory.
+
+Argent also checks a `suite.config.yaml` file in a directory that has no e2e test file.
+
+Argent does not run the e2e tests of a rejected suite. The e2e tests outside the suite still run. The output shows the rejection in these items:
+
+- The `suite.config.yaml` file has its own numbered header and the outcome line `not run (invalid suite config)`. Argent writes the reason on stderr.
+- Each e2e test of the suite has the outcome line `skipped (invalid suite config)`. The next line names the `suite.config.yaml` file.
+- The `Failed e2e tests` section has an entry for the `suite.config.yaml` file. Its `re-run:` command runs the suite directory.
+- The summary counts the `suite.config.yaml` file as one failed entry. The exit code is 1. After a batch stop, the exit code can be different.
+
+```text
+[2/5] posts/suite.config.yaml
+  ✗ not run (invalid suite config)
+posts/suite.config.yaml: unknown key "bogus"; the allowed keys are tests and continueOnFailure
+[3/5] posts/add-post.yaml
+  · skipped (invalid suite config)
+    invalid suite config: posts/suite.config.yaml
+```
+
+With `--json`, the `e2eTests` array has an entry for the `suite.config.yaml` file: `{ "path": "posts/suite.config.yaml", "status": "fail", "error": <reason>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. Argent writes the same `error`, `error_code` and `error_kind` in an error object on stderr. The `reason` of each skipped e2e test is `invalid suite config: <path>`.
+
+When an earlier failure stopped the directory run, Argent still reports the `suite.config.yaml` file as above. These items are different:
+
+- Each e2e test of the suite has the outcome line `not run (batch stopped)`. No line names the `suite.config.yaml` file.
+- With `--json`, the entry of each e2e test of the suite has no `reason`.
+- When the CLI did not connect to the tool-server, the exit code is 2.
+
 ### The `argent e2e list` JSON document
 
-`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. Each entry holds these fields:
+`argent e2e list --json` writes one document on stdout. The document holds an `e2eTests` array. The array has the same order as the plain output. The array also holds the e2e test files that the plain output leaves out, and each invalid `suite.config.yaml` file in a directory that has no e2e test file. Each entry holds these fields:
 
 | Field        | Description                                                                                                                      |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
 | `path`       | The path that the plain output prints                                                                                            |
 | `name`       | The name that `argent e2e run <name>` accepts. Only for a file directly in `.argent/e2e` or `.argent/flows`                      |
-| `legacy`     | `true` for an e2e test in `.argent/flows`                                                                                        |
+| `legacy`     | `true` for an entry in `.argent/flows`                                                                                           |
 | `shadowedBy` | The path of an earlier entry with the same name. `argent e2e run <name>` runs that entry instead. Only when such an entry exists |
-| `warning`    | The problem in the file, as one of the codes below. Only when the file is empty or has a YAML syntax error                       |
+| `suite`      | The path of the suite directory, in the same form as `path`. Only for an entry in a suite                                        |
+| `warning`    | The problem, as one of the codes below. Only when a code applies                                                                 |
 
-| `warning` code | Meaning                                    |
-| -------------- | ------------------------------------------ |
-| `empty`        | The file is empty or holds only whitespace |
-| `syntax-error` | The file has a YAML syntax error           |
+| `warning` code         | Meaning                                                                                                                                                            |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `empty`                | The file is empty or holds only whitespace                                                                                                                         |
+| `syntax-error`         | The file has a YAML syntax error                                                                                                                                   |
+| `invalid-suite-config` | The e2e test is in a suite with an invalid `suite.config.yaml` file. A directory run skips it. The entry of an invalid `suite.config.yaml` file also has this code |
+| `not-in-suite`         | The `tests` list of the suite does not name the file. A directory run does not run it                                                                              |
+
+When a file has a suite code and a file code, the entry holds the suite code.
 
 ```json
 {
@@ -799,9 +1125,9 @@ Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--p
 }
 ```
 
-When Argent finds no e2e test, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
+When Argent finds no e2e test and no invalid `suite.config.yaml` file, the array is empty and the exit code is 0. When neither `.argent/e2e` nor `.argent/flows` exists, the document also holds a top-level `warning` field with the code `no-e2e-directory`. The top-level `warning` field is not the `warning` field of an entry. With `--json`, Argent writes no notes on stderr. With `--json`, a usage error writes one JSON object with `event` and `error` on stderr and gives exit code 2.
 
-`argent e2e list <dir> --json` gives each entry only the `path` field, and the `warning` field when it applies. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
+`argent e2e list <dir> --json` gives each entry only the `path` field, and the `suite` and `warning` fields when they apply. With `--json`, Argent writes each `<dir>` error as the JSON error object on stderr.
 
 <a id="flows-over-a-link" />
 
@@ -860,7 +1186,7 @@ For an e2e test with `snapshot:` steps, the CLI also uploads baselines from the 
 
 When a run that compares and a run that updates use the same directory, the CLI uploads the content of each baseline that the run that compares reads. It uploads the name of each other baseline.
 
-When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails with exit code 1. When the connection closes before the result, the CLI writes no baseline.
+When a run updates baselines, the tool-server returns each new baseline in the result, also the baselines of nested runs. The CLI writes each one into the directory of its run after the run, and into no other directory. When the CLI cannot write a baseline, it prints the path and the reason. The run then fails with `FAIL`, `"ok": false` and exit code 1. When the connection closes before the result, the CLI writes no baseline.
 
 The CLI does not upload a baseline that links out of the directories above, or a `.png` name that links to a file that is not a PNG file. A `snapshot:` step that reads or writes such a baseline reports `error`. When the `__baselines__/<test>/` directory itself links out of these directories, the CLI uploads no baseline and writes none.
 
@@ -903,7 +1229,7 @@ Over a link, both sources send these files with the call, and the tool-server ru
 - the snapshot baselines of each run
 - the file arguments of the `tool:` steps
 
-The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
+The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report shows `baseline not written` with the path and the reason, and the run fails. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
 
 Before the first step, Argent checks the e2e test and each fragment and nested e2e test that the client sends, at any depth. Argent rejects these:
 

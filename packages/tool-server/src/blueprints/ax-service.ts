@@ -19,7 +19,7 @@ import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 import { asUiOrientation, type UiOrientation } from "../tools/describe/contract";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
-export { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../utils/ax-prefs";
+export { ensureAutomationEnabled } from "../utils/ax-prefs";
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
@@ -139,7 +139,7 @@ export interface AXFillResponse {
 }
 
 export interface AXServiceApi {
-  /** Entitlement bypass isn't active (sim booted outside argent) — AX reads may come back empty. */
+  /** The simulator lacks required accessibility preferences. AX reads may come back empty. */
   degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
   /** The front app's full hierarchy; while a system alert shows, the system app first and the app under it second. */
@@ -348,7 +348,7 @@ export function axDaemonCrashSignal(err: unknown): string | undefined {
   );
 }
 
-// A failed start, by whether the entitlement bypass was inactive when it began.
+// A failed start, by whether the required accessibility preferences were missing when it began.
 const startFailureDegraded = new WeakMap<Error, boolean>();
 
 /**
@@ -574,10 +574,10 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       events.emit("terminated", err);
     };
 
-    const { entitlementBypassActive } = await host.bootstrapAx(udid);
+    const { accessibilityPrefsEnabled } = await host.bootstrapAx(udid);
     // Every failure from here on is of a start whose boot state is known.
     const startFailed = (err: unknown): unknown => {
-      if (err instanceof Error) startFailureDegraded.set(err, !entitlementBypassActive);
+      if (err instanceof Error) startFailureDegraded.set(err, !accessibilityPrefsEnabled);
       return err;
     };
 
@@ -755,7 +755,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     // an old daemon is not asked again before every touch.
     let lacksOrientationCommand = false;
     const api: AXServiceApi = {
-      degraded: !entitlementBypassActive,
+      degraded: !accessibilityPrefsEnabled,
 
       async describe(): Promise<AXDescribeResponse> {
         const result = (await query("describe", 10_000)) as AXDescribeResponse & {

@@ -25,7 +25,7 @@ vi.mock("../src/utils/ios-device-sets", async (importOriginal) => ({
 }));
 
 const isAndroidTvMock = vi.fn<(serial: string) => Promise<boolean>>();
-const runAdbMock = vi.fn<(argv: string[]) => Promise<string>>();
+const runAdbMock = vi.fn<(argv: string[]) => Promise<{ stdout: string; stderr: string }>>();
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
   isAndroidTv: (serial: string) => isAndroidTvMock(serial),
@@ -160,6 +160,60 @@ describe("screenshot tool on an Apple TV simulator", () => {
 
   it("skips the downscale at scale 1", async () => {
     expect(await zTargetsFor({ scale: 1 })).toEqual([]);
+  });
+
+  // The `simctl io` and `sips` argv of one capture; `sips` fails when `sipsFails`.
+  async function capturesFor(params: { scale?: number }, sipsFails = false) {
+    const io: string[][] = [];
+    const sips: string[][] = [];
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[]) ?? [];
+      if (args[0] === "xcrun") io.push(argv);
+      if (args[0] === "sips") sips.push(argv);
+      const fail = args[0] === "sips" && argv[0] === "-Z" && sipsFails;
+      callbackOf(args)?.(fail ? new Error("sips: unable to render") : null, {
+        stdout: "pixelWidth: 3840\npixelHeight: 2160\n",
+        stderr: "",
+      });
+    });
+    const tool = createScreenshotTool({ resolveService: vi.fn() } as unknown as Registry);
+    const parsed = tool.zodSchema!.parse({ udid: TV, ...params }) as Parameters<
+      typeof tool.execute
+    >[1];
+    await tool.execute({}, parsed, { artifacts: new ArtifactStore() });
+    return { io, sips };
+  }
+
+  it("takes a downscaled capture as JPEG and writes the PNG in the downscale", async () => {
+    const { io, sips } = await capturesFor({});
+
+    expect(io).toHaveLength(1);
+    expect(io[0]).toContain("--type=jpeg");
+    const jpeg = io[0]!.at(-1)!;
+    const resize = sips.find((argv) => argv[0] === "-Z")!;
+    expect(resize.slice(0, 5)).toEqual(["-Z", "576", "-s", "format", "png"]);
+    expect(resize[5]).toBe(jpeg);
+    expect(resize.at(-1)).toMatch(/\.png$/);
+  });
+
+  it("keeps a capture at a given scale lossless", async () => {
+    // Scale 0.25 is the flow settle's: JPEG would change its motion counts.
+    for (const scale of [1, 0.25]) {
+      const { io } = await capturesFor({ scale });
+
+      expect(io).toHaveLength(1);
+      expect(io[0]).not.toContain("--type=jpeg");
+      expect(io[0]!.at(-1)).toMatch(/\.png$/);
+    }
+  });
+
+  it("falls back to a full-resolution PNG when the downscale fails", async () => {
+    const { io } = await capturesFor({}, true);
+
+    expect(io).toHaveLength(2);
+    expect(io[1]).not.toContain("--type=jpeg");
+    expect(io[1]!.at(-1)).toMatch(/\.png$/);
   });
 });
 
@@ -308,7 +362,7 @@ describe("screenshot tool on Vega", () => {
     runAdbMock.mockReset().mockImplementation(async (argv) => {
       const png = new PNG({ width: dims.width, height: dims.height });
       await writeFile(join(argv[argv.length - 1]!, "shot.png"), PNG.sync.write(png));
-      return "";
+      return { stdout: "OK\r\n", stderr: "" };
     });
     const tool = createScreenshotTool({ resolveService: vi.fn() } as unknown as Registry);
     const parsed = tool.zodSchema!.parse({

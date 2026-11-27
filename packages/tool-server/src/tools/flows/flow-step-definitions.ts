@@ -12,6 +12,7 @@ import {
   type WhenCondition,
 } from "./flow-utils";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
+import type { OutputCheck } from "./flow-output";
 
 /**
  * The UI condition shape shared by `await`, `assert` and the UI arm of a
@@ -48,7 +49,8 @@ function yamlSelectorLabel(sel: FlowSelector): string {
 // Render a text condition for the summary: the comparator is preserved — regex
 // patterns as `matches /…/`, exact text as `== "…"`, substrings as
 // `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous.
+// control characters stay unambiguous. A pattern's control characters go
+// through `escapeInline` instead, which leaves its backslashes copyable.
 function yamlTextConditionLabel(
   sel: FlowSelector,
   expectedText: string | undefined,
@@ -57,7 +59,7 @@ function yamlTextConditionLabel(
   const selector = yamlSelectorLabel(sel);
   const expected = expectedText ?? "";
   return textMatch === "matches"
-    ? `text ${selector} matches /${expected}/`
+    ? `text ${selector} matches /${escapeInline(expected)}/`
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
@@ -157,7 +159,14 @@ function swipeLabel(
  * on every surface, so only the UI arm is parameterized.
  */
 function whenLabel(cond: WhenCondition, renderUi: (cond: UiCondition) => string): string {
-  return cond.kind === "platform" ? `platform ${cond.platform}` : renderUi(cond);
+  if (cond.kind === "platform") return `platform ${cond.platform}`;
+  if (cond.kind === "output") return outputCheckLabel(cond.check);
+  return renderUi(cond);
+}
+
+/** `output user.role equals "admin"`, the same on every surface. */
+function outputCheckLabel(check: OutputCheck): string {
+  return `output ${escapeInline(check.path)} ${check.test} ${escapeInline(JSON.stringify(check.expected))}`;
 }
 
 /** A compact rendering of a when guard for report reasons. */
@@ -315,27 +324,29 @@ const FLOW_STEP_DEFINITIONS: {
   [K in FlowStep["kind"]]: FlowStepDefinition<Extract<FlowStep, { kind: K }>>;
 } = {
   "tool": {
-    summary: (step) => `${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`,
+    summary: (step) =>
+      `${escapeInline(String(step.name))} ${renderToolArgs(step.args)}${delayLabel(step)}`,
     // Carries its subject in a report field of its own (`tool`) that renderers
     // print in the target's place.
     target: () => undefined,
   },
   "echo": {
-    summary: (step) => step.message,
+    summary: (step) => escapeInline(step.message),
     // As for `tool`, but the field is `message`.
     target: () => undefined,
   },
   "launch": {
-    summary: (step) => (typeof step.app === "string" ? step.app : JSON.stringify(step.app)),
+    summary: (step) =>
+      typeof step.app === "string" ? escapeInline(step.app) : JSON.stringify(step.app),
     // A launch's app id may be per-platform (`appIdForPlatform`), and a step
     // alone does not know the run device.
     target: () => undefined,
   },
   "run": {
-    summary: (step) => step.flow,
-    // The as-written path, so a report line shows exactly what the flow
-    // references (`run ../shared/login.yaml`), not just the attribution stem.
-    target: (step) => step.flow,
+    summary: (step) => escapeInline(step.flow),
+    // The as-written path (control characters escaped), so a report line shows
+    // what the flow references (`run ../shared/login.yaml`), not just the attribution stem.
+    target: (step) => escapeInline(step.flow),
   },
   "when": {
     summary: (step) => {
@@ -427,8 +438,13 @@ const FLOW_STEP_DEFINITIONS: {
     // replays, the way tap's `times` does, while a report target names only
     // what the step acts on.
     summary: (step) =>
-      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
-    target: (step) => step.path,
+      `${escapeInline(step.path)}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+    target: (step) => escapeInline(step.path),
+  },
+  "output-check": {
+    summaryKind: "assert",
+    summary: (step) => outputCheckLabel(step.check),
+    target: (step) => outputCheckLabel(step.check),
   },
   "snapshot": {
     // `name` interpolates raw on both surfaces. It becomes a baseline filename,
@@ -471,6 +487,11 @@ export function summarizeStep(step: FlowStep, n: number): string {
 /** One human-readable line per recorded step, in the flow file's own spellings. */
 export function summarizeSteps(flow: FlowFile): string[] {
   return flow.steps.map((step, i) => summarizeStep(step, i + 1));
+}
+
+/** {@link summarizeStep} for the `n`th step of a `shutdown:` list. */
+export function summarizeShutdownStep(step: FlowStep, n: number): string {
+  return `shutdown ${summarizeStep(step, n)}`;
 }
 
 /**

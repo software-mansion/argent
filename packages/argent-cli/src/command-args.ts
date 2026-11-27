@@ -26,13 +26,16 @@ type OptionSpec =
       readonly alias?: string;
       /** When set, any other value is a usage error naming the accepted ones. */
       readonly choices?: readonly string[];
+      /** Every occurrence is kept, in order, as a `string[]`. */
+      readonly repeatable?: boolean;
     };
 
 export type OptionSpecs = Readonly<Record<string, OptionSpec>>;
 
 /** The parsed options: `true` for a boolean that was given, the string for a
- * value option, absent when not given. A repeated option keeps the last value. */
-type ParsedOptions = Record<string, string | boolean | undefined>;
+ * value option, absent when not given. A repeated option keeps the last value,
+ * unless it is `repeatable`: then it is the list of every value. */
+type ParsedOptions = Record<string, string | boolean | string[] | undefined>;
 
 interface ParsedCommandArgs {
   positionals: string[];
@@ -55,7 +58,8 @@ function listChoices(choices: readonly string[]): string {
 }
 
 function resolveName(tok: string, specs: OptionSpecs): string | null {
-  if (tok.startsWith("--")) return tok.slice(2) in specs ? tok.slice(2) : null;
+  // hasOwn, not `in`: `in` takes Object.prototype names (`--toString`) for options.
+  if (tok.startsWith("--")) return Object.hasOwn(specs, tok.slice(2)) ? tok.slice(2) : null;
   // `-x`: a declared single-letter alias.
   const short = tok.slice(1);
   for (const [name, spec] of Object.entries(specs)) {
@@ -126,7 +130,12 @@ export function parseCommandArgs(argv: readonly string[], specs: OptionSpecs): P
     if (spec.choices && !spec.choices.includes(value)) {
       throw new UsageError(`${display} must be ${listChoices(spec.choices)}, got "${value}"`);
     }
-    options[name] = value;
+    if (spec.repeatable) {
+      const seen = options[name];
+      options[name] = Array.isArray(seen) ? [...seen, value] : [value];
+    } else {
+      options[name] = value;
+    }
   }
 
   return { positionals, options };

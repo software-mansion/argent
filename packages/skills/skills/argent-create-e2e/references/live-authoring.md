@@ -15,6 +15,7 @@ Read this file before creating or changing an e2e test. Exercise the saved path 
     - [Typing](#typing)
     - [Scrolling and swiping](#scrolling-and-swiping)
     - [Live waits and checks](#live-waits-and-checks)
+    - [Network capture](#network-capture)
     - [Wrong turns](#wrong-turns)
   - [Finish and polish](#finish-and-polish)
   - [Worked example](#worked-example)
@@ -32,8 +33,17 @@ Obey these lifecycle rules:
 1. Choose a name unique to the task: another caller can take over the same `name` + `project_root` pair without an ownership check. The pair is keyed by the file the filesystem resolves to, not the spelling you passed, so a differently-cased name or a symlinked `.argent/e2e` collides too. That collision is reported: the second start says `restarted`, and the first recording's next call fails naming both spellings.
 2. Treat `e2e-start-recording` as destructive. It truncates the named YAML even when it holds a finished or committed test. `restarted` reports only a displaced live take.
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. A call that returns normally while reporting an unmet condition **does** append the step; `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
+4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. The recorder still appends `await-ui-element` and `await-network-request` steps that return `success: false`. Check the warning before continuing. To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
+6. Set script defaults with `e2e-start-recording.env` or call `e2e-set-env` directly before recording the script. Use `e2e-add-script.env` for values specific to one step. The tool runs the script immediately. If a secret is missing, check the project’s secret sources before retrying.
+
+## Record cleanup after the main steps
+
+Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run during the call. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
+
+A fragment recorded as `run:` in the main list usually defers cleanup until the first shutdown action or script, or until `e2e-finish-recording`. Read `fragmentShutdown` and the call message before assuming cleanup passed. If the call was cancelled, finish the recording or retry the shutdown call to run queued cleanup.
+
+For an uploaded fragment or one that starts its own Chromium app, read the message for cleanup that ran immediately. If later steps need the state it removed, record the fragment's main steps individually and its cleanup with `shutdown: true`. Replace those steps after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
 
 ## Start in the correct order
 
@@ -105,7 +115,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator.
 
-**Pass `selector` when you know which field is stable.** The recorder is `id`-first, which is wrong when the id is positional (`row-3`) and the text is durable: `e2e-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. It sits beside `args`, not inside the JSON. The selector is checked against the replay tree, not `describe`. A replay taps the centre of the element the selector resolves to there, so the innermost element at that centre must be the one under the tap. The call is refused before the tap runs when that tree cannot be read (or the platform has none), the selector matches nothing there, or its centre is on another element (on a Mac app, also when it is away from a click on an element where the point matters, such as a slider). That refusal names the centre: when the selector names the element you meant (a text leaf narrower than its row, say), record the tap again at that point. When it says a smaller element sits at the centre, the tree cannot tell which of the two takes the touch: a label passes it to its row, a button keeps it. Record there only if the result is the one you want. `selector` with any other `command`, with `delayMs`, or inside `args` is refused the same way.
+**Pass `selector` when you know which field is stable.** The recorder is `id`-first, which is wrong when the id is positional (`row-3`) and the text is durable: `e2e-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. It sits beside `args`, not inside the JSON. The selector is checked against the replay tree, not `describe`. A replay taps the centre of the element the selector resolves to there, so the innermost element at that centre must be the one under the tap. The call is refused before the tap runs when that tree cannot be read (or the platform has none), the selector matches nothing there, or its centre is on another element (on a Mac app, also when it is away from a click on an element where the point matters, such as a slider). That refusal names the centre: when the selector names the element you meant (a text leaf narrower than its row, say), record the tap again at that point. When it says a smaller element sits at the centre, the tree cannot tell which of the two takes the touch: a label passes it to its row, a button keeps it. Record there only if the result is the one you want. `selector` with any other `command`, with `delayMs` or an `{{output:...}}` reference in `args`, or inside `args` is refused the same way.
 
 With no `selector`, the recorder reads the pre-tap tree and derives one in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap, because the first never warns. It names the derived form (a selector map, or the kept point):
 
@@ -146,6 +156,19 @@ A stale `hidden` whose selector matches nothing replays as a silent pass: the un
 The live tool and e2e runner use [different trees](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree). After a successful wait, the recorder checks the same condition on the runner tree and warns when it does not hold there or could not be checked; the warning says what to rule out. If the trees really differ, keep the raw `await-ui-element` step: it replays on the tree it passed on.
 
 A warning does not reject the step. If `e2e-finish-recording` reports dropped warnings, record those waits again. Replay every conversion. Keep a raw tool only for `pollIntervalMs`, `bundleId`, or a cross-tree mismatch.
+
+### Network capture
+
+On iOS simulators, Android, Mac apps, and Chromium, use `e2e-add-step` to record `network-capture-start`, the action, `await-network-request`, and `network-capture-stop` in that order. Put capture start after launch and the first-screen wait. A start before `launch:` makes the test a fragment. Use [Inspect network requests](../../argent-metro-debugger/SKILL.md#inspect-network-requests) for platform setup.
+
+- Keep the wait as a raw `tool:` step. A log listing can pass with an empty log. Match a part of the URL that contains no secret. On Android, capture can slow the app: start just before the action and stop right after the wait. When collecting several related requests, stop after the last check.
+- If the recorder reports `NETWORK_CAPTURE_NOT_STARTED`, record the missing start, then repeat and record the action and the wait. Replay only uses recorded steps.
+- If the recorder saves a failed wait, inspect `toolResult.nearMisses` for an `unmet` wait. Restore capture and repeat the action for `unreadable`. Record a new wait if cancelled. Remove superseded steps after `e2e-finish-recording`.
+- On replay, verify the relevant layer's `armed` and `reason` in the start and stop results. On Chromium, stop can report `armed: false` even when there was no window. If a failed step skips the stop, stop capture before replaying.
+
+On Vega, call `view-network-logs` before the action to start JavaScript capture. Read the log again after the action to inspect the requests. `await-network-request` is unavailable on Vega.
+
+A recorded `tool:` step keeps its `bundleId` on every platform. If app IDs differ, restrict the test with [`requires:`](e2e-yaml.md#file-shape-and-test-type) and record a test for each platform.
 
 ### Wrong turns
 

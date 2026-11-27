@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { FileInputSpec, ToolDefinition } from "@argent/registry";
+import { LAUNCH_PLATFORMS, type FileInputSpec, type ToolDefinition } from "@argent/registry";
 import {
   countStepsOnDisk,
   getFlowPath,
@@ -9,15 +9,20 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
-  LAUNCH_PLATFORMS,
+  envRecordSchema,
+  flowEnvProblem,
   parseRequires,
   RUNTIME_KINDS,
   serializeFlow,
   validateFlow,
   type FlowFile,
   type FlowSavedTo,
+  fragmentShutdownNote,
+  runDeferredShutdown,
+  type FragmentShutdownReport,
 } from "./flow-utils";
-import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { resolveScriptEnv } from "./flow-script-step";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 
 const MACOS_PLATFORM_FLAG = { [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } };
@@ -71,6 +76,11 @@ const zodSchema = z.object({
         "(`ios` also covers a remote simulator); `runtimeKind` is `tv` or `mobile`. Omit it for a test that runs " +
         "on any target."
     ),
+  env: envRecordSchema(z.string())
+    .optional()
+    .describe(
+      "Default script environment values saved in the test's top-level env. Use {{secret:NAME}} for credentials."
+    ),
 });
 
 export const flowStartRecordingTool: ToolDefinition<
@@ -79,6 +89,8 @@ export const flowStartRecordingTool: ToolDefinition<
     message: string;
     restarted?: true;
     discardedSteps?: number;
+    /** A restart: the kept shutdown of the discarded take's `run:` fragments, which it ran. */
+    fragmentShutdown?: FragmentShutdownReport;
     e2eTestFile: string;
     /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
     flowFile: string;
@@ -86,7 +98,7 @@ export const flowStartRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-start-recording",
-  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
+  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one. A restart runs pending fragment cleanup from the discarded recording and reports it in \`fragmentShutdown\`.
 Use when you want to capture a reusable sequence of device interactions for later replay. Load the argent-create-e2e skill first: it holds the polish, audit and replay steps. Not for Apple TV or Android TV.
 Returns { message, e2eTestFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
 Without a link, it creates that file and fails if the .argent/e2e/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
@@ -103,7 +115,7 @@ recorded run-sequence gets no such warning, so read its \`toolResult\`. For a
 standalone e2e test, record a restart-app of the app under test as the FIRST step
 (captured as the e2e test's \`launch\` step); for a reusable fragment, skip that and
 pass executionPrerequisite instead. Starting over an existing e2e test replaces the
-whole file, including its \`requires:\` block; pass \`requires\` to keep it.
+whole file, including its \`requires:\` and \`env:\` blocks; pass \`requires\` and \`env\` to keep them.
 Use e2e-add-echo to add labels, and
 e2e-add-script to run a local .mjs, .mts, .js or .ts file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
@@ -132,14 +144,21 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
   fileInputs,
+  // A restart may run the discarded take's fragment shutdown, on the device.
+  longRunning: true,
   services: () => ({}),
   async execute(_services, params, ctx) {
     // The type emerges from the steps: a first `restart-app` becomes a leading
     // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
     // documents a fragment.
+    if (params.env) {
+      const problem = flowEnvProblem(params.env);
+      if (problem) throw new InvalidToolInputError(`env ${problem}`);
+    }
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
       ...(params.requires ? { requires: parseRequires(params.requires) } : {}),
+      ...(params.env && Object.keys(params.env).length > 0 ? { env: params.env } : {}),
       steps: [],
     };
     validateFlow(flow);
@@ -159,6 +178,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       persist === "client" && ctx?.legacyE2eDir
         ? getLegacyFlowPath(params.project_root, params.name)
         : getFlowPath(params.project_root, params.name);
+    // After the path checks, which refuse a project_root the secret lookup
+    // must not search from; before the existing file is replaced.
+    if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
 
     // Truncate-and-register is one critical section: under the flow-file lock a
     // step from the take being discarded can neither slip in between the reset
@@ -185,8 +207,8 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           replaced === null
             ? undefined
             : replaced.persist === "host"
-              ? await countStepsOnDisk(replaced.filePath)
-              : replaced.flow.steps.length;
+              ? await countStepsOnDisk(replaced.filePath, "both")
+              : replaced.flow.steps.length + (replaced.flow.shutdown?.length ?? 0);
 
         let savedTo: FlowSavedTo;
         if (persist === "host") {
@@ -209,6 +231,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
     // Recordings are keyed per flow file, so only a same-key restart replaces
     // anything; starting a *different* flow abandons nothing to report.
     if (replaced) {
+      // The discarded take's recorded fragments ran, so their kept shutdown
+      // runs now, as it would have at its finish.
+      const fragmentShutdown = await runDeferredShutdown(replaced, ctx);
       // Only claim the file was reset when this process reset it: in client mode
       // truncation waits on the client applying the directive, and a rejected
       // path or a failed write there comes back as `savedTo: null`.
@@ -224,8 +249,12 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           ? "the previous take"
           : `the previous take (${discardedSteps} step${discardedSteps === 1 ? "" : "s"})`;
       return {
-        message: `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset,
+        message:
+          `Restarted recording "${params.name}" — ${lost} was discarded and ` +
+          reset +
+          (fragmentShutdown ? ` ${fragmentShutdownNote(fragmentShutdown)}` : ""),
         restarted: true,
+        ...(fragmentShutdown ? { fragmentShutdown } : {}),
         ...(discardedSteps === undefined ? {} : { discardedSteps }),
         e2eTestFile: flowFile,
         flowFile,

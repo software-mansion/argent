@@ -60,6 +60,7 @@ import {
   UNHINTED_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-add-step";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import { flowSetEnvTool } from "../../src/tools/flows/flow-set-env";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import {
   __resetRecordingsForTesting,
@@ -68,6 +69,9 @@ import {
   STEP_DIRECTIVE_KEYS,
 } from "../../src/tools/flows/flow-utils";
 import { n } from "./harness";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const IOS = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 const ANDROID = "emulator-5554"; // adb-serial shape → classifies android
@@ -397,7 +401,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     const warning = warningOf(result, "unmet");
     expect(warning).toContain("the wait itself never held");
-    expect(warning).toContain("stops the run there");
+    expect(warning).toContain("FAILS the step and stops the run there");
     expect(warning).not.toContain("replays fine");
     // Nothing was compared, so nothing may blame a tree divergence.
     expect(warning).not.toContain("neither contains the other");
@@ -899,11 +903,11 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // A node is kept only when onScreen AND addressable; naming the latter blames the selector.
     expect(warning).toContain("addressable nodes");
-    expect(warning).toContain("clamp");
+    expect(warning).toContain("did not clip to zero area");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // Both axes. `normRect` clamps each edge alone, so a sideways node is zero-WIDTH.
-    expect(warning).toContain("zero width for one left or right of it");
+    // Both axes. The walker clips each edge alone, so a sideways node is zero-WIDTH.
+    expect(warning).toContain("zero width for one cut off left or right");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
     expect(warning).toContain("5000-node walk limit is not what went wrong");
     expect(warning).not.toContain("past the end of what it read");
@@ -1413,8 +1417,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // A determinate verdict costs TWO full reads, so a ceiling of "grace plus one
   // read" turns a merely slow device into an indeterminate warning.
   it("still reaches a determinate verdict when each read is slower than the grace window", async () => {
-    // 1.9s per read is over the 1s grace, so the loop takes two reads, near 3.8s.
-    // Load only pushes that UP: above the 3500ms ceiling, under the 6000ms budget.
+    // 1.9s per read is over the 1s grace, so the loop takes two reads, 3.8s:
+    // above the 3500ms ceiling, under the 6000ms budget.
     fetchRunnerTree = async () => {
       await new Promise((resolve) => setTimeout(resolve, 1900));
       return { tree: iosRunnerTree([iosLabel("Proceed")]), source: "native-devtools" };
@@ -1484,11 +1488,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   // The cap ELIDES THE MIDDLE: the note about a dark final poll lives at the END.
   it("keeps the tail of an over-long reason, where the final-poll note lives", async () => {
     const wall = "Lorem ipsum dolor sit amet ".repeat(60);
-    // Trusted reads keep the condition false, then the source dies on the last
-    // poll. That tail is inside CONDITION_DARK_TAIL_TOLERANCE_MS, so it stays firm.
-    const probeStartedAt = Date.now();
+    // Trusted reads keep the condition false; the source dies at 900ms, so the
+    // dark tail runs from the 600ms read: 400ms, past one poll interval but
+    // inside CONDITION_DARK_TAIL_TOLERANCE_MS, so the verdict stays firm.
+    let firstReadAt: number | undefined;
     fetchRunnerTree = async () => {
-      if (Date.now() - probeStartedAt > 900) throw new Error("native devtools went away");
+      firstReadAt ??= Date.now();
+      if (Date.now() - firstReadAt >= 900) throw new Error("native devtools went away");
       return { tree: iosRunnerTree([iosLabel(`Total ${wall}`)]), source: "native-devtools" };
     };
     await startRecording("tail");
@@ -1501,10 +1507,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     const warning = warningOf(result, "tail") ?? "";
 
     // This tier holds only while the dark tail is inside
-    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms). Host load breaks it.
+    // CONDITION_DARK_TAIL_TOLERANCE_MS (2 poll intervals, 600ms).
     expect(
       warning,
-      "expected the blip tier: under host load the dark tail can exceed CONDITION_DARK_TAIL_TOLERANCE_MS, which turns this indeterminate"
+      "expected the blip tier: a dark tail past CONDITION_DARK_TAIL_TOLERANCE_MS turns this indeterminate"
     ).toContain("does NOT hold against the tree the runner resolves");
     expect(warning).toContain("Lorem ipsum");
     expect(warning).toContain("more chars)");
@@ -1834,7 +1840,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     serveTree(iosRunnerTree([iosLabel("Sign in")]));
     await recordWait("deleted", { condition: "visible", selector: { text: "Sign in" } });
 
-    // Delete the diverging step 1, the remedy `UNMET_WAIT_WARNING` offers.
+    // Delete the diverging step 1, the remedy `unmetWaitWarning` offers.
     const file = path.join(tmpDir, ".argent", "e2e", "deleted.yaml");
     const parsed = parseFlow(await fs.readFile(file, "utf8"));
     parsed.steps = parsed.steps.slice(1);
@@ -1920,6 +1926,33 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     // Number 2 now holds the twin that AGREED, so a verdict there convicts it.
     expect(finished.summary).toHaveLength(3);
     expect(verdictsIn(finished.summary).size).toBe(0);
+    expect(finished.summary[1]).toContain('"Continue"');
+    for (const line of finished.summary) expect(line).not.toContain("warning:");
+    expect(finished.message).toContain(
+      "1 warning raised during this recording is NOT in `summary`"
+    );
+  });
+
+  it("drops the moved verdict when e2e-set-env is the call that re-reads the edit", async () => {
+    await startRecording("envtwins");
+    serveTree(iosRunnerTree([iosLabel("Ready marker")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Ready marker" } });
+    serveTree(iosRunnerTree([iosLabel("Proceed")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Continue" } });
+    serveTree(iosRunnerTree([iosLabel("Continue")]));
+    await recordWait("envtwins", { condition: "visible", selector: { text: "Continue" } });
+
+    const file = path.join(tmpDir, ".argent", "e2e", "envtwins.yaml");
+    const parsed = parseFlow(await fs.readFile(file, "utf8"));
+    parsed.steps = [parsed.steps[0], parsed.steps[2]];
+    await fs.writeFile(file, serializeFlow(parsed), "utf8");
+
+    await flowSetEnvTool.execute({}, { name: "envtwins", project_root: tmpDir, env: { A: "1" } });
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "envtwins", project_root: tmpDir }
+    );
+
     expect(finished.summary[1]).toContain('"Continue"');
     for (const line of finished.summary) expect(line).not.toContain("warning:");
     expect(finished.message).toContain(
@@ -2163,6 +2196,43 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(() =>
       assertSupported("await-ui-element", tool.capability, resolveDevice(`remote:${IOS}`))
     ).not.toThrow();
+  });
+});
+
+// `await-network-request` reads the capture layers, not a UI tree, and has no
+// `await:` form to convert to, so an unmet one is never re-probed.
+describe("a recorded network wait", () => {
+  it("keeps an unmet await-network-request as a wait step, with the wait warning and no re-probe", async () => {
+    const args = { bundleId: "com.acme.app", method: "POST", url: "/v1/auth/login" };
+    const registry = {
+      invokeTool: vi.fn(async (id: string) => {
+        if (id === "await-network-request") {
+          return { success: false, elapsed: 10_000, cause: "unmet", note: "No request matched." };
+        }
+        throw new ToolNotFoundError(id);
+      }),
+      getTool: vi.fn(() => undefined),
+    } as unknown as Registry;
+    await startRecording("netunmet");
+
+    const result = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "netunmet",
+        project_root: tmpDir,
+        command: "await-network-request",
+        args: JSON.stringify({ udid: IOS, ...args }),
+      }
+    );
+
+    const warning = warningOf(result, "netunmet");
+    expect(warning).toContain("the wait never held");
+    expect(warning).toContain("at replay an unmet wait FAILS the step");
+    expect(warning).not.toMatch(/re-probe|UI tree/);
+    expect(fetchCount).toBe(0);
+    expect(await recordedSteps("netunmet")).toEqual([
+      { kind: "tool", name: "await-network-request", args, delayMs: undefined },
+    ]);
   });
 });
 

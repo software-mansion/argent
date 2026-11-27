@@ -1,10 +1,13 @@
 ---
 sidebar_position: 4
 sidebar_label: Supported platforms
-title: Supported platforms
+title: iOS simulators, Android emulators, TVs and Mac apps
+description: Argent drives iOS simulators and iPhones, Android emulators and devices, Apple TV, Android TV, Fire TV, Electron and Chromium apps, Mac apps and HarmonyOS.
 sidebar_custom_props:
   icon: layers
 ---
+
+# Supported platforms
 
 Argent drives a growing set of targets through a single toolkit, each with the right interaction model.
 
@@ -35,6 +38,18 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+On a physical Android device, Argent starts a screen-sharing agent on the device over adb. When the session ends, Argent stops this agent. This cleanup is best-effort: it needs a working adb connection at that moment. The agent can stay active in these cases:
+
+- The user or the system sends a kill signal to the host process.
+- The host computer goes to sleep.
+- The user disconnects the cable.
+
+To stop the agent manually, connect the device again and run `adb -s <serial> shell pkill -f 'screensharing[.]Main'`. This command also stops the device mirror of Android Studio.
+
+### Shared Android emulators
+
+Several agents can boot the same AVD at the same time. Each agent boots a read-only emulator on its own console port. A read-only emulator keeps the AVD and its snapshot unchanged. The emulator does not run a read-only instance next to a writable one, so start your own emulator of that AVD read-only too. See the [tools reference](/docs/reference/tools#devices-and-apps).
+
 ### Foldable simulators and emulators
 
 Argent drives these foldable devices closed, half-open and open:
@@ -46,7 +61,7 @@ The agent folds and unfolds the device with the `fold` tool. `list-devices` mark
 
 ### Physical iPhones
 
-Argent also drives a physical iPhone over a USB cable, including pinches, rotations and multi-finger paths in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
+Argent drives physical iPhones through USB or a connected CoreDevice network tunnel. Pinches, rotations and multi-finger paths work in apps drawn in portrait. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).
 
 ### HarmonyOS
 

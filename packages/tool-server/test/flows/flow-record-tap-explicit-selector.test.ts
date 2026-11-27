@@ -13,7 +13,11 @@ vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
 
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
-import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import {
+  __resetRecordingsForTesting,
+  getRecordingSession,
+  parseFlow,
+} from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB";
 const FLOW = "rec";
@@ -302,7 +306,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Go" } }]);
   });
 
-  // Appending the step refuses this marker, which would be after the tap ran.
+  // The tree checks would read the reference unresolved.
   it("refuses a selector holding an output reference, running nothing", async () => {
     setTree([n({ frame: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, label: "Pay {{output:x}}" })]);
     const res = (await record({
@@ -312,6 +316,20 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(/uses unsupported template syntax/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("refuses a selector on a tap whose args hold an output reference, running nothing", async () => {
+    (await getRecordingSession(tmpDir, FLOW))!.output = { row: { x: ON_ROW.x } };
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: "{{output:row.x}}", y: ON_ROW.y }),
+      selector: { text: "Settings" },
+    })) as { message: string; recorded?: string };
+
+    expect(res.message).toMatch(/`args` hold an `\{\{output:\.\.\.\}\}` reference/);
+    expect(res.recorded).toBeUndefined();
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });

@@ -19,6 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { describeVega, vegaRequires } from "../describe/platforms/vega";
 import { describeTvFocus, hasTvCursor } from "../describe/platforms/tv-focus";
 import { resolveTvApi } from "../tv/tv-service";
 import type { TvControlApi } from "../../blueprints/tv-control-types";
@@ -34,8 +35,9 @@ const DEFAULT_MIN_STABLE_MS = 250;
  * How long an Apple TV screen with no cursor must hold before it counts as
  * settled. After a push or pop in Settings the list appears at 130-260 ms and the
  * cursor at 820-950 ms, up to 720 ms later (20 presses), and a remote press sent
- * in that gap is lost. A screen with nothing focusable never gets a cursor, so
- * this can only be a bound.
+ * in that gap is lost. When the keyboard opens or closes, the old element keeps
+ * focus outside the new focusable list for about 550 ms. A screen with nothing
+ * focusable never gets a cursor, so this can only be a bound.
  */
 const TV_NO_CURSOR_STABLE_MS = 1200;
 /**
@@ -47,7 +49,7 @@ const DARK_TAIL_MAX_MS = 2000;
 const TV_NO_CURSOR_NOTE = "no element holds focus on this screen, so a remote press may be lost";
 
 interface IdleResult {
-  /** Screen rendered content and went still before the timeout. */
+  /** Screen rendered content and held it for minStableMs (0: content alone) before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
@@ -63,19 +65,21 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
   harmony: { device: true },
   macos: { app: true, catalyst: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
-// while still catching real motion (a slide/fade animation).
+// while still catching real motion (a slide/fade animation). Focus and
+// selection count too: a TV remote press may move only the cursor.
 function treeSignature(root: DescribeNode): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   const parts: string[] = [];
   const walk = (node: DescribeNode): void => {
     const f = node.frame;
     parts.push(
-      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`
+      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}|${node.focused ? "F" : ""}${node.selected ? "S" : ""}`
     );
     for (const child of node.children) walk(child);
   };
@@ -115,7 +119,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
       ),
     timeoutMs: z
       .number()
@@ -140,7 +144,7 @@ const zodSchema = z
       .max(10_000)
       .optional()
       .describe(
-        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}); 0 settles on the first non-empty read.`
       ),
   })
   .strict();
@@ -173,6 +177,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
+    if (device.platform === "vega") {
+      return describeVega(device.id);
+    }
     if (device.platform === "harmony") {
       return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
     }
@@ -184,9 +191,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
-    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
+    description: `Block until the screen has rendered content and held it for minStableMs, or the timeout elapses. It polls the same element tree as \`describe\`.
 Use when a launch or navigation must finish rendering before a screenshot or tap.
-Returns { settled, waitedMs, polls, note? }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+Returns { settled, waitedMs, polls, note? }. If that is not seen before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
     zodSchema,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
@@ -213,6 +220,7 @@ Returns { settled, waitedMs, polls, note? }. If the screen never goes still befo
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "vega") await ensureDeps(vegaRequires);
       else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
@@ -244,19 +252,27 @@ Returns { settled, waitedMs, polls, note? }. If the screen never goes still befo
             stableSince = 0;
             return { done: false };
           }
+          // The window starts when the read that showed the tree came back: a
+          // slow read may show a screen that appeared at its end.
           const signature = treeSignature(data.tree);
-          if (signature === stableSignature) {
-            const requiredMs =
-              tvApi && !hasTvCursor(data.tree)
-                ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
-                : minStableMs;
-            if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
-          } else {
+          if (signature !== stableSignature) {
             stableSignature = signature;
             stableSince = nowMs;
             if (minStableMs === 0) return { done: true, result: true };
           }
-          return { done: false };
+          const requiredMs =
+            tvApi && !hasTvCursor(data)
+              ? Math.max(minStableMs, TV_NO_CURSOR_STABLE_MS)
+              : minStableMs;
+          if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
+          // Read again after the poll interval, or when the window ends if that
+          // is sooner. A read sent when the window ends comes back after it, so
+          // it confirms a static screen, and reads inside the window are never
+          // more than one poll interval apart.
+          return {
+            done: false,
+            waitMs: Math.min(stableSince + requiredMs - nowMs, pollIntervalMs),
+          };
         },
       });
 
@@ -276,7 +292,7 @@ Returns { settled, waitedMs, polls, note? }. If the screen never goes still befo
           : undefined
         : unsettledNote(poll.lastData, poll.lastError, hung ? darkTailMs : undefined);
       const populatedNoCursor =
-        tvApi && poll.lastData?.tree.children.length && !hasTvCursor(poll.lastData.tree);
+        tvApi && poll.lastData?.tree.children.length && !hasTvCursor(poll.lastData);
       const cursorNote = populatedNoCursor ? TV_NO_CURSOR_NOTE : undefined;
       return {
         settled,

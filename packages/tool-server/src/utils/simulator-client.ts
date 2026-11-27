@@ -3,15 +3,12 @@ import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@a
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
-import {
-  encodeButton,
-  encodeRotate,
-  encodeTouch,
-  type ButtonName,
-  type KeyActionName,
-  type RotationName,
-  type TouchActionName,
-} from "./datachannel-proto";
+import type {
+  ButtonName,
+  KeyActionName,
+  RotationName,
+  TouchActionName,
+} from "@swmansion/argent-cloud-sdk";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
 import { captureOnDemandDropped } from "./profiling-devices";
@@ -23,7 +20,7 @@ import {
   readUiOrientation,
   unknownOrientationNote,
 } from "./ios-ui-orientation";
-import { isTurned, uiPointToNative } from "./ui-orientation";
+import { isTurned, uiEdgeToNative, uiPointToNative, type ScreenEdge } from "./ui-orientation";
 import type { UiOrientation } from "../tools/describe/contract";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -84,6 +81,18 @@ export interface SimulatorServerTransport {
 // not for normal latency, so it can be generous without ever being reached in a
 // healthy run.
 const COMMAND_ACK_TIMEOUT_MS = 5_000;
+// The first edge Down activates the guest digitizer. Its barrier can take 30s
+// after another simulator-server exits. Leave time for setup and the reply.
+const EDGE_DOWN_ACK_TIMEOUT_MS = 35_000;
+
+/**
+ * The ack budget for a key press. A key that times out is worse than a late
+ * one: the call fails mid-string, though the Down still lands once the server
+ * resumes (the socket releases it, see `releaseHeldKeys`). A host under load
+ * stalls the server for longer than COMMAND_ACK_TIMEOUT_MS, so a key waits
+ * this long before it fails.
+ */
+export const KEY_ACK_TIMEOUT_MS = 15_000;
 
 interface PendingCommand {
   settle: (err?: FailureError) => void;
@@ -99,6 +108,11 @@ interface Connection {
    * when two tools drive one device at once.
    */
   pending: Map<string, PendingCommand>;
+  /**
+   * Keys whose Down this socket carried and whose Up it has not, in press
+   * order. Released on this socket when it is dropped (`releaseHeldKeys`).
+   */
+  heldKeys: number[];
 }
 
 const connections = new Map<string, Connection>();
@@ -128,6 +142,37 @@ function pendingIdNamedBy(conn: Connection, message: string | undefined): string
     if (entry.cmd === named) return id;
   }
   return undefined;
+}
+
+/**
+ * Write an Up for every key this socket still holds down, on this socket,
+ * before it is dropped. A server that stalls past the ack budget still has
+ * the unanswered Down in this socket's buffer and applies it once it resumes.
+ * An Up sent on a new socket cannot help: that socket does not open while the
+ * server is stalled, and its Up could not be ordered after the Down anyway.
+ * Written right behind the Down, the Up lands next, so no key stays held and
+ * repeats or shifts every later key (#2030). Covers every caller (`keyboard`,
+ * `paste`'s chord, `fill`'s backspace). An Up for a key the server never
+ * pressed does nothing. The replies are not awaited: they come back on a
+ * socket that is closing, and nothing waits on them.
+ */
+function releaseHeldKeys(conn: Connection): void {
+  const held = conn.heldKeys.splice(0).reverse();
+  if (conn.ws.readyState !== WebSocket.OPEN) return;
+  for (const code of held) {
+    conn.ws.send(JSON.stringify({ id: String(++cmdId), cmd: "key", code, direction: "Up" }));
+  }
+}
+
+/** Track what a `key` command does to the keys this socket holds down. */
+function trackHeldKey(conn: Connection, cmd: Record<string, unknown>): void {
+  if (cmd.cmd !== "key" || typeof cmd.code !== "number") return;
+  if (cmd.direction === "Down") {
+    conn.heldKeys.push(cmd.code);
+    return;
+  }
+  const index = conn.heldKeys.lastIndexOf(cmd.code);
+  if (index !== -1) conn.heldKeys.splice(index, 1);
 }
 
 function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
@@ -188,7 +233,7 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
    */
   const { host } = new URL(api.apiUrl);
   const ws = new WebSocket(`ws://${host}/ws`);
-  const conn: Connection = { ws, pending: new Map() };
+  const conn: Connection = { ws, pending: new Map(), heldKeys: [] };
 
   ws.on("message", (data: WebSocket.RawData) => {
     const text = Buffer.isBuffer(data)
@@ -266,9 +311,10 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  *
  * Rejects — rather than reporting a phantom success — when the server answers
  * `status: "error"`, when the socket fails or closes with the command in
- * flight, or when no reply arrives within `COMMAND_ACK_TIMEOUT_MS`. Awaiting
- * the ack is what separates a delivered input from a lost one: every one of
- * those cases used to be indistinguishable from a landed tap
+ * flight, or when no reply arrives within `options.ackTimeoutMs` (default
+ * `COMMAND_ACK_TIMEOUT_MS`, `EDGE_DOWN_ACK_TIMEOUT_MS` for an edge Down).
+ * Awaiting the ack is what separates a delivered input from a lost one: every
+ * one of those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
  *
  * MoQ has no per-command ack, so it reports less: a send rejects only once the
@@ -279,7 +325,8 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  */
 export async function sendCommand(
   api: SimulatorServerApi,
-  cmd: Record<string, unknown>
+  cmd: Record<string, unknown>,
+  options: { ackTimeoutMs?: number } = {}
 ): Promise<SendCommandOutcome> {
   const cmdName = typeof cmd.cmd === "string" ? cmd.cmd : "unknown";
   // The UI turns with the device, and a button (home, app switcher, lock) can
@@ -302,6 +349,11 @@ export async function sendCommand(
       : (screenWarning ?? turnWarning);
   const id = String(++cmdId);
   const payload = JSON.stringify({ id, ...targeted });
+  const ackTimeoutMs =
+    options.ackTimeoutMs ??
+    (cmdName === "edgeTouch" && cmd.type === "Down"
+      ? EDGE_DOWN_ACK_TIMEOUT_MS
+      : COMMAND_ACK_TIMEOUT_MS);
 
   await new Promise<void>((resolve, reject) => {
     let done = false;
@@ -318,7 +370,7 @@ export async function sendCommand(
         settleAndDropConnection(
           new FailureError(
             `simulator-server did not acknowledge the '${cmdName}' command within ` +
-              `${COMMAND_ACK_TIMEOUT_MS}ms. The command may not have reached the device — ` +
+              `${ackTimeoutMs}ms. The command may not have reached the device — ` +
               `the simulator may be wedged or the simulator-server unresponsive.`,
             {
               error_code: FAILURE_CODES.SIMULATOR_COMMAND_ACK_TIMEOUT,
@@ -330,7 +382,7 @@ export async function sendCommand(
             }
           )
         ),
-      COMMAND_ACK_TIMEOUT_MS
+      ackTimeoutMs
     );
     // `unref` so a pending ack never holds the process open on shutdown.
     timer.unref?.();
@@ -339,8 +391,10 @@ export async function sendCommand(
     // the answer to this command is still owed, and once it lands nothing can
     // tell it apart from the answer to a later one. Drop the socket instead of
     // guessing — the next command reconnects, and `close` fails anything else
-    // still in flight rather than leaving it to mismatch.
+    // still in flight rather than leaving it to mismatch. Keys still down are
+    // released on this socket first.
     const settleAndDropConnection = (err: FailureError) => {
+      releaseHeldKeys(conn);
       settle(err);
       connections.delete(api.apiUrl);
       conn.ws.close();
@@ -348,10 +402,12 @@ export async function sendCommand(
 
     conn.pending.set(id, { settle, cmd: cmdName });
 
-    const write = () =>
+    const write = () => {
+      trackHeldKey(conn, targeted);
       conn.ws.send(payload, (err) => {
         if (err) settle(transportError(cmdName, api.apiUrl, err.message));
       });
+    };
     // A socket still CONNECTING queues the write; if it never opens, the
     // `error`/`close` handlers above fail the command instead of dropping it.
     if (conn.ws.readyState === WebSocket.OPEN) write();
@@ -394,7 +450,7 @@ async function withNativeTouchSpace(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (
-    cmd.cmd !== "touch" ||
+    (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") ||
     !api.deviceId ||
     inNativeCoordinates() ||
     !isIosSimulator(resolveDevice(api.deviceId))
@@ -418,6 +474,7 @@ async function withNativeTouchSpace(
 
   const turned: Record<string, unknown> = { ...cmd };
   const first = uiPointToNative({ x: cmd.x as number, y: cmd.y as number }, orientation);
+  if (cmd.cmd === "edgeTouch") turned.edge = uiEdgeToNative(cmd.edge as ScreenEdge, orientation);
   turned.x = first.x;
   turned.y = first.y;
   const sx = cmd.second_x;
@@ -461,7 +518,7 @@ async function withActiveScreen(
   cmd: Record<string, unknown>
 ): Promise<{ cmd: Record<string, unknown>; warning?: string }> {
   if (!api.display?.foldable || cmd.screen !== undefined) return { cmd };
-  if (cmd.cmd !== "touch") return { cmd };
+  if (cmd.cmd !== "touch" && cmd.cmd !== "edgeTouch") return { cmd };
   const udid = api.deviceId ?? "";
   let screen = cmd.type !== "Down" ? gestureScreens.get(api) : undefined;
   let warning: string | undefined;
@@ -973,7 +1030,7 @@ function routeViaTransport(
   switch (cmd.cmd) {
     case "touch": {
       // Call sites speak the WebSocket protocol's snake_case second_x/second_y
-      // (null when absent); the proto encoder takes optional secondX/secondY.
+      // (null when absent); the SDK's InputMessage takes optional secondX/secondY.
       const sx = (cmd.second_x ?? cmd.secondX) as number | null | undefined;
       const sy = (cmd.second_y ?? cmd.secondY) as number | null | undefined;
       return transport.touch({
@@ -1018,21 +1075,20 @@ export function createMoqTransport(
 
   return {
     async touch(opts) {
-      await moq.sendControl(
-        encodeTouch({
-          action: opts.type,
-          x: opts.x,
-          y: opts.y,
-          secondX: opts.secondX,
-          secondY: opts.secondY,
-        })
-      );
+      await moq.sendInput({
+        type: "touch",
+        action: opts.type,
+        x: opts.x,
+        y: opts.y,
+        secondX: opts.secondX,
+        secondY: opts.secondY,
+      });
     },
     async button(opts) {
-      await moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
+      await moq.sendInput({ type: "button", action: opts.direction, button: opts.button });
     },
     async rotate(direction) {
-      await moq.sendControl(encodeRotate(direction));
+      await moq.sendInput({ type: "rotate", direction });
     },
     async paste(text) {
       // The pasteboard fill and ⌘V pair live in the caller's `pasteText`, so
@@ -1040,7 +1096,7 @@ export function createMoqTransport(
       await options.pasteText(text);
     },
     async pressKey(direction, keyCode) {
-      await moq.key(direction, keyCode);
+      await moq.sendInput({ type: "key", action: direction, code: keyCode });
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();

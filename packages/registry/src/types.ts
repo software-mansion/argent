@@ -148,6 +148,34 @@ export interface InvokeToolOptions {
    * `flow-execute`. The HTTP route never sets it.
    */
   flowStack?: readonly { canonical: string; display: string }[];
+  /**
+   * Internal: one holder shared by a flow run and every run nested in it, set
+   * once a step of any of them types a `{{secret:…}}` value. A sub-tool call
+   * passes it on as it does {@link flowStack}. The HTTP route never sets it.
+   */
+  flowSecret?: { typed?: boolean };
+  /**
+   * Internal: the output document of a recording, which the recorder shares
+   * with an e2e test it runs to record as a `run:` step, so the scripts of
+   * that test read and set it as a replay's would. Only the call that sets it
+   * carries it: a sub-tool call never passes it on. The run leaves `doc` as
+   * its steps left it, since a replay runs that test's `shutdown:` at its own
+   * end, and puts the document after its shutdown in `shutdownDoc`. With
+   * `deferShutdown`, the run does not run its queued `shutdown:` blocks: it
+   * sets `deferredShutdown`, which runs them later, in the call it is given,
+   * against the document it is given, and appends their step reports to
+   * `reports`, numbered on from those already there.
+   */
+  flowOutput?: {
+    doc: Record<string, unknown>;
+    shutdownDoc?: Record<string, unknown>;
+    deferShutdown?: boolean;
+    deferredShutdown?: (
+      ctx: ToolContext | undefined,
+      output: { doc: Record<string, unknown> },
+      reports: object[]
+    ) => Promise<void>;
+  };
 }
 
 /**

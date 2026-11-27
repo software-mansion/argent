@@ -22,6 +22,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { describeWhenCondition, summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -155,7 +158,7 @@ describe("when: parse/serialize", () => {
 
   it("requires exactly one condition key and no timeout", () => {
     expect(() => parseFlow("steps:\n  - when: {}\n    steps: [{ tap: A }]\n")).toThrow(
-      /exactly one condition key \(exists, visible, hidden, text, platform\)/i
+      /exactly one condition key \(exists, visible, hidden, text, platform, output\)/i
     );
     expect(() =>
       parseFlow("steps:\n  - when: { visible: X, hidden: Y }\n    steps: [{ tap: A }]\n")
@@ -705,6 +708,26 @@ describe("when: execution", () => {
     expect(result.steps[2].reason).toMatch(/platform android/);
     expect(result.taps).toHaveLength(1);
     expect(result.ok).toBe(true);
+  });
+
+  it("reports an echo in a skipped block on one line", async () => {
+    await writeFlow("narrated-skip", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "when",
+          condition: { kind: "platform", platform: "android" },
+          steps: [{ kind: "echo", message: "a\nb\u001b[31m" }],
+        },
+      ],
+    });
+
+    const result = await run("narrated-skip"); // DEVICE is an iOS UDID
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.message}`)).toEqual([
+      "when:skip:undefined",
+      "echo:skip:a\\nb\\u001b[31m",
+    ]);
   });
 
   it("matches a platform guard positively on an android device and skips the ios block", async () => {

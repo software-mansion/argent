@@ -289,6 +289,16 @@ describe("flow-execute refuses the retired `settle` key through the real registr
     expect(steps[0]!.reason).toContain("momentum: false");
   });
 
+  it("quotes a refused fragment's target on one line", async () => {
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows", "sub\nx"), { recursive: true });
+    await writeSteps("sub\nx/settle-fragment", [swipeStep({ settle: true })]);
+    await writeSteps("composed", [{ kind: "run", flow: "sub\nx/settle-fragment.yaml" }]);
+
+    const steps = await runFlowSteps("composed", IOS_DEVICE);
+
+    expect(steps[0]!.reason).toContain('fragment "sub\\nx/settle-fragment.yaml" step 1');
+  });
+
   // The gate never guesses at a tool it cannot look up: an unknown tool's step
   // fails on its own, with a message about the tool rather than about a key.
   it("leaves an unknown tool's step to its own failure", async () => {

@@ -24,7 +24,7 @@ import {
   simctlTargetForWithdrawal,
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { prepareLocalAxPrefs } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
@@ -68,8 +68,8 @@ interface IosHost {
   inspectRunningApp(udid: string, bundleId: string): Promise<RunningAppInspection>;
 
   // ax-service steps
-  /** Local probes via `defaults read`; remote assumes the orchestrator handled it. */
-  bootstrapAx(udid: string): Promise<{ entitlementBypassActive: boolean }>;
+  /** Local checks the accessibility preferences; remote assumes the orchestrator handled it. */
+  bootstrapAx(udid: string): Promise<{ accessibilityPrefsEnabled: boolean }>;
   /**
    * Local: real `xcrun simctl spawn` process for the ax-service daemon.
    * Remote: fire-and-forget orchestrator setup; returns an `EventEmitter` stub
@@ -497,7 +497,7 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
  * iOS 18.6 a `UIKitApplication` row is removed outright when the app exits.
  * Callers treat a null pid as no evidence.
  */
-function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
+export function parseUIKitApplicationJobs(stdout: string): Map<string, number | null> {
   const jobs = new Map<string, number | null>();
   for (const line of stdout.split("\n")) {
     const match = line.match(/UIKitApplication:([^[]+)/);
@@ -669,15 +669,19 @@ export const localIosHost: IosHost = {
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
-    await ensureAutomationEnabled(udid);
-    return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
+    return { accessibilityPrefsEnabled: await prepareLocalAxPrefs(udid) };
   },
   spawnAxDaemon: spawnAxDaemonLocal,
   async startProxy() {},
   async stopProxy() {},
 };
 
-/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+/**
+ * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
+ * `AutomationEnabled` makes UIKit label a text field with its placeholder;
+ * local iPhone and iPad sims leave it out to keep Full Keyboard Access working
+ * ({@linkcode prepareLocalAxPrefs}).
+ */
 const ACCESSIBILITY_DEFAULT_FLAGS = [
   "AutomationEnabled",
   "AccessibilityEnabled",
@@ -704,16 +708,15 @@ export const remoteIosHost: IosHost = {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
-  // The same accessibility `defaults write`s the local host performs, routed
-  // through the remote generic spawn. The entitlement-bypass plist is assumed
-  // active on cloud sims.
+  // Accessibility `defaults write`s routed through the remote generic spawn.
+  // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
     for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
       await simRemoteSpawn(udid, {
         args: ["defaults", "write", "com.apple.Accessibility", flag, "-bool", "true"],
       });
     }
-    return { entitlementBypassActive: true };
+    return { accessibilityPrefsEnabled: true };
   },
   spawnAxDaemon: spawnAxDaemonRemote,
   startProxy: simRemoteProxyStart,

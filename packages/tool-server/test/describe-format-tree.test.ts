@@ -286,10 +286,9 @@ describe("formatDescribeTree", () => {
       children: [],
     };
     const out = formatDescribeTree(empty, { source: "ax-service" });
-    expect(out).toContain("normalized [0,1] fractions of the screen");
-    expect(out).toContain("gesture-tap");
-    expect(out).toContain("tap_x = frame.x + frame.width / 2");
-    expect(out).toContain("tap_y = frame.y + frame.height / 2");
+    expect(out).toContain("normalized [0,1] screen (x,y,w,h), not pixels");
+    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
+    expect(out).toContain("tap centre = (x+w/2, y+h/2)");
   });
 
   // Physical iOS plays two fingers through the runner's touch synthesizer, so
@@ -309,9 +308,7 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "xcuitest-runner" });
     expect(out).toContain("Source: xcuitest-runner");
     expect(out).toContain("Mode: nested");
-    expect(out).toContain(
-      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
-    );
+    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
     expect(out).not.toContain("No two-finger gestures");
   });
 

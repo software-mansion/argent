@@ -16,6 +16,8 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
+import { awaitIosAppInFront } from "../../../utils/ios-front-app";
+import { settleWithin } from "../../../utils/timing";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -28,7 +30,7 @@ export function makeIosImpl(
 ): PlatformImpl<Record<string, unknown>, LaunchAppParams, LaunchAppResult> {
   return {
     requires: ["xcrun"],
-    handler: async (_services, params, device) => {
+    handler: async (_services, params, device, options) => {
       /**
        * native-devtools injection needs a grant most providers withhold, as it
        * loads Argent's dylib into an app somebody else launched. Resolving
@@ -40,12 +42,10 @@ export function makeIosImpl(
        * fail on a grant the provider withheld, so one device would launch or
        * not depending only on which of its names was used.
        */
+      let nativeDevtools: NativeDevtoolsApi | undefined;
       if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
-        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-          ndRef.urn,
-          ndRef.options
-        );
+        nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
         const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
         if (blocked) return blocked;
       }
@@ -104,7 +104,22 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      return { launched: true, bundleId: params.bundleId };
+      await awaitIosAppInFront(registry, device, params.bundleId, options?.signal);
+      // A cancelled call stops waiting for the new process to be armed.
+      const capture = nativeDevtools
+        ? await settleWithin(
+            nativeDevtools.networkCaptureAfterLaunch(params.bundleId),
+            undefined,
+            options?.signal
+          )
+        : undefined;
+      if (capture?.type === "error") throw capture.cause;
+      const networkCapture = capture?.type === "value" ? capture.value : undefined;
+      return {
+        launched: true,
+        bundleId: params.bundleId,
+        ...(networkCapture ? { networkCapture } : {}),
+      };
     },
   };
 }

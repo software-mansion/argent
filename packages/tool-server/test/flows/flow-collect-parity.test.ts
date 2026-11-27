@@ -84,7 +84,9 @@ function runnerTargets(text: string): string[] {
       if (inner) walk(inner);
     }
   };
-  walk(parseFlow(text).steps);
+  const flow = parseFlow(text);
+  walk(flow.steps);
+  walk(flow.shutdown ?? []);
   return [...targets];
 }
 
@@ -190,6 +192,16 @@ describe("the client's walk and the runner's parse name the same run: targets", 
       "steps:\n  - run: >-\n      login\n  - run: !!str sub/tagged\n" +
         "  - when: { platform: ios }\n    steps:\n      - run: |-\n          sub/literal\n",
     ],
+    [
+      "leading blank lines and an indented first line",
+      "\n\n  steps:\n  - run: login\nexecutionPrerequisite: logged out\n",
+    ],
+    ["a trailing line of a space YAML does not skip", "steps:\n  - run: login\n \n"],
+    [
+      "a shutdown list and a when: in it",
+      "steps:\n  - echo: hi\nshutdown:\n  - run: cleanup\n" +
+        "  - when: { platform: ios }\n    steps:\n      - run: sub/ios-cleanup\n",
+    ],
   ])("%s", async (_form, text) => {
     // No target exists, so the client sends each one as missing and reads no further.
     const flowsDir = path.join(tmpDir, flows(""));
@@ -264,6 +276,15 @@ describe("the client's run: closure covers every resolution the runner makes", (
       "steps:\n  - echo: two blocks deep\n  - run: ../frag-echo\n"
     );
     await write(flows("norun.yaml"), "steps:\n  - echo: no composition\n");
+    await write(
+      flows("withshutdown.yaml"),
+      "steps:\n  - echo: main\nshutdown:\n  - run: frag-echo.yaml\n"
+    );
+    await write(
+      flows("frag-down.yaml"),
+      "steps:\n  - echo: frag main\nshutdown:\n  - run: frag-echo.yaml\n"
+    );
+    await write(flows("shutdown-frag.yaml"), "steps:\n  - run: frag-down.yaml\n");
   });
 
   it.each([
@@ -276,6 +297,8 @@ describe("the client's run: closure covers every resolution the runner makes", (
     ["cyc01", MAX_RUN_DEPTH],
     ["nested-when", 3],
     ["norun", 0],
+    ["withshutdown", 1],
+    ["shutdown-frag", 2],
   ])("%s", async (name, expectedMembers) => {
     const { resolved, sent, colocated, linked } = await runBothWays(name);
 

@@ -16,31 +16,34 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 ## 2. Choosing the Right Tool
 
-| Action                         | Tool                | Notes                                                          |
-| ------------------------------ | ------------------- | -------------------------------------------------------------- |
-| Several known steps            | `run-sequence`      | One call, one screenshot at the end (§5)                       |
-| Open an app                    | `launch-app`        | **Never tap home-screen icons**                                |
-| Restart an app                 | `restart-app`       | Clean in-memory state                                          |
-| Open URL / deep link           | `open-url`          | Web pages, deep links, URL schemes                             |
-| Tap                            | `gesture-tap`       | Buttons, links, checkboxes                                     |
-| Scroll / swipe                 | `gesture-swipe`     | Touch targets; not Chromium                                    |
-| Scroll (Chromium)              | `gesture-scroll`    | Mouse wheel                                                    |
-| Drag (Chromium)                | `gesture-drag`      | Sliders, drag-and-drop, text selection                         |
-| Long press, drag & drop        | `gesture-custom`    | Also any other non-linear touch sequence                       |
-| Pinch / zoom                   | `gesture-pinch`     |                                                                |
-| Two-finger rotation            | `gesture-rotate`    |                                                                |
-| Hardware key                   | `button`            | Home, back, power, volume, appSwitch, actionButton             |
-| Type text or press a named key | `keyboard`          | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu, Mac app           |
-| Rotate device                  | `rotate`            | Orientation changes                                            |
-| Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
-| Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
-| Wait for UI                    | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text  |
-| Wait for idle                  | `await-screen-idle` | Block until a non-empty screen tree stops changing (§4)        |
+| Action                         | Tool                 | Notes                                                          |
+| ------------------------------ | -------------------- | -------------------------------------------------------------- |
+| Several known steps            | `run-sequence`       | One call, one screenshot at the end (§5)                       |
+| Open an app                    | `launch-app`         | **Never tap home-screen icons**                                |
+| Restart an app                 | `restart-app`        | Clean in-memory state                                          |
+| Open URL / deep link           | `open-url`           | Web pages, deep links, URL schemes                             |
+| Tap                            | `gesture-tap`        | Buttons, links, checkboxes                                     |
+| Scroll / swipe                 | `gesture-swipe`      | Touch targets; not Chromium                                    |
+| Scroll (Chromium)              | `gesture-scroll`     | Mouse wheel                                                    |
+| Drag (Chromium)                | `gesture-drag`       | Sliders, drag-and-drop, text selection                         |
+| Long press, drag & drop        | `gesture-custom`     | Also any other non-linear touch sequence                       |
+| Pinch / zoom                   | `gesture-pinch`      |                                                                |
+| Two-finger rotation            | `gesture-rotate`     |                                                                |
+| Hardware key                   | `button`             | Home, back, power, volume, appSwitch, actionButton             |
+| Type text or press a named key | `keyboard`           | Every platform; text or one key per call (§6)                  |
+| Paste text                     | `paste`              | Only where a user would paste (§6). Sim/emu, Mac app           |
+| Rotate device                  | `rotate`             | Orientation changes                                            |
+| Fold device                    | `fold`               | Foldables only: `references/foldables.md`                      |
+| Shake device                   | `shake`              | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
+| Slow or offline network        | `network-conditions` | iOS simulator app, Android emulator, or Chromium tab           |
+| Wait for UI                    | `await-ui-element`   | Block until an element is visible/hidden/exists/contains text  |
+| Wait for idle                  | `await-screen-idle`  | Block until a non-empty tree holds for `minStableMs` (§4)      |
+
+After a network test, call `network-conditions` with the same target and omit the conditions to reset. On Android, this brings an offline emulator back online. If an Argent crash leaves an emulator's proxy active, reset before retrying.
 
 ## 3. Finding Tap Targets
 
-After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each tree has a `Tree id`. When the tree is identical to an earlier one, the result names that id in place of the tree: use that tree, and call `describe` if it is not in your context. An identical tree does not mean the action did nothing.
+After an action moves you to a different screen, or whenever you don't know an element's coordinates, discover before tapping. Interaction results already carry the element tree (`--- Elements after action (describe) ---`): use it, and call a discovery tool only when no fresh tree covers the current screen. Each full tree has a `Tree id`, and each full screenshot has a `Screenshot id`. When the tree or screenshot matches an earlier one (or only a few tree lines changed), the result names that id in place of repeating it (an unchanged note, or `-` gone / `+` new lines against it): refer back to the named result, and call `describe` or `screenshot` if it is not in your context. An identical tree does not mean the action did nothing.
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -79,7 +82,7 @@ Use `run-sequence` when every step is known in advance; if a step depends on wha
 - "submit form": fill every field, then tap submit
 - "go back to X": a known tap path
 
-Gate a step that depends on a screen transition with an `await-ui-element` step rather than a fixed `delayMs`. If its condition is not met before the timeout, the sequence **stops there** and the later steps do not run, so a tap can't fire against a screen that never appeared. Any failing step also stops the sequence, with partial results.
+Use `await-ui-element` to gate a step on a screen transition. To gate on a request, start capture before the sequence and put `await-network-request` after the triggering action. A failed step, including a wait with `success: false`, stops the sequence and returns partial results.
 
 ## 6. Text Entry and Secrets
 

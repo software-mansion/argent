@@ -57,10 +57,34 @@ describe("flag-parser number coercion rejects empty/whitespace", () => {
     expect(parseFlags(["--n=-3"], numSchema).args.n).toBe(-3);
   });
 
+  it("rejects non-finite numbers (Infinity would be serialised as null)", () => {
+    expect(() => parseFlags(["--x=Infinity"], numSchema)).toThrow(FlagParseException);
+    expect(() => parseFlags(["--x=-Infinity"], numSchema)).toThrow(FlagParseException);
+    expect(() => parseFlags(["--x", "1e999"], numSchema)).toThrow(FlagParseException);
+  });
+
   it("rejects a non-integer / whitespace-only integer, still accepts a valid one", () => {
     expect(() => parseFlags(["--n=1.5"], numSchema)).toThrow(FlagParseException);
     expect(() => parseFlags(["--n", "   "], numSchema)).toThrow(FlagParseException);
     expect(parseFlags(["--n", " 7 "], numSchema).args.n).toBe(7);
+  });
+});
+
+describe("nullable integer flags", () => {
+  const schema = schemaFrom({ commit_index: z.coerce.number().int().nullable().optional() });
+
+  it.each(["", "   ", "1.5"])("rejects %j as a profiler index", (value) => {
+    expect(() => parseFlags(["--commit_index", value], schema)).toThrow(
+      "--commit_index expected an integer"
+    );
+  });
+
+  it("parses an index as an integer and accepts explicit JSON null", () => {
+    expect(parseFlags(["--commit_index=0"], schema).args).toEqual({ commit_index: 0 });
+    expect(parseFlags(["--commit_index", "3"], schema).args).toEqual({ commit_index: 3 });
+    expect(parseFlags(["--commit_index-json", "null"], schema).args).toEqual({
+      commit_index: null,
+    });
   });
 });
 
@@ -141,6 +165,7 @@ const flowAddStepSchema: JsonSchema = {
       },
     },
     delayMs: { type: "integer" },
+    shutdown: { type: "boolean" },
   },
   required: ["name", "project_root", "command"],
 };

@@ -1,5 +1,5 @@
 import type { DeviceInfo, FailureCode, Platform, Registry, ToolContext } from "@argent/registry";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type SelectablePlatform } from "@argent/registry";
 import { getAndroidRuntimeKind } from "../../utils/adb";
 import { MACOS_APPS_FLAG_OFF_REASON, macosAppsUnavailableReason } from "../../utils/capability";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
@@ -13,11 +13,10 @@ import {
   type FlowRequires,
   type FlowRuntimeKind,
   type FlowStep,
-  type SelectablePlatform,
 } from "./flow-utils";
 
 /**
- * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
+ * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in @argent/registry.
  * Wider than the authoring set by `ios-remote`: a remote simulator is a device
  * a run can select, never something a flow file names.
  */
@@ -404,8 +403,9 @@ export function stripDeviceKeys(args: Record<string, unknown>): Record<string, u
  * Three of the classifications are worth stating outright:
  *
  * - `when` needs a device whatever its body contains, because the guard itself
- *   reads one — the device's platform, or its view tree. That classifies the
- *   header alone; the body is left to {@link flowRequiresDevice}'s walk.
+ *   reads one — the device's platform, or its view tree — unless the guard
+ *   checks a script's output. That classifies the header alone; the body is
+ *   left to {@link flowRequiresDevice}'s walk.
  * - `idle` needs one despite carrying no selector: it reads the device twice
  *   over, the UI tree and a screenshot of it.
  * - `run` needs one without the fragment being read here: it is resolved at run
@@ -416,10 +416,12 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
     case "echo":
     case "wait":
     case "script":
+    case "output-check":
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);
     case "when":
+      return step.condition.kind !== "output";
     case "run":
     case "launch":
     case "tap":
@@ -447,11 +449,10 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
  * Whether any step in a flow acts on a device - each block header's own
  * classification OR, via {@link blockSteps}, the steps it actually CONTAINS.
  *
- * The child walk answers nothing today: `when`, the only block kind, classifies
- * device-requiring in {@link stepRequiresDevice}. It is what makes a future
- * block kind safe to classify `false` — a flow that is only such a block would
- * otherwise resolve device-free and hard-stop on the first device step in its
- * body.
+ * The child walk is what decides a `when` block whose guard checks a script's
+ * output, which {@link stepRequiresDevice} classifies `false`: a flow that is
+ * only such a block would otherwise resolve device-free and hard-stop on the
+ * first device step in its body.
  */
 export function flowRequiresDevice(registry: Registry, steps: FlowStep[]): boolean {
   return steps.some(

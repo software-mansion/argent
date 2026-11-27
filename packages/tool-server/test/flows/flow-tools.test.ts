@@ -411,11 +411,11 @@ describe("a step the recorder refuses", () => {
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "one" });
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user.id}}" })
+      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user[0]}}" })
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain("takes no {{output:...}} reference");
     expect(parseFlow(await onDisk("poison")).steps).toEqual([{ kind: "echo", message: "one" }]);
 
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "two" });
@@ -441,39 +441,68 @@ describe("a step the recorder refuses", () => {
     );
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id}}" })
+      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user[0]}}" })
       .catch((e: unknown) => e as Error);
 
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain("takes no {{output:...}} reference");
     const session = await getRecordingSession(clientRoot, "poison");
     expect(session?.flow.steps).toEqual([{ kind: "echo", message: "one" }]);
   });
 
-  it("says the tool call already ran when the refusal lands after it", async () => {
+  it("refuses a malformed reference before the call runs", async () => {
     const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
     const tool = createFlowAddStepTool(registry);
     await flowStartRecordingTool.execute(
       {},
-      { name: "already-ran", project_root: tmpDir, executionPrerequisite: PREREQ }
+      { name: "not-run", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
 
-    const err = await tool
-      .execute(
-        {},
-        {
-          name: "already-ran",
-          project_root: tmpDir,
-          command: "keyboard",
-          args: '{"text":"{{output:code}}"}',
-        }
-      )
-      .catch((e: unknown) => e as Error);
+    for (const text of ["{{output:code[0]}}", "{{output:code}}"]) {
+      const err = await tool
+        .execute(
+          {},
+          {
+            name: "not-run",
+            project_root: tmpDir,
+            command: "keyboard",
+            args: JSON.stringify({ text }),
+          }
+        )
+        .catch((e: unknown) => e as Error);
+      expect((err as Error).message).toContain("Nothing ran and no step was recorded");
+    }
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await onDisk("not-run")).steps).toEqual([]);
+  });
 
-    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "{{output:code}}" });
-    expect((err as Error).message).toContain("`keyboard` call ran");
-    expect((err as Error).message).toContain("unsupported template syntax");
-    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
-    expect(parseFlow(await onDisk("already-ran")).steps).toEqual([]);
+  it("runs the call with what the recorded scripts returned and keeps the reference", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 4 } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "resolved", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    (await getRecordingSession(tmpDir, "resolved"))!.output = { otp: { code: 1234 } };
+
+    await tool.execute(
+      {},
+      {
+        name: "resolved",
+        project_root: tmpDir,
+        command: "keyboard",
+        args: '{"text":"{{output:otp.code}}","delayMs":"{{output:otp.code}}"}',
+      }
+    );
+
+    // A whole-value reference keeps its JSON type, as the runner gives it.
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: 1234, delayMs: 1234 });
+    expect(parseFlow(await onDisk("resolved")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "keyboard",
+        args: { text: "{{output:otp.code}}", delayMs: "{{output:otp.code}}" },
+      },
+    ]);
   });
 
   // A host-mode append re-parses the file, so the same guard also judges the
@@ -488,7 +517,7 @@ describe("a step the recorder refuses", () => {
     );
     await fs.writeFile(
       path.join(flowsDirFor(tmpDir), "hand-edited.yaml"),
-      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user.id}}"\n`
+      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user[0]}}"\n`
     );
 
     const err = await tool
@@ -1473,8 +1502,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("compose-path")).steps).toEqual([
       { kind: "run", flow: "login.yaml" },
     ]);
-    // The live sub-invoke gets no file-input boundary, so it must run the
-    // sibling by name…
+    // The live sub-invoke runs the sibling by name, as the recorded run: does…
     const nested = (registry.invokeTool as any).mock.calls[0][1];
     expect(nested).toEqual({ name: "login", project_root: tmpDir });
     // …which a real tool-server resolves to that same file.
@@ -1483,6 +1511,39 @@ describe("flow-add-step", () => {
       flowName: "login",
       viaUpload: false,
     });
+  });
+
+  it("runs and records a tool step that names an e2e_test_path, without a link", async () => {
+    const registry = new Registry();
+    registry.registerTool(flowReadPrerequisiteTool as never);
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "prereq-path", project_root: tmpDir });
+    const target = path.join(tmpDir, "elsewhere.yaml");
+    await fs.writeFile(target, "executionPrerequisite: Signed in\nsteps:\n  - echo: hi\n", "utf8");
+
+    const result = await tool.execute(
+      {},
+      {
+        name: "prereq-path",
+        project_root: tmpDir,
+        command: "e2e-read-prerequisite",
+        args: JSON.stringify({ e2e_test_path: target, project_root: tmpDir }),
+      }
+    );
+
+    expect(result.toolResult).toEqual({
+      e2eTest: "elsewhere",
+      flow: "elsewhere",
+      executionPrerequisite: "Signed in",
+    });
+    expect(parseFlow(await onDisk("prereq-path")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "e2e-read-prerequisite",
+        args: { e2e_test_path: target, project_root: tmpDir },
+      },
+    ]);
   });
 
   it("names the e2e_test_path the author wrote when the rewritten call is rejected", async () => {
@@ -1639,6 +1700,34 @@ describe("flow-add-step", () => {
 
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
+  });
+
+  it("says a relative sibling e2e_test_path was resolved against the tool server's cwd", async () => {
+    const registry = createMockRegistry({
+      "flow-execute": { result: { ok: true, steps: [] } },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute({}, { name: "compose-relative", project_root: tmpDir });
+    await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
+
+    await expect(
+      tool.execute(
+        {},
+        {
+          name: "compose-relative",
+          project_root: tmpDir,
+          command: "flow-execute",
+          args: JSON.stringify({ e2e_test_path: ".argent/e2e/login.yaml", project_root: tmpDir }),
+        }
+      )
+    ).rejects.toThrow(
+      `or the project's other e2e test directory, as the tool server resolves a relative path ` +
+        `against its own cwd ("${process.cwd()}"), not the calling agent's - pass the absolute path.`
+    );
+
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await readFlowFile("compose-relative")).steps).toEqual([]);
   });
 
   it('rejects a sibling e2e_test_path containing a ".." segment without running it', async () => {
@@ -3146,7 +3235,15 @@ describe("the flow-add-step schema the CLI tests hand-copy", () => {
   //
   // So the guard lives on this side, where the schema is. If this fails,
   // update those three fixtures in the same change.
-  const CLI_FIXTURE_PROPERTIES = ["name", "project_root", "command", "args", "selector", "delayMs"];
+  const CLI_FIXTURE_PROPERTIES = [
+    "name",
+    "project_root",
+    "command",
+    "args",
+    "selector",
+    "delayMs",
+    "shutdown",
+  ];
   const CLI_FIXTURE_REQUIRED = ["name", "project_root", "command"];
 
   it("still declares exactly the properties and required keys those fixtures encode", () => {

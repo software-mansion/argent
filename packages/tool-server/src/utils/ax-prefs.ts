@@ -5,11 +5,22 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { deviceSetForUdid, simctlArgsForUdid } from "./ios-device-sets";
+import { parsePlist } from "./ios-device/usbmux-protocol";
+
+const PRE_BOOT_ACCESSIBILITY_KEYS = [
+  "IgnoreAXServerEntitlements",
+  "AccessibilityEnabled",
+  "ApplicationAccessibilityEnabled",
+];
 
 const execFileAsync = promisify(execFile);
 
-export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync(
+async function accessibilityDefaults(
+  udid: string,
+  verb: "write" | "delete" | "export",
+  ...args: string[]
+): Promise<string> {
+  const { stdout } = await execFileAsync(
     "xcrun",
     /**
      * On an external device this is only reached from ax-service contexts,
@@ -17,49 +28,66 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
      */
     await simctlArgsForUdid(
       udid,
-      [
-        "spawn",
-        udid,
-        "defaults",
-        "write",
-        "com.apple.Accessibility",
-        "AutomationEnabled",
-        "-bool",
-        "true",
-      ],
+      ["spawn", udid, "defaults", verb, "com.apple.Accessibility", ...args],
       { granted: "ax-service" }
     ),
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
   );
+  return stdout;
+}
+
+export async function ensureAutomationEnabled(udid: string): Promise<void> {
+  await accessibilityDefaults(udid, "write", "AutomationEnabled", "-bool", "true");
+}
+
+function hasAutomationEnabled(plist: string): boolean {
+  return plist.includes("<key>AutomationEnabled</key>");
 }
 
 /**
- * SB caches `IgnoreAXServerEntitlements` at AX-server init, so only the
- * pre-boot plist write in boot-device takes effect; a post-boot write applies
- * from the next restart. False here means that write didn't happen, and
- * describe surfaces a degraded-quality hint.
+ * `AutomationEnabled` persists on the sim's disk and leaves Full Keyboard Access
+ * unable to move focus, even across reboots. Local iPhone and iPad sims trade it
+ * away (Apple TV sims still need it): the ax-service connects without it, though
+ * UIKit then reports a text field's placeholder only as its value, with no
+ * label. Removes it from sims an older argent wrote it to as well.
+ *
+ * `defaults delete` words a missing key differently per runtime, so presence is
+ * checked through `defaults export`, which prints the domain as an XML plist
+ * (an empty one for a missing domain) on every runtime.
  */
-export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
+export async function clearAutomationEnabled(udid: string, plist?: string): Promise<void> {
+  if (!hasAutomationEnabled(plist ?? (await accessibilityDefaults(udid, "export", "-")))) return;
   try {
-    const { stdout } = await execFileAsync(
-      "xcrun",
-      /** Same reasoning as {@linkcode ensureAutomationEnabled}. */
-      await simctlArgsForUdid(
-        udid,
-        [
-          "spawn",
-          udid,
-          "defaults",
-          "read",
-          "com.apple.Accessibility",
-          "IgnoreAXServerEntitlements",
-        ],
-        { granted: "ax-service" }
-      ),
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    await accessibilityDefaults(udid, "delete", "AutomationEnabled");
+  } catch (err) {
+    // Another clear of the same sim can delete the key between the check and here.
+    if (hasAutomationEnabled(await accessibilityDefaults(udid, "export", "-"))) throw err;
+  }
+}
+
+export async function clearAutomationEnabledOrWarn(udid: string): Promise<void> {
+  await clearAutomationEnabled(udid).catch((err) => {
+    process.stderr.write(
+      `[ax-prefs ${udid.slice(0, 8)}] could not clear AutomationEnabled, Full Keyboard Access may stay broken: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`
     );
-    return stdout.trim() === "1";
+  });
+}
+
+/** The running defaults can reveal a missing setting, but cannot show when it was applied. */
+export async function prepareLocalAxPrefs(udid: string): Promise<boolean> {
+  const plist = await accessibilityDefaults(udid, "export", "-");
+  await clearAutomationEnabled(udid, plist);
+  try {
+    const prefs = parsePlist(plist);
+    return (
+      typeof prefs === "object" &&
+      !Array.isArray(prefs) &&
+      PRE_BOOT_ACCESSIBILITY_KEYS.every((key) => prefs[key] === true || prefs[key] === 1)
+    );
   } catch {
+    // A diagnostic probe must not prevent the service from reading the screen.
     return false;
   }
 }
@@ -79,18 +107,23 @@ async function accessibilityPlistPath(udid: string): Promise<string> {
 }
 
 /**
- * Write the four AX prefs BEFORE `simctl boot` so SB caches them at AX-server
- * init. All four are required on a freshly-erased sim:
+ * Write the three AX prefs BEFORE `simctl boot` so SB caches them at AX-server
+ * init. All three are required on a freshly-erased sim:
  * - `IgnoreAXServerEntitlements` bypasses the iOS 26.5+ entitlement check.
- * - `AutomationEnabled` opts the simctl-spawned ax-service in as an AX client.
  * - `AccessibilityEnabled` + `ApplicationAccessibilityEnabled` gate the AT
  *   subsystem bootstrap; without them SB never spawns `AccessibilityUIServer`
  *   and describe returns an empty ROOT even though the entitlement check passes.
  *
+ * Apple TV sims also get `AutomationEnabled`, which opts the simctl-spawned
+ * tvOS ax-service in as an AX client.
+ *
  * Caller must ensure the sim is Shutdown — in-sim cfprefsd would otherwise
  * overwrite this file on flush.
  */
-export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
+export async function setAccessibilityPrefsPreBoot(
+  udid: string,
+  { isTvOs }: { isTvOs: boolean }
+): Promise<void> {
   const plistPath = await accessibilityPlistPath(udid);
   await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
   const exists = await fsAsync
@@ -100,12 +133,10 @@ export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> 
   if (!exists) {
     await execFileAsync("plutil", ["-create", "binary1", plistPath]);
   }
-  for (const key of [
-    "AutomationEnabled",
-    "IgnoreAXServerEntitlements",
-    "AccessibilityEnabled",
-    "ApplicationAccessibilityEnabled",
-  ]) {
+  const keys = isTvOs
+    ? ["AutomationEnabled", ...PRE_BOOT_ACCESSIBILITY_KEYS]
+    : PRE_BOOT_ACCESSIBILITY_KEYS;
+  for (const key of keys) {
     await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
   }
 }
