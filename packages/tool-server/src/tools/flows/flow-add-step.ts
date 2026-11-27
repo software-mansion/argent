@@ -1007,7 +1007,7 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
       "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
-      "on Chromium, for an app this tool-server session booted, as the app's path and boot args " +
+      "on Chromium, outside `shutdown:` and for an app this tool-server session booted, as the app's path and boot args " +
       "(other args are ignored), when only echo and script steps, also inside leading `run:` " +
       "fragments, come before it in a recording without an executionPrerequisite",
   },
@@ -1964,6 +1964,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof strippedArgs.bundleId === "string" &&
         (chromiumPort !== null
           ? chromiumSpec !== undefined &&
+            block === "steps" &&
             !take.executionPrerequisite &&
             (await leadsRun(take, session.filePath, { registry, project }))
           : Object.keys(extraLaunchArgs).length === 0 &&

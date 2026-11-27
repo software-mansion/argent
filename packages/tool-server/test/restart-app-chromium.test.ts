@@ -1021,6 +1021,39 @@ describe("restart-app on Chromium", () => {
     }
   });
 
+  it("records a restart in the shutdown list as a raw step", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-flow-"));
+    try {
+      await flowStartRecordingTool.execute({}, { name: "cleanup", project_root: projectRoot });
+      await flowInsertEchoTool.execute(
+        {},
+        { name: "cleanup", project_root: projectRoot, message: "start" }
+      );
+
+      await createFlowAddStepTool(registryWithRestartApp()).execute(
+        {},
+        {
+          name: "cleanup",
+          project_root: projectRoot,
+          command: "restart-app",
+          args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
+          shutdown: true,
+        }
+      );
+
+      const flow = parseFlow(
+        fs.readFileSync(path.join(projectRoot, ".argent", "e2e", "cleanup.yaml"), "utf8")
+      );
+      expect(flow.steps).toEqual([{ kind: "echo", message: "start" }]);
+      expect(flow.shutdown).toEqual([
+        { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
+      ]);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["only echo steps", "  - echo: seeded\n", { kind: "launch", app: { chromium: "__APP__" } }],
     [
