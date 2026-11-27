@@ -75,9 +75,10 @@ describe("hidden assert against an unreadable tree (end-to-end)", () => {
         /accessibility tree of .* is empty: the foreground app \(com\.example\.app\) exposes no accessible elements/,
     },
     {
-      name: "an empty tree on a simulator argent did not boot",
+      name: "an empty tree on a simulator without the pre-boot accessibility settings",
       ax: { degraded: true, tree: async () => EMPTY_TREE },
-      reason: /accessibility tree of .* is empty: argent did not boot this simulator/,
+      reason:
+        /accessibility tree of .* is empty: argent could not verify the simulator's pre-boot accessibility settings/,
     },
     {
       name: "a read that fails",

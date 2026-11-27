@@ -9,7 +9,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // against at replay (fetchFlowTree), not the trimmed agent-facing describe
 // tree — mock it directly so each test controls exactly what capture sees.
 let currentTreeData: () => DescribeTreeData;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (orig) => ({
+  ...(await orig<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentTreeData()),
 }));
 
@@ -21,7 +22,12 @@ import { selectorToFrame, type Selector } from "../../src/utils/ui-tree-match";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { summarizeStep } from "../../src/tools/flows/flow-step-definitions";
-import { __resetRecordingsForTesting, parseFlow } from "../../src/tools/flows/flow-utils";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
+import {
+  __resetRecordingsForTesting,
+  parseFlow,
+  serializeFlow,
+} from "../../src/tools/flows/flow-utils";
 
 const DEVICE = "00000000-0000-0000-0000-0000000000AB"; // iOS UDID shape
 const ANDROID = "emulator-5554";
@@ -222,6 +228,70 @@ describe("flow-add-step tap capture targets the recorded launch", () => {
       selector: { text: "Bump" },
     });
     expect(order).toEqual(["restart-app", "ax-read-1", "ax-read-2", "gesture-tap"]);
+  });
+
+  it("passes a shutdown tap the app a shutdown launch started", async () => {
+    setTree([]);
+    await recordRestart();
+    const add = (command: string, args: object) =>
+      createFlowAddStepTool(registryWithRestart()).execute(
+        {},
+        {
+          name: E2E_FLOW,
+          project_root: tmpDir,
+          command,
+          args: JSON.stringify(args),
+          shutdown: true,
+        }
+      );
+    await add("restart-app", { udid: DEVICE, bundleId: "com.example.cleanup" });
+    vi.mocked(fetchFlowTree).mockClear();
+
+    await add("gesture-tap", { udid: DEVICE, x: 0.5, y: 0.5 });
+
+    expect(vi.mocked(fetchFlowTree).mock.calls[0]![2]).toMatchObject({
+      bundleId: "com.example.cleanup",
+    });
+  });
+
+  it("drops a shutdown wait verdict when a passing wait takes its number after a hand edit", async () => {
+    setTree([
+      n({ role: "AXStaticText", label: "Bye", frame: { x: 0.2, y: 0.2, width: 0.3, height: 0.1 } }),
+    ]);
+    let pass = false;
+    const registry = {
+      invokeTool: vi.fn(async () =>
+        pass
+          ? { success: true, elapsed: 10 }
+          : { success: false, elapsed: 1500, note: "no element matched" }
+      ),
+      getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    } as unknown as Registry;
+    const wait = () =>
+      createFlowAddStepTool(registry).execute(
+        {},
+        {
+          name: E2E_FLOW,
+          project_root: tmpDir,
+          command: "await-ui-element",
+          args: JSON.stringify({ udid: DEVICE, condition: "visible", selector: { text: "Bye" } }),
+          shutdown: true,
+        }
+      );
+    await wait();
+    const file = path.join(tmpDir, ".argent", "e2e", `${E2E_FLOW}.yaml`);
+    const flow = parseFlow(await fs.readFile(file, "utf8"));
+    await fs.writeFile(file, serializeFlow({ ...flow, shutdown: undefined }));
+    pass = true;
+    expect((await wait()).message).not.toMatch(/warning|never held/i);
+
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: E2E_FLOW, project_root: tmpDir }
+    );
+
+    expect(finished.summary.some((line) => line.includes("warning:"))).toBe(false);
+    expect(finished.message).toMatch(/1 warning raised during this recording is NOT in `summary`/);
   });
 
   it("passes nothing when the recording has captured no launch", async () => {

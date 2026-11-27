@@ -189,6 +189,17 @@ describe("setConfigValue — return value", () => {
   });
 });
 
+describe("autoUpdate.enabled", () => {
+  it("defaults on and accepts a machine-wide opt-out", () => {
+    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(true);
+    setConfigValue("autoUpdate.enabled", false, "global", opts());
+    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(false);
+    expect(() => setConfigValue("autoUpdate.enabled", true, "project", opts())).toThrow(
+      ConfigScopeError
+    );
+  });
+});
+
 describe("listConfig", () => {
   it("reports every schema entry with per-scope and effective values", () => {
     setConfigValue("lens.agent", "claude", "global", opts());

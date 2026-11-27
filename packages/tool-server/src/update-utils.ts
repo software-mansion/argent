@@ -2,7 +2,7 @@
 // the agent should do: a note that leads with warnings reads as background, and
 // agents finish the task without passing it on.
 export function buildUpdateNote(currentVersion: string, latestVersion: string): string {
-  return `An Argent update is available (${currentVersion} -> ${latestVersion}). Briefly tell the user, then continue with their request.
+  return `An Argent update is available (${currentVersion} -> ${latestVersion}). Ask the user if they want to update, then continue with their request.
 
 Update only if the user asks you to in this conversation:
   - The user can run \`npx @swmansion/argent update\` in the terminal.
