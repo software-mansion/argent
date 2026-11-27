@@ -1,16 +1,28 @@
 import { canonicalToolId } from "@argent/registry";
-import { isUnmetUiWaitResult, unmetUiWaitCause } from "../tools/await-ui-element";
+import { unmetUiWaitCause } from "../tools/await-ui-element";
 import { isDebuggerNotConnectedResult } from "../tools/debugger/not-connected";
 import { nestedOrchestratorOutcome } from "../tools/flows/flow-nested-outcome";
 import { isNativeDevtoolsBlockResult } from "../blueprints/native-devtools";
+import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetWaitResult, type UnmetWaitCause } from "./wait-result";
 
-/** Why an `await-ui-element` came back `success: false`. */
-export function unmetWaitReason(result: unknown): string {
+/**
+ * Why a wait of `tool` came back `success: false`. `await-ui-element` can read
+ * it off the note of a result without the field; the other wait tools always
+ * carry `cause`.
+ */
+export function unmetWaitCause(tool: string, result: unknown): UnmetWaitCause {
+  if (tool === AWAIT_UI_ELEMENT_TOOL_ID) return unmetUiWaitCause(result);
+  const carried = (result as { cause?: unknown } | null)?.cause;
+  return carried === "unreadable" || carried === "cancelled" ? carried : "unmet";
+}
+
+/** Why a wait of `tool` came back `success: false`, as a step's reason. */
+export function unmetWaitReason(tool: string, result: unknown): string {
   const { note } = result as { note?: string };
-  const cause = unmetUiWaitCause(result);
+  const cause = unmetWaitCause(tool, result);
   // Only an `unmet` wait judged the condition; the other causes observed nothing.
   const what = cause === "unmet" ? "condition not met" : `condition not judged (${cause})`;
-  return `await-ui-element ${what}${note ? `: ${note}` : ""}`;
+  return `${tool} ${what}${note ? `: ${note}` : ""}`;
 }
 
 export interface ToolResultVerdict {
@@ -20,7 +32,7 @@ export interface ToolResultVerdict {
 
 /**
  * The failure a tool reports in a result it returns rather than throws: an
- * unmet `await-ui-element`, an `e2e-execute` or `run-sequence` that did not
+ * unmet wait (`await-ui-element`, `await-network-request`), an `e2e-execute` or `run-sequence` that did not
  * pass, a debugger tool with no connection, a native-devtools precheck that
  * stopped the tool before its work, a recording tool that recorded nothing.
  * `undefined` for any other result.
@@ -29,7 +41,9 @@ export interface ToolResultVerdict {
  * {@link directCallFailure}.
  */
 export function toolResultVerdict(tool: string, result: unknown): ToolResultVerdict | undefined {
-  if (isUnmetUiWaitResult(tool, result)) return { status: "fail", reason: unmetWaitReason(result) };
+  if (isUnmetWaitResult(tool, result)) {
+    return { status: "fail", reason: unmetWaitReason(tool, result) };
+  }
   const nested = nestedOrchestratorOutcome(tool, result);
   if (nested) return nested;
   if (isDebuggerNotConnectedResult(tool, result)) {

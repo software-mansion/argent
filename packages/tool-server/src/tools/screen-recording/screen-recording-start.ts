@@ -52,7 +52,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target ID from `list-devices`.<flag:macos-apps> For a Mac app, use its device ID, such as `macos-app-com.example.notes`.</flag:macos-apps>"
+      "Target ID from `list-devices`<flag:macos-apps> (Mac app: `macos-app-<bundle id>`)</flag:macos-apps>."
     ),
   timeLimitSeconds: z
     .number()
@@ -60,25 +60,16 @@ const zodSchema = z.object({
     .min(1)
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
-    .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}). ` +
-        `Set it to slightly more than the interaction you plan to capture.`
-    ),
+    .describe(`Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}).`),
   trimStatic: z
     .boolean()
     .optional()
-    .describe(
-      "Default true. Collapse stretches where the screen does not change: the first second of " +
-        "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
-        "so a long recording with brief activity comes back short instead of full of dead air. " +
-        "Set false to keep a faithful real-time recording."
-    ),
+    .describe("Collapse idle unchanged stretches after 1s (default true; false = real-time)."),
   showTouches: z
     .boolean()
     .optional()
     .describe(
-      "Draw touch markers in the video (default true). Recordings of physical iPhones have no touch markers." +
-        "<flag:macos-apps> For Mac apps, this shows the agent's pointer, a click ring, and a dot while a mouse button is held.</flag:macos-apps>"
+      "Draw touch markers (default true; unsupported on physical iPhones)<flag:macos-apps>. Mac apps: shows pointer, click ring, and hold dot</flag:macos-apps>."
     ),
 });
 
@@ -87,10 +78,9 @@ export function createScreenRecordingStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
-    description: `Start an MP4 recording of the device screen<flag:macos-apps> or Mac app window</flag:macos-apps>. Use when the user wants a video of an interaction or animation. Use \`screenshot\` for a still image.
-Recording continues across tool calls until stopped or until the time limit. Set a reminder as soon as recording starts. The start result returns \`outputFile\` on the tool-server host. Retrieve the video with \`screen-recording-stop\`, even after the time limit.
-Start fails if the target is unavailable or already has a recording waiting to be stopped or retrieved. Cabled iPhones, foldable simulators, and Android emulators and devices on a Linux or Windows host require ffmpeg. On a physical iPhone, check for \`transportType: "wired"\` in \`list-devices\` and have the user allow camera access for \`ios-screen-stream\` if prompted on the first recording. tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega are unsupported.<flag:macos-apps>
-For a Mac app started by Argent, restore its window and move it fully onto one display. Capture protection blocks recording. Mac app recording needs neither Screen Recording permission nor ffmpeg and continues while the Mac is locked. If start returns \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>`,
+    description: `Start an MP4 recording of the device screen<flag:macos-apps> or Mac app window</flag:macos-apps>. Use when capturing video of an interaction or animation (use \`screenshot\` for a still image).
+Continues until \`screen-recording-stop\` or \`timeLimitSeconds\` (always retrieve via \`screen-recording-stop\`). Requires \`ffmpeg\` on foldable simulators, Android on a Linux or Windows host, and wired iPhones (needs \`transportType: "wired"\` and camera access for \`ios-screen-stream\`). Unsupported on tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega.<flag:macos-apps> Mac apps: needs a visible window on one display, no capture protection, no Screen Recording permission or ffmpeg; on \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>
+Returns \`{ outputFile }\` on the tool-server host. Fails if target is unavailable or already recording.`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {

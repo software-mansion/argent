@@ -1,7 +1,12 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import { injectAndroidNamedKey, injectAndroidText } from "../../../utils/android-input";
+import {
+  assertTypeableAndroidText,
+  injectAndroidNamedKey,
+  injectAndroidText,
+} from "../../../utils/android-input";
+import { fillAndroid } from "../../fill/android";
 import type { KeyboardParams, KeyboardResult } from "../types";
 import { typeTv } from "./tv";
 
@@ -10,9 +15,15 @@ import { typeTv } from "./tv";
 // (routine for CI / headless), so the tool reported success while typing nothing
 // (#449). `device.id` is the adb serial.
 async function typeAndroidPhone(
+  registry: Registry,
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
+  if (params.clear) {
+    // Validate text up front so un-typeable text does not clear the field before failing.
+    if (params.text) assertTypeableAndroidText(params.text);
+    await fillAndroid(registry, device, "");
+  }
   let keysPressed = 0;
   // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
   // branch runs and there is no ordering to get right.
@@ -23,10 +34,15 @@ async function typeAndroidPhone(
     keysPressed += params.text.length;
   }
   if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    await injectAndroidNamedKey(device.id, params.key, count);
+    keysPressed += count;
   }
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
+  return {
+    typed: params.text ?? params.key ?? "",
+    keys: keysPressed,
+    ...(params.clear ? { cleared: true as const } : {}),
+  };
 }
 
 // An Android TV emulator classifies as platform "android" by serial shape, and TV
@@ -43,6 +59,6 @@ export function makeAndroidImpl(
     handler: async (_services, params, device) =>
       (await isAndroidTv(device.id))
         ? typeTv(registry, device, params)
-        : typeAndroidPhone(device, params),
+        : typeAndroidPhone(registry, device, params),
   };
 }

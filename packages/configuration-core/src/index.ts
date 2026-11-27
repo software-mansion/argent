@@ -26,6 +26,8 @@ export {
 
 export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } from "./config.js";
 
+export { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "./whats-new.js";
+
 // Ordered environment + dotenv-file chain that `{{secret:…}}` placeholders and
 // `argent secrets` resolve names through.
 export {
@@ -83,6 +85,7 @@ export {
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
   getAndroidAdbServerPort,
+  isAutoUpdateEnabled,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,

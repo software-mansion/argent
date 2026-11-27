@@ -1,10 +1,13 @@
 ---
 sidebar_position: 10
 sidebar_label: Mac apps
-title: Mac apps
+title: Test native Mac apps with an AI agent
+description: Argent lets the AI coding agent test native Mac apps, including Mac Catalyst apps. The agent reads the interface, clicks, types and takes screenshots while the app runs in the background.
 sidebar_custom_props:
   icon: monitor
 ---
+
+# Mac apps
 
 Argent lets your agent test native Mac apps, including Mac Catalyst builds of iPad apps. The agent reads the interface, clicks, types, and takes screenshots while you continue to use your Mac.
 
@@ -40,7 +43,7 @@ Context menus and pop-up menus can temporarily bring the app window to the front
 - **Interact:** click (including double-clicks, right-clicks, and Command-clicks), drag, scroll, type text, and use keyboard shortcuts.
 - **Use menus:** choose commands such as File > Export while the app stays in the background.
 - **Open and save files:** answer file dialogs with a path.
-- **Inspect network traffic:** read `URLSession` requests and [JavaScript requests from React Native apps](/docs/features/network#start-and-stop-the-capture).
+- **Inspect network traffic:** read `URLSession` and React Native JavaScript requests, or [wait for a specific request](/docs/features/network#wait-for-a-request).
 - **Debug React Native apps:** inspect console logs and React components. See [Debug a React Native app](#debug-a-react-native-app).
 - **Profile performance:** find CPU hotspots, UI hangs, and memory leaks. In React Native apps, you can also find slow React renders. See [Profile your app](#profile-your-app).
 - **Test workflows:** record and replay [e2e tests](/docs/features/e2e), including screenshot comparisons.
@@ -114,7 +117,7 @@ Use a [supported Debug build](#profile-a-react-native-app). Start Metro before y
 Argent targets the Mac app even when it shares Metro with an iOS simulator.
 
 If the hardened runtime prevents Argent from launching a react-native-macos build, start it from Xcode.
-The agent can still debug JavaScript. Screen inspection and input require a build Argent can control.
+The agent can still debug JavaScript and capture its HTTP requests through Metro. For screen inspection, input and native network capture, ask Argent to launch a supported build.
 
 See the [Mac app debugger reference](/docs/reference/tools#javascript-debugging-on-a-mac-app) for setup and troubleshooting.
 

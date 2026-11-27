@@ -7,6 +7,16 @@ import type { KeyboardParams, KeyboardResult } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * How long a key stays down, whatever `delayMs` says. iOS auto-repeats a key
+ * held long enough, and a key held down is exposed to that: if the simulator
+ * stalls before the Up lands, the key repeats (#2030). Keeping the hold short
+ * and fixed shrinks that window; `delayMs` is spent between keys instead,
+ * where a stall only delays the next one. 20 ms is the hold `fill` already
+ * presses backspace with. Mutable for tests only.
+ */
+export const KEY_HOLD = { ms: 20 };
+
 // Android phones/tablets do not use this HID transport — they inject over
 // `adb shell input` instead (utils/android-input.ts, #449).
 export async function typeSimulatorServer(
@@ -20,12 +30,15 @@ export async function typeSimulatorServer(
   let keysPressed = 0;
 
   const pressKeyCode = async (keyCode: number, withShift = false) => {
+    // A key that fails is not released here: the socket that carried its
+    // Down releases every key still down when it gives up on an ack, on that
+    // socket (utils/simulator-client.ts, `releaseHeldKeys`).
     if (withShift) {
       await api.pressKey("Down", SHIFT_KEYCODE);
       await sleep(10);
     }
     await api.pressKey("Down", keyCode);
-    await sleep(delay);
+    await sleep(KEY_HOLD.ms);
     await api.pressKey("Up", keyCode);
     if (withShift) {
       await sleep(10);
@@ -69,7 +82,11 @@ export async function typeSimulatorServer(
         }
       );
     }
-    await pressKeyCode(namedKeyCode);
+    const count = params.repeat ?? 1;
+    for (let i = 0; i < count; i++) {
+      await pressKeyCode(namedKeyCode);
+      if (i < count - 1) await sleep(delay);
+    }
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };

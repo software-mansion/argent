@@ -3660,6 +3660,40 @@ describe("timing and filtering", () => {
     ]);
   });
 
+  it("lists with includeHidden also the records a clear hid, the one in flight too, still without Metro's traffic on the port", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "https://example.com/done");
+    agent.started(agent.rid(2), "https://example.com/open");
+    agent.request(agent.rid(3), "http://10.0.2.2:8081/status");
+    await vi.waitFor(() =>
+      expect(api.records(0).map((r) => r.state)).toEqual(["complete", "pending", "complete"])
+    );
+
+    api.clear();
+    expect(api.records(8081)).toEqual([]);
+    const hidden = (): Array<[string, string]> =>
+      api.records(8081, { includeHidden: true }).map((r) => [r.request.url, r.state]);
+    expect(hidden()).toEqual([
+      ["https://example.com/done", "complete"],
+      ["https://example.com/open", "pending"],
+    ]);
+    // The Metro request is still in the buffer: only the port leaves it out.
+    expect(api.records(0, { includeHidden: true })).toHaveLength(3);
+
+    agent.request(agent.rid(4), "https://example.com/after");
+    await vi.waitFor(() =>
+      expect(api.records(8081).map((r) => [r.request.url, r.state])).toEqual([
+        ["https://example.com/after", "complete"],
+      ])
+    );
+    expect(hidden()).toEqual([
+      ["https://example.com/done", "complete"],
+      ["https://example.com/open", "pending"],
+      ["https://example.com/after", "complete"],
+    ]);
+  });
+
   it("times a failed request by the arrival of its events", async () => {
     const api = await armedInspector();
     const agent = agents[0]!;

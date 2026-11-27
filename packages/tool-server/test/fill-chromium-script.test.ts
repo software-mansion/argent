@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildChromiumFillScript } from "../src/tools/fill/chromium";
+import { useAutoAdvancingClock } from "./helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 /**
  * Runs the real page script against a hand-built document. The mock carries

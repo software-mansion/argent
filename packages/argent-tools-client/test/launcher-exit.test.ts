@@ -27,6 +27,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       // Readable, so narrow before spying.
       const stdout = child.stdout as unknown as { unref: () => void } | null;
       if (stdout) vi.spyOn(stdout, "unref");
+      vi.spyOn(child, "unref");
       lastChild = child;
       return child;
     },
@@ -91,5 +92,19 @@ describe("spawnToolsServer — process-exit hygiene", () => {
     expect(stdout).toBeTruthy();
     // The socket that used to strand `argent run` on the event loop.
     expect(stdout!.unref).toHaveBeenCalled();
+    expect(lastChild!.unref).toHaveBeenCalled();
+  });
+
+  it("keeps the child ref'd until ready, so an early exit still rejects", async () => {
+    process.env.FAKE_MODE = "exit-immediate";
+    try {
+      const port = await launcher.findFreePort();
+      await expect(launcher.spawnToolsServer(fakePaths(), port)).rejects.toThrow(
+        "tool-server exited with code 7 before becoming ready"
+      );
+    } finally {
+      delete process.env.FAKE_MODE;
+    }
+    expect(lastChild!.unref).not.toHaveBeenCalled();
   });
 });

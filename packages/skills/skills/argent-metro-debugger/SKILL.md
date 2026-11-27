@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug JavaScript with Argent in React Native apps on iOS, Android, Vega, and macOS, or in Chromium and Electron over CDP. Use when connecting to a runtime, inspecting React components, reading console logs, or evaluating JavaScript.
+description: Debug JS with Argent in React Native (iOS, Android, Vega, macOS) or Chromium/Electron (CDP). Use when reading console logs, inspecting React trees, evaluating JS, or checking HTTP requests.
 ---
 
 ## 1. Prerequisites
@@ -16,19 +16,16 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 Use the `device_id` from `list-devices` and keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
 
-On iOS and Android, use the `list-devices` ID as `udid` for `network-capture-start` and `network-capture-stop`. If shared Metro requires a logical ID, pass it as `logicalDeviceId`, then use it as `device_id` when reading the JS capture.
-
-| Tool                                                 | Use for                                                                                                                                                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `debugger-status`                                    | Diagnosing the connection. Call it first when anything fails                                                                                                                               |
-| `debugger-connect`                                   | Opening the session and starting console capture                                                                                                                                           |
-| `debugger-reload-metro`                              | Reloading the JS bundle of an attached app                                                                                                                                                 |
-| `restart-app`                                        | Relaunching the app when it lost its Metro connection                                                                                                                                      |
-| `debugger-component-tree`                            | Component names and testIDs on screen. Find tap targets with `describe`                                                                                                                    |
-| `debugger-inspect-element`                           | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1                                                                     |
-| `debugger-log-registry`                              | Console log summary and the log file path (§4)                                                                                                                                             |
-| `debugger-evaluate`                                  | Running a JS expression in the app runtime                                                                                                                                                 |
-| `view-network-logs` → `view-network-request-details` | JS-level HTTP traffic, then the headers and body of one request. On iOS and Android, call `network-capture-start` before the action, and `network-capture-stop` when you have the requests |
+| Tool                       | Use for                                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `debugger-status`          | Diagnosing the connection. Call it first when anything fails                                                           |
+| `debugger-connect`         | Opening the session and starting console capture                                                                       |
+| `debugger-reload-metro`    | Reloading the JS bundle of an attached app                                                                             |
+| `restart-app`              | Relaunching the app when it lost its Metro connection                                                                  |
+| `debugger-component-tree`  | Component names and testIDs on screen. Find tap targets with `describe`                                                |
+| `debugger-inspect-element` | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
+| `debugger-log-registry`    | Console log summary, the newest entries inline, and the log file path (§4)                                             |
+| `debugger-evaluate`        | Running a JS expression in the app runtime                                                                             |
 
 A component missing from `debugger-component-tree`? `includeSkipped` only adds counts of what was pruned. Use `onScreenOnly: false` for one off screen, or `debugger-inspect-element` at its point for one on screen.
 
@@ -36,11 +33,24 @@ A component missing from `debugger-component-tree`? `includeSkipped` only adds c
 
 1. Start Metro before launching a Debug Hermes build of react-native-macos 0.76+ or React Native for Mac Catalyst. Launch Mac Catalyst through Argent so it can identify its runtime. If `boot-device` refuses a hardened react-native-macos build, have the user start it from Xcode. JavaScript tools still work. UI inspection and gestures require a build Argent can control.
 2. Keep `macos-app-<bundle id>` as `device_id`, even on shared Metro. If a call returns `device_mismatch`, check that the Debug bundle loaded from the requested Metro port. The IDs in the error identify other targets.
-3. Call `view-network-logs` before reproducing a JavaScript request and again after a reload. For native traffic, use `network-capture-start` and read with `native-network-logs`. The two logs can show the same `fetch()` request.
 
 Use `describe` for tap targets. The React tools use the root with the most components, which can be in a different window. Before using a point, verify that both tools are looking at the same window. To inspect a tap point from the React tree, multiply its fractions by the width and height in `Screen: WxH`. The resulting points include the title bar. On the old architecture (Paper), native views around the React root can shift those points. Check the returned component against the intended control.
 
+For JavaScript capture in an app started from Xcode, use `macos-app-<bundle id>` as `udid` and select `layer: "js"` on start and stop. `list-devices` only lists Mac apps launched through Argent. Native capture needs a supported build launched through Argent.
+
 If `debugger-reload-metro` fails to reload the Mac app, use `restart-app` for an Argent-controlled build. For a build started from Xcode, restart it there.
+
+### Inspect network requests
+
+1. Choose the log. Use `view-network-logs` for JavaScript or the active Chromium tab and `native-network-logs` for OkHttp or URLSession. The two logs can show the same request.
+2. Start before triggering the request. On iOS simulators, Android, and Mac apps, call `network-capture-start`. Select `layer: "js"` or `layer: "native"` when you only need one. Check that the layer you need is armed. On Vega, read the JS log to start. On Chromium, read the log to attach or call start if you need a window for a request check.
+3. After the action, use `await-network-request` to check for a specific request or read the logs to explore traffic. On Vega, use the log. On Chromium, use a valid placeholder bundle ID such as `argent.capture` for start, stop, and wait. The log includes traffic outside the window. For redirects, Chromium waits match the final URL and method. Other layers match the URL the app requested.
+4. For an `unmet` wait, check the action and matcher against the near misses. For `unreadable`, follow the layer notes before repeating the action. A wait can restore recording while a JS window is active, but may miss requests sent before it reconnects.
+5. Pass an ID from the log or wait to `view-network-request-details`. Read Android native bodies you need before stopping. Stop the capture you started with `network-capture-stop`. Check `armed` and `reason` to confirm what stopped. On Chromium, a stop closes the window and leaves tab logging active.
+
+Keep the original `udid` for start, wait, stop, and native reads. On iOS simulators and Android, if shared Metro requires a logical ID, use it as `logicalDeviceId` on start and stop and as `device_id` on JS reads. For Mac apps, keep `macos-app-<bundle id>` for capture and JS reads, even on shared Metro. Check the project's Metro start script if the port is unclear. Pass the same port throughout when it differs from the device default. The wait reuses the target from start.
+
+After a JavaScript reload or relaunch, start JS capture again before repeating the action. On Vega, read the log again instead. If the Android app restarted outside Argent, start native capture again. If an iOS provider owns native capture, relaunch clears its history. Once the app reconnects, start capture again and confirm the native layer is armed.
 
 ## 3. Rules and recovery
 
@@ -58,7 +68,7 @@ What the `guidance` does not tell you:
 
 ## 4. Reading Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk. `debugger-log-registry` returns the summary and the file path.
+`debugger-log-registry` returns the newest log entries inline (`levels` and `tail` filter them) plus the path of the full log file. Read `entries` first; search the file only for older lines or full messages.
 
 ### Flat log format
 

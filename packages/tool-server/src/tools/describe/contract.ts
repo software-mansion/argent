@@ -93,7 +93,8 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 );
 
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
-// "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
+// "uiautomator" / "android-devtools": Android; with "+cdp", a Chrome tab's page
+// came from the DOM walk over Chrome DevTools. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
 // automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
 // dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
@@ -104,6 +105,8 @@ export type DescribeSource =
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
+  | "uiautomator+cdp"
+  | "android-devtools+cdp"
   | "cdp-dom"
   | "vega-automation"
   | "harmony-uitest"
@@ -126,9 +129,12 @@ export interface DescribeTreeData {
   hint?: string;
   // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
   stale?: boolean;
-  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // Part of the screen was not read (e.g. system dialogs outside the iOS app),
   // so an element's absence proves nothing; `hint` says why.
   partial?: boolean;
+  // Apple TV: the focused element is one the screen has left, as while the
+  // keyboard opens or closes. The cursor has not landed on this screen yet.
+  cursorNotLanded?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set

@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -25,7 +25,7 @@
     "@fails-components/webtransport": "^1.6.8",
     "@fails-components/webtransport-transport-http3-quiche": "^1.6.8",
     "@moq/net": "^0.3.5",
-    "@swmansion/argent-cloud-sdk": "^0.3.1",
+    "@swmansion/argent-cloud-sdk": "^0.3.3",
     "bunyan": "^1.8.15",
     "bytes": "^3.1.2",
     "dotenv": "^18.0.8",

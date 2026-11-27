@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir } from "node:os";
+import { argentHomeDir } from "./home.js";
 
 export type FlagScope = "global" | "project";
 
@@ -88,6 +88,13 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     defaultEnabled: true,
   },
   {
+    name: "whats-new",
+    description:
+      "After an update, tell the agent the highlights of the new Argent version on its first tool call. " +
+      "On by default; turn it off with `argent disable whats-new`.",
+    defaultEnabled: true,
+  },
+  {
     name: "macos-apps",
     description:
       "Control native Mac apps, including Mac Catalyst. " +
@@ -136,9 +143,8 @@ export function resolveProjectRoot(startDir: string): string {
 }
 
 export function getFlagsPath(scope: FlagScope, options: FlagsPathOptions = {}): string {
-  const home = options.homeDir ?? homedir();
   if (scope === "global") {
-    return path.join(home, ".argent", "flags.json");
+    return path.join(argentHomeDir({ homeDir: options.homeDir }), "flags.json");
   }
   const cwd = options.cwd ?? process.cwd();
   return path.join(resolveProjectRoot(cwd), ".argent", "flags.json");
