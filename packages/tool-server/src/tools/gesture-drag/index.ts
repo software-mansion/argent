@@ -168,7 +168,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
-  description: `Perform a left-button mouse drag between normalized [0,1] window points in Chromium<flag:macos-apps> or a Mac app</flag:macos-apps>.
+  description: `Drag the left mouse button between normalized [0,1] window points in Chromium<flag:macos-apps> or a Mac app</flag:macos-apps>.
 Use when dragging sliders, drag-and-drop items, or selecting text (use \`gesture-scroll\` to scroll desktop lists; use \`gesture-swipe\` on iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>).<flag:macos-apps> Mac app: same start/end point = long press; drops stay inside the app's windows.</flag:macos-apps>
 Returns \`{ dragged: true, timestampMs }\`. Fails if the CDP session is unreachable.`,
   zodSchema,

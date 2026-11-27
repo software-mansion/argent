@@ -61,7 +61,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const chromiumTabsTool: ToolDefinition<Params, Result> = {
   id: "chromium-tabs",
-  description: `List, select, open, or close tabs/windows in a Chromium (CDP) or Electron app (all UI tools target the active tab).
+  description: `List and switch tabs/windows (or open/close them) in a Chromium (CDP) or Electron app (all UI tools target the active tab).
 Use when switching between multiple tabs/windows or opening/closing pages.
 Returns \`{ tabs: [{ tabId, targetId, title, url, active, label? }] }\`. Fails on non-Chromium targets or unknown tab ids.`,
   zodSchema,

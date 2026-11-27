@@ -29,7 +29,7 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
-  description: `Evaluate JavaScript in the app runtime (Hermes on React Native/Vega<flag:macos-apps>/Mac apps</flag:macos-apps>; V8 on Chromium; awaits Promises).
+  description: `Run JavaScript in the app runtime (Hermes on React Native/Vega<flag:macos-apps>/Mac apps</flag:macos-apps>; V8 on Chromium; awaits Promises).
 Use when inspecting runtime state (e.g. localStorage/sessionStorage on Chromium) or calling app functions.
 Returns \`{ result, deviceName, appName, logicalDeviceId }\` (JSON-serialized; cyclic objects fail). Fails if disconnected or the expression throws.`,
   zodSchema,

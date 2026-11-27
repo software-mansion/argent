@@ -44,7 +44,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const settingsPermissionsTool: ToolDefinition<Params, SettingsPermissionsResult> = {
   id: "settings-permissions",
-  description: `Grant, deny, or reset an app's runtime permission without opening Settings. Use when setting up permissions before launching or triggering a prompt (changing permissions may terminate a running app).
+  description: `Grant or deny an app's runtime permission, or reset it, without opening Settings. Use when setting up permissions before launching or triggering a prompt (changing permissions may terminate a running app).
 iOS sim: \`grant location\`/\`location-always\` requires the app installed first. Android: app must be installed and declare the mapped permissions in its manifest.
 Returns \`{ action, permission, bundleId, applied, skipped? }\`. Fails if nothing could be applied.`,
   zodSchema,

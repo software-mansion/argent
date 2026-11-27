@@ -50,7 +50,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
   id: "chromium-cookies",
-  description: `Read, set, delete, or clear cookies (including HttpOnly) in a Chromium (CDP) app.
+  description: `Read and write cookies (including HttpOnly) in a Chromium (CDP) app.
 Use when seeding an auth session or asserting cookie state (\`set\`/\`delete\` need \`url\` or \`domain\`). \`clear\` wipes ALL browser cookies across every domain (ignores \`url\`/\`domain\`); use \`get\` + \`delete\` to clear a single domain.
 Returns \`{ cookies, count }\` (\`get\`) or \`{ set }\` / \`{ deleted }\` / \`{ cleared }\`. Fails on non-Chromium targets or missing required params.`,
   zodSchema,

@@ -169,7 +169,7 @@ export const flowAddScriptTool: ToolDefinition<
 > = deferredShutdownFirst({
   id: "e2e-add-script",
   description: `Run a local JS/TS script and record it as a \`script:\` step (requires no \`argent link\` / \`ARGENT_TOOLS_URL\`).
-Use when adding a setup/seed/cleanup script during an open recording (output is available to later steps via \`{{output:PATH}}\`).
+Use when the user requests a local script in an open recording (output is available to later steps via \`{{output:PATH}}\`).
 Returns \`{ status, reason?, outputJson?, stepCount, recorded? }\`. A failed script returns \`status: "fail"\` or \`"error"\` without recording (check \`reason\` and affected state before retrying). Fails on invalid input, no open recording, or recording over a link.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,

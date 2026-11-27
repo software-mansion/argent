@@ -70,7 +70,7 @@ export const nativeProfilerLaunchAnalysisTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `${launchAnalysisMode[params.mode].failed}: ${failureSignal.error_code}`,
   },
-  description: `Measure or profile iOS app startup on an already-installed Release build (warms once, then measures).
+  description: `Profile or measure iOS app startup on an already-installed Release build (warms once, then measures).
 Use when benchmarking launch time (\`measure\`: 5 XCTest launches incl. extended tasks; signed runner on iPhone) or profiling pre-first-frame CPU work (\`profile\`: Instruments App Launch trace; follow \`profilerSession.next\` with \`profiler-load\` + \`profiler-stack-query\`).
 Returns \`samplesCollected\` (\`measure\`) or \`launchMs\` + \`profilerSession\` (\`profile\`). Fails if the app is not installed or no iPhone / allowed simulator is available.`,
   zodSchema,

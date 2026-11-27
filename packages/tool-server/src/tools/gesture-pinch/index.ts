@@ -70,7 +70,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
-  description: `Perform a two-finger pinch-to-zoom gesture in normalized [0,1] coords (\`startDistance < endDistance\` zooms in, e.g. 0.2→0.6; \`>\` zooms out).
+  description: `Send a two-finger pinch-to-zoom gesture in normalized [0,1] coords (\`startDistance < endDistance\` zooms in, e.g. 0.2→0.6; \`>\` zooms out).
 Use when zooming maps, photos, or zoomable views (use \`gesture-rotate\` to rotate).
 Returns \`{ pinched: true, timestampMs, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if the backend<flag:harmonyos> (\`hdc\` on HarmonyOS)</flag:harmonyos> is unreachable or a physical iPhone app is not in portrait.`,
   zodSchema,

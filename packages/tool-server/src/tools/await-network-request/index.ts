@@ -172,7 +172,7 @@ export function createAwaitNetworkRequestTool(
   return {
     // A literal, so scripts/extract-tools.mjs finds the description it scores.
     id: "await-network-request",
-    description: `Wait for a matching HTTP request in the latest \`network-capture-start\` window (unsupported on physical iPhones and Vega; Chromium matches post-redirect URL/method).
+    description: `Check for a matching HTTP request in the latest \`network-capture-start\` window (unsupported on physical iPhones and Vega; Chromium matches post-redirect URL/method).
 Use when asserting or synchronizing on an API call after triggering a UI action.
 Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`match.id\` to \`view-network-request-details\`). Fails with \`NETWORK_CAPTURE_NOT_STARTED\` if capture was not started; \`success: false\` fails e2e steps and stops \`run-sequence\`.`,
     zodSchema,
