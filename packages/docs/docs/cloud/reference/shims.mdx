@@ -41,15 +41,13 @@ The printed code:
 - adds the directory to the front of `PATH` one time,
 - on Linux, adds `--require <DIR>/appium-host.cjs` to `NODE_OPTIONS`. This preload tells the Appium driver that it runs on macOS. It applies to Appium entry points only.
 
-The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the binary that wrote them.
-
 ## What each shim does
 
 | Shim            | Behaviour                                                                                                                                                                                    |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xcrun`         | Sends `simctl ...` to `sim-remote simctl`. Answers `devicectl list devices` with an empty list. Answers `--show-sdk-version` with the newest iOS runtime on the machine                      |
+| `xcrun`         | Sends `simctl ...` to `sim-remote simctl`. Answers `devicectl list devices` with an empty list. Answers `--show-sdk-version` with the newest iOS runtime on the Mac                          |
 | `xcodebuild`    | Installs the XCTest runner on the simulator, launches it, finds its port, and opens a forward tunnel to the local port that the driver polls. Build and inspect calls succeed and do nothing |
-| `plutil`        | Uses `plistutil` from libplist. Falls back to `/usr/bin/plutil` on a Mac                                                                                                                     |
+| `plutil`        | Uses `plistutil` from libplist. Falls back to `/usr/bin/plutil` on macOS                                                                                                                     |
 | `applesimutils` | Maps `--setPermissions` to `simctl privacy`                                                                                                                                                  |
 | `xcode-select`  | Points at the stand-in `Xcode.app`                                                                                                                                                           |
 | `open`          | Does nothing. `simctl boot` boots the simulator                                                                                                                                              |
@@ -67,5 +65,5 @@ The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the bin
 
 - The `xcodebuild` shim reads the runner port from a log line. If the runner never logs a port, the shim reports it.
 - The runner install, the launch, the port discovery and the tunnel must fit in the driver timeout.
-- The `xcodebuild` shim installs the runner one time per session. A Maestro upgrade in the middle of a session keeps the old runner. Pin the Maestro version.
+- The `xcodebuild` shim installs the runner on a simulator one time and keeps it until you release the session. A Maestro upgrade before the release keeps the old runner. Pin the Maestro version.
 - Each `log stream` that the shim starts leaves a `log` process in the simulator until the simulator shuts down.

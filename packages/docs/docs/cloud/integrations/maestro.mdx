@@ -10,9 +10,9 @@ sidebar_custom_props:
 
 ## Prerequisites
 
-- `sim-remote` on `PATH` and a session with a machine. See [Installation](/docs/cloud/fundamentals/installation).
+- `sim-remote` on `PATH` and a session that you hold. See [Installation](/docs/cloud/fundamentals/installation).
 - The stock `maestro` CLI and a JVM.
-- On Linux, `plistutil` from libplist 2.3.0 or newer. Install it with `apt install libplist-utils`. A Mac does not need it.
+- On Linux, `plistutil` from libplist 2.3.0 or newer. Install it with `apt install libplist-utils`. macOS does not need it.
 
 ## Run a flow
 
@@ -34,15 +34,9 @@ Install the app under test with `sim-remote simctl install`, or with `xcrun simc
 
 ## How it works
 
-Maestro starts its test runner with `xcodebuild`. The `xcodebuild` stand-in:
+Maestro starts its test runner with `xcodebuild`. The `xcodebuild` stand-in launches the test runner on the simulator and opens a forward tunnel from the local port that Maestro polls. The stand-in stops the test runner and the tunnel when Maestro ends.
 
-1. uploads the test runner of Maestro to the simulator, unless the test runner is already installed,
-2. launches the test runner on an ephemeral port,
-3. reads the port from the log of the test runner,
-4. opens a forward tunnel from the local port that Maestro polls to that port,
-5. stops the test runner and the tunnel when Maestro ends.
-
-The stand-in installs the test runner one time per session. Set `SIM_REMOTE_FORCE_RUNNER_INSTALL=1` to install it on every run.
+The stand-in installs the test runner on a simulator one time. The test runner stays on the simulator until you release the session. Set `SIM_REMOTE_FORCE_RUNNER_INSTALL=1` to install it on every run.
 
 The stand-in writes its steps to the `xctest_runner_*.log` file of Maestro. Read this file when the test runner does not start.
 

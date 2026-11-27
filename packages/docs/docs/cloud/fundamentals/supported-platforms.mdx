@@ -26,10 +26,10 @@ Argent Cloud hosts these devices:
 | Android emulator | Not available |
 | Physical device  | Not available |
 
-The device types and the iOS versions are the ones that Xcode on the hosted machine provides. Run this command to see them:
+The device types and the iOS versions are the ones that Xcode on the Mac provides. Run this command to see them:
 
 ```bash
 sim-remote simctl list devices available
 ```
 
-A machine can have one pre-booted iPhone simulator, so the first boot of that device is fast. You can create more simulators with `sim-remote simctl create`.
+A new session can start with one pre-booted iPhone simulator, so you do not wait for its first boot. Create more simulators with `sim-remote simctl create`. Keep at most two simulators booted in a session, including the pre-booted one. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).

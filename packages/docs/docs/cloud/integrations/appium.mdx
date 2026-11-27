@@ -10,11 +10,11 @@ The XCUITest driver of [Appium](https://appium.io) runs its sessions through the
 
 ## Prerequisites
 
-- `sim-remote` on `PATH` and a session with a machine. See [Installation](/docs/cloud/fundamentals/installation).
+- `sim-remote` on `PATH` and a session that you hold. See [Installation](/docs/cloud/fundamentals/installation).
 - The stock `appium` server with the `xcuitest` driver. Install the driver with `appium driver install xcuitest`.
 - Node.js as Appium requires.
 
-## Start a session
+## Start an Appium session
 
 Log in, install the stand-ins, and start the Appium server:
 
@@ -30,7 +30,7 @@ In fish, pipe the output of `install-shims` to `source`:
 sim-remote install-shims --shell fish | source
 ```
 
-A session needs these capabilities:
+An Appium session needs these capabilities:
 
 ```json
 {
@@ -45,32 +45,24 @@ A session needs these capabilities:
 
 ## Capabilities
 
-| Capability                  | Value                          | Notes                                                                                             |
-| --------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `platformName`              | `iOS`                          | Required                                                                                          |
-| `appium:automationName`     | `XCUITest`                     | Required                                                                                          |
-| `appium:udid`               | The UDID of a hosted simulator | Required                                                                                          |
-| `appium:isHeadless`         | `true`                         | Required                                                                                          |
-| `appium:app`                | A local `.app` path            | Optional. The stand-in uploads and installs the bundle                                            |
-| `appium:wdaLocalPort`       | Default `8100`                 | The local port that the stand-in tunnels to WebDriverAgent                                        |
-| `appium:mjpegServerPort`    | Default `9100`                 | The local port that the stand-in tunnels to the MJPEG stream                                      |
-| `appium:wdaLaunchTimeout`   | Default 60 seconds             | Increase it on a slow network                                                                     |
-| `appium:showXcodeLog`       | `false`                        | Set `true` to see the steps of the stand-in in the server log                                     |
-| `appium:useNewWDA`          | `false`                        | `true` replaces the running runner                                                                |
-| `appium:updatedWDABundleId` | Ignored                        | The machine ships one WebDriverAgent build with the bundle id `com.facebook.WebDriverAgentRunner` |
-| `appium:wdaBindingIP`       | Ignored                        | WebDriverAgent binds to `127.0.0.1` on the machine                                                |
+The stand-ins handle these other capabilities:
+
+| Capability                  | Value               | Notes                                                                                         |
+| --------------------------- | ------------------- | --------------------------------------------------------------------------------------------- |
+| `appium:app`                | A local `.app` path | Optional. The stand-in uploads and installs the bundle                                        |
+| `appium:wdaLocalPort`       | Default `8100`      | The local port that the stand-in tunnels to WebDriverAgent                                    |
+| `appium:mjpegServerPort`    | Default `9100`      | The local port that the stand-in tunnels to the MJPEG stream                                  |
+| `appium:wdaLaunchTimeout`   | Default 60 seconds  | The runner startup must fit in it. Increase it on a slow network                              |
+| `appium:showXcodeLog`       | `false`             | Set `true` to see the steps of the stand-in in the server log                                 |
+| `appium:useNewWDA`          | `false`             | `true` replaces the running runner                                                            |
+| `appium:updatedWDABundleId` | Ignored             | The Mac ships one WebDriverAgent build with the bundle id `com.facebook.WebDriverAgentRunner` |
+| `appium:wdaBindingIP`       | Ignored             | WebDriverAgent binds to `127.0.0.1` on the Mac                                                |
 
 Capabilities that need another WebDriverAgent build, for example `appium:xcodeOrgId`, are ignored.
 
 ## How it works
 
-Appium builds WebDriverAgent with `xcodebuild`, which needs Xcode. The hosted machine ships a prebuilt WebDriverAgent instead. The `xcodebuild` stand-in:
-
-1. installs WebDriverAgent on the simulator from the copy on the machine,
-2. launches it on ephemeral ports,
-3. reads the ports from the log of the runner,
-4. opens forward tunnels from the local ports that the driver polls to those ports,
-5. stops the runner and the tunnels when the driver ends the session.
+Appium builds WebDriverAgent with `xcodebuild`, which needs Xcode. The Mac ships a prebuilt WebDriverAgent instead. The `xcodebuild` stand-in installs this copy on the simulator and launches it. Then the stand-in opens forward tunnels from the local ports that the driver polls. The stand-in stops the runner and the tunnels when the driver ends the Appium session.
 
 Appium keeps one `xcodebuild` process per server, so the launch cost applies one time per server. The MJPEG tunnel makes `mobile: startRecordingScreen` and the MJPEG screenshot path work.
 
@@ -78,9 +70,8 @@ On Linux, the driver refuses a simulator session unless Node.js reports macOS. T
 
 ## Limits
 
-- The runner startup must fit in `appium:wdaLaunchTimeout`.
-- Appium sees the Xcode version from `SIM_REMOTE_SHIM_XCODE_VERSION` (default `26.0`), because nothing reports the version on the machine. Appium gates a few behaviours by the major version.
+- Appium sees the Xcode version from `SIM_REMOTE_SHIM_XCODE_VERSION` (default `26.0`), because nothing reports the version on the Mac. Appium gates a few behaviours by the major version.
 - Permission changes go through `simctl privacy`. Notifications, health and Face ID permissions are not available.
-- The version of the XCUITest driver should bundle the WebDriverAgent release that the machine ships. A mismatch is a warning from the driver.
+- The version of the XCUITest driver should bundle the WebDriverAgent release that the Mac ships. A mismatch is a warning from the driver.
 
 The [test driver shims reference](/docs/cloud/reference/shims) describes the stand-ins.
