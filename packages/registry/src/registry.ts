@@ -388,6 +388,7 @@ export class Registry {
 
     const selfRelease = this.selfReleases.get(urn);
     if (selfRelease) {
+      if (this._disposing(urn)) return Promise.reject(serviceTerminatingError(urn));
       return selfRelease.then(() => this._resolveAfterSelfRelease<T>(urn, resolutionPath, options));
     }
 
@@ -467,10 +468,12 @@ export class Registry {
     resolutionPath: string[],
     options?: Record<string, unknown>
   ): Promise<T> {
-    if (this.disposeCalls > 0 || this.disposingUrns.has(urn)) {
-      return Promise.reject(serviceTerminatingError(urn));
-    }
+    if (this._disposing(urn)) return Promise.reject(serviceTerminatingError(urn));
     return this._resolve<T>(urn, resolutionPath, options);
+  }
+
+  private _disposing(urn: URN): boolean {
+    return this.disposeCalls > 0 || this.disposingUrns.has(urn);
   }
 
   private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {

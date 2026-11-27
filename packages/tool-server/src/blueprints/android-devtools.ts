@@ -644,7 +644,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
-    let inFlight = 0;
     let idleTimer: NodeJS.Timeout | undefined;
     const armIdleRelease = () => {
       clearTimeout(idleTimer);
@@ -652,10 +651,9 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       idleTimer.unref();
     };
     const tracked = <T>(call: () => Promise<T>): Promise<T> => {
-      inFlight++;
       clearTimeout(idleTimer);
       return call().finally(() => {
-        if (--inFlight === 0 && !disposed) armIdleRelease();
+        if (!disposed) armIdleRelease();
       });
     };
     armIdleRelease();
