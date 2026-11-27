@@ -128,13 +128,34 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
+// UIKit exposes every UIScrollView's vertical and horizontal scroll indicators
+// as adjustable elements ("Vertical scroll bar, 1 page" value="0%"), even for
+// single-page containers and inside table cells. Omitting them here (rather
+// than in the iOS adapters) keeps the DescribeNode tree non-empty on screens
+// whose only accessible elements are scroll indicators, so empty-tree checks in
+// describeIos, await-ui-element, and await-screen-idle keep working. Real
+// adjustable controls and anything with an explicit identifier or hint stay.
+const IOS_SCROLL_BAR_LABEL = /^(Vertical|Horizontal) scroll bar, .+\bpages?$/;
+const PERCENT_VALUE = /^\d+(?:\.\d+)?%$/;
+
+function isIosScrollBar(n: DescribeNode): boolean {
+  return (
+    n.role === "AXAdjustable" &&
+    !n.identifier &&
+    !n.hint &&
+    typeof n.label === "string" &&
+    IOS_SCROLL_BAR_LABEL.test(n.label) &&
+    (n.value === undefined || PERCENT_VALUE.test(n.value))
+  );
+}
+
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
   source: DescribeSource
 ): string[] {
   return root.children
-    .filter((n) => shouldEmit(n, contentRoles) || hasIosState(n))
+    .filter((n) => !isIosScrollBar(n) && (shouldEmit(n, contentRoles) || hasIosState(n)))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1, source));
