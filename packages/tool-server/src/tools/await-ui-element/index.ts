@@ -252,7 +252,7 @@ const zodSchema = z
       .enum(["exists", "visible", "hidden", "text"])
       .describe(
         "`exists`: in tree; `visible`: non-zero on-screen frame; `hidden`: absent or zero-area; " +
-          "`text`: first visible match in reading order matches `expectedText`."
+          "`text`: first visible match in reading order matches `expectedText`.<flag:macos-apps> On a Mac app, open menus match before alerts/sheets and the window.</flag:macos-apps>"
       ),
     selector: selectorSchema.describe(
       "Element matcher (at least one field; all given fields must match)."

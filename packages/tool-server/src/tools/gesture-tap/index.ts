@@ -143,7 +143,9 @@ const zodSchema = z.object({
     .min(1)
     .max(10)
     .optional()
-    .describe("Tap/click count as one OS gesture (2 = double-tap; default 1)."),
+    .describe(
+      "Tap/click count as one OS gesture (2 = double-tap; default 1). On physical iOS, higher counts loop single taps, which a double-tap recognizer may pair."
+    ),
   button: z
     .enum(["left", "right"])
     .optional()

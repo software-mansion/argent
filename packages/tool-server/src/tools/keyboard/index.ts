@@ -41,7 +41,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Text to type (cannot combine with `key`; use two steps in `run-sequence` to type then press enter). " +
+      "Text to type. Cannot be combined with `key` (use two steps in `run-sequence` to type then press enter). " +
         "Supports `{{secret:<NAME>}}` placeholders resolved server-side from `ARGENT_SECRET_<NAME>` / `.argent/secrets.env` " +
         "(auto-screenshot is skipped; combine with submit in one `run-sequence` to keep the skip; never ask the user for plaintext)."
     ),
@@ -49,7 +49,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key (cannot combine with `text`): enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
+      "Named key. Cannot be combined with `text` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
         "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete, home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
     ),
   delayMs: z

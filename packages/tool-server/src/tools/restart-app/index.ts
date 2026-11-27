@@ -39,7 +39,9 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
-    .describe("App identifier (iOS/macOS bundle id, Android package name, or Vega app id)."),
+    .describe(
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, or Vega app id)."
+    ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
@@ -61,7 +63,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     id: "restart-app",
     // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Terminate and relaunch an app (also refreshes native-devtools injection on iOS/tvOS).
+    description: `Terminate and relaunch an app (also refreshes native-devtools injection on iOS/tvOS).<flag:macos-apps> On a Mac app, quits and restarts the same .app in the background.</flag:macos-apps>
 Use when you need a clean in-memory app state without reinstalling. Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. Fails if the app is not installed or fails to terminate.`,
     zodSchema,
     alwaysLoad: true,

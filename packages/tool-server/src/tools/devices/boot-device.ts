@@ -2852,7 +2852,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Android on macOS only: enable guest Vulkan (default false; true needed for WebGPU/Vulkan renderers, may crash Chrome GPU). Pair with `force: true` to toggle."
+      "Android on a macOS host only: enable guest Vulkan (default false; true needed for WebGPU/Vulkan renderers, may crash Chrome GPU). Pair with `force: true` to toggle."
     ),
   readOnly: z
     .boolean()
