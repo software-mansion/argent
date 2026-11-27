@@ -83,13 +83,13 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Capture baseline live at full resolution (mutually exclusive with `captureCurrent`)."
+        "Capture baseline live from the device, at full resolution (mutually exclusive with `captureCurrent`)."
       ),
     captureCurrent: z
       .boolean()
       .optional()
       .describe(
-        "Capture current live at full resolution (mutually exclusive with `captureBaseline`)."
+        "Capture current live from the device, at full resolution (mutually exclusive with `captureBaseline`)."
       ),
     rotation: z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -110,7 +110,7 @@ type Params = z.infer<typeof zodSchema>;
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
   description: `Compare two PNG screenshots (saved files or one live capture<flag:harmonyos> on iOS, Android, or HarmonyOS</flag:harmonyos>) and return a visual-diff summary (status bar ignored).
-Use when checking pixel-visible regressions (layout, spacing, color, typography, clipping, overflow). Save baselines with \`screenshot\` \`scale: 1.0\` so dimensions match.<flag:macos-apps> Mac apps: resized windows fail as a dimension mismatch.</flag:macos-apps>
+Use when checking pixel-visible regressions (layout, spacing, color, typography, clipping, overflow). Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model.<flag:macos-apps> Mac apps: resized windows fail as a dimension mismatch.</flag:macos-apps>
 Returns \`{ summary, diffPath?, contextDiffPath? }\` with normalized [0,1] changed regions. Fails if sources are invalid, dimensions differ, files cannot be read/written, or the capture backend<flag:harmonyos> (\`hdc\` on HarmonyOS)</flag:harmonyos> is unreachable.`,
   zodSchema,
   searchHint:

@@ -1636,7 +1636,9 @@ const zodSchema = z
       .describe("Saved e2e test name in `<project_root>/.argent/e2e/` (or `.argent/flows/`)."),
     project_root: z
       .string()
-      .describe("Absolute path to the project root (script cwd; also resolves `name`)."),
+      .describe(
+        "Absolute path to the project root (script cwd; with e2e_test_path, run:/script:/baselines resolve beside the YAML)."
+      ),
     e2e_test_file: z
       .string()
       .optional()
@@ -1700,7 +1702,7 @@ export function createRunFlowTool(
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "e2e-execute",
-    description: `Run a saved YAML e2e test end to end. Use when replaying a recorded path or QA regression (use gesture tools for one-off actions, \`e2e-start-recording\` to author tests). Pass exactly one source: \`name\` or \`e2e_test_path\`.
+    description: `Run a saved YAML e2e test end to end. Use when replaying a recorded path or QA regression (use gesture tools for one-off actions, \`e2e-start-recording\` to author tests). Pass exactly one e2e test source: \`name\` or \`e2e_test_path\`.
 Returns a per-step report. A main-step failure skips remaining main steps, then runs \`shutdown:\` steps (marked \`shutdown: true\`; failure sets \`shutdownFailed\`).
 Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the test, \`run:\` fragments, baselines, and absolute \`.png\`/\`.yaml\` args; steps needing other client files (e.g. \`script:\`, recording tools, directories) fail before step 1. Fails if the YAML is invalid, no unique matching device is booted, or a step fails.`,
     zodSchema,

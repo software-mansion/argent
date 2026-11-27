@@ -65,7 +65,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureRotateTool: ToolDefinition<Params, Result> = {
   id: "gesture-rotate",
-  description: `Send a two-finger circular arc gesture in normalized [0,1] coords to rotate content from \`startAngle\` to \`endAngle\` (pass \`radius\`, or \`radiusX\`+\`radiusY\` for a circular physical orbit).
+  description: `Send a two-finger circular arc gesture in normalized [0,1] coords to rotate content from \`startAngle\` to \`endAngle\` (pass \`radius\`, or \`radiusX\`+\`radiusY\` together for a circular physical orbit; one half of the pair alone is rejected).
 Use when rotating a map, photo, or canvas (use \`gesture-pinch\` for zoom).
 Returns \`{ rotated: true, timestampMs, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if the backend is unreachable or a physical iPhone app is not in portrait.`,
   zodSchema,
