@@ -77,10 +77,8 @@ async function unrelatedPaths(a: string, b: string): Promise<boolean> {
 const annotationSchema = z.object({
   offsetMs: z.coerce
     .number()
-    .describe(
-      "Milliseconds since profiling started: tapTimestampMs - startedAtEpochMs, where tapTimestampMs is the timestampMs a tap/swipe tool returned and startedAtEpochMs is the value react-profiler-start returned."
-    ),
-  label: z.string().describe("Description of the action performed"),
+    .describe("Ms since profiling started (`tapTimestampMs - startedAtEpochMs`)."),
+  label: z.string().describe("Action label."),
 });
 
 const zodSchema = z.object({
@@ -88,23 +86,19 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device ID used to record or load the React profile<flag:macos-apps>. For a Mac app, use its ID from list-devices</flag:macos-apps>."
+      "Device ID from list-devices used for the profile<flag:macos-apps> (Mac app: its list-devices ID)</flag:macos-apps>."
     ),
-  project_root: z
-    .string()
-    .describe("Absolute path to the RN project root for session context detection"),
+  project_root: z.string().describe("Absolute path to the RN project root."),
   platform: z
     .enum(["ios", "android", "macos"])
     .optional()
-    .describe("Platform for source lookup when the recording does not identify one.")
+    .describe("Fallback platform for source lookup if absent from recording.")
     .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
-  rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
+  rn_version: z.coerce.string().default("unknown").describe('RN version (e.g. "0.73.4").'),
   annotations: z
     .array(annotationSchema)
     .optional()
-    .describe(
-      "User actions to annotate the report's commits with: each commit shows the action that preceded it."
-    ),
+    .describe("User actions to annotate report commits."),
 });
 
 export const reactProfilerAnalyzeTool: ToolDefinition<
@@ -112,15 +106,9 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-analyze",
-  description: `Analyze stored profiling data and return a markdown performance report.
-Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
-The report is structured around hot React commits (≥16ms absolute floor) with per-commit
-render cascades, root cause identification, and a top components table.
-Raw profiling data is saved to disk with a unique session timestamp for later reload via profiler-load.
-After presenting the report, ask the user whether to investigate further (drill-down with
-profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
-Use when the profiling session is complete and you need to interpret the collected data.
-Fails if react-profiler-stop has not been called or no profiling data is stored.`,
+  description: `Analyze stored React profiling data into a markdown report of hot commits (≥16ms), render cascades, root causes, and top components.
+Use when \`react-profiler-stop\` has finished and you want to interpret the profile (drill down further with \`profiler-cpu-query\` / \`profiler-commit-query\`).
+Returns \`{ report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }\`. Fails if no profiling data is stored.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Analyzing React profile",

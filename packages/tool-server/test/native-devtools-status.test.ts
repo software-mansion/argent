@@ -831,47 +831,68 @@ describe("precheckNativeDevtools maps a measured state to its remedy", () => {
     expect(result.requiresRestart).toBe(true);
   });
 
-  // Without this pin, collapsing the mapping back to a single status leaves
-  // every precheck-level test green while the agent silently gets restart-app
-  // guidance again.
-  it("carries service_stale out through every native-* tool", async () => {
-    const tools = [
-      nativeDescribeScreenTool,
-      nativeFindViewsTool,
-      nativeFullHierarchyTool,
-      nativeNetworkLogsTool,
-      nativeViewAtPointTool,
-      nativeUserInteractableViewAtPointTool,
-    ];
+  it.each([
+    {
+      status: "restart_required",
+      options: { state: "stale_process" },
+      guidance: /call restart-app then retry/i,
+    },
+    {
+      status: "service_stale",
+      options: { state: "unregistered" },
+      guidance:
+        /argent server stop && argent server start --detach.*Treat native devtools as unavailable/,
+    },
+    {
+      status: "connect_pending",
+      options: { state: "connecting" },
+      guidance: /wait a few seconds.*do not restart the app:/i,
+    },
+    {
+      status: "init_failed",
+      options: { initFailure: { attempts: 2, givenUp: true, lastError: "setup failed" } },
+      guidance: /re-booting the simulator/,
+    },
+  ] as const)(
+    "returns $status and its recovery guidance from every native-* tool",
+    async ({ status, options, guidance }) => {
+      const tools = [
+        nativeDescribeScreenTool,
+        nativeFindViewsTool,
+        nativeFullHierarchyTool,
+        nativeNetworkLogsTool,
+        nativeViewAtPointTool,
+        nativeUserInteractableViewAtPointTool,
+      ];
 
-    for (const tool of tools) {
-      // native-network-logs reaches the precheck only once the app's capture is started.
-      const { api } = makeNativeApi({
-        envSetup: true,
-        appRunning: true,
-        state: "unregistered",
-        captureStarted: true,
-      });
+      for (const tool of tools) {
+        // native-network-logs reaches the precheck only once the app's capture is started.
+        const { api } = makeNativeApi({
+          envSetup: true,
+          appRunning: true,
+          captureStarted: true,
+          ...options,
+        });
 
-      const result = (await tool.execute(
-        { nativeDevtools: api },
-        {
-          // A simulator UDID: native-network-logs reads any other id as an Android serial.
-          udid: "11111111-1111-1111-1111-111111111111",
-          bundleId: "com.example.app",
-          x: 1,
-          y: 1,
-          className: "UIView",
-          limit: 1,
-          clear: false,
-        }
-      )) as { status: string; message: string };
+        const result = (await tool.execute(
+          { nativeDevtools: api },
+          {
+            // A simulator UDID: native-network-logs reads any other id as an Android serial.
+            udid: "11111111-1111-1111-1111-111111111111",
+            bundleId: "com.example.app",
+            x: 1,
+            y: 1,
+            className: "UIView",
+            limit: 1,
+            clear: false,
+          }
+        )) as { status: string; message: string };
 
-      expect(result.status, `${tool.id} must report service_stale`).toBe("service_stale");
-      expect(result.message).toContain("argent server stop && argent server start --detach");
-      expect(result.message).not.toContain("restart-app");
+        expect(result, tool.id).toMatchObject({ status, message: expect.stringMatching(guidance) });
+        if (status === "service_stale") expect(result.message).not.toContain("restart-app");
+      }
     }
-  });
+  );
 
   // The booleans cannot say "one restart, then stop". `requiresRestart: true` is
   // the whole of what an `indeterminate` app reports, and the only state a
@@ -1079,21 +1100,20 @@ describe("precheckNativeDevtools maps a measured state to its remedy", () => {
   });
 });
 
-// Descriptions are what an agent reads before ever calling, so one that names
-// restart_required while staying silent about service_stale rebuilds the loop in
-// the more prominent place, whatever the runtime message says.
-describe("native-* tool descriptions document every precheck outcome", () => {
-  const tools = [
+describe("native-* tool recovery descriptions", () => {
+  // Keep the remedies consistent wherever the description presents them.
+  // native-network-logs directs readers to the returned message instead.
+  const toolsWithRecoveryInDescription = [
     nativeDescribeScreenTool,
     nativeFindViewsTool,
     nativeFullHierarchyTool,
-    nativeNetworkLogsTool,
     nativeViewAtPointTool,
     nativeUserInteractableViewAtPointTool,
   ];
+  const tools = [...toolsWithRecoveryInDescription, nativeNetworkLogsTool];
 
   it("names service_stale and its tool-server remedy alongside restart_required", () => {
-    for (const tool of tools) {
+    for (const tool of toolsWithRecoveryInDescription) {
       expect(tool.description, `${tool.id} must mention restart_required`).toContain(
         "restart_required"
       );
@@ -1283,17 +1303,15 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     expect(nativeDevtoolsStatusTool.description).toContain("argent server start");
   });
 
-  // One agent reads the tool description AND the message the same call returns.
-  // The descriptions must be plain literals (extract-tools.mjs reads them
-  // statically), so the wording is copied eight ways and nothing but this pins
-  // the copies together — which is how six of them kept telling the reader to
-  // wait "a second or two" after the connect budget outgrew it and the
-  // other two were updated.
+  // Agents see both the description, when it gives the remedy, and the message.
   it("agrees with the message on how long a connecting app is worth waiting for", () => {
     const surfaces: [string, string][] = [
       ["connecting message", buildAppStateMessage("com.example.app", "connecting")],
       ["native-devtools-status description", guidanceLine("connecting")],
-      ...tools.map((t): [string, string] => [`${t.id} description`, t.description!]),
+      ...toolsWithRecoveryInDescription.map((t): [string, string] => [
+        `${t.id} description`,
+        t.description!,
+      ]),
     ];
     for (const [name, text] of surfaces) {
       expect(text, `${name} has no wait guidance to check`).toMatch(/wait a few seconds/i);
@@ -1301,23 +1319,21 @@ describe("native-* tool descriptions document every precheck outcome", () => {
       // failure names the drift rather than a missing phrase.
       expect(text, `${name} still quotes the pre-budget wait`).not.toMatch(/second or two/i);
     }
-    // The six carry their own phrasing of the prohibition, so they need their
+    // These descriptions carry their own phrasing of the prohibition, so they need their
     // own pin — and it has to reject a qualified one for the same reason the
     // message's does: the first relaunch is already the one that discards the
     // handshake, so "do not restart it more than once" is wrong advice that
     // still contains "do not restart it".
-    for (const tool of tools) {
+    for (const tool of toolsWithRecoveryInDescription) {
       expect(tool.description!, `${tool.id} qualifies the connecting prohibition`).toContain(
         "Do not restart it, wait"
       );
     }
   });
 
-  // Same split surface, same hazard: round 2 gave `unregistered` a landing that
-  // terminates, and the six tool descriptions route `service_stale` — the status
-  // that state maps to — with their own copy of the remedy.
+  // Descriptions that explain service_stale need the same retry limit as the message.
   it("stops every service_stale surface from prescribing an unbounded tool-server restart", () => {
-    for (const tool of tools) {
+    for (const tool of toolsWithRecoveryInDescription) {
       const routing = tool
         .description!.split("\n")
         .find((l) => l.includes("If status is service_stale:"));

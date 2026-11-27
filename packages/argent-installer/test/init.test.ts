@@ -4,7 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SKILLS_DIR, ARGENT_SKILLS_REPO, buildArgentSkillsSource } from "../src/utils.js";
 import * as p from "@clack/prompts";
-import { printFirstRunNotice, resolveTelemetryConsent } from "../src/first-run-notice.js";
+import {
+  printFirstRunNotice,
+  resolveTelemetryConsent,
+  seedWhatsNewVersion,
+} from "../src/first-run-notice.js";
+import { getWhatsNewSeenVersion, setWhatsNewSeenVersion } from "@argent/configuration-core";
 import {
   hasShownFirstRunNotice,
   markFirstRunNoticeShown,
@@ -75,6 +80,36 @@ describe("printFirstRunNotice", () => {
     _resetConsentCacheForTest();
     printFirstRunNotice();
     expect(hasShownFirstRunNotice()).toBe(false);
+  });
+});
+
+describe("seedWhatsNewVersion", () => {
+  let tmp: string;
+  const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-installer-whats-new-"));
+    process.env.HOME = tmp;
+    process.env.USERPROFILE = tmp;
+  });
+
+  afterEach(() => {
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("records the version of a fresh install", () => {
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.35.0");
+  });
+
+  it("keeps the version an earlier install recorded", () => {
+    setWhatsNewSeenVersion("0.34.0");
+    seedWhatsNewVersion("0.35.0");
+    expect(getWhatsNewSeenVersion()).toBe("0.34.0");
   });
 });
 
@@ -160,6 +195,26 @@ describe("resolveTelemetryConsent", () => {
     const result = await resolveTelemetryConsent({ nonInteractive: false, disableFlag: false });
     expect(result).toEqual({ kind: "skipped" });
     expect(p.select).not.toHaveBeenCalled();
+  });
+
+  it("does not prompt a fresh ARGENT_HOME_DIR when ~/.argent opted out", async () => {
+    const savedArgentHome = process.env.ARGENT_HOME_DIR;
+    try {
+      fs.mkdirSync(path.join(tmp, ".argent"));
+      fs.writeFileSync(
+        path.join(tmp, ".argent", "config.json"),
+        JSON.stringify({ telemetry: { enabled: false } })
+      );
+      process.env.ARGENT_HOME_DIR = path.join(tmp, "moved-home");
+      vi.mocked(p.select).mockResolvedValue("enabled");
+      const result = await resolveTelemetryConsent({ nonInteractive: false, disableFlag: false });
+      expect(result).toEqual({ kind: "skipped" });
+      expect(p.select).not.toHaveBeenCalled();
+      expect(isEnabled()).toBe(false);
+    } finally {
+      if (savedArgentHome === undefined) delete process.env.ARGENT_HOME_DIR;
+      else process.env.ARGENT_HOME_DIR = savedArgentHome;
+    }
   });
 
   it("an interactive Enabled choice is effective immediately but only persists on commit", async () => {

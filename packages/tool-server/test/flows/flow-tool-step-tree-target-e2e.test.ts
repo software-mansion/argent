@@ -6,6 +6,9 @@ import { FAILURE_CODES, FailureError, type Registry } from "@argent/registry";
 import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 // Composition of the two halves the sibling suites pin separately
 // (flow-launch-pins-tree-target.test.ts and
@@ -15,7 +18,7 @@ import { serializeFlow } from "../../src/tools/flows/flow-utils";
 // tree path is mocked, and the only seam is the native-devtools service.
 //
 // The device is the CI shape the pin exists for: the app under test is
-// healthy, a second app is connected, and its `Application.getState` never
+// inactive, a second app is connected, and its `Application.getState` never
 // answers, so every unhinted read of this simulator times out.
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
@@ -27,8 +30,8 @@ let tmpDir: string;
 function appState(bundleId: string): NativeAppState {
   return {
     bundleId,
-    applicationState: "active",
-    foregroundActiveSceneCount: 1,
+    applicationState: "inactive",
+    foregroundActiveSceneCount: 0,
     foregroundInactiveSceneCount: 0,
     backgroundSceneCount: 0,
     unattachedSceneCount: 0,
@@ -116,7 +119,7 @@ function bareWindow() {
 
 /**
  * The launched app answers getState from the background, the healthy subject is
- * active, and the wedged sibling's getState never answers. Only the subject's
+ * inactive, and the wedged sibling's getState never answers. Only the subject's
  * hierarchy carries the `ready` marker - the backgrounded app serves a bare
  * window.
  */

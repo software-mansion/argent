@@ -1,10 +1,13 @@
 ---
 sidebar_position: 2
 sidebar_label: Debugging
-title: Debugging
+title: Debug mobile, web and desktop apps with an AI agent
+description: Argent connects the AI coding agent to the running app. The agent reads console logs, runs JavaScript, and reads the React component tree and the native view tree.
 sidebar_custom_props:
   icon: bug
 ---
+
+# Debugging
 
 Argent connects the agent to the JavaScript runtime of the running app. The agent reads the console logs, runs JavaScript in the app, and reads the component tree of the current screen. With this data the agent finds the cause of a bug without your help at the keyboard.
 
@@ -17,7 +20,7 @@ Argent connects the agent to the JavaScript runtime of the running app. The agen
 
 ## Console logs
 
-Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it.
+Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it. The summary also contains the newest log lines. Thus the agent can read them without access to the log file.
 
 When the app crashes, Argent keeps the log file of the session for at least 24 hours. The agent reads the logs from before the crash.
 
@@ -34,7 +37,7 @@ The agent can inspect the native view tree on iOS and in AppKit-based [Mac apps]
 
 ## Network traffic
 
-Argent records the HTTP requests of the app. The agent reads the list of requests and the details of one request. The [Network inspection](/docs/features/network) page describes this feature.
+Ask the agent to find a failed HTTP request and inspect its response. See [Network inspection](/docs/features/network) for supported traffic and capture options.
 
 ## Chromium and Electron
 
@@ -54,7 +57,9 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 
 ## Limits
 
-- Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
+- In React Native apps that use React Native DevTools, Hermes sends its most recent logs to Argent when the debugger connects. The agent sees the logs from the start of the app, for example the warnings at launch.
+- Hermes keeps 1000 logs at most. If the app writes more logs before the debugger connects, the agent does not see the oldest logs.
+- In other apps, for example Chromium, Electron and Vega apps, Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
 - The agent connects to one app at a time.
 
 Argent does this with the `debugger-*`, `native-*` and `chromium-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

@@ -2,6 +2,7 @@
 sidebar_position: 8
 sidebar_label: Tool-server API
 title: Tool-server API reference
+description: "Reference for the tool-server API: how a client sends the files of an e2e test run to an Argent tool-server over a link."
 sidebar_custom_props:
   icon: plug
 ---
@@ -213,7 +214,7 @@ The tool-server adds a `failure` field beside `data` when the result of a call r
 | Tool                                                                                                              | Result                                                                                   |
 | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `e2e-execute`                                                                                                     | The e2e test does not pass, or does not run because its prerequisite is not acknowledged |
-| `await-ui-element`                                                                                                | `success` is `false`                                                                     |
+| `await-ui-element`, `await-network-request`                                                                       | `success` is `false`                                                                     |
 | `run-sequence`                                                                                                    | A step stops the sequence                                                                |
 | `debugger-log-registry`                                                                                           | The debugger is not connected                                                            |
 | `debugger-inspect-element`                                                                                        | The result has an `error`                                                                |

@@ -34,11 +34,11 @@ import {
 } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { createHash } from "node:crypto";
 
 import { ARCHIVE_CONTENT_TYPES, ARCHIVE_FORMATS, safeExtractArchive } from "@argent/archive";
-import { argentHomeDir, findProjectRoot, getConfigValueByKey } from "@argent/configuration-core";
+import { findProjectRoot, getConfigValueByKey, resolveHomeDir } from "@argent/configuration-core";
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -153,10 +153,9 @@ export function artifactDir(deviceId?: string): string {
  */
 function durableBaseDir(): string {
   const projectRoot = findProjectRoot(process.cwd());
-  // argentHomeDir() is `<home>/.argent`, so its parent is the home dir and the
-  // hint re-adds the `.argent` segment: the global fallback lands on
+  // The hint re-adds the `.argent` segment: the global fallback lands on
   // `~/.argent/recordings`, mirroring `<root>/.argent/recordings`.
-  return projectRoot ?? dirname(argentHomeDir());
+  return projectRoot ?? resolveHomeDir();
 }
 
 /**
@@ -194,7 +193,7 @@ function configuredRecordingsDir(): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (trimmed === "") return null;
-  const home = dirname(argentHomeDir());
+  const home = resolveHomeDir();
   const expanded =
     trimmed === "~"
       ? home

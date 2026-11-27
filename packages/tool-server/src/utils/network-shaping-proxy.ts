@@ -25,6 +25,8 @@ export interface ProxyTarget {
 
 export interface ShapingProxyOptions {
   resolveTarget(host: string, port: number): Promise<ProxyTarget | null>;
+  /** Asked again whenever data moves, so an open connection follows the latest answer. */
+  bypass(host: string, port: number): boolean;
 }
 
 export interface ShapingProxy {
@@ -42,6 +44,11 @@ function parseAuthority(authority: string): ProxyTarget | null {
 function httpTarget(url: URL | null): ProxyTarget | null {
   if (!url || url.protocol !== "http:") return null;
   return { host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port || 80) };
+}
+
+export function requestLineTarget(line: string): ProxyTarget | null {
+  const [method, target = ""] = line.split(" ");
+  return method === "CONNECT" ? parseAuthority(target) : httpTarget(URL.parse(target));
 }
 
 function connectionOptions(headers: http.IncomingHttpHeaders): string[] {
@@ -203,6 +210,11 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
     });
   };
 
+  const isBypassed = (requestLine: string): boolean => {
+    const target = requestLineTarget(requestLine);
+    return target !== null && options.bypass(target.host, target.port);
+  };
+
   const server = http.createServer({ requestTimeout: 0 });
   server.on("request", (req, res) => void onRequest(req, res).catch(() => res.destroy()));
   server.on("connect", (req, client: Duplex, head: Buffer) => {
@@ -214,7 +226,7 @@ export async function startShapingProxy(options: ShapingProxyOptions): Promise<S
 
   const listener = net.createServer({ allowHalfOpen: true }, (socket) => {
     track(socket);
-    server.emit("connection", link.attach(socket));
+    server.emit("connection", link.attach(socket, isBypassed));
   });
   const port = await listen(listener);
 

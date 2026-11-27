@@ -150,15 +150,12 @@ async function runOnIosDevice(
 }
 
 const eventSchema = z.object({
-  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().min(0).max(1).describe("Touch x."),
-  y: z.number().min(0).max(1).describe("Touch y."),
-  x2: z.number().min(0).max(1).optional().describe("Second finger x, for two-finger gestures."),
-  y2: z.number().min(0).max(1).optional().describe("Second finger y, for two-finger gestures."),
-  delayMs: z
-    .number()
-    .optional()
-    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
+  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type."),
+  x: z.number().min(0).max(1).describe("Normalized x."),
+  y: z.number().min(0).max(1).describe("Normalized y."),
+  x2: z.number().min(0).max(1).optional().describe("Second finger x."),
+  y2: z.number().min(0).max(1).optional().describe("Second finger y."),
+  delayMs: z.number().optional().describe("Delay before event in ms (default 16)."),
 });
 
 const zodSchema = z.object({
@@ -166,17 +163,12 @@ const zodSchema = z.object({
   edge: z
     .enum(screenEdges)
     .optional()
-    .describe(
-      "Starting edge in upright screen coordinates for a single-finger system gesture on a local iOS simulator."
-    ),
-  events: z.array(eventSchema).describe("Touch events, dispatched in order."),
+    .describe("Starting screen edge for a single-finger system gesture (local iOS simulator)."),
+  events: z.array(eventSchema).describe("Ordered touch events."),
   interpolate: z
     .number()
     .optional()
-    .describe(
-      "Number of Move events to insert between each pair of consecutive events, linearly interpolating " +
-        "both x,y and x2,y2 and splitting the delay evenly, for a smooth gesture. Default: no interpolation."
-    ),
+    .describe("Insert N linearly interpolated Move events between consecutive events (default 0)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -201,30 +193,11 @@ function validateEdge(params: Params, device: ReturnType<typeof resolveDevice>) 
 
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
-  description: `Send a sequence of touch events for complex gestures.
-Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
-For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.<flag:macos-apps> Not supported on a Mac app: use gesture-tap, gesture-drag and gesture-scroll there.</flag:macos-apps>
-For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
-On a local iOS simulator, set edge to the starting side for a system gesture. To move a full-screen app into Split View on an open Duo, set edge:"bottom". In one continuous contact move from bottom center to center, pause there, drag to the requested side, and release. See the device-interact foldables reference for coordinates and timing.
-All x/y values are fractions of the screen width/height (not pixels).
-Physical iOS: a Down, any Moves, then an Up; x2/y2 adds a second finger. A plain Down then Up: same point = press-hold, other point = drag (Up delayMs = rest before the move); one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Any other train plays as timed paths, each event waiting its delayMs, and needs the app drawn in portrait.
-Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
-
-Example long-press at center:
-  [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
-
-Example pick up a list item with a long press, then drag it up:
-  [{"type":"Down","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.6,"delayMs":800},{"type":"Up","x":0.5,"y":0.3,"delayMs":500}]
-
-Example smooth scroll down:
-  [{"type":"Down","x":0.5,"y":0.7},
-   {"type":"Move","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.5},{"type":"Move","x":0.5,"y":0.4},
-   {"type":"Up","x":0.5,"y":0.3}]
-
-Example pinch-to-zoom (with interpolate:10 for smoothness):
-  events: [{"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},
-           {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
-  interpolate: 10`,
+  description: `Send a custom sequence of normalized [0,1] touch events.
+Use when you need long-press, drag-and-drop, edge/system gestures (\`edge\` on local iOS sim), or multi-waypoint/two-finger paths. Prefer \`gesture-tap\`, \`gesture-swipe\`, \`gesture-pinch\`, or \`gesture-rotate\` for standard gestures.<flag:macos-apps> Not supported on Mac apps (use \`gesture-tap\`, \`gesture-drag\`, \`gesture-scroll\`).</flag:macos-apps>
+Physical iOS: Down, optional Moves, then Up (\`x2\`/\`y2\` = second finger). Plain Down then Up: same point = press-hold, other point = drag (\`Up delayMs\` = rest before move); one Move at Down point between them = long-press pickup (\`Move delayMs\` = hold, \`Up delayMs\` = move time); any other train plays as timed paths (each waiting its \`delayMs\`, portrait required).
+Example long-press + drag: \`[{"type":"Down","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.6,"delayMs":800},{"type":"Up","x":0.5,"y":0.3,"delayMs":500}]\`.
+Returns \`{ events, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if device is not booted or events are invalid.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Performing custom gesture",

@@ -12,6 +12,9 @@ import {
   stepRequiresDevice,
 } from "../../src/tools/flows/flow-device";
 import { createStopAllSimulatorServersTool } from "../../src/tools/simulator/stop-all-simulator-servers";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab";
 let tmpDir: string;
@@ -298,6 +301,7 @@ describe("stepRequiresDevice", () => {
       "fold": true,
       "snapshot": true,
       "script": false,
+      "output-check": false,
     };
     const samples: Record<FlowStep["kind"], FlowStep> = {
       "echo": { kind: "echo", message: "x" },
@@ -319,6 +323,10 @@ describe("stepRequiresDevice", () => {
       "fold": { kind: "fold", posture: "open" },
       "snapshot": { kind: "snapshot", name: "s" },
       "script": { kind: "script", path: "seed.mjs" },
+      "output-check": {
+        kind: "output-check",
+        check: { path: "a", test: "exists", expected: true },
+      },
     };
 
     const { registry } = mockRegistry();

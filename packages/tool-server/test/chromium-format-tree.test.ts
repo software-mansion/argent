@@ -31,16 +31,19 @@ const tree: DescribeNode = {
 };
 
 describe("formatDescribeTree (cdp-dom)", () => {
-  it("renders nested mode and shows descendants beyond depth 1", () => {
+  it("renders nested mode, collapses bare structural wrappers by default, and keeps them with raw: true", () => {
     const out = formatDescribeTree(tree, { source: "cdp-dom" });
     expect(out).toContain("Mode: nested");
-    // Body, h1, and button must all appear — flat mode would only emit body.
-    expect(out).toContain("body");
+    // Bare `body` wrapper is collapsed in compact mode while descendants survive.
+    expect(out).not.toContain("\n  body ");
     expect(out).toContain("h1");
     expect(out).toContain('"Click me"');
     expect(out).toContain('id="go"');
     expect(out).toContain("clickable");
     // The h1 has value "Hello World" — must surface in the rendering.
     expect(out).toContain("Hello World");
+
+    const raw = formatDescribeTree(tree, { source: "cdp-dom", raw: true });
+    expect(raw).toContain("  body ");
   });
 });

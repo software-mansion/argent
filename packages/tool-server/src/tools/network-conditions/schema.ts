@@ -4,46 +4,23 @@ import { metroPortField } from "../../utils/debugger/metro-port";
 
 export const networkConditionsZodSchema = z
   .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe(
-        "Target device id from `list-devices`: an iOS simulator UDID, an Android emulator serial, or a Chromium id."
-      ),
+    udid: z.string().min(1).describe("Device ID from `list-devices`."),
     bundleId: z
       .string()
       .min(1)
       .optional()
-      .describe("iOS only, and required there: the bundle id of the app to throttle."),
+      .describe("App bundle ID (required on iOS; ignored elsewhere)."),
     port: metroPortField.describe(
-      "iOS only: the Metro port the throttle leaves alone. Omit it to use this device's port (8081 by default)."
+      "Metro port exempt from shaping (omit for device default, usually 8081)."
     ),
-    latencyMs: z
-      .number()
-      .int()
-      .min(0)
-      .max(60_000)
-      .optional()
-      .describe(
-        "Minimum time in milliseconds from sending a request to its response. iOS and Chromium only."
-      ),
-    downloadKbps: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe("Download limit in kilobits per second. iOS and Chromium only."),
-    uploadKbps: z
-      .number()
-      .int()
-      .min(1)
-      .optional()
-      .describe("Upload limit in kilobits per second. iOS and Chromium only."),
+    latencyMs: z.number().int().min(0).max(60_000).optional().describe("Added latency in ms."),
+    downloadKbps: z.number().int().min(1).optional().describe("Download cap in kbps."),
+    uploadKbps: z.number().int().min(1).optional().describe("Upload cap in kbps."),
     offline: z
       .boolean()
       .optional()
       .describe(
-        "Make requests fail as if the network were down. On Android, ports forwarded with adb reverse stay reachable."
+        "Simulate offline (on Android, `adb reverse` ports stay reachable while Metro at `10.0.2.2` does not; `false` alone resets conditions)."
       ),
   })
   .strict();

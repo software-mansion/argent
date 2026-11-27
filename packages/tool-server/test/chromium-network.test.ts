@@ -150,6 +150,80 @@ describe("NetworkManager (recording)", () => {
     await net.setConditions(toCdpNetworkConditions(null));
     expect(net.throttled()).toBe(false);
   });
+
+  it("marks a record finished once Network.loadingFinished arrives, not at its response", () => {
+    emitRequest(f.events, { id: "open", url: "https://x.test/open", status: 200 });
+    emitRequest(f.events, { id: "failed", url: "https://x.test/boom", failed: "net::ERR_FAILED" });
+    emitRequest(f.events, { id: "done", url: "https://x.test/done", finished: true });
+
+    expect(net.get("open")?.finished).toBeUndefined();
+    expect(net.get("failed")?.finished).toBeUndefined();
+    expect(net.get("done")?.finished).toBe(true);
+  });
+
+  it("times a no-store fetch that ends at the last byte of its declared body like its loadingFinished", () => {
+    emitRequest(f.events, { id: "unread", url: "https://x.test/unread", type: "Fetch" });
+    f.events.emit("event", "Network.responseReceived", {
+      requestId: "unread",
+      type: "Fetch",
+      response: { status: 200, headers: { "Cache-Control": "no-store", "Content-Length": "58" } },
+    });
+    f.events.emit("event", "Network.dataReceived", {
+      requestId: "unread",
+      dataLength: 30,
+      timestamp: 100.1,
+    });
+    f.events.emit("event", "Network.dataReceived", {
+      requestId: "unread",
+      dataLength: 28,
+      timestamp: 100.2,
+    });
+    expect(net.get("unread")).toMatchObject({ finished: true });
+    expect(net.get("unread")?.durationMs).toBeCloseTo(200);
+  });
+
+  it("numbers the records in creation order, and requestsAfter lists the ones after a number", () => {
+    emitRequest(f.events, { id: "a", url: "https://x.test/a" });
+    emitRequest(f.events, { id: "b", url: "https://x.test/b" });
+    // A later event of a record keeps its number.
+    emitRequest(f.events, { id: "a", url: "https://x.test/a", status: 200, finished: true });
+
+    const after = (n: number) =>
+      net.requestsAfter(n).map(({ seq, record }) => `${seq}:${record.requestId}`);
+    expect(after(0)).toEqual(["1:a", "2:b"]);
+    expect(after(1)).toEqual(["2:b"]);
+    expect(net.requestsAfter(0)[0]!.record).toBe(net.get("a"));
+  });
+
+  it("marks where a capture starts and where its stop ends, and keeps the mark after the stop", () => {
+    // No mark before a start, and a stop without a start marks nothing.
+    emitRequest(f.events, { id: "before", url: "https://x.test/before" });
+    expect(net.stopCapture()).toBeUndefined();
+    expect(net.captureMark()).toBeUndefined();
+
+    expect(net.startCapture()).toEqual({ lastSeq: 1 });
+    emitRequest(f.events, { id: "during", url: "https://x.test/during" });
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    emitRequest(f.events, { id: "after", url: "https://x.test/after" });
+    // A second stop keeps where the first one ended.
+    expect(net.stopCapture()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+    expect(net.captureMark()).toEqual({ lastSeq: 1, stoppedSeq: 2 });
+
+    // A new start begins a new mark, without an end.
+    expect(net.startCapture()).toEqual({ lastSeq: 3 });
+    expect(net.captureMark()).toEqual({ lastSeq: 3 });
+  });
+
+  it("drops an evicted record's number, so requestsAfter never lists it", () => {
+    // The store keeps 1000 records.
+    for (let i = 1; i <= 1001; i++) {
+      emitRequest(f.events, { id: `r${i}`, url: `https://x.test/${i}` });
+    }
+
+    const kept = net.requestsAfter(0);
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]).toMatchObject({ seq: 2, record: { requestId: "r2" } });
+  });
 });
 
 // ── view-network-logs / view-network-request-details: Chromium branch ────────
@@ -356,6 +430,35 @@ describe("view-network-request-details (chromium branch)", () => {
       expect(details.request.postData).toBe(postData);
     }
   });
+
+  it.each([
+    { kind: "every byte of it arrived", finished: true, body: '{"ok":true}' },
+    { kind: "some of it is still due", finished: false, body: undefined },
+  ])(
+    "reads a body Chrome keeps no copy of yet from its buffer only when $kind",
+    async ({ finished, body }) => {
+      // A no-store fetch() the page has not read: Chrome has the bytes but no body to give.
+      const record = rec({ requestId: "r4", status: 200, mimeType: "application/json", finished });
+      const send = vi.fn(async (method: string) => {
+        if (method === "Network.streamResourceContent") {
+          return { bufferedData: Buffer.from('{"ok":true}').toString("base64") };
+        }
+        throw new Error("No data found for resource with given identifier");
+      });
+      const services = {
+        chromium: { cdp: { send }, server: { network: { get: () => record } } },
+      } as never;
+
+      const details = (await networkRequestTool.execute(services, {
+        device_id: "chromium-cdp-9222",
+        port: 8081,
+        requestId: "r4",
+        includeBody: true,
+      })) as { response: { body?: string } };
+
+      expect(details.response.body).toBe(body);
+    }
+  );
 
   it("returns an error string when the requestId is unknown", async () => {
     const services = {

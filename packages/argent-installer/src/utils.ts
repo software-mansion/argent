@@ -13,6 +13,8 @@ import {
   modify as modifyJsonc,
   parse as parseJsonc,
   type JSONPath,
+  type ParseError,
+  type ParseOptions,
 } from "jsonc-parser";
 import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
@@ -437,6 +439,40 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   return parsed ?? {};
 }
 
+function tomlSyntaxErrorLine(raw: string): number | null {
+  try {
+    parseToml(raw);
+    return null;
+  } catch (err) {
+    return (err as { line?: number }).line ?? 1;
+  }
+}
+
+function yamlSyntaxErrorLine(raw: string): number | null {
+  const first = parseDocument(raw, { uniqueKeys: false }).errors[0];
+  return first ? (first.linePos?.[0].line ?? 1) : null;
+}
+
+export function findConfigSyntaxErrorLine(
+  filePath: string,
+  jsonOptions: ParseOptions
+): number | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  if (raw.trim() === "") return null;
+  if (filePath.endsWith(".toml")) return tomlSyntaxErrorLine(raw);
+  if (/\.ya?ml$/.test(filePath)) return yamlSyntaxErrorLine(raw);
+  const errors: ParseError[] = [];
+  parseJsonc(raw, errors, jsonOptions);
+  const first = errors[0];
+  return first ? raw.slice(0, first.offset).split("\n").length : null;
+}
+
 /**
  * Apply a single path-targeted edit to a JSONC config file in place. Comments,
  * trailing commas, blank lines and key ordering outside the edited path are
@@ -730,22 +766,6 @@ export function npxChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proces
   }
   childEnv.GIT_CONFIG_COUNT = String(count);
   return childEnv;
-}
-
-// `cwd`: where the `skills` command will run - `npx --no-install` resolves a
-// project-local bin from it.
-export function isSkillsCliAvailable(cwd?: string): boolean {
-  try {
-    execSync("npx --force --no-install skills --version", {
-      env: npxChildEnv(),
-      stdio: ["ignore", "ignore", "ignore"],
-      timeout: PROBE_TIMEOUT_MS,
-      ...(cwd ? { cwd } : {}),
-    });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {

@@ -1,5 +1,7 @@
 import * as p from "@clack/prompts";
+import * as path from "node:path";
 import pc from "picocolors";
+import { argentHomeDir } from "@argent/configuration-core";
 import {
   readLinkConfig,
   writeLinkConfig,
@@ -462,7 +464,10 @@ export async function link(argv: string[]): Promise<void> {
   } else {
     console.log(`${pc.green("✓")} Linked: ${pc.cyan(url)}`);
   }
-  if (token) console.log(pc.dim("  auth: token stored in ~/.argent/link.json (0600)"));
+  if (token)
+    console.log(
+      pc.dim(`  auth: token stored in ${path.join(argentHomeDir(), "link.json")} (0600)`)
+    );
   printSecurityCaveat(host, token, url);
   if (process.env.ARGENT_TOOLS_URL) {
     console.log(

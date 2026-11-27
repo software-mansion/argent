@@ -34,32 +34,23 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps><flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
-    ),
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos><flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps>"
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega interactive component app id<flag:harmonyos>, or HarmonyOS bundle name</flag:harmonyos>)."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
-    .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used."
-    ),
+    .describe("Android only: Activity name to relaunch (default: launcher activity)."),
   launchArgs: z
     .array(z.string())
     .optional()
-    .describe(
-      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults.<flag:macos-apps> Omitted on a Mac app, the app gets the arguments of its last start.</flag:macos-apps>'
-    ),
+    .describe('Apple targets only: process launch args, e.g. `["-FeatureFlag", "YES"]`.'),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -72,10 +63,8 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     id: "restart-app",
     // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>or Vega.
-Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android, and local iOS simulators where capture stays on for later processes), once network-capture-start started native network capture for the app, says whether it followed the launch, or that network-capture-stop stopped it. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.<flag:macos-apps>
-For Mac apps, kind is 'catalyst' or 'app'. Check appPath and args to confirm the restarted build and arguments. Check note for warnings such as a force-quit or no window.</flag:macos-apps>`,
+    description: `Terminate and relaunch an app (also refreshes native-devtools injection on iOS/tvOS).<flag:macos-apps> On a Mac app, quits and restarts the same .app in the background.</flag:macos-apps>
+Use when you need a clean in-memory app state without reinstalling. Returns { restarted, bundleId, <flag:macos-apps>kind?, appPath?, args?, note?, </flag:macos-apps>networkCapture? }. Fails if the app is not installed or fails to terminate.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

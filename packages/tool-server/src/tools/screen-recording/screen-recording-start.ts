@@ -16,6 +16,8 @@ import { startCapture, type PanelFollow, type PointerControl } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
 import type { StartRecordingResult } from "./session-guards";
 import { startIosDeviceCapture } from "./ios-device-stream/start-device-capture";
+import { startMacosCapture } from "./capture-macos";
+import { resolveMacosApp } from "../../utils/macos-input";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
 const MAX_TIME_LIMIT_SECONDS = 600;
@@ -30,13 +32,15 @@ const capability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  // argent's library records the app's window from inside the app.
+  macos: { app: true, catalyst: true },
 } as const;
 
 const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS Simulator UDID, cabled iPhone UDID, or Android serial)."
+      "Target ID from `list-devices`<flag:macos-apps> (Mac app: `macos-app-<bundle id>`)</flag:macos-apps>."
     ),
   timeLimitSeconds: z
     .number()
@@ -44,25 +48,16 @@ const zodSchema = z.object({
     .min(1)
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
-    .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}). ` +
-        `Set it to slightly more than the interaction you plan to capture.`
-    ),
+    .describe(`Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}).`),
   trimStatic: z
     .boolean()
     .optional()
-    .describe(
-      "Default true. Collapse stretches where the screen does not change: the first second of " +
-        "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
-        "so a long recording with brief activity comes back short instead of full of dead air. " +
-        "Set false to keep a faithful real-time recording."
-    ),
+    .describe("Collapse idle unchanged stretches after 1s (default true; false = real-time)."),
   showTouches: z
     .boolean()
     .optional()
     .describe(
-      "Default true. Draw an on-screen marker for every tap, swipe, drag, pinch and rotate into the " +
-        "video, so it shows where each interaction landed. Set false to record the raw screen with no overlay."
+      "Draw touch markers (default true; unsupported on physical iPhones)<flag:macos-apps>. Mac apps: shows pointer, click ring, and hold dot</flag:macos-apps>."
     ),
 });
 
@@ -71,12 +66,9 @@ export function createScreenRecordingStartTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
-    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
-Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
-A physical iPhone must be on a USB cable (list-devices transportType "wired"). Its first recording on this host compiles a capture helper and the OS asks the user to allow camera access for "ios-screen-stream"; tell them to click Allow. No touch markers are drawn on a phone.
-Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
+    description: `Start an MP4 recording of the device screen<flag:macos-apps> or Mac app window</flag:macos-apps>. Use when capturing video of an interaction or animation (use \`screenshot\` for a still image).
+Continues until \`screen-recording-stop\` or \`timeLimitSeconds\` (always retrieve via \`screen-recording-stop\`). Requires \`ffmpeg\` on simulators, Android, and wired iPhones (needs \`transportType: "wired"\` and camera access for \`ios-screen-stream\`). Unsupported on tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos>, and Vega.<flag:macos-apps> Mac apps: needs a visible window on one display, no capture protection, no Screen Recording permission or ffmpeg; on \`MACOS_APP_LIBRARY_OUTDATED\`, run \`restart-app\` and retry.</flag:macos-apps>
+Returns \`{ outputFile }\` on the tool-server host. Fails if target is unavailable or already recording.`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
@@ -132,6 +124,16 @@ Fails if a recording is already running on the device, the device is not booted,
         // the mp4 is fetched at stop. The touch visualizer is drawn there too,
         // into the frames before they are encoded.
         return startRemoteCapture(api, {
+          timeLimitSeconds,
+          watermark,
+          trimStatic: params.trimStatic ?? true,
+          showTouches,
+        });
+      }
+
+      if (device.platform === "macos") {
+        const app = await resolveMacosApp(registry, device, "screen-recording-start");
+        return startMacosCapture(api, app, {
           timeLimitSeconds,
           watermark,
           trimStatic: params.trimStatic ?? true,

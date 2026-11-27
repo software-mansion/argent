@@ -286,4 +286,61 @@ describe("describe ax-service adapter", () => {
     expect(root.children).toHaveLength(1);
     expect(root.children[0]?.label).toBe("Visible");
   });
+
+  it("keeps UIKit scroll bar indicators in the DescribeNode tree while omitting them from formatted output", () => {
+    const frame = { x: 0.91, y: 0.12, width: 0.08, height: 0.7 };
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Vertical scroll bar, 4 pages",
+          value: "0%",
+          frame,
+          traits: ["adjustable"],
+        },
+        {
+          label: "Horizontal scroll bar, 1 page",
+          value: "34%",
+          frame,
+          traits: ["adjustable"],
+        },
+      ],
+    });
+    // Preserved in the AST so screens whose only accessible elements are scroll
+    // indicators stay non-empty for describeIos / await-ui-element / await-screen-idle.
+    expect(root.children).toHaveLength(2);
+    const rendered = formatDescribeTree(root, { source: "ax-service" });
+    expect(rendered).not.toContain("scroll bar");
+  });
+
+  it("preserves real adjustable controls and scroll bars with an explicit identifier in formatted output", () => {
+    const frame = { x: 0.1, y: 0.5, width: 0.8, height: 0.05 };
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Text Size",
+          value: "50%",
+          frame,
+          traits: ["adjustable"],
+        },
+        {
+          label: "Section index",
+          frame,
+          traits: ["adjustable"],
+        },
+        {
+          label: "Vertical scroll bar, 2 pages",
+          value: "0%",
+          identifier: "customScrollBar",
+          frame,
+          traits: ["adjustable"],
+        },
+      ],
+    });
+    const rendered = formatDescribeTree(root, { source: "ax-service" });
+    expect(rendered).toContain('AXAdjustable "Text Size"');
+    expect(rendered).toContain('AXAdjustable "Section index"');
+    expect(rendered).toContain('id="customScrollBar"');
+  });
 });
