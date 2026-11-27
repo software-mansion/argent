@@ -104,6 +104,9 @@ describe("claimTargets", () => {
     expect(
       claimTargets({ command: "gesture-tap", args: `{"udid":"${SIM.toLowerCase()}"}` })
     ).toEqual([SIM]);
+    expect(
+      claimTargets({ command: "gesture-tap", shutdown: true, args: `{"udid":"${SIM}"}` })
+    ).toEqual([SIM]);
     expect(claimTargets({ command: "gesture-tap", args: "not json" })).toEqual([]);
     expect(claimTargets({})).toEqual([]);
     expect(claimTargets(undefined)).toEqual([]);
