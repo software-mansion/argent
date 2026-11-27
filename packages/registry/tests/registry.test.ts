@@ -749,3 +749,151 @@ describe("Registry -- terminated-during-initialization signal", () => {
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
   });
 });
+
+function gatedBlueprint() {
+  const instances: Array<{ events: TypedEventEmitter<ServiceEvents> }> = [];
+  let releaseDispose!: () => void;
+  const disposeGate = new Promise<void>((resolve) => {
+    releaseDispose = resolve;
+  });
+  const blueprint = {
+    namespace: "Gated",
+    getURN: (payload: string) => `Gated:${payload}`,
+    factory: async () => {
+      const instance = {
+        api: { n: instances.length },
+        dispose: () => disposeGate,
+        events: new TypedEventEmitter<ServiceEvents>(),
+      };
+      instances.push(instance);
+      return instance;
+    },
+  };
+  return { blueprint, instances, releaseDispose };
+}
+
+describe("Registry -- resolve during a teardown", () => {
+  it("waits for a teardown without a fault and starts the service again", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.TERMINATING);
+    const first = registry.resolveService("Gated:x");
+    const second = registry.resolveService("Gated:x");
+    releaseDispose();
+
+    await expect(first).resolves.toEqual({ n: 1 });
+    await expect(second).resolves.toEqual({ n: 1 });
+    expect(instances).toHaveLength(2);
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.RUNNING);
+  });
+
+  it("does not start the service again once the registry is disposing", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    const resolving = registry.resolveService("Gated:x").catch((e: unknown) => e);
+    const disposing = registry.dispose();
+    releaseDispose();
+    await disposing;
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+    expect(instances).toHaveLength(1);
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("does not start the service again for a resolve issued after dispose", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    const disposing = registry.dispose();
+    const resolving = registry.resolveService("Gated:x").catch((e: unknown) => e);
+    releaseDispose();
+    await disposing;
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+    expect(instances).toHaveLength(1);
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("still refuses a resolve during a teardown with a fault", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated", new Error("socket lost"));
+    const err = await registry.resolveService("Gated:x").catch((e: unknown) => e);
+    releaseDispose();
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
+    expect(instances).toHaveLength(1);
+  });
+});
+
+describe("Registry -- dispose during a self-release", () => {
+  it("waits for the release before it returns", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    let settled = false;
+    const disposing = registry.dispose().then(() => (settled = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    releaseDispose();
+    await disposing;
+
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("does not start the service again for a resolve that waits behind disposeService", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    const disposing = registry.disposeService("Gated:x");
+    const resolving = registry.resolveService("Gated:x").catch((e: unknown) => e);
+    releaseDispose();
+    await disposing;
+
+    expect(getFailureSignal(await resolving)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_SERVICE_TERMINATING
+    );
+    expect(instances).toHaveLength(1);
+  });
+
+  it("makes disposeService wait for the release", async () => {
+    const registry = new Registry();
+    const { blueprint, instances, releaseDispose } = gatedBlueprint();
+    registry.registerBlueprint(blueprint);
+    await registry.resolveService("Gated:x");
+
+    instances[0]!.events.emit("terminated");
+    let settled = false;
+    const disposing = registry.disposeService("Gated:x").then(() => (settled = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    releaseDispose();
+    await disposing;
+
+    expect(registry.getServiceState("Gated:x")).toBe(ServiceState.IDLE);
+  });
+});

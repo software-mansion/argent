@@ -42,6 +42,14 @@ export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /**
+   * Teardowns of services that ended themselves without a fault, for example
+   * after an idle window. A resolve that arrives during one waits for it and starts the
+   * service again.
+   */
+  private selfReleases = new Map<URN, Promise<void>>();
+  private disposeCalls = 0;
+  private disposingUrns = new Set<URN>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
   /**
@@ -315,14 +323,29 @@ export class Registry {
   async disposeService(urn: URN): Promise<void> {
     const node = this.services.get(urn);
     if (!node) throw new ServiceNotFoundError(urn);
-    await this._teardown(urn);
+    const selfRelease = this.selfReleases.get(urn);
+    if (!selfRelease) return this._teardown(urn);
+    this.disposingUrns.add(urn);
+    try {
+      await selfRelease;
+      await this._teardown(urn);
+    } finally {
+      this.disposingUrns.delete(urn);
+    }
   }
 
   async dispose(): Promise<void> {
-    for (const [urn, node] of this.services) {
-      if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
-        await this._teardown(urn);
+    this.disposeCalls++;
+    try {
+      for (const [urn, node] of this.services) {
+        const selfRelease = this.selfReleases.get(urn);
+        if (selfRelease) await selfRelease;
+        if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
+          await this._teardown(urn);
+        }
       }
+    } finally {
+      this.disposeCalls--;
     }
   }
 
@@ -363,12 +386,14 @@ export class Registry {
       );
     }
 
+    const selfRelease = this.selfReleases.get(urn);
+    if (selfRelease) {
+      if (this._disposing(urn)) return Promise.reject(serviceTerminatingError(urn));
+      return selfRelease.then(() => this._resolveAfterSelfRelease<T>(urn, resolutionPath, options));
+    }
+
     if (node.state === ServiceState.TERMINATING) {
-      return Promise.reject(
-        new ServiceInitializationError(urn, "Service is currently terminating", {
-          cause: terminatingSignalCause("Service is currently terminating"),
-        })
-      );
+      return Promise.reject(serviceTerminatingError(urn));
     }
 
     if (node.state === ServiceState.RUNNING && node.instance) {
@@ -420,7 +445,9 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        void this._teardown(urn, error);
+        const selfRelease = !error && node.state === ServiceState.RUNNING;
+        const teardown = this._teardown(urn, error);
+        if (selfRelease) this._trackSelfRelease(urn, teardown);
       });
 
       return instance.api as T;
@@ -434,6 +461,25 @@ export class Registry {
       }
       throw new ServiceInitializationError(urn, cause.message, { cause });
     }
+  }
+
+  private _resolveAfterSelfRelease<T>(
+    urn: URN,
+    resolutionPath: string[],
+    options?: Record<string, unknown>
+  ): Promise<T> {
+    if (this._disposing(urn)) return Promise.reject(serviceTerminatingError(urn));
+    return this._resolve<T>(urn, resolutionPath, options);
+  }
+
+  private _disposing(urn: URN): boolean {
+    return this.disposeCalls > 0 || this.disposingUrns.has(urn);
+  }
+
+  private _trackSelfRelease(urn: URN, teardown: Promise<void>): void {
+    this.selfReleases.set(urn, teardown);
+    const forget = () => this.selfReleases.delete(urn);
+    void teardown.then(forget, forget);
   }
 
   private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {
@@ -495,6 +541,12 @@ function terminatingSignalCause(message: string): FailureError {
     failure_stage: "registry_service_terminating",
     failure_area: "registry",
     error_kind: "unknown",
+  });
+}
+
+function serviceTerminatingError(urn: URN): ServiceInitializationError {
+  return new ServiceInitializationError(urn, "Service is currently terminating", {
+    cause: terminatingSignalCause("Service is currently terminating"),
   });
 }
 

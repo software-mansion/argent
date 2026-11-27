@@ -7,7 +7,13 @@ import { EventEmitter } from "node:events";
 import * as net from "node:net";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  Registry,
+  ServiceState,
+  getFailureSignal,
+  type DeviceInfo,
+} from "@argent/registry";
 
 class FakeProc extends EventEmitter {
   stdout = new PassThrough();
@@ -26,6 +32,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     spawn: () => {
+      log.push("spawn");
       proc = new FakeProc();
       setImmediate(() => proc.stdout.write("INSTRUMENTATION_STATUS: port=41000\n"));
       return proc;
@@ -77,7 +84,12 @@ vi.mock("@argent/native-devtools-android", () => ({
   bundledHelperApkPath: () => "/tmp/argent-android-devtools.apk",
 }));
 
-import { androidDevtoolsBlueprint } from "../../src/blueprints/android-devtools";
+import {
+  HELPER_IDLE_RELEASE_MS,
+  androidDevtoolsBlueprint,
+  androidDevtoolsRef,
+  type AndroidDevtoolsApi,
+} from "../../src/blueprints/android-devtools";
 
 const DEVICE: DeviceInfo = { id: "emulator-5554", platform: "android", kind: "emulator" };
 
@@ -87,6 +99,8 @@ let server: net.Server;
 let connections: net.Socket[] = [];
 /** `undefined` leaves the request unanswered. */
 let answer: (method: string) => { result?: unknown; error?: unknown } | undefined;
+/** Answers `{ ok: true }` to each request left unanswered, in order. */
+let unanswered: Array<() => void>;
 /** How long `am instrument` takes to exit after `shutdown`; `null` never. */
 let exitAfterShutdownMs: number | null;
 /** `am force-stop` returns once this settles; unset, at once. */
@@ -119,6 +133,7 @@ function watch(promise: Promise<unknown>): { settled: boolean } {
 beforeEach(async () => {
   log.length = 0;
   connections = [];
+  unanswered = [];
   exitAfterShutdownMs = 50;
   forceStopGate = undefined;
   answer = () => ({ result: { ok: true } });
@@ -134,6 +149,8 @@ beforeEach(async () => {
         log.push(method);
         const reply = answer(method);
         if (reply) socket.write(JSON.stringify({ id, ...reply }) + "\n");
+        else
+          unanswered.push(() => socket.write(JSON.stringify({ id, result: { ok: true } }) + "\n"));
         if (method === "shutdown" && exitAfterShutdownMs !== null) {
           setTimeout(() => {
             log.push("exit");
@@ -452,5 +469,110 @@ describe("android-devtools connection lifecycle", () => {
     expect(connections).toHaveLength(2);
     expect(proc.kill).not.toHaveBeenCalled();
     expect(log.slice(-3)).toEqual(["shutdown", "exit", "forward-remove"]);
+  });
+});
+
+describe("android-devtools idle release", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("releases the helper once it has gone unused for the idle window", async () => {
+    const { instance, terminated } = await start();
+
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
+    await instance.api.ping();
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
+    expect(terminated).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(terminated).toEqual([undefined]);
+
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
+  it("holds off the release while a call is in flight", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "getHierarchy" ? undefined : { result: { ok: true } });
+
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
+    const reading = instance.api.getHierarchy();
+    await flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(terminated).toEqual([]);
+
+    unanswered.shift()!();
+    await reading;
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
+    expect(terminated).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(terminated).toEqual([undefined]);
+
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
+  it("re-arms the release after a call that failed", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) =>
+      method === "getScreenSize"
+        ? { error: { type: "java.lang.IllegalStateException", message: "no display" } }
+        : { result: { ok: true } };
+
+    await expect(instance.api.getScreenSize()).rejects.toThrow("no display");
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS);
+    expect(terminated).toEqual([undefined]);
+
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
+  it("holds off the release while a setText is in flight", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });
+
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1_000);
+    const filling = instance.api.setText("hello");
+    await flush();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(terminated).toEqual([]);
+
+    unanswered.shift()!();
+    await filling;
+    await vi.advanceTimersByTimeAsync(HELPER_IDLE_RELEASE_MS - 1);
+    expect(terminated).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(terminated).toEqual([undefined]);
+
+    vi.useRealTimers();
+    await instance.dispose();
+  });
+
+  it("starts a fresh helper for a call that arrives while the released one shuts down", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(androidDevtoolsBlueprint);
+    const ref = androidDevtoolsRef(DEVICE);
+    await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+    const released = proc;
+
+    vi.advanceTimersByTime(HELPER_IDLE_RELEASE_MS);
+    vi.useRealTimers();
+    expect(registry.getServiceState(ref.urn)).toBe(ServiceState.TERMINATING);
+    const api = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+
+    expect(log.filter((entry) => ["spawn", "shutdown", "exit"].includes(entry))).toEqual([
+      "spawn",
+      "shutdown",
+      "exit",
+      "spawn",
+    ]);
+    expect(proc).not.toBe(released);
+    await expect(api.ping()).resolves.toEqual({ ok: true });
+    await registry.dispose();
   });
 });
