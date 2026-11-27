@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: brand-argent
 ---
 
-Argent, the toolkit for AI agents, uses `sim-remote` to drive the hosted simulators. You install Argent as usual, log in with `sim-remote`, and the agent sees the hosted simulators next to your local devices.
+Argent, the toolkit for AI agents, drives the hosted simulators through `sim-remote`. The agent sees the hosted simulators next to your local devices.
 
 ## Setup
 
@@ -30,22 +30,13 @@ The agent lists a hosted simulator with the `remote:` prefix before its UDID. On
 - inspect the native view hierarchy and the native network log,
 - record and replay e2e tests.
 
-The screen and the input go through a live video stream between Argent and the Mac. The agent does not need a window for the simulator.
-
 ## Metro and the debugger
 
 When the agent connects the debugger or starts Metro, Argent opens a reverse tunnel for the port on its own. The hosted simulator loads the bundle from the Metro server on your computer. See [Connect to local servers](/docs/cloud/guides/local-servers).
 
-## Example instructions
-
-- "List the devices and boot the hosted iPhone."
-- "Install `./build/MyApp.app` on the remote simulator and open the login screen."
-- "Tap the Sign in button on the remote simulator and take a screenshot."
-- "Run the checkout e2e test on the remote simulator."
-
 ## Limits
 
-- Argent supports iOS simulators on Argent Cloud. There are no hosted Android devices at this moment.
+- Argent Cloud hosts iOS simulators only. There are no hosted Android devices.
 - The idle release of the session also applies to the agent. See [Manage sessions](/docs/cloud/guides/sessions).
 - Argent mocks the microphone of hosted simulators with `audio-input`. A helper process in the simulator feeds the input, so an app hears silence for a few seconds after the tool server stops, until that helper gives the input back. The helper decodes audio files in the simulator, so a tool server on Linux can also play files. The Mac has no microphone, so `source: "microphone"` gives silence.
 

@@ -6,11 +6,11 @@ sidebar_custom_props:
   icon: key-round
 ---
 
-A session is one of the four isolated parts of a Mac, with its own macOS user, disk volume and resources. Argent Cloud reserves it for you. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide reserves, shares and returns sessions.
+A session is one of the four isolated parts of a Mac. See [How it works](/docs/cloud/fundamentals/how-it-works#macs-and-sessions).
 
 ## Log in and reserve a session
 
-`sim-remote login` authenticates you with your API key and reserves a session. If all sessions of your team are busy, the command waits for a free one. The command prints the ID of the session that you got. The ID names the Mac and the session on it.
+`sim-remote login` authenticates you with your API key and reserves a session. If all sessions of your team are busy, the command waits for a free one. The command prints the ID of the session in the form `<MAC_ID>/simN`:
 
 ```
 Logged in. Acquired machine A1B2C3D4E5/sim2.
@@ -20,9 +20,9 @@ You can also log in without a session and reserve one later with `sim-remote acq
 
 ## Hold more than one session
 
-One user can hold several sessions at the same time. A session stays responsive with up to two booted simulators. To run more simulators in parallel, hold more than one session. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
+A session stays responsive with up to two booted simulators. To run more simulators in parallel, hold more than one session. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
 
-One daemon holds one session. `sim-remote acquire` does nothing when the daemon already holds a session. To hold several sessions from one computer, run one daemon per session. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
+One daemon holds one session. To hold several sessions from one computer, run one daemon per session: set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Several sessions on one computer](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
 
 `sim-remote list-machines` shows all the sessions that you hold and marks the session of the current daemon. `sim-remote attach <MACHINE_ID>` switches the current daemon to another session that you hold and releases the session that the daemon held before. Two daemons can share one session in this way. The session stays reserved until both daemons release it.
 
@@ -32,14 +32,8 @@ The daemon releases the session after 15 minutes without a `sim-remote` command.
 
 ## Give a session back
 
-`sim-remote release` returns the session and keeps you logged in. `sim-remote logout` returns the session and logs you out. Log out when you are done. Nobody else on your team can use a session that you hold.
+`sim-remote release` returns the session and keeps you logged in. `sim-remote logout` returns the session and logs you out. Nobody else on your team can use a session that you hold, so log out when you are done.
 
-When a session is returned, Argent Cloud erases every simulator in it and rebuilds the session volume from a clean image. The reset takes about a minute. See [Security and data](/docs/cloud/reference/security-and-data).
+When the last daemon releases a session, Argent Cloud erases every simulator in it and rebuilds it from a clean image. Download your logs and files first. See [What survives a session](/docs/cloud/reference/security-and-data#what-survives-a-session).
 
-## Example instructions
-
-- "Log in to Argent Cloud and reserve a session."
-- "Show which cloud sessions I hold."
-- "Release the cloud session when the tests complete."
-
-The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts. The [CLI reference](/docs/cloud/reference/cli) lists all commands.
+The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts. The [CLI reference](/docs/cloud/reference/cli#session-commands) lists the session commands.

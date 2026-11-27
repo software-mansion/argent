@@ -8,13 +8,7 @@ sidebar_custom_props:
 
 Argent Cloud provides [GitHub Actions](https://docs.github.com/actions) that install `sim-remote`, reserve a session for the job, and put the Maestro stand-ins on `PATH`. A job on `ubuntu-latest` can install an app, drive a hosted simulator and run Maestro flows. The job needs no macOS runner and no Xcode. The build of the `.app` still needs macOS and Xcode.
 
-The actions live in the [argent-cloud-actions](https://github.com/software-mansion-labs/argent-cloud-actions) repository. The examples on this page reference the `v1` tag. The tag moves to the latest `v1.N.N` release. A job that passes a secret to an action trusts the code behind the reference. For the strongest guarantee, pin the reference to the full commit SHA of a release and put the version in a comment:
-
-```yaml
-- uses: software-mansion-labs/argent-cloud-actions/acquire@fa197d08fb72476f6a93d499ce3479b1f5bd7618 # v1.0.0
-```
-
-Review the diff before you move the SHA to a new release. GitHub explains the reasons in [Security hardening for GitHub Actions](https://docs.github.com/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions).
+The actions live in the [argent-cloud-actions](https://github.com/software-mansion-labs/argent-cloud-actions) repository. The examples on this page reference the `v1` tag, which moves to the latest `v1.N.N` release. To pin a release, see [Pin the actions](#pin-the-actions).
 
 | Action          | Reference                                                     | What it does                                                                   |
 | --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
@@ -49,9 +43,9 @@ jobs:
       - run: maestro --udid "$UDID" test .maestro/flow.yaml
 ```
 
-After the acquire step, `sim-remote` is on `PATH` and the job holds a session. Every later step uses the login of the daemon and needs no credential.
+After the acquire step, the job holds a session. Every later step uses the login of the daemon and needs no credential.
 
-The actions do not select a simulator. The boot step picks the first available iPhone, boots it, and writes its UDID to `GITHUB_ENV`. Every later step reads `$UDID` from the environment. `simctl bootstatus -b` boots the simulator when it is not booted yet and waits until the boot completes.
+The actions do not select a simulator. The boot step picks the first available iPhone, boots it, and writes its UDID to `GITHUB_ENV` for the later steps.
 
 ## The API key
 
@@ -62,6 +56,16 @@ The key stays in the job:
 - The action passes the key to `sim-remote` as an environment variable, never as an argument.
 - The action does not write the key to `GITHUB_ENV`, `GITHUB_OUTPUT` or `GITHUB_STATE`.
 - `sim-remote` keeps the login token in the memory of the daemon. The token does not reach the disk.
+
+## Pin the actions
+
+A job that passes a secret to an action trusts the code behind the reference. For the strongest guarantee, pin the reference to the full commit SHA of a release and put the version in a comment:
+
+```yaml
+- uses: software-mansion-labs/argent-cloud-actions/acquire@fa197d08fb72476f6a93d499ce3479b1f5bd7618 # v1.0.0
+```
+
+Review the diff before you move the SHA to a new release. See [Security hardening for GitHub Actions](https://docs.github.com/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions).
 
 ## `install`
 
@@ -90,7 +94,7 @@ The action expects `sim-remote` on `PATH`, so it goes after `install`. A post st
 | `release`         | `true`  | Release the session in the post step. With `false`, the session stays reserved after the job. See below        |
 | `sim-remote-path` | Empty   | The path of the CLI. The default is `sim-remote` from `PATH`                                                   |
 
-A later job cannot reuse the login of this job. GitHub gives each job a fresh runner, and the login token lives only in the memory of the daemon on that runner. A later job that needs the same session logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the sessions that the API key holds. Log out or release the session in the last job, because a reserved session blocks the other jobs of your team until the server releases it.
+A later job cannot reuse the login of this job, because each job gets a fresh runner with its own daemon. A later job that needs the same session logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the sessions that the API key holds. Log out or release the session in the last job, because a reserved session blocks the other jobs of your team until the server releases it.
 
 Your team has a fixed number of sessions, so a matrix of jobs waits in a queue. A bad API key fails at once. With the defaults, the action waits about 40 minutes for a session. To wait longer, increase `retries`. The server caps one attempt, so a larger `timeout` does not help.
 
@@ -110,7 +114,7 @@ The action writes the stand-ins with `sim-remote install-shims` and expects `sim
 | ---------- | -------------------------------------- |
 | `shim-dir` | The directory that holds the stand-ins |
 
-On a macOS runner, the stand-ins shadow `xcrun`, `xcodebuild` and `open` for every later step. With `add-to-path: false`, add the output to `PATH` around the Maestro step only:
+With `add-to-path: false`, add the output to `PATH` for the Maestro step only:
 
 ```yaml
 - uses: software-mansion-labs/argent-cloud-actions/maestro-shims@v1

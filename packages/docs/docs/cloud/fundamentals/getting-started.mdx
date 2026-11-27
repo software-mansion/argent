@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: rocket
 ---
 
-Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use it to run iOS and React Native applications remotely. CI/CD pipelines on Linux or cloud servers use it in the same way. Both can execute, inspect, debug and test the applications.
+Argent Cloud is a platform from Software Mansion that hosts isolated iOS simulators on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use these simulators to run, inspect, debug and test iOS and React Native apps. CI pipelines on Linux use them in the same way.
 
 <Prompt>
 {`
@@ -37,7 +37,7 @@ Do not run sim-remote logout or release. I want to keep the session.
 
 <InstallCommand />
 
-If `~/.local/bin` is not on your `PATH`, add this line to your shell profile. Run the same line in the current shell, so the next command finds the binary:
+If `~/.local/bin` is not on your `PATH`, add this line to your shell profile and run it in the current shell:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -53,26 +53,22 @@ See [Installation](/docs/cloud/fundamentals/installation) for the prerequisites 
 
 ### Step 2: Acquire an API key
 
-We issue one API key per user and send it to you directly. If you do not have a key yet, [contact us](https://argent.swmansion.com/cloud#contact) and we will send you one. Treat the key like a password and do not commit it to a repository. See [Security and data](/docs/cloud/reference/security-and-data).
+We issue one API key per user. If you do not have a key, [contact us](https://argent.swmansion.com/cloud#contact). Treat the key like a password. See [Security and data](/docs/cloud/reference/security-and-data).
 
 ### Step 3: Authenticate
 
-Put your API key in the `SIM_REMOTE_API_KEY` environment variable and log in. The command reserves a session for you and prints its ID.
+Put your API key in the `SIM_REMOTE_API_KEY` environment variable and log in. `sim-remote login` reserves a session for you and prints its ID.
 
 ```bash
 export SIM_REMOTE_API_KEY=<API_KEY>
 sim-remote login
 ```
 
-We recommend the environment variable. Set it once in your shell profile, and `sim-remote login` needs no arguments. In CI, supply the same variable as a secret.
-
-You can also give the key with the `--api-key` option:
+Set the variable once in your shell profile. In CI, supply it as a secret. You can also pass the key with the `--api-key` option:
 
 ```bash
 sim-remote login --api-key <API_KEY>
 ```
-
-`sim-remote` keeps the login token in memory only and does not write the key to disk.
 
 ### Step 4: Boot a simulator
 
@@ -90,7 +86,7 @@ sim-remote simctl bootstatus <UDID> -b
 
 ### Step 5: Install and launch your app
 
-Install your app. The path is a path on your computer. `sim-remote` uploads the bundle for you.
+Install your app from a path on your computer. `sim-remote` uploads the bundle for you.
 
 ```bash
 sim-remote simctl install <UDID> ./build/MyApp.app
@@ -104,7 +100,7 @@ sim-remote simctl launch <UDID> com.example.MyApp
 
 ### Step 6: Log out
 
-Log out when you are done. This makes the session available to other users on your team again.
+Log out when you are done. Other users on your team can then use the session.
 
 ```bash
 sim-remote logout

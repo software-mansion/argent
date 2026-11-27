@@ -10,11 +10,11 @@ sidebar_custom_props:
 sim-remote simctl <SUBCOMMAND> [ARGS...]
 ```
 
-`sim-remote simctl` runs `xcrun simctl` on the Mac. For a subcommand that `sim-remote` forwards without changes, the subcommand name, the arguments, the options, the output and the exit codes are the ones of `simctl`. The subcommands in the table below are different. `sim-remote` runs them on its own, accepts only the forms in the table, and can print an error of its own. `sim-remote simctl help [SUBCOMMAND]` shows the usage of `simctl`.
+`sim-remote simctl` runs `xcrun simctl` on the Mac with the same arguments, output and exit codes. The subcommands in the first table below are the exception. `sim-remote simctl help [SUBCOMMAND]` shows the usage of `simctl`.
 
 ## Subcommands with local files
 
-Most arguments go to the Mac without changes. A subcommand that names a file is different, because a path from your computer means nothing on the Mac. `sim-remote` runs these subcommands on its own and moves the file for you.
+A path on your computer does not exist on the Mac. `sim-remote` runs these subcommands on its own and moves the file for you.
 
 | Subcommand                                                                                            | Direction | Description                                                                                                                                                                                       |
 | ----------------------------------------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -46,4 +46,4 @@ All other subcommands go to the Mac as they are. This includes `list`, `launch`,
 
 - One upload is at most 1 GiB. A larger upload fails with `upload exceeds the 1 GiB limit`.
 - `sim-remote` streams the output. When the consumer closes the pipe, for example `| head`, the remote command stops.
-- The paths of `--display` and `--mask` are options, and `sim-remote` passes them to `simctl` without changes.
+- `sim-remote` passes the values of `--display` and `--mask` to `simctl` without changes.

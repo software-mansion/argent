@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: timer
 ---
 
-A Mac has four sessions. A session is one isolated part of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` reserves a session, and `sim-remote release` gives it back. See [How it works](/docs/cloud/fundamentals/how-it-works#macs-and-sessions).
+A session is one of the four isolated parts of a Mac. See [How it works](/docs/cloud/fundamentals/how-it-works#macs-and-sessions).
 
 ## Lifecycle
 
@@ -20,7 +20,7 @@ A Mac has four sessions. A session is one isolated part of a Mac, with its own m
 | Idle release | No command for the idle timeout              | The daemon releases the session on its own. You stay logged in                                                     |
 | Lifetime cap | The session is held for the maximum lifetime | The server releases the session                                                                                    |
 
-A session returns to your team when the last daemon that holds it releases it. Argent Cloud then revokes its credentials, closes the live connections, erases the simulators, and rebuilds the session volume from a clean image. The reset takes about a minute.
+A session returns to your team when the last daemon that holds it releases it. Argent Cloud then resets the session in about a minute. See [What survives a session](/docs/cloud/reference/security-and-data#what-survives-a-session).
 
 ## Limits
 
@@ -45,11 +45,11 @@ To run more than two simulators at the same time, hold more than one session and
 
 A new session has one pre-booted simulator by default. Shut it down before you boot two other simulators. The pre-booted simulator is a setting of your account. [Contact us](https://argent.swmansion.com/cloud#contact) to turn it off or to change the device. Without it, the first boot is slower.
 
-With more than two booted simulators, the session can stop starting new processes. The session does not recover from the client. Release it and acquire a new session. See [Troubleshooting](/docs/cloud/reference/troubleshooting#symptoms).
+With more than two booted simulators, the session can stop starting new processes. See the `os error 35` entry in [Troubleshooting](/docs/cloud/reference/troubleshooting#symptoms) for the fix.
 
 ## The daemon
 
-`sim-remote` runs a small background daemon on your computer. The daemon holds the login token, sends a heartbeat to the server every 60 seconds, and owns the tunnels. Any command that needs a login starts the daemon. The daemon is the same binary as the CLI.
+`sim-remote` runs a background daemon on your computer. The daemon holds the login token in memory, sends a heartbeat to the server every 60 seconds, and owns the tunnels. Any command that needs a login starts the daemon.
 
 | Item             | Value                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------------------- |
@@ -58,25 +58,21 @@ With more than two booted simulators, the session can stop starting new processe
 | Stop             | `sim-remote daemon stop`. This releases the session and logs you out                                  |
 | Version mismatch | After an update, the old daemon refuses the new client. Run `sim-remote daemon stop` and log in again |
 
-The daemon keeps the login token in memory. `sim-remote` writes no login token, API key or configuration file to disk. The log files below are the only files that `sim-remote` writes.
-
 ## Several sessions on one computer
 
-One daemon holds one session. Set `SIM_REMOTE_SESSION` to a name to use several sessions at the same time from one computer. Each name has its own daemon and its own login.
+One daemon holds one session, and `sim-remote acquire` does nothing while the daemon holds one. Set `SIM_REMOTE_SESSION` to a name to use several sessions at the same time from one computer. Each name has its own daemon and its own login.
 
 ```bash
 export SIM_REMOTE_SESSION=agent-1
 sim-remote login
 ```
 
-All `sim-remote` commands that run with the same value share one daemon. A different value is a different daemon. Commands that run without the variable use the default daemon.
+Commands that run with the same value share one daemon. Commands that run without the variable use the default daemon.
 
 | Rule       | Value                                                       |
 | ---------- | ----------------------------------------------------------- |
 | Characters | Lowercase letters, digits, `.`, `_` and `-`. No leading `.` |
 | Length     | 1 to 32 characters                                          |
-| Socket     | `$HOME/.sim-remote-daemon-<NAME>.sock`                      |
-| Log file   | `sim-remote-daemon-<NAME>`                                  |
 | Scope      | `daemon stop` and `logout` act only on the named daemon     |
 
 Every process reads the variable from its own environment. Set `SIM_REMOTE_SESSION` in the shell or agent that runs the commands. Every shim and tool that it starts inherits the same value.

@@ -41,8 +41,6 @@ The printed code:
 - adds the directory to the front of `PATH` one time,
 - on Linux, adds `--require <DIR>/appium-host.cjs` to `NODE_OPTIONS`. This preload tells the Appium driver that it runs on macOS. It applies to Appium entry points only.
 
-The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the binary that wrote them.
-
 ## What each shim does
 
 | Shim            | Behaviour                                                                                                                                                                                    |

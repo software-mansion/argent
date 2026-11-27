@@ -10,13 +10,13 @@ Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Ar
 
 ## Macs and sessions
 
-A Mac has four sessions. A session is one isolated part of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` reserves a session for you, and `sim-remote release` gives it back. You can keep a session across shells, hand it to another client, or give it back without a logout. See [Manage sessions](/docs/cloud/guides/sessions).
+A Mac has four sessions. A session is one isolated part of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` reserves a session for you, and `sim-remote release` gives it back. See [Manage sessions](/docs/cloud/guides/sessions).
 
 A Mac runs up to six booted simulators at the same time, shared by its four sessions. A session stays responsive with up to two booted simulators. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
 
 ## Simulator control
 
-`sim-remote simctl` is a drop-in replacement for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. For commands that need access to files on your computer (such as `install`, `addmedia` or `push`) it uploads them to the Mac for you. For commands that produce files (`io screenshot`, `io recordVideo`, `get_app_container`) it handles the download. All other subcommands go to the Mac without changes. See [Run your app](/docs/cloud/guides/run-your-app).
+`sim-remote simctl` is a drop-in replacement for `xcrun simctl`, with the same subcommands, arguments, output and exit codes. It uploads the local files that a subcommand reads, such as the bundle for `install`. It downloads the files that a subcommand writes, such as the image of `io screenshot`. See [Run your app](/docs/cloud/guides/run-your-app).
 
 ## Networking
 
