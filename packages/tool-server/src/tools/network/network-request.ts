@@ -32,6 +32,8 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPortField } from "../../utils/debugger/metro-port";
+import type { SecretRedactor } from "../../utils/secrets";
+import { networkSecretRedactor, redactNetworkResult } from "./network-secrets";
 import {
   isRedirect,
   jsCaptureDebuggerRef,
@@ -112,9 +114,20 @@ function cutMarker(fullSize: string, mimeType?: string, shown = MAX_BODY_SIZE): 
   return `[TRUNCATED: first ${shown} chars shown, full size: ${fullSize}${mime}]`;
 }
 
-function truncateBody(body: string, mimeType: string): string {
+/**
+ * The first `shown` chars of a body, with each secret value replaced. `cut`
+ * says the body goes on past them, so a value they end inside leaves no start
+ * of it: the redaction runs on the shown text, after the cut. A body shown
+ * whole is left to the redaction of the whole result.
+ */
+function shownText(text: string, shown: number, cut: boolean, redact?: SecretRedactor): string {
+  const head = text.slice(0, shown);
+  return redact ? redact(head, { cut }) : head;
+}
+
+function truncateBody(body: string, mimeType: string, redact?: SecretRedactor): string {
   return body.length > MAX_BODY_SIZE
-    ? `${cutMarker(`${body.length} chars`, mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`
+    ? `${cutMarker(`${body.length} chars`, mimeType)}\n${shownText(body, MAX_BODY_SIZE, true, redact)}...`
     : body;
 }
 
@@ -160,11 +173,15 @@ function utf8Text(bytes: Buffer): string | Buffer {
 }
 
 /** A request body cut to MAX_BODY_SIZE; `truncated` says the interceptor kept only its start. */
-function truncatePostData(postData: string | undefined, truncated?: boolean): string | undefined {
+function truncatePostData(
+  postData: string | undefined,
+  truncated: boolean | undefined,
+  redact: SecretRedactor
+): string | undefined {
   // A body the interceptor cut is always longer than MAX_BODY_SIZE.
   if (postData == null || postData.length <= MAX_BODY_SIZE) return postData;
   const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
-  return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
+  return `${cutMarker(fullSize)}\n${shownText(postData, MAX_BODY_SIZE, true, redact)}...`;
 }
 
 interface RawEntry {
@@ -261,7 +278,7 @@ export const networkRequestTool: ToolDefinition<
 > = {
   id: "view-network-request-details",
   description: `Read the details of one captured request. Call this with an ID from a network log or await-network-request. Native requests need no debugger connection.
-Returns status, timing, headers and available bodies. Argent redacts sensitive headers and limits text previews to 1000 characters. URLs and bodies can still contain secrets. If a native upload is still in progress, retry after it finishes.
+Returns status, timing, headers and available bodies. Argent redacts sensitive headers, shows each secret exposed to Argent as its {{secret:NAME}} placeholder, and limits text previews to 1000 characters. Other credentials, such as a token the server issues, still show. If a native upload is still in progress, retry after it finishes.
 If the ID is not found, the tool returns a message. Refresh the log if that happens or after a JavaScript reload. Reloads can reuse IDs for different requests. On Vega, a JS lookup can start capture. Read view-network-logs before triggering the request.`,
   zodSchema,
   readOnly: true,
@@ -299,23 +316,38 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
+    const redact = networkSecretRedactor(ctx);
+    const details = await readDetails(services, params, redact);
+    // A string is argent's own message, which quotes no app data.
+    return typeof details === "string"
+      ? details
+      : redactNetworkResult(details, redact, ["requestId"]);
+  },
+};
+
+async function readDetails(
+  services: Record<string, unknown>,
+  params: z.infer<typeof zodSchema>,
+  redact: SecretRedactor
+): Promise<NetworkRequestDetails | string> {
+  {
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
       const found = findAndroidNativeRecord(params.requestId);
       return found
-        ? nativeRequestDetails(found.record, found.inspector, params.includeBody)
+        ? nativeRequestDetails(found.record, found.inspector, params.includeBody, redact)
         : nativeNotFound(params.requestId, params.device_id, "android");
     }
     if (IOS_NATIVE_REQUEST_ID.test(params.requestId)) {
       const found = findIosNativeRecord(params.requestId);
       return found
-        ? nativeRequestDetails(found.record, found.records, params.includeBody)
+        ? nativeRequestDetails(found.record, found.records, params.includeBody, redact)
         : nativeNotFound(params.requestId, params.device_id, "ios");
     }
     if (MACOS_NATIVE_REQUEST_ID.test(params.requestId)) {
       const found = findMacosNativeRecord(params.requestId);
       return found
-        ? nativeRequestDetails(found.record, found.records, params.includeBody)
+        ? nativeRequestDetails(found.record, found.records, params.includeBody, redact)
         : nativeNotFound(params.requestId, params.device_id, "macos");
     }
 
@@ -340,7 +372,7 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
           url: rec.url,
           method: rec.method,
           headers: redactHeaders(rec.requestHeaders),
-          postData: truncatePostData(rec.postData),
+          postData: truncatePostData(rec.postData, false, redact),
         };
       }
       if (rec.status != null) {
@@ -357,7 +389,7 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
             if (typeof body !== "string") {
               resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
             } else {
-              resp.body = truncateBody(body, resp.mimeType);
+              resp.body = truncateBody(body, resp.mimeType, redact);
             }
           }
         }
@@ -418,7 +450,7 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
         url: entry.request.url,
         method: entry.request.method,
         headers: redactHeaders(entry.request.headers),
-        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated),
+        postData: truncatePostData(entry.request.postData, entry.request.postDataTruncated, redact),
       };
     }
 
@@ -452,7 +484,7 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
               : entry.bodyLength != null
                 ? `${entry.bodyLength} chars`
                 : `more than ${body.length} chars`;
-          resp.body = `${cutMarker(fullSize, entry.response.mimeType)}\n${body.slice(0, MAX_BODY_SIZE)}...`;
+          resp.body = `${cutMarker(fullSize, entry.response.mimeType)}\n${shownText(body, MAX_BODY_SIZE, true, redact)}...`;
         } else {
           resp.body = body;
         }
@@ -462,8 +494,8 @@ If the ID is not found, the tool returns a message. Refresh the log if that happ
     }
 
     return details;
-  },
-};
+  }
+}
 
 function isNativeRequestId(requestId: string): boolean {
   return (
@@ -513,7 +545,8 @@ interface NativeBodies {
 async function nativeRequestDetails(
   record: NativeNetworkRecord,
   bodies: NativeBodies,
-  includeBody: boolean
+  includeBody: boolean,
+  redact: SecretRedactor
 ): Promise<NetworkRequestDetails> {
   const { wireHeaders } = record.request;
   /**
@@ -533,14 +566,18 @@ async function nativeRequestDetails(
   const headersNote = requestHeadersNote(record);
   if (headersNote) request.headersNote = headersNote;
   if (record.request.hasPostData) {
-    request.postData = await readNativeBody(() => bodies.requestPostData(record.id), {
-      contentType: requestHeader("content-type"),
-      contentEncoding: requestHeader("content-encoding"),
-      wholeSize: sizeInBytes(
-        Number(requestHeader("content-length") || NaN),
-        "as the app sent them"
-      ),
-    });
+    request.postData = await readNativeBody(
+      () => bodies.requestPostData(record.id),
+      {
+        contentType: requestHeader("content-type"),
+        contentEncoding: requestHeader("content-encoding"),
+        wholeSize: sizeInBytes(
+          Number(requestHeader("content-length") || NaN),
+          "as the app sent them"
+        ),
+      },
+      redact
+    );
   }
 
   const details: NetworkRequestDetails = {
@@ -576,16 +613,20 @@ async function nativeRequestDetails(
     };
     if (record.response.fromCache) resp.fromCache = true;
     if (includeBody) {
-      resp.body = await readNativeBody(() => bodies.responseBody(record.id), {
-        mimeType: record.response.mimeType,
-        contentType: headerValue(record.response.headers, "content-type"),
-        // An iOS or Mac app response body is read decoded, so its Content-Encoding is not applied again.
-        contentEncoding:
-          record.layer === "ios-native" || record.layer === "macos-native"
-            ? ""
-            : headerValue(record.response.headers, "content-encoding"),
-        wholeSize: sizeInBytes(record.encodedDataLength ?? NaN, "as the app received them"),
-      });
+      resp.body = await readNativeBody(
+        () => bodies.responseBody(record.id),
+        {
+          mimeType: record.response.mimeType,
+          contentType: headerValue(record.response.headers, "content-type"),
+          // An iOS or Mac app response body is read decoded, so its Content-Encoding is not applied again.
+          contentEncoding:
+            record.layer === "ios-native" || record.layer === "macos-native"
+              ? ""
+              : headerValue(record.response.headers, "content-encoding"),
+          wholeSize: sizeInBytes(record.encodedDataLength ?? NaN, "as the app received them"),
+        },
+        redact
+      );
     }
     details.response = resp;
   }
@@ -624,7 +665,8 @@ interface NativeBodyFraming {
 
 async function readNativeBody(
   read: () => Promise<NativeNetworkBody>,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  redact: SecretRedactor
 ): Promise<string> {
   const mimeType = framing.mimeType ?? framing.contentType.split(";")[0]!.trim();
   let body: NativeNetworkBody;
@@ -637,13 +679,13 @@ async function readNativeBody(
   // A request body that the upload cut has no known whole size.
   if (body.incomplete) framing = { ...framing, wholeSize: undefined };
   if (body.inlineChars !== undefined) {
-    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing);
+    return inlineBody(body.body, body.inlineChars, body.truncated, mimeType, framing, redact);
   }
   const asSent = (): string => {
     const text = inDeclaredCharset(body.body, framing.contentType, body.truncated);
     return body.truncated
-      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, body.incomplete)
-      : truncateBody(text, mimeType);
+      ? cutByAgent(text, mimeType, Buffer.byteLength(body.body), framing, redact, body.incomplete)
+      : truncateBody(text, mimeType, redact);
   };
   // A text body with no Content-Encoding reads as it came, with no copy of its bytes.
   if (!body.base64Encoded && contentCodings(framing.contentEncoding).length === 0) return asSent();
@@ -659,8 +701,8 @@ async function readNativeBody(
       : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
-    ? cutByAgent(text, mimeType, kept.length, framing, body.incomplete)
-    : truncateBody(text, mimeType);
+    ? cutByAgent(text, mimeType, kept.length, framing, redact, body.incomplete)
+    : truncateBody(text, mimeType, redact);
 }
 
 /**
@@ -691,7 +733,8 @@ function inlineBody(
   wholeChars: number,
   truncated: boolean,
   mimeType: string,
-  framing: NativeBodyFraming
+  framing: NativeBodyFraming,
+  redact: SecretRedactor
 ): string {
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
     return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
@@ -708,14 +751,15 @@ function inlineBody(
     const size = truncated ? (framing.wholeSize ?? "size unknown") : `${encoded!.length} bytes`;
     return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
   }
-  if (!truncated) return truncateBody(decoded, mimeType);
+  if (!truncated) return truncateBody(decoded, mimeType, redact);
   // In another charset, or under a Content-Encoding, the whole body has more chars than its kept start.
   const fullSize =
     !encoded && namesUtf8(framing.contentType)
       ? `${wholeChars} chars`
       : `more than ${decoded.length} chars`;
   const shown = Math.min(decoded.length, MAX_BODY_SIZE);
-  return `${cutMarker(fullSize, mimeType, shown)}\n${decoded.slice(0, shown)}${decoded.length > shown ? "..." : ""}`;
+  // The host kept only the start, so the text ends at a cut even when all of it shows.
+  return `${cutMarker(fullSize, mimeType, shown)}\n${shownText(decoded, shown, true, redact)}${decoded.length > shown ? "..." : ""}`;
 }
 
 function decodesTooLarge(framing: NativeBodyFraming): string {
@@ -732,11 +776,13 @@ function cutByAgent(
   mimeType: string,
   keptBytes: number,
   framing: NativeBodyFraming,
+  redact: SecretRedactor,
   incomplete?: boolean
 ): string {
   const shown = Math.min(text.length, MAX_BODY_SIZE);
   const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
-  return `${cutMarker(fullSize, mimeType, shown)}\n${text.slice(0, shown)}${text.length > shown ? "..." : ""}`;
+  // The agent kept only the start, so the text ends at a cut even when all of it shows.
+  return `${cutMarker(fullSize, mimeType, shown)}\n${shownText(text, shown, true, redact)}${text.length > shown ? "..." : ""}`;
 }
 
 function agentKept(keptBytes: number, incomplete?: boolean): string {

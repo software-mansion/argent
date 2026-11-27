@@ -17,6 +17,7 @@ import {
   type UnmetWaitCause,
 } from "../../utils/wait-result";
 import { CAPTURE_CAPABILITY } from "../network/network-capture";
+import { networkSecretRedactor } from "../network/network-secrets";
 import { assertMacosAppBundle } from "../native-devtools/macos-view-hierarchy";
 import { markedLayers, type LayerRead, type MarkedLayer } from "./layers";
 import {
@@ -216,6 +217,19 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
       if (layers.length === 0) throw notStartedError(params);
 
       const criteria = criteriaOf(params);
+      /**
+       * The records are matched as read, and what the result shows of them is
+       * redacted: the app text of a record (method, URL, error) and the layer
+       * notes, which can quote an agent or the app. The ids and counts are
+       * argent's own and stay, and so does the agent's own pattern in the note.
+       */
+      const redact = networkSecretRedactor(ctx);
+      const shown = <T extends WaitRecord>(record: T): T => ({
+        ...record,
+        method: redact(record.method),
+        url: redact(record.url),
+        ...(record.errorText !== undefined ? { errorText: redact(record.errorText) } : {}),
+      });
       const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const pollIntervalMs = params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
       const start = Date.now();
@@ -266,12 +280,12 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
         // What the reads in this call said of each layer, as a reload that left
         // requests out, so that the match may not be the first request.
         const notes = [...notesSeen].flatMap(([layer, seen]) =>
-          [...seen].map((note) => `${layer}: ${note}`)
+          [...seen].map((note) => `${layer}: ${redact(note)}`)
         );
         return {
           success: true,
           elapsed: elapsed(),
-          match,
+          match: shown(match),
           ...(notes.length > 0 ? { note: notes.join("; ") } : {}),
         };
       };
@@ -359,11 +373,12 @@ Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Sta
             readable: readable !== undefined,
             ...(last?.stopped ? { stopped: true as const } : {}),
             requests: readable?.records.length ?? 0,
-            ...(last?.note ? { note: last.note } : {}),
+            ...(last?.note ? { note: redact(last.note) } : {}),
           };
         });
         const seen = [...latestReadable.values()].flatMap((read) => read.records);
-        const misses = nearMisses(criteria, seen);
+        // Redacted before describeRecord cuts a URL, so a cut value leaves no start of it.
+        const misses = nearMisses(criteria, seen).map(shown);
         const counts = summaries
           .map(
             (s) =>

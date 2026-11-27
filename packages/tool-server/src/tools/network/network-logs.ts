@@ -1,4 +1,6 @@
 import { STATUS_CODES } from "node:http";
+import type { SecretRedactor } from "../../utils/secrets";
+import { networkSecretRedactor } from "./network-secrets";
 import { z } from "zod";
 import bytesUtil from "bytes";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -211,21 +213,28 @@ function shortName(url: string, from?: string): string {
   }
 }
 
-function formatEntry(entry: LogEntry): string {
-  const method = entry.request?.method ?? "???";
+/**
+ * One line of the log. The parts that hold app text (method, path, redirect
+ * target, error and status text) are redacted one by one, so a short secret
+ * value never replaces the id, a size or a duration. The path is redacted
+ * after `shortName`, which would percent-encode a marker's braces.
+ */
+function formatEntry(entry: LogEntry, redact: SecretRedactor): string {
+  const method = redact(entry.request?.method ?? "???");
   const url = entry.request?.url ?? "unknown";
-  const name = shortName(url);
+  const name = redact(shortName(url));
   const finalUrl = entry.response?.url;
-  const redirect = finalUrl && isRedirect(url, finalUrl) ? `→ ${shortName(finalUrl, url)}` : "";
+  const redirect =
+    finalUrl && isRedirect(url, finalUrl) ? `→ ${redact(shortName(finalUrl, url))}` : "";
 
   let status: string;
   if (entry.state === "failed") {
-    status = entry.errorText ?? "failed";
+    status = entry.errorText ? redact(entry.errorText) : "failed";
   } else if (entry.response) {
     // A response whose body has not completed.
     status = [
       entry.response.status,
-      entry.response.statusText,
+      redact(entry.response.statusText),
       entry.state === "pending" ? "(pending)" : "",
     ]
       .filter((part) => part !== "")
@@ -269,7 +278,8 @@ function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
 /** Same output format as the RN path. */
 function renderChromiumPage(
   records: NetworkRequestRecord[],
-  pageIndexParam: number | "latest"
+  pageIndexParam: number | "latest",
+  redact: SecretRedactor
 ): string {
   const total = records.length;
   if (total === 0) {
@@ -283,7 +293,7 @@ function renderChromiumPage(
   const start = pageIndex * ITEMS_PER_PAGE;
   const lines = records
     .slice(start, start + ITEMS_PER_PAGE)
-    .map((r, i) => formatEntry(recordToLogEntry(r, start + i)));
+    .map((r, i) => formatEntry(recordToLogEntry(r, start + i), redact));
   return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${total} total) ===\n\n${lines.join("\n")}`;
 }
 
@@ -333,11 +343,12 @@ Fails if the Chromium target is unreachable. A read can also fail if Argent cann
     const capture = jsCapture(payload);
     return capture ? { debugger: jsCaptureDebuggerRef(params, capture) } : {};
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
+    const redact = networkSecretRedactor(ctx);
     const device = resolveDevice(params.device_id);
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
-      return renderChromiumPage(chromium.server.network.requests(), params.pageIndex);
+      return renderChromiumPage(chromium.server.network.requests(), params.pageIndex, redact);
     }
     const port = jsReadPort(params);
 
@@ -348,7 +359,7 @@ Fails if the Chromium target is unreachable. A read can also fail if Argent cann
         () => undefined,
         (err: unknown) => (err instanceof Error ? err.message : String(err))
       );
-      return renderJsLog(api.cdp, port, params.pageIndex, {
+      return renderJsLog(api.cdp, port, params.pageIndex, redact, {
         noLog: () => notInstalled(installError),
         empty:
           "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before capture started (at the first network-tool call).",
@@ -360,7 +371,7 @@ Fails if the Chromium target is unreachable. A read can also fail if Argent cann
     const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
     if (!dbg || !capture) return jsNotStarted(deviceId, port);
     const stopped = capture.intent === "stopped";
-    return renderJsLog(dbg.cdp, port, params.pageIndex, {
+    return renderJsLog(dbg.cdp, port, params.pageIndex, redact, {
       noLog: () => jsNoLog(capture),
       empty: stopped
         ? `No network traffic captured: network capture is stopped for ${capture.bundleId} (network-capture-stop). Call network-capture-start to capture again, then repeat the action.`
@@ -381,6 +392,7 @@ async function renderJsLog(
   cdp: CDPClient,
   port: number,
   pageIndexParam: number | "latest",
+  redact: SecretRedactor,
   texts: {
     noLog: () => string;
     empty: string;
@@ -425,7 +437,8 @@ async function renderJsLog(
             ...entry,
             response: { ...entry.response, statusText: reasonPhrase(entry.response.status) },
           }
-        : entry
+        : entry,
+      redact
     )
   );
 

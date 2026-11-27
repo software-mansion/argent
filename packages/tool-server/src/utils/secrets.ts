@@ -122,6 +122,23 @@ export interface SecretRedactor {
   readonly names: ReadonlySet<string>;
 }
 
+export interface SecretRedactorOptions {
+  /**
+   * For data an agent parses, such as network traffic, rather than a log it
+   * reads: only whole values are found, in the spellings of
+   * {@link spellingsOf} plus those of {@link dataSpellingsOf}. No fragment is
+   * looked for inside the text, since a fragment of a password such as
+   * `password1` is in every `"password"` key. A value shorter than
+   * {@link MIN_FRAGMENT} counts only where it stands alone (see
+   * {@link standsAlone}), so a PIN `4821` is not found in the id `14821`. A
+   * marker already in the text is left as it is, so a second pass does not
+   * nest markers. With `cut`, the longest start of a spelling that ends the
+   * text is redacted, a start shorter than {@link MIN_FRAGMENT} only after a
+   * character that is not a letter or a digit.
+   */
+  wholeValues?: boolean;
+}
+
 /**
  * {@link redactSecrets} with the secrets indexed once, for a caller that
  * redacts many strings. `cut` says the text ends where a size limit cut it: a
@@ -129,25 +146,59 @@ export interface SecretRedactor {
  * then redacted too, since the limit, not the script, decided where it stops.
  */
 export function secretRedactor(
-  secrets: ReadonlyArray<{ name: string; value: string }>
+  secrets: ReadonlyArray<{ name: string; value: string }>,
+  options: SecretRedactorOptions = {}
 ): SecretRedactor {
+  const whole = options.wholeValues === true;
   // A lower index wins a contested position, so a value containing another (a
   // host inside a URL) is not split around the shorter one.
   const ordered = secrets
     .filter(({ value }) => value.length > 0)
     .sort((a, b) => b.value.length - a.value.length || (a.name < b.name ? -1 : +(a.name > b.name)));
   const none = ordered.length;
-  const spellings = ordered.map(({ value }) => [...spellingsOf(value)]);
+  const spellings = ordered.map(({ value }) => [
+    ...(whole ? dataSpellingsOf(value) : spellingsOf(value)),
+  ]);
   // Ids rise as entries are visited, so the first one a window records wins.
   const windows = new Map<string, number>();
-  spellings.forEach((forms, id) => {
-    for (const spelling of forms) {
-      for (let i = 0; i + MIN_FRAGMENT <= spelling.length; i++) {
-        const window = spelling.slice(i, i + MIN_FRAGMENT);
-        if (!windows.has(window)) windows.set(window, id);
+  if (!whole)
+    spellings.forEach((forms, id) => {
+      for (const spelling of forms) {
+        for (let i = 0; i + MIN_FRAGMENT <= spelling.length; i++) {
+          const window = spelling.slice(i, i + MIN_FRAGMENT);
+          if (!windows.has(window)) windows.set(window, id);
+        }
       }
+    });
+
+  const wholeClaims = (
+    text: string,
+    cut: boolean,
+    owner: Int32Array,
+    claim: (from: number, to: number, id: number) => void
+  ) => {
+    spellings.forEach((forms, id) => {
+      const short = ordered[id].value.length < MIN_FRAGMENT;
+      for (const spelling of forms) {
+        for (let at = text.indexOf(spelling); at !== -1; at = text.indexOf(spelling, at + 1)) {
+          if (!short || standsAlone(text, at, at + spelling.length)) {
+            claim(at, at + spelling.length, id);
+          }
+        }
+        if (!cut) continue;
+        for (let n = Math.min(spelling.length - 1, text.length); n > 0; n--) {
+          const at = text.length - n;
+          if (!text.endsWith(spelling.slice(0, n))) continue;
+          if ((n >= MIN_FRAGMENT && !short) || startsAlone(text, at)) claim(at, text.length, id);
+          break;
+        }
+      }
+    });
+    // A marker already in the text keeps its characters, whichever value they spell.
+    for (const marker of text.matchAll(MARKER_IN_TEXT_RE)) {
+      owner.fill(none, marker.index, marker.index + marker[0].length);
     }
-  });
+  };
 
   const claims = (text: string, opts: { cut?: boolean } = {}): Int32Array => {
     const owner = new Int32Array(text.length).fill(none);
@@ -155,6 +206,10 @@ export function secretRedactor(
     const claim = (from: number, to: number, id: number) => {
       for (let i = from; i < to; i++) owner[i] = Math.min(owner[i], id);
     };
+    if (whole) {
+      wholeClaims(text, opts.cut === true, owner, claim);
+      return owner;
+    }
     spellings.forEach((forms, id) => {
       for (const spelling of forms) {
         if (spelling.length >= MIN_FRAGMENT) continue;
@@ -219,6 +274,51 @@ export function secretRedactor(
     render,
     names: new Set(ordered.map(({ name }) => name)),
   });
+}
+
+/** `{{secret:NAME}}` as text, for {@link SecretRedactorOptions.wholeValues}. */
+const MARKER_IN_TEXT_RE = /\{\{secret:[A-Za-z_][A-Za-z0-9_]*\}\}/g;
+
+function isAsciiAlnum(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+/**
+ * Whether `text[from, to)` has no ASCII letter or digit on either side. An
+ * escape right before it (`\n`, `\u0026`, `%20`) stands for a character that is
+ * not one, so it counts as a boundary too: `"code\n4821"` holds the value
+ * `4821`. A letter outside ASCII is not a letter here.
+ */
+function standsAlone(text: string, from: number, to: number): boolean {
+  return startsAlone(text, from) && (to === text.length || !isAsciiAlnum(text.charCodeAt(to)));
+}
+
+function startsAlone(text: string, from: number): boolean {
+  if (from === 0 || !isAsciiAlnum(text.charCodeAt(from - 1))) return true;
+  const before = text.slice(Math.max(0, from - 6), from);
+  return /(?:\\[bfnrt]|\\u[0-9a-fA-F]{4}|%[0-9a-fA-F]{2})$/.test(before);
+}
+
+/**
+ * The spellings of {@link spellingsOf} and those the common client stacks
+ * write into a request: `/` written `\/` (Android's org.json, Foundation's
+ * JSONSerialization), `<`, `>`, `&`, `=`, `'` and every character outside
+ * ASCII written `\u` and 4 lowercase hex digits (Gson's default, Python's
+ * json), and a form body (`URLSearchParams`, OkHttp's `FormBody`), which
+ * percent-encodes all but letters, digits and `*-._` and writes a space `+`.
+ */
+function dataSpellingsOf(value: string): Set<string> {
+  const spellings = spellingsOf(value);
+  const json = JSON.stringify(value).slice(1, -1);
+  spellings.add(json.replaceAll("/", "\\/"));
+  spellings.add(
+    json.replace(
+      /[<>&='\u0080-\uffff]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+    )
+  );
+  spellings.add(new URLSearchParams([["", value]]).toString().slice(1));
+  return spellings;
 }
 
 function spellingsOf(value: string): Set<string> {

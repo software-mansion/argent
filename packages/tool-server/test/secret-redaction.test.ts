@@ -129,3 +129,56 @@ it("redacts a whole character where a fragment ends inside a surrogate pair", ()
   const out = redactSecrets("\u{10600}abcdefg", [{ name: "S", value: "\u{1F600}abcdefg" }]);
   expect(out).toBe("{{secret:S}}");
 });
+
+describe("secretRedactor for network data (wholeValues)", () => {
+  const PASSWORD = { name: "PASSWORD", value: 'p w&d="1"/x' };
+  const PIN = { name: "PIN", value: "4821" };
+  const redact = secretRedactor([PASSWORD, PIN], { wholeValues: true });
+
+  it.each([
+    ["JSON.stringify", JSON.stringify({ password: PASSWORD.value })],
+    ["a slash written \\/", '{"password":"p w&d=\\"1\\"\\/x"}'],
+    ["Gson's HTML-safe escapes", '{"password":"p w\\u0026d\\u003d\\"1\\"/x"}'],
+    ["a URLSearchParams form body", new URLSearchParams({ password: PASSWORD.value }).toString()],
+    ["encodeURIComponent", `password=${encodeURIComponent(PASSWORD.value)}`],
+  ])("finds the whole value in %s", (_title, text) => {
+    const out = redact(text);
+    expect(out).toContain("{{secret:PASSWORD}}");
+    expect(out).not.toMatch(/p w|p%20w|p\+w/);
+  });
+
+  it("finds no fragment, so a password that holds a common word leaves keys alone", () => {
+    const own = secretRedactor([{ name: "P", value: "password1" }], { wholeValues: true });
+    expect(own('{"password":"x","passwords":2}')).toBe('{"password":"x","passwords":2}');
+    expect(own('{"password":"password1"}')).toBe('{"password":"{{secret:P}}"}');
+  });
+
+  it("finds a short value only where it stands alone, also after an escape", () => {
+    expect(redact('{"pin":"4821","count":14821,"code":"x4821","n":48210}')).toBe(
+      '{"pin":"{{secret:PIN}}","count":14821,"code":"x4821","n":48210}'
+    );
+    expect(redact('{"note":"code\\n4821"}')).toBe('{"note":"code\\n{{secret:PIN}}"}');
+    expect(redact("q=a%204821&pin=4821")).toBe("q=a%20{{secret:PIN}}&pin={{secret:PIN}}");
+  });
+
+  it("leaves a marker already in the text as it is", () => {
+    const named = secretRedactor([{ name: "S", value: "PIN" }], { wholeValues: true });
+    expect(named("{{secret:PIN}} and PIN")).toBe("{{secret:PIN}} and {{secret:S}}");
+  });
+
+  it("at a cut, redacts the start of a value that ends the text", () => {
+    const token = secretRedactor([{ name: "T", value: "hunter2-SECRET-value" }], {
+      wholeValues: true,
+    });
+    expect(token('{"password":"hunter2-SE', { cut: true })).toBe('{"password":"{{secret:T}}');
+    expect(token('{"password":"hu', { cut: true })).toBe('{"password":"{{secret:T}}');
+    // A start shorter than six after a letter or a digit is too likely to be chance.
+    expect(token('{"name":"Ahu', { cut: true })).toBe('{"name":"Ahu');
+    expect(token('{"password":"hu')).toBe('{"password":"hu');
+  });
+
+  it("at a cut, redacts the start of a short value only where it stands alone", () => {
+    expect(redact('{"pin":"48', { cut: true })).toBe('{"pin":"{{secret:PIN}}');
+    expect(redact('{"count":148', { cut: true })).toBe('{"count":148');
+  });
+});

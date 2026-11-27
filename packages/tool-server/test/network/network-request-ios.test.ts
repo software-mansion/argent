@@ -1,3 +1,4 @@
+import type { ToolContext } from "@argent/registry";
 import * as zlib from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry, type ToolCapability } from "@argent/registry";
@@ -904,5 +905,64 @@ describe("view-network-request-details: an ios- ID before any iOS capture", () =
         includeBody: true,
       })
     ).toBe(NOT_STARTED_NATIVE(UNKNOWN_ID));
+  });
+});
+
+describe("view-network-request-details: secret values", () => {
+  const TOKEN = "stored-token-0123456789";
+  const PASSWORD = 'hunter2 "SECRET"/value';
+  /** The record number of ID, so a short secret could break the ID. */
+  const REC = "7";
+  const clientSecrets = new Map([
+    ["TOKEN", TOKEN],
+    ["PASSWORD", PASSWORD],
+    ["REC", REC],
+  ]);
+
+  async function scrubbed(rec: NativeNetworkRecord): Promise<Details> {
+    serve(rec);
+    const out = await networkRequestTool.execute!(
+      noServices,
+      { device_id: UDID, requestId: ID, includeBody: true },
+      { artifacts: {}, clientSecrets } as unknown as ToolContext
+    );
+    return out as Details;
+  }
+
+  it("shows each value as its placeholder in the URL, a header and both bodies, and keeps the ID", async () => {
+    const rec = record({
+      request: {
+        url: `http://localhost:9091/v1/login?token=${encodeURIComponent(TOKEN)}`,
+        method: "POST",
+        headers: { "X-Trace": TOKEN, "Content-Type": "application/json" },
+        hasPostData: true,
+      },
+    });
+    requestPostData.mockResolvedValue(inlineBody(JSON.stringify({ password: PASSWORD })));
+    responseBody.mockResolvedValue(textBody(`{"echo":${JSON.stringify(PASSWORD)},"n":7}`));
+
+    const out = await scrubbed(rec);
+
+    expect(out.requestId).toBe(ID);
+    expect(out.request.url).toBe("http://localhost:9091/v1/login?token={{secret:TOKEN}}");
+    expect(out.request.headers["X-Trace"]).toBe("{{secret:TOKEN}}");
+    expect(out.request.postData).toBe('{"password":"{{secret:PASSWORD}}"}');
+    expect(out.response.body).toBe('{"echo":"{{secret:PASSWORD}}","n":{{secret:REC}}}');
+    // The record keeps what the app sent.
+    expect(rec.request.headers["X-Trace"]).toBe(TOKEN);
+  });
+
+  it("leaves no start of a value that a 1000-character cut ends inside", async () => {
+    const body = `${"x".repeat(990)}"${PASSWORD}"${"y".repeat(2000)}`;
+    requestPostData.mockResolvedValue(textBody(body));
+    responseBody.mockResolvedValue(textBody(body));
+
+    const out = await scrubbed(post({ "Content-Type": "text/plain" }));
+
+    for (const text of [out.request.postData!, out.response.body!]) {
+      expect(text).toMatch(/^\[TRUNCATED: first 1000 chars shown, full size: /);
+      expect(text.endsWith(`${"x".repeat(990)}"{{secret:PASSWORD}}...`)).toBe(true);
+      expect(text).not.toContain("hunter");
+    }
   });
 });

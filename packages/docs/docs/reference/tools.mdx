@@ -439,7 +439,7 @@ On Mac apps, keep `macos-app-<bundle id>` for start, stop, and JS reads. Omit `l
 
 Native logs exclude requests to the Metro port on loopback addresses and, on Android, `10.0.2.2`. Requests to Metro on a LAN address can still appear. The JavaScript log filters local Metro bundle and development traffic.
 
-Argent redacts sensitive headers. URLs and bodies can still contain secrets. Text previews show up to 1,000 characters with a truncation notice when needed. Argent omits binary response bodies and binary native request bodies. If an upload is still in progress, read the details again after it ends.
+Argent redacts sensitive headers. In the results of the network tools, each value of a [secret](/docs/reference/configuration#secrets) shows as its `{{secret:NAME}}` placeholder; see [Secrets in network results](/docs/reference/configuration#secrets-in-network-results). Text previews show up to 1,000 characters with a truncation notice when needed. Argent omits binary response bodies and binary native request bodies. If an upload is still in progress, read the details again after it ends.
 
 Read native bodies before the app exits. Argent can reuse recently read bodies, up to 64 per app, subject to retention limits. On Apple platforms, some inline UTF-8 request bodies survive the process without a prior read.
 

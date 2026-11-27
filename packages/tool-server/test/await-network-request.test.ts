@@ -1001,3 +1001,53 @@ describe("the JS layer and a teardown under way", () => {
     });
   });
 });
+
+describe("secret values in the result", () => {
+  const TOKEN = "stored-token-0123456789";
+  /** The number of the records below, so a short secret could break their ids. */
+  const REC = "11";
+  const options = {
+    clientSecrets: new Map([
+      ["TOKEN", TOKEN],
+      ["REC", REC],
+    ]),
+  };
+  const waitWith = (params: Record<string, unknown> & { url: string }) =>
+    registry.invokeTool<WaitResult>(
+      AWAIT_NETWORK_REQUEST_TOOL_ID,
+      { udid: IOS, bundleId: APP, pollIntervalMs: 50, timeoutMs: 150, ...params },
+      options
+    );
+
+  it("matches on the record as sent and shows the placeholder in match.url, keeping the id", async () => {
+    await startIos();
+    ios.add(11, { url: `/v1/login?token=${TOKEN}`, status: 200 });
+
+    const result = await waitWith({ url: "/v1/login", status: 200 });
+
+    expect(result.match).toMatchObject({
+      id: "ios-t7-11",
+      url: `${API}/v1/login?token={{secret:TOKEN}}`,
+    });
+    expect(ios.records[0]!.request.url).toBe(`${API}/v1/login?token=${TOKEN}`);
+  });
+
+  it("redacts a near miss's URL and error before the note cuts them, keeping ids and counts", async () => {
+    await startIos();
+    // The token spans characters 114 to 137 of the URL, across the note's 120-character cut.
+    const url = `/${"p".repeat(90)}?token=${TOKEN}`;
+    ios.add(11, { url, status: 500 });
+    ios.add(12, { url: "/other", state: "failed", errorText: `refused ${TOKEN}` });
+
+    const result = await waitWith({ url: "/v1/login" });
+
+    expect(result.success).toBe(false);
+    expect(result.nearMisses?.map(({ id }) => id)).toEqual(["ios-t7-11", "ios-t7-12"]);
+    expect(result.nearMisses?.[0]?.url).toBe(`${API}/${"p".repeat(90)}?token={{secret:TOKEN}}`);
+    expect(result.nearMisses?.[1]?.errorText).toBe("refused {{secret:TOKEN}}");
+    expect(result.note).toContain("[ios-native ios-t7-11]");
+    expect(result.note).toContain("ios-native 2");
+    expect(result.note).not.toMatch(/stored|token-0/);
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+});

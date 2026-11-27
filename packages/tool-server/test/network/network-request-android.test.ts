@@ -1,3 +1,4 @@
+import type { ToolContext } from "@argent/registry";
 import * as zlib from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry, type ToolCapability } from "@argent/registry";
@@ -897,4 +898,36 @@ describe("view-network-request-details: routing an android- ID", () => {
       });
     }
   );
+});
+
+describe("view-network-request-details: secret values on Android", () => {
+  const PASSWORD = "hunter2-SECRET-value";
+  const clientSecrets = new Map([["PASSWORD", PASSWORD]]);
+
+  it("redacts a gzip body after decoding it, and a value the agent's cut ends inside", async () => {
+    // The agent kept 1 MiB of a longer body, and the value straddles the 1000-character cut.
+    const text = `${"x".repeat(990)}${PASSWORD}${"y".repeat(5000)}`;
+    responseBody.mockResolvedValue(heldBody(zlib.gzipSync(JSON.stringify({ echo: PASSWORD }))));
+    requestPostData.mockResolvedValue(heldBody(Buffer.from(text), true));
+    serve(
+      record({
+        request: {
+          method: "POST",
+          hasPostData: true,
+          headers: { "Content-Type": "text/plain" },
+        },
+        response: { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
+      })
+    );
+
+    const out = (await networkRequestTool.execute!(
+      {},
+      { device_id: SERIAL, requestId: ID, includeBody: true },
+      { artifacts: {}, clientSecrets } as unknown as ToolContext
+    )) as Details;
+
+    expect(out.response.body).toBe('{"echo":"{{secret:PASSWORD}}"}');
+    expect(out.request.postData).toMatch(/\nx{990}\{\{secret:PASSWORD\}\}\.\.\.$/);
+    expect(out.request.postData).not.toContain("hunter");
+  });
 });

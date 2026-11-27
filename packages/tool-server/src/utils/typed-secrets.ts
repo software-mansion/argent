@@ -56,6 +56,19 @@ export function noteTypedSecrets(
   }
 }
 
+/**
+ * Every secret value typed on any device, by name, newest first per device. A
+ * value typed under a name that now resolves to another value is still here.
+ */
+export function typedSecrets(): Array<{ name: string; value: string }> {
+  return [...devices.values()].flatMap((values) =>
+    [...values].reverse().map(([value, placeholder]) => ({
+      name: placeholder.slice(SECRET_PLACEHOLDER_MARKER.length, -2),
+      value,
+    }))
+  );
+}
+
 /** Whether a secret was ever typed on the device, for the life of the tool-server. */
 export function secretTypedOn(deviceId: string): boolean {
   return devices.has(deviceKey(deviceId));

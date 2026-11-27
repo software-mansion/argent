@@ -174,6 +174,16 @@ A name that no source defines fails the step at run time. Argent redacts each re
 
 A text field that is not secure shows the typed value on the screen. A tool that reads the screen, for example `describe`, returns the value. For the text that a failed check of an e2e test quotes from the screen, see [Typed secrets in a report](/docs/reference/e2e-yaml#typed-secrets-in-a-report).
 
+### Secrets in network results
+
+`view-network-logs`, `view-network-request-details`, `native-network-logs` and `await-network-request` show each secret value as its placeholder, on every capture layer. The values come from every source in the table, a value that an earlier source overrides included, from the secrets that the client forwards, and from every value typed since the tool-server started. Argent finds a value in these forms:
+
+- As written, in a URL, a header, a body, an error or a redirect.
+- JSON-escaped, also with `/` written `\/` or with `<`, `>`, `&`, `=`, `'` and non-ASCII characters written `\uXXXX`.
+- URL-encoded, as `encodeURIComponent` or a form body writes it, with `+` for a space.
+
+A value shorter than 6 characters counts only where no letter or digit is next to it, so a PIN `4821` stays in the number `14821`. A body preview that ends inside a value shows the placeholder, not the start of the value. Argent does not find a value that the app changed or encoded in another way, for example in base64, and does not hide data that is not a secret, such as a token that the server issues.
+
 ### Secrets over a link
 
 With `argent link` or `ARGENT_TOOLS_URL`, the tool-server can run on a different computer, for example a hosted Mac. By default, that computer must define each secret. Enable the `forward-secrets` flag to use the secrets of the client instead:
