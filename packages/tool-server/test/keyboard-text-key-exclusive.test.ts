@@ -438,6 +438,9 @@ describe("keyboard — how the constraint reaches a client", () => {
       [{ key: "" }, true], // a name, and there is no key called ""
       [{ text: "hi", key: "enter" }, true],
       [{ text: "", key: "" }, true], // shape, not truthiness
+      [{ key: "backspace", repeat: 3 }, false],
+      [{ text: "hi", repeat: 3 }, true],
+      [{ repeat: 3 }, true],
     ];
 
     for (const [args, rejected] of shapes) {
@@ -448,5 +451,96 @@ describe("keyboard — how the constraint reaches a client", () => {
       );
       expect(outcome, `runtime disagrees on ${JSON.stringify(args)}`).toBe(rejected);
     }
+  });
+});
+
+describe("keyboard — repeating a named key", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isAndroidTv.mockResolvedValue(false);
+  });
+
+  it("presses `key` `repeat` times on iOS simulator, Chromium, Vega, and HarmonyOS", async () => {
+    const tool = createKeyboardTool(registry());
+
+    const iosRes = await tool.execute(
+      {},
+      { udid: "809A848B-1671-4A72-B9C9-B1683D95973E", key: "backspace", repeat: 4, delayMs: 0 }
+    );
+    expect(iosRes).toEqual({ typed: "backspace", keys: 4 });
+    expect(
+      pressKey.mock.calls.filter((c) => c[0] === "Down" && c[1] === NAMED_KEYS.backspace)
+    ).toHaveLength(4);
+
+    const chromiumRes = await tool.execute(
+      {},
+      { udid: "chromium-cdp-9222", key: "backspace", repeat: 3, delayMs: 0 }
+    );
+    expect(chromiumRes).toEqual({ typed: "backspace", keys: 3 });
+    expect(
+      dispatchKeyEvent.mock.calls.filter((c) => c[0].type === "keyDown" && c[0].key === "Backspace")
+    ).toHaveLength(3);
+
+    const vegaRes = await tool.execute(
+      {},
+      { udid: "amazon-4a27df03c9777152", key: "backspace", repeat: 3 }
+    );
+    expect(vegaRes).toEqual({ typed: "backspace", keys: 3 });
+    expect(vi.mocked(injectVegaNamedKey)).toHaveBeenCalledTimes(3);
+
+    const harmonyRes = await tool.execute(
+      {},
+      { udid: "harmony-025DEK236V035771", key: "backspace", repeat: 3 }
+    );
+    expect(harmonyRes).toEqual({ typed: "backspace", keys: 3 });
+    expect(
+      vi.mocked(runHdcShell).mock.calls.filter(([, cmd]) => cmd === "uitest uiInput keyEvent 2055")
+    ).toHaveLength(3);
+  });
+
+  it("packs repeated Android keyevents into a single adb call", async () => {
+    const tool = createKeyboardTool(registry());
+
+    const res5 = await tool.execute({}, { udid: "emulator-5554", key: "backspace", repeat: 5 });
+    expect(res5).toEqual({ typed: "backspace", keys: 5 });
+    expect(adbShell).toHaveBeenCalledTimes(1);
+    expect(adbShell).toHaveBeenCalledWith(
+      "emulator-5554",
+      "input keyevent 67 67 67 67 67",
+      expect.any(Object)
+    );
+
+    vi.clearAllMocks();
+    const res60 = await tool.execute({}, { udid: "emulator-5554", key: "backspace", repeat: 60 });
+    expect(res60).toEqual({ typed: "backspace", keys: 60 });
+    expect(adbShell).toHaveBeenCalledTimes(1);
+    expect(adbShell.mock.calls[0]![1]).toBe(`input keyevent ${Array(60).fill("67").join(" ")}`);
+  });
+
+  it("rejects `repeat` with `text` before resolving secret placeholders", async () => {
+    const tool = createKeyboardTool(registry());
+    await expect(
+      tool.execute({}, { udid: "emulator-5554", text: "{{secret:NONEXISTENT_REPEAT}}", repeat: 2 })
+    ).rejects.toThrow(InvalidToolInputError);
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("enforces 1..100 integer bounds on `repeat` in zodSchema", () => {
+    const schema = createKeyboardTool(registry()).zodSchema!;
+    expect(schema.safeParse({ udid: "emulator-5554", key: "backspace", repeat: 1 }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ udid: "emulator-5554", key: "backspace", repeat: 100 }).success).toBe(
+      true
+    );
+    expect(schema.safeParse({ udid: "emulator-5554", key: "backspace", repeat: 0 }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ udid: "emulator-5554", key: "backspace", repeat: 101 }).success).toBe(
+      false
+    );
+    expect(schema.safeParse({ udid: "emulator-5554", key: "backspace", repeat: 2.5 }).success).toBe(
+      false
+    );
   });
 });

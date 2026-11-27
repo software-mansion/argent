@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
+import { ownsGlobalInstall } from "../src/package-manager.js";
+import * as utils from "../src/utils.js";
 import { hashBundledContent } from "../src/utils.js";
 import { resolveInstallableUpdateTarget } from "../src/update-target.js";
 
@@ -365,6 +367,142 @@ describe("update — agent-triggered runs never install a missing global", () =>
       expect.anything()
     );
   });
+});
+
+describe.skipIf(process.platform === "win32")("automatic global updates", () => {
+  let pkgRoot: string;
+  let modules: string;
+  let previousExitCode: typeof process.exitCode;
+
+  beforeEach(() => {
+    previousExitCode = process.exitCode;
+    vi.stubEnv("ARGENT_AUTOMATIC_UPDATE", "1");
+    vi.stubEnv("ARGENT_UPDATE_TRIGGER", "mcp_update");
+    const prefix = path.join(tmpDir, "prefix");
+    modules = path.join(prefix, "lib", "node_modules");
+    pkgRoot = path.join(modules, "@swmansion", "argent");
+    const cli = path.join(pkgRoot, "dist", "cli.js");
+    const bin = path.join(prefix, "bin", "argent");
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", bin: "dist/cli.js" })
+    );
+    fs.writeFileSync(cli, "");
+    fs.symlinkSync(cli, bin);
+    childProcessMock.which.mockReturnValue(bin);
+    childProcessMock.execFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "root") return modules;
+      if (args[0] === "install") topologyState.globalVersion = "99.0.0";
+    });
+    vi.spyOn(utils, "resolvePackageRoot").mockReturnValue(pkgRoot);
+  });
+
+  afterEach(() => {
+    vi.mocked(utils.resolvePackageRoot).mockRestore();
+    childProcessMock.which.mockReturnValue("/usr/local/bin/argent\n");
+    childProcessMock.execFileSync.mockReset();
+    vi.unstubAllEnvs();
+    process.exitCode = previousExitCode;
+  });
+
+  it.each(["1", "1 installed"])("recognizes Bun's global package list header (%s)", (count) => {
+    const root = fs.realpathSync(pkgRoot);
+    childProcessMock.execFileSync.mockReturnValue(
+      `${path.dirname(modules)} node_modules (${count})\n└── @swmansion/argent@1.0.0`
+    );
+    expect(ownsGlobalInstall("bun", root)).toBe(true);
+    expect(ownsGlobalInstall("bun", projDir)).toBe(false);
+  });
+
+  it("treats a pnpm-linked checkout as a local build", () => {
+    const root = fs.realpathSync(pkgRoot);
+    const listing = (version: string) =>
+      JSON.stringify([{ dependencies: { "@swmansion/argent": { path: pkgRoot, version } } }]);
+    childProcessMock.execFileSync.mockReturnValue(listing("1.0.0"));
+    expect(ownsGlobalInstall("pnpm", root)).toBe(true);
+    childProcessMock.execFileSync.mockReturnValue(listing("link:../checkout"));
+    expect(ownsGlobalInstall("pnpm", root)).toBe(false);
+  });
+
+  it("updates the global copy while leaving a local pin and project MCP entry intact", async () => {
+    const manifest = JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } });
+    const entry = JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+    fs.writeFileSync(path.join(projDir, "package.json"), manifest);
+    fs.writeFileSync(path.join(projDir, ".mcp.json"), entry);
+    await update(["--yes", "--global", "--version", "99.0.0"]);
+    expect(npmCalls().map(([, args]) => args)).toContainEqual([
+      "install",
+      "-g",
+      "@swmansion/argent@99.0.0",
+    ]);
+    expect(fs.readFileSync(path.join(projDir, "package.json"), "utf8")).toBe(manifest);
+    expect(fs.readFileSync(path.join(projDir, ".mcp.json"), "utf8")).toBe(entry);
+    const { killToolServerForInstallDir } = await import("@argent/tools-client");
+    expect(killToolServerForInstallDir).not.toHaveBeenCalled();
+  });
+
+  it("skips the install when ~/.argent opts out under a moved ARGENT_HOME_DIR", async () => {
+    fs.mkdirSync(path.join(tmpDir, ".argent"));
+    fs.writeFileSync(
+      path.join(tmpDir, ".argent", "config.json"),
+      JSON.stringify({ autoUpdate: { enabled: false } })
+    );
+    const movedHome = path.join(tmpDir, "moved-home");
+    fs.mkdirSync(movedHome);
+    fs.writeFileSync(
+      path.join(movedHome, "config.json"),
+      JSON.stringify({ autoUpdate: { enabled: true } })
+    );
+    vi.stubEnv("ARGENT_HOME_DIR", movedHome);
+    await update(["--yes", "--global", "--version", "99.0.0"]);
+    expect(npmCalls().some(([, args]) => args.includes("install"))).toBe(false);
+  });
+
+  it("refreshes the global skills and leaves the project's skills alone", async () => {
+    const runner = path.join(tmpDir, "npx");
+    fs.writeFileSync(runner, "", { mode: 0o755 });
+    vi.stubEnv("PATH", tmpDir);
+    const lock = JSON.stringify({ skills: { "argent-device-interact": {} } });
+    const globalLock = path.join(tmpDir, ".agents", ".skill-lock.json");
+    fs.mkdirSync(path.dirname(globalLock), { recursive: true });
+    fs.writeFileSync(globalLock, lock);
+    fs.writeFileSync(path.join(projDir, "skills-lock.json"), lock);
+    fs.writeFileSync(path.join(tmpDir, "skills-lock.json"), lock);
+
+    await update(["--yes", "--global", "--version", "99.0.0"]);
+
+    const skillRuns = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>)
+      .filter(([bin, args]) => bin === runner && args.includes("skills"))
+      .map(([, args]) => args);
+    expect(skillRuns.length).toBeGreaterThan(0);
+    expect(skillRuns.every((args) => args.includes("-g"))).toBe(true);
+  });
+
+  it.each(["other running copy", "other npm prefix", "release held by policy", "linked checkout"])(
+    "falls back to asking for a %s",
+    async (reason) => {
+      if (reason === "linked checkout") {
+        const checkout = path.join(tmpDir, "checkout");
+        fs.renameSync(pkgRoot, checkout);
+        fs.symlinkSync(checkout, pkgRoot);
+      }
+      if (reason === "other running copy")
+        vi.mocked(utils.resolvePackageRoot).mockReturnValue(projDir);
+      if (reason === "other npm prefix") modules = path.join(tmpDir, "elsewhere");
+      if (reason === "release held by policy")
+        vi.mocked(resolveInstallableUpdateTarget).mockResolvedValueOnce({
+          latestVersion: "99.0.0",
+          targetVersion: null,
+          latestPublishedAt: null,
+          minReleaseAgeMs: 86400000,
+        });
+      await update(["--yes", "--global", "--version", "99.0.0"]);
+      expect(npmCalls().some(([, args]) => args.includes("install"))).toBe(false);
+      expect(process.exitCode).toBe(1);
+    }
+  );
 });
 
 describe("update — multi-target failure handling", () => {

@@ -13,9 +13,13 @@ import request from "supertest";
 import { Registry } from "@argent/registry";
 import { z } from "zod";
 
-vi.mock("@argent/configuration-core", () => {
+vi.mock("@argent/configuration-core", async (importOriginal) => {
   const isFlagEnabled = vi.fn();
-  return { isFlagEnabled, isFeatureEnabled: (name: string) => isFlagEnabled(name) };
+  return {
+    ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+    isFlagEnabled,
+    isFeatureEnabled: (name: string) => isFlagEnabled(name),
+  };
 });
 import { isFlagEnabled } from "@argent/configuration-core";
 import { createHttpApp } from "../src/http";

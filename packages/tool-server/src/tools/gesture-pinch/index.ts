@@ -46,37 +46,23 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      "Device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
     ),
-  centerX: z.number().describe("Center of the pinch, horizontal."),
-  centerY: z.number().describe("Center of the pinch, vertical."),
-  startDistance: z.number().describe("Initial distance between the two fingers."),
-  endDistance: z.number().describe("Final distance between the two fingers."),
-  endCenterX: z
-    .number()
-    .optional()
-    .describe(
-      "Final horizontal center of the pinch. When set, the centroid drifts linearly from centerX to " +
-        "endCenterX over the gesture (e.g. to keep expanding fingers on-screen near an edge). Omit for a " +
-        "fixed center."
-    ),
-  endCenterY: z
-    .number()
-    .optional()
-    .describe(
-      "Final vertical center of the pinch; drifts from centerY like endCenterX. Omit for a fixed center."
-    ),
+  centerX: z.number().describe("Normalized center x."),
+  centerY: z.number().describe("Normalized center y."),
+  startDistance: z.number().describe("Initial normalized finger distance."),
+  endDistance: z.number().describe("Final normalized finger distance (> start = zoom in)."),
+  endCenterX: z.number().optional().describe("Optional final center x (centroid drifts linearly)."),
+  endCenterY: z.number().optional().describe("Optional final center y."),
   angle: z
     .number()
     .optional()
-    .describe(
-      "Angle in degrees of the axis the fingers lie on: 0 = horizontal (default), 90 = vertical."
-    ),
+    .describe("Finger axis angle in degrees (0 = horizontal, 90 = vertical)."),
   durationMs: z
     .number()
     .optional()
     .describe(
-      "Total gesture duration in milliseconds (default 300)<flag:harmonyos>. On HarmonyOS the device runs the whole move itself and takes this as wall-clock time, clamped to the 1–15000ms range `uinput` accepts.</flag:harmonyos>"
+      "Duration in ms (default 300)<flag:harmonyos>; clamped to 1–15000ms on HarmonyOS</flag:harmonyos>."
     ),
 });
 
@@ -84,10 +70,9 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
-  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. Positions and distances are fractions of the screen (0.0–1.0, not pixels), as in gesture-tap.
-startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
-Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device, or on a physical iPhone when the app is not drawn in portrait.`,
+  description: `Send a two-finger pinch-to-zoom gesture in normalized [0,1] coords (\`startDistance < endDistance\` zooms in, e.g. 0.2→0.6; \`>\` zooms out).
+Use when zooming maps, photos, or zoomable views (use \`gesture-rotate\` to rotate).
+Returns \`{ pinched: true, timestampMs, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if the backend<flag:harmonyos> (\`hdc\` on HarmonyOS)</flag:harmonyos> is unreachable or a physical iPhone app is not in portrait.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) =>

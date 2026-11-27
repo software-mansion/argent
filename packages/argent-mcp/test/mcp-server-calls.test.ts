@@ -586,6 +586,31 @@ describe("startMcpServer tool calls", () => {
     }
   });
 
+  it("leaves a newer installed version's highlights for the adapter that ships them", async () => {
+    const previous = "0.33.0";
+    vi.stubGlobal("ARGENT_CLI_VERSION", previous);
+    setWhatsNewSeenVersion(previous);
+    try {
+      const old = await connect({
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      });
+      try {
+        expect(old.getServerVersion()?.version).toBe(getInstalledVersion());
+        expect(textOf(await old.callTool({ name: "noted", arguments: {} }))).not.toContain(
+          "Argent was updated"
+        );
+        expect(getWhatsNewSeenVersion()).toBe(previous);
+      } finally {
+        await old.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      setWhatsNewSeenVersion(getInstalledVersion());
+    }
+  });
+
   it("sends no what's new note when the whats-new flag is off", async () => {
     const version = getInstalledVersion();
     setWhatsNewSeenVersion("0.0.1");
@@ -958,6 +983,19 @@ describe("startMcpServer screen capture after an interaction", () => {
         ].join("\n"),
       },
     ]);
+  });
+
+  it("skips tree memory on describe({ raw: true }) so later pruned auto-describes keep the last pruned base", async () => {
+    const pruned = await describeScreen();
+    const prunedId = treeId(pruned);
+
+    describeText = "ROOT AXGroup (0,0,1,1)\n  button Done (0.1,0.2,0.3,0.1)";
+    const raw = await client.callTool({ name: "describe", arguments: { udid: "u", raw: true } });
+    expect(textOf(raw)).not.toContain("Tree id:");
+
+    describeText = "button Done (0.1,0.2,0.3,0.1)";
+    const followUp = await wait();
+    expect(lastText(followUp)).toBe(note(prunedId, "describe"));
   });
 
   it("still sends a changed screenshot when the tree is identical", async () => {

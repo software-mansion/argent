@@ -5,7 +5,12 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const LOG_FILE = process.env.ARGENT_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
+function argentHomeDir() {
+  const override = process.env.ARGENT_HOME_DIR?.trim();
+  return override ? path.resolve(override) : path.join(os.homedir(), ".argent");
+}
+
+const LOG_FILE = process.env.ARGENT_MCP_LOG ?? path.join(argentHomeDir(), "mcp-calls.log");
 
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
 if (!fs.existsSync(LOG_FILE)) {

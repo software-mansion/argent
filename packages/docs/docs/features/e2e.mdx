@@ -62,7 +62,11 @@ An e2e test can contain more than taps and text. A step can wait for an element,
 
 An e2e test can [check that an action sends a request](/docs/features/network#wait-for-a-request). Start capture after launch and before the action. Wait for the request, then stop capture. Check start and stop results in the replay report to confirm the layer was ready or stopped. If a failed check skips the stop, ask the agent to stop capture before the next run. See [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
-Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test.
+Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. Use environment values to run the same script against different servers. Use a secret placeholder to pass credentials without storing them in the e2e test file.
+
+A script can return a value, such as the ID of a user it creates. Later steps can use that ID to find the user in the app or pass it to a cleanup script.
+
+Use shutdown steps to clean up data the e2e test creates, such as a test user. Argent runs them after the main steps pass or fail. Cancelling the run skips any remaining cleanup. Ask the agent to record cleanup after the main steps. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 
@@ -73,6 +77,8 @@ The file is plain text. You can commit the file, review the file in a pull reque
 You ask the agent to run an e2e test by its name. The agent replays each step in order on the connected device. When a step fails, Argent stops the e2e test. Argent reports the later steps as skipped. Argent also adds a screenshot of the device to the failed step. At the end, the agent receives a report with the result of each step.
 
 An e2e test also runs without an agent. The `argent e2e run` command replays an e2e test from the terminal. The command prints the result of each step and exits with a status code. Thus an e2e test runs in a CI job or in a script. The command runs one e2e test, an e2e test file in a different location, or the e2e tests in a directory. When the command runs the e2e tests in a directory, the command prints the failed e2e tests at the end. For each failed e2e test, the command also prints the reason and a command that runs only that e2e test.
+
+On a shared Mac, you can limit automatic devtools setup to the simulators assigned to your CI job. Set the watcher scope when you start the job's tool-server. See [Simulator watcher configuration](/docs/reference/configuration#devices).
 
 ## Suites
 
@@ -105,5 +111,7 @@ The e2e tests in a directory without a `suite.config.yaml` file are independent.
 - Over a link, the agent cannot record a local script, and a replay rejects an e2e test with a local script. Record and replay such an e2e test without a link.
 - Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different e2e test when that e2e test fails. In both cases, Argent records no step.
 - An argent client that is older than the tool-server can write the e2e test file on the computer of the tool-server. It can also record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
+
+Ask the agent to set the script environment values before it records a script. See [Set values while recording](/docs/reference/e2e-yaml#set-values-while-recording).
 
 Argent does this with the `e2e-start-recording`, `e2e-add-step`, `e2e-add-echo`, `e2e-add-script`, `e2e-finish-recording` and `e2e-execute` tools, and with the `argent e2e` command. The [tools reference](/docs/reference/tools) contains all tools. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the file format and the command options.

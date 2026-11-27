@@ -1,6 +1,5 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -19,6 +18,7 @@ import {
   markFirstRunNoticeShown,
   shouldShowFirstRunNotice,
 } from "@argent/telemetry";
+import { argentHomeDir } from "@argent/configuration-core";
 import {
   toMcpContent,
   flowRunToMcpContent,
@@ -58,6 +58,9 @@ export { fetchWithReconnect } from "./tool-caller.js";
 // These end their session whatever the client does, and their result is the only
 // reference to the file: a retry after a dropped result finds no session.
 const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
+
+// esbuild stamps the public package version into the bundle, including canaries.
+declare const ARGENT_CLI_VERSION: string | undefined;
 
 export interface StartMcpServerOptions {
   /**
@@ -108,6 +111,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
   const whatsNewOn = whatsNewEnabled();
+  const installedVersion = getInstalledVersion();
+  // The updater can replace the package while this adapter is serving calls.
+  // Its highlights belong to the loaded bundle; the handshake reports the
+  // installed manifest, including canaries restamped after the bundle build.
+  const highlightsVersion =
+    typeof ARGENT_CLI_VERSION === "string" ? ARGENT_CLI_VERSION : installedVersion;
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
   const trees = createTreeMemory();
   const screenshots = createScreenshotMemory();
@@ -168,7 +177,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return reconnectPromise;
   }
 
-  const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
+  const LOG_FILE = process.env.ARGENT_MCP_LOG ?? join(argentHomeDir(), "mcp-calls.log");
   let logDirReady = false;
 
   async function spyLog(entry: Record<string, unknown>) {
@@ -319,7 +328,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     if (!whatsNewOn || whatsNewChecked) return [];
     whatsNewChecked = true;
     try {
-      const note = takeWhatsNewNote(getInstalledVersion());
+      const note = takeWhatsNewNote(highlightsVersion);
       return note ? [{ type: "text" as const, text: note }] : [];
     } catch {
       return [];
@@ -327,7 +336,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const server = new Server(
-    { name: "argent", version: getInstalledVersion() },
+    { name: "argent", version: installedVersion },
     {
       capabilities: { tools: {} },
       instructions: SERVER_INSTRUCTIONS,
@@ -430,9 +439,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           content = [...content, { type: "text" as const, text: screenshotIdLine(id) }];
         }
       }
-      if (udid && autoDescribeOn && canonicalToolId(params.name) === "describe") {
+      if (
+        udid &&
+        autoDescribeOn &&
+        canonicalToolId(params.name) === "describe" &&
+        params.arguments?.raw !== true
+      ) {
         // The agent now has this tree, so the next action's tree is compared
-        // with it. The id lets a later note name it.
+        // with it. The id lets a later note name it. Raw describes are skipped
+        // so the next pruned auto-describe stays diffed against the last pruned
+        // tree instead of emitting spurious removals for pruned lines.
         const tree = describedTree(result);
         if (tree !== undefined) {
           treeUdid = udid;

@@ -1366,3 +1366,25 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[3]).toEqual({ type: "text", text: "[3] C" });
   });
 });
+
+describe("flowRunToMcpContent shutdown", () => {
+  it("heads the shutdown steps and says when shutdown did not finish", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      ok: false,
+      shutdownFailed: true,
+      passed: 1,
+      failed: 0,
+      errored: 1,
+      skipped: 0,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "hi" },
+        { index: 1, kind: "script", status: "error", reason: "boom", shutdown: true },
+      ],
+    });
+    const texts = blocks.map((b) => (b as { text?: string }).text);
+    expect(texts.indexOf("shutdown:")).toBe(texts.findIndex((t) => t?.startsWith("[2]")) - 1);
+    expect(texts.at(-2)).toMatch(/^⚠ shutdown did not finish/);
+    expect(texts.at(-1)).toMatch(/^FAIL/);
+  });
+});

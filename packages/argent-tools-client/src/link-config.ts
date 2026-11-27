@@ -1,9 +1,9 @@
 import * as path from "node:path";
-import { homedir } from "node:os";
 import { mkdir, writeFile, readFile, unlink, chmod } from "node:fs/promises";
+import { argentHomeDir } from "@argent/configuration-core";
 import { AUTH_TOKEN_ENV } from "./launcher.js";
 
-const LINK_DIR = path.join(homedir(), ".argent");
+const LINK_DIR = argentHomeDir();
 const LINK_FILE = path.join(LINK_DIR, "link.json");
 
 export interface LinkConfig {

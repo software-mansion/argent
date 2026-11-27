@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
+description: Autonomously verify one-off mobile UI flows (iOS/Android) with interact-screenshot-verify loops. Use when testing navigation, login, manual QA steps, or visible UI changes.
 ---
 
 ## Before testing

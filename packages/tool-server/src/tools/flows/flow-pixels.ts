@@ -476,16 +476,12 @@ export function comparePixels(
   maskBottomFraction = 0
 ): PixelChange {
   if (a.width !== b.width || a.height !== b.height) return "moving";
-  const maskedRows = Math.min(a.height, Math.floor(a.height * maskTopFraction));
-  const maskedBottomRows = Math.min(
-    a.height - maskedRows,
-    Math.floor(a.height * maskBottomFraction)
-  );
-  const total = a.width * (a.height - maskedRows - maskedBottomRows);
+  const { start, end } = unmaskedBytes(a, maskTopFraction, maskBottomFraction);
+  const total = (end - start) / 4;
   if (total <= 0) return "still";
-  const limit = Math.min(a.data.length, b.data.length, (a.height - maskedBottomRows) * a.width * 4);
+  const limit = Math.min(a.data.length, b.data.length, end);
   let changed = 0;
-  for (let o = maskedRows * a.width * 4; o + 2 < limit; o += 4) {
+  for (let o = start; o + 2 < limit; o += 4) {
     const dr = a.data[o] - b.data[o];
     const dg = a.data[o + 1] - b.data[o + 1];
     const db = a.data[o + 2] - b.data[o + 2];
@@ -497,6 +493,33 @@ export function comparePixels(
   );
   if (changed > motionThreshold) return "moving";
   return changed >= LOCALIZED_MOTION_MIN_PIXELS ? "localized" : "still";
+}
+
+function unmaskedBytes(
+  frame: PixelFrame,
+  maskTopFraction: number,
+  maskBottomFraction: number
+): { start: number; end: number } {
+  const maskedRows = Math.min(frame.height, Math.floor(frame.height * maskTopFraction));
+  const maskedBottomRows = Math.min(
+    frame.height - maskedRows,
+    Math.floor(frame.height * maskBottomFraction)
+  );
+  return {
+    start: maskedRows * frame.width * 4,
+    end: (frame.height - maskedBottomRows) * frame.width * 4,
+  };
+}
+
+function identicalPixels(
+  a: PixelFrame,
+  b: PixelFrame,
+  maskTopFraction: number,
+  maskBottomFraction: number
+): boolean {
+  if (a.width !== b.width || a.height !== b.height) return false;
+  const { start, end } = unmaskedBytes(a, maskTopFraction, maskBottomFraction);
+  return a.data.subarray(start, end).equals(b.data.subarray(start, end));
 }
 
 const SNAPSHOT_SETTLE_POLL_MS = 100;
@@ -512,6 +535,15 @@ const ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS = 400;
 // polls: a small control animating (a switch, a checkmark) finishes first, and a
 // caret or a spinner that never stops still lets the snapshot go ahead.
 const SNAPSHOT_LOCALIZED_POLLS = 3;
+
+// An eased or low-contrast fade can change less than PIXEL_THRESHOLD per poll.
+// For this long after the last action, a frame that is not byte-identical to the
+// one before must also not be moving against the one SNAPSHOT_SLOW_START_POLLS
+// polls earlier, so such a frame settles only after that many captures in a row
+// (a failed capture starts the count again). The steps between the action and
+// the snapshot (an await, slow captures) use up part of it.
+const SNAPSHOT_SLOW_START_WINDOW_MS = 2_000;
+const SNAPSHOT_SLOW_START_POLLS = 3;
 
 // The home indicator (iOS) or gesture bar (Android) at the bottom of a phone
 // capture, which the system fades after an app comes to the front.
@@ -533,35 +565,56 @@ export async function settlesOnPixels(device: ActionEnv["device"]): Promise<bool
 /**
  * Wait until two captures one poll apart show the same screen, and a quiet
  * window ({@link SNAPSHOT_QUIET_AFTER_ACTION_MS}) has passed since the run's
- * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. `blind` means no
- * two captures could be compared.
+ * last action, for at most {@link SNAPSHOT_SETTLE_TIMEOUT_MS}. Soon after an
+ * action, two captures that differ slightly also have to hold against a capture
+ * from {@link SNAPSHOT_SLOW_START_POLLS} polls earlier. `blind` means no two
+ * captures could be compared.
  */
 export async function settleOnPixels(
   env: ActionEnv
 ): Promise<"still" | "moving" | "aborted" | "blind"> {
   const deadline = Date.now() + SNAPSHOT_SETTLE_TIMEOUT_MS;
+  const lastActionAt = env.lastActionAt ?? 0;
   const quietAfter =
-    (env.lastActionAt ?? 0) +
+    lastActionAt +
     (env.device.platform === "android"
       ? ANDROID_SNAPSHOT_QUIET_AFTER_ACTION_MS
       : SNAPSHOT_QUIET_AFTER_ACTION_MS);
   const maskTopFraction = await statusBarMaskFraction(env.device);
   const maskBottomFraction = maskTopFraction > 0 ? HOME_INDICATOR_MASK_FRACTION : 0;
-  let previous = await capturePixelsWithin(env, deadline, true);
+  const compare = (a: PixelFrame, b: PixelFrame) =>
+    comparePixels(a, b, maskTopFraction, maskBottomFraction);
+  const identical = (a: PixelFrame, b: PixelFrame) =>
+    identicalPixels(a, b, maskTopFraction, maskBottomFraction);
+  const mayStillBeChanging = (recent: PixelFrame[], frame: PixelFrame) => {
+    if (Date.now() - lastActionAt >= SNAPSHOT_SLOW_START_WINDOW_MS) return false;
+    if (recent.length < SNAPSHOT_SLOW_START_POLLS) return true;
+    return compare(recent[0], frame) === "moving";
+  };
+
+  const first = await capturePixelsWithin(env, deadline, true);
+  let recent = first ? [first] : [];
   let compared = false;
   let localizedPolls = 0;
   while (Date.now() < deadline) {
     if (!(await sleepOrAbort(SNAPSHOT_SETTLE_POLL_MS, env.signal))) return "aborted";
     const frame = await capturePixelsWithin(env, deadline, false);
     if (env.signal?.aborted) return "aborted";
-    if (previous && frame) {
+    if (!frame) {
+      recent = [];
+      continue;
+    }
+    const previous = recent.at(-1);
+    if (previous) {
       compared = true;
-      const change = comparePixels(previous, frame, maskTopFraction, maskBottomFraction);
+      const change = compare(previous, frame);
       localizedPolls = change === "localized" ? localizedPolls + 1 : 0;
-      const settled = change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS;
+      const settled =
+        (change === "still" || localizedPolls >= SNAPSHOT_LOCALIZED_POLLS) &&
+        (identical(previous, frame) || !mayStillBeChanging(recent, frame));
       if (settled && Date.now() >= quietAfter) return "still";
     }
-    previous = frame;
+    recent = [...recent, frame].slice(-SNAPSHOT_SLOW_START_POLLS);
   }
   return compared ? "moving" : "blind";
 }

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../process-kill";
 import { PS_BIN } from "../vega-process";
+import { argentHomeDir } from "@argent/configuration-core";
 
 /**
  * Reap runner xcodebuild processes that outlived the tool-server that launched them.
@@ -55,7 +56,7 @@ export async function killStaleRunnersForDevice(
     if (
       !line.includes("test-without-building") ||
       !line.includes(`platform=iOS,id=${udid}`) ||
-      !line.includes(path.join(".argent", "ios-device-runner"))
+      !line.includes(` ${path.join(argentHomeDir(), "ios-device-runner")}${path.sep}`)
     ) {
       continue;
     }

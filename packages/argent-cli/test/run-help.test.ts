@@ -53,6 +53,7 @@ const flowAddStepMeta = {
       command: { type: "string" },
       args: { type: "string" },
       delayMs: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+      shutdown: { type: "boolean" },
     },
     required: ["name", "project_root", "command"],
   },
