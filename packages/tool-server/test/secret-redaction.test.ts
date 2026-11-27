@@ -149,12 +149,16 @@ describe("secretRedactor for network data (wholeValues)", () => {
 
   it.each([
     // Gson escapes `&` and leaves `ä` as it is; Python's json does the reverse.
-    ["Gson", '{"p":"p\u00e4\\u0026ss1234"}'],
-    ["Python's json", '{"p": "p\\u00e4&ss1234"}'],
-  ])("finds a value with a non-ASCII character and an `&` as %s writes it", (_title, text) => {
-    const own = secretRedactor([{ name: "PW", value: "p\u00e4&ss1234" }], { wholeValues: true });
-    expect(own(text)).toMatch(/^\{"p": ?"\{\{secret:PW\}\}"\}$/);
-  });
+    ["Gson", "p\u00e4&ss1234", '{"p":"p\u00e4\\u0026ss1234"}'],
+    ["Python's json", "p\u00e4&ss1234", '{"p": "p\\u00e4&ss1234"}'],
+    ["Python's json, with DEL", "p\u00e4&ss\u007f1234", '{"p": "p\\u00e4&ss\\u007f1234"}'],
+  ])(
+    "finds a value with a non-ASCII character and an `&` as %s writes it",
+    (_title, value, text) => {
+      const own = secretRedactor([{ name: "PW", value }], { wholeValues: true });
+      expect(own(text)).toMatch(/^\{"p": ?"\{\{secret:PW\}\}"\}$/);
+    }
+  );
 
   it.each(["p@ss word", "Za\u017c\u00f3\u0142\u0107:1", "ab|cd e9", "pa ss'wd{^}"])(
     "finds %j left unencoded in a URL, as a URL parser writes it",
@@ -164,6 +168,16 @@ describe("secretRedactor for network data (wholeValues)", () => {
         "https://h.test/x?pw={{secret:PW}}"
       );
       expect(own(new URL(`https://h.test/u/${value}`).pathname)).toBe("/u/{{secret:PW}}");
+    }
+  );
+
+  it.each(["pa;ss=wd|x", "secretx$='", "p w[1]^ok"])(
+    "finds %j left unencoded in a URL's userinfo, as a URL parser writes it",
+    (value) => {
+      const own = secretRedactor([{ name: "PW", value }], { wholeValues: true });
+      expect(own(new URL(`https://user:${value}@h.test/`).href)).toBe(
+        "https://user:{{secret:PW}}@h.test/"
+      );
     }
   );
 

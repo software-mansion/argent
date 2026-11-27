@@ -300,7 +300,7 @@ function startsAlone(text: string, from: number): boolean {
  * The spellings of {@link spellingsOf} and those the common client stacks
  * write into a request: `/` written `\/` (Android's org.json, Foundation's
  * JSONSerialization), `<`, `>`, `&`, `=` and `'` written `\u003c` and so on
- * (Gson's default), every character outside ASCII written `\u` and 4
+ * (Gson's default), DEL and every character outside ASCII written `\u` and 4
  * lowercase hex digits (Python's json), and a form body (`URLSearchParams`,
  * OkHttp's `FormBody`), which percent-encodes all but letters, digits and
  * `*-._` and writes a space `+`. A value the app put in a URL unencoded comes
@@ -313,7 +313,7 @@ function dataSpellingsOf(value: string): Set<string> {
   const unicodeEscape = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
   spellings.add(json.replaceAll("/", "\\/"));
   spellings.add(json.replace(/[<>&='\u2028\u2029]/g, unicodeEscape));
-  spellings.add(json.replace(/[\u0080-\uffff]/g, unicodeEscape));
+  spellings.add(json.replace(/[\u007f-\uffff]/g, unicodeEscape));
   spellings.add(new URLSearchParams([["", value]]).toString().slice(1));
   for (const escaped of URL_ESCAPED) spellings.add(urlSerialized(value, escaped));
   return spellings;
@@ -321,10 +321,11 @@ function dataSpellingsOf(value: string): Set<string> {
 
 /**
  * The ASCII characters the WHATWG URL standard percent-encodes in a query of
- * an http(s) URL, and in a path, with and without `^`, which newer parsers
- * escape too. Controls and characters outside ASCII are escaped in all of them.
+ * an http(s) URL, in a path, with and without `^`, which newer parsers escape
+ * too, and in the userinfo (`https://user:password@host`). Controls and
+ * characters outside ASCII are escaped in all of them.
  */
-const URL_ESCAPED = [/[ "#<>']/, /[ "#<>?`{}]/, /[ "#<>?`{}^]/];
+const URL_ESCAPED = [/[ "#<>']/, /[ "#<>?`{}]/, /[ "#<>?`{}^]/, /[ "#<>?`{}/:;=@[\\\]^|]/];
 
 /** `value` as a URL parser writes it where it escapes the ASCII characters `escaped` matches. */
 function urlSerialized(value: string, escaped: RegExp): string {

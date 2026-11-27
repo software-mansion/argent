@@ -119,7 +119,7 @@ describe("the JS layer", () => {
         url: `https://api.test/next?t=${TOKEN}`,
         status: 200,
         headers: {},
-        mimeType: "text/plain",
+        mimeType: `text/x-${TOKEN}`,
       },
       responseBody: body,
     });
@@ -144,6 +144,8 @@ describe("the JS layer", () => {
     expect(details.requestId).toBe("rn-net-1000");
     expect(details.request.url).toBe("https://api.test/u/{{secret:TOKEN}}");
     expect(details.response.redirectedTo).toBe("https://api.test/next?t={{secret:TOKEN}}");
+    // The app's MIME type in the preview's header is app text too.
+    expect(details.response.body).toContain("MIME: text/x-{{secret:TOKEN}}]");
     for (const text of [details.request.postData, details.response.body]) {
       // The preview's own header keeps its numbers, though PIN is 1000.
       expect(text).toMatch(/^\[TRUNCATED: first 1000 chars shown, full size: 4013 chars/);

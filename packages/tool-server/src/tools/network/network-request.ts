@@ -124,13 +124,14 @@ function shownText(text: string, shown: number, redact: SecretRedactor): string 
 }
 
 /**
- * Every body is redacted where it is built, cut or whole, and the redaction of
- * the whole result skips it: a second pass would rewrite the numbers in the
+ * Every body is redacted where it is built, cut or whole, and so is the app
+ * text in the notes around it (a MIME type, a Content-Encoding). The redaction
+ * of the whole result skips it: a second pass would rewrite the numbers in the
  * preview's own header, such as `first 1000 chars shown`, with a short value.
  */
 function truncateBody(body: string, mimeType: string, redact: SecretRedactor): string {
   return body.length > MAX_BODY_SIZE
-    ? `${cutMarker(`${body.length} chars`, mimeType)}\n${shownText(body, MAX_BODY_SIZE, redact)}...`
+    ? `${cutMarker(`${body.length} chars`, redact(mimeType))}\n${shownText(body, MAX_BODY_SIZE, redact)}...`
     : redact(body);
 }
 
@@ -395,7 +396,7 @@ async function readDetails(
         if (out) {
           const body = out.base64Encoded ? utf8Text(Buffer.from(out.body, "base64")) : out.body;
           if (typeof body !== "string") {
-            resp.body = `[body omitted: binary ${resp.mimeType || "data"}, ${body.length} bytes]`;
+            resp.body = `[body omitted: binary ${redact(resp.mimeType) || "data"}, ${body.length} bytes]`;
           } else {
             resp.body = truncateBody(body, resp.mimeType, redact);
           }
@@ -481,7 +482,7 @@ async function readDetails(
           : entry.bodyLength != null
             ? `, ~${entry.bodyLength} bytes`
             : "";
-      resp.body = `[body omitted: binary ${entry.response.mimeType || "data"}${size}]`;
+      resp.body = `[body omitted: binary ${redact(entry.response.mimeType) || "data"}${size}]`;
     } else if (params.includeBody && entry.responseBody != null) {
       const body = entry.responseBody;
       if (body.length > MAX_BODY_SIZE) {
@@ -492,7 +493,7 @@ async function readDetails(
             : entry.bodyLength != null
               ? `${entry.bodyLength} chars`
               : `more than ${body.length} chars`;
-        resp.body = `${cutMarker(fullSize, entry.response.mimeType)}\n${shownText(body, MAX_BODY_SIZE, redact)}...`;
+        resp.body = `${cutMarker(fullSize, redact(entry.response.mimeType))}\n${shownText(body, MAX_BODY_SIZE, redact)}...`;
       } else {
         resp.body = redact(body);
       }
@@ -699,13 +700,13 @@ async function readNativeBody(
   // A body sent as text has the body's own bytes as UTF-8, so its Content-Encoding applies to them.
   const kept = Buffer.from(body.body, body.base64Encoded ? "base64" : "utf8");
   const bytes = decodeContent(kept, framing.contentEncoding, body.truncated);
-  if (!bytes) return decodesTooLarge(framing);
+  if (!bytes) return decodesTooLarge(framing, redact);
   if (!body.base64Encoded && bytes === kept) return asSent();
   const text = decodeText(bytes, charsetOf(framing.contentType), body.truncated);
   if (text === null) {
     return body.truncated
-      ? `[body omitted: binary ${mimeType || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
-      : `[body omitted: binary ${mimeType || "data"}, ${bytes.length} bytes]`;
+      ? `[body omitted: binary ${redact(mimeType) || "data"}, ${framing.wholeSize ?? "size unknown"}; ${agentKept(kept.length, body.incomplete)}]`
+      : `[body omitted: binary ${redact(mimeType) || "data"}, ${bytes.length} bytes]`;
   }
   return body.truncated
     ? cutByAgent(text, mimeType, kept.length, framing, redact, body.incomplete)
@@ -744,19 +745,19 @@ function inlineBody(
   redact: SecretRedactor
 ): string {
   if (BINARY_BODY_TYPES.test(mimeType.toLowerCase())) {
-    return `[body omitted: binary ${mimeType}, ${framing.wholeSize ?? "size unknown"}]`;
+    return `[body omitted: binary ${redact(mimeType)}, ${framing.wholeSize ?? "size unknown"}]`;
   }
   // A body with no Content-Encoding reads as it came, with no copy of its bytes.
   const sent = contentCodings(framing.contentEncoding).length ? Buffer.from(text, "utf8") : null;
   const bytes = sent && decodeContent(sent, framing.contentEncoding, truncated);
-  if (sent && !bytes) return decodesTooLarge(framing);
+  if (sent && !bytes) return decodesTooLarge(framing, redact);
   const encoded = bytes && bytes !== sent ? bytes : null;
   const decoded = encoded
     ? decodeText(encoded, charsetOf(framing.contentType), truncated)
     : inDeclaredCharset(text, framing.contentType, truncated);
   if (decoded === null) {
     const size = truncated ? (framing.wholeSize ?? "size unknown") : `${encoded!.length} bytes`;
-    return `[body omitted: binary ${mimeType || "data"}, ${size}]`;
+    return `[body omitted: binary ${redact(mimeType) || "data"}, ${size}]`;
   }
   if (!truncated) return truncateBody(decoded, mimeType, redact);
   // In another charset, or under a Content-Encoding, the whole body has more chars than its kept start.
@@ -766,11 +767,11 @@ function inlineBody(
       : `more than ${decoded.length} chars`;
   const shown = Math.min(decoded.length, MAX_BODY_SIZE);
   // The host kept only the start, so the text ends at a cut even when all of it shows.
-  return `${cutMarker(fullSize, mimeType, shown)}\n${shownText(decoded, shown, redact)}${decoded.length > shown ? "..." : ""}`;
+  return `${cutMarker(fullSize, redact(mimeType), shown)}\n${shownText(decoded, shown, redact)}${decoded.length > shown ? "..." : ""}`;
 }
 
-function decodesTooLarge(framing: NativeBodyFraming): string {
-  return `[unavailable: the ${framing.contentEncoding.trim()} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
+function decodesTooLarge(framing: NativeBodyFraming, redact: SecretRedactor): string {
+  return `[unavailable: the ${redact(framing.contentEncoding.trim())} body decodes to more than ${MAX_DECODED_BODY_BYTES / (1024 * 1024)} MiB]`;
 }
 
 /**
@@ -789,7 +790,7 @@ function cutByAgent(
   const shown = Math.min(text.length, MAX_BODY_SIZE);
   const fullSize = `${framing.wholeSize ?? "unknown"}; ${agentKept(keptBytes, incomplete)}`;
   // The agent kept only the start, so the text ends at a cut even when all of it shows.
-  return `${cutMarker(fullSize, mimeType, shown)}\n${shownText(text, shown, redact)}${text.length > shown ? "..." : ""}`;
+  return `${cutMarker(fullSize, redact(mimeType), shown)}\n${shownText(text, shown, redact)}${text.length > shown ? "..." : ""}`;
 }
 
 function agentKept(keptBytes: number, incomplete?: boolean): string {
