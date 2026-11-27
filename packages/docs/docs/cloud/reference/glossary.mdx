@@ -1,0 +1,39 @@
+---
+sidebar_position: 7
+sidebar_label: Glossary
+title: Glossary
+sidebar_custom_props:
+  icon: book-a
+---
+
+The Argent Cloud docs use each term below with one meaning only.
+
+## Terms
+
+| Term                 | Meaning                                                                                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mac                  | The hosted macOS computer that runs the iOS simulators. A Mac has four sessions and runs up to six booted simulators at the same time, shared by its sessions. See [How it works](/docs/cloud/fundamentals/how-it-works#macs-and-sessions)                          |
+| Session              | One of the four isolated parts of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` or `acquire` reserves a session, and `release` gives it back. See [Manage sessions](/docs/cloud/guides/sessions)                                    |
+| Session ID           | The ID of a session, in the form `<Mac ID>/simN`, for example `A1B2C3D4E5/sim2`. The CLI calls it `<MACHINE_ID>`. See [CLI reference](/docs/cloud/reference/cli#session-commands)                                                                                   |
+| Release              | The return of a session to your team. Argent Cloud then erases the session and rebuilds it from a clean image. See [Security and data](/docs/cloud/reference/security-and-data#what-survives-a-session)                                                             |
+| Pre-booted simulator | The simulator that a new session has booted by default. It counts toward the limit of two booted simulators per session. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session)                                                        |
+| Team                 | The users that share a fixed number of sessions. Nobody else on the team can use a session that one user holds. See [Manage sessions](/docs/cloud/guides/sessions#give-a-session-back)                                                                              |
+| API key              | The secret that `sim-remote login` sends to the server. We issue one API key per user. See [Security and data](/docs/cloud/reference/security-and-data#the-api-key)                                                                                                 |
+| Login                | The authenticated connection of the CLI to the Argent Cloud server. `sim-remote login` starts it, and `sim-remote logout` ends it. See [Lifecycle](/docs/cloud/reference/sessions#lifecycle)                                                                        |
+| Login token          | The token that the server returns at login. The token lasts 24 hours, and only the daemon keeps it, in memory. See [Limits](/docs/cloud/reference/sessions#limits)                                                                                                  |
+| Daemon               | The background `sim-remote` process on your computer. It holds the login token, one session and the tunnels. `SIM_REMOTE_SESSION` names a daemon, so each session on one computer needs its own daemon. See [The daemon](/docs/cloud/reference/sessions#the-daemon) |
+| Reverse tunnel       | A connection that lets the simulator reach a server on your computer, for example Metro. See [Reverse tunnels](/docs/cloud/guides/local-servers#reverse-tunnels)                                                                                                    |
+| Forward tunnel       | A connection that lets your computer reach a server that your session started on the Mac. See [Forward tunnels](/docs/cloud/guides/local-servers#forward-tunnels)                                                                                                   |
+| Shims                | Stand-in tools, such as `xcrun` and `xcodebuild`, that `sim-remote install-shims` writes. Maestro and Appium call them, and they pass the calls to `sim-remote`. See [Test driver shims](/docs/cloud/reference/shims)                                               |
+
+## Words to avoid
+
+| Avoid                      | Use instead                                                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| machine                    | Mac for the hosted computer, session for one of its four parts. Keep "machine" only in CLI literals: `list-machines`, `<MACHINE_ID>` and CLI output |
+| host, host machine         | Mac                                                                                                                                                 |
+| runner, for the Mac        | Mac. "Runner" means a GitHub Actions runner                                                                                                         |
+| slot                       | session                                                                                                                                             |
+| lease                      | hold, reserve or release a session                                                                                                                  |
+| session, for the CLI login | login                                                                                                                                               |
+| local machine              | your computer                                                                                                                                       |
