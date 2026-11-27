@@ -6,6 +6,8 @@ export interface KeyboardParams {
    * the two. Not valid on TV targets.
    */
   key?: string;
+  /** Number of times to press `key` (1–100, default 1). Rejected without `key` in ./index.ts. */
+  repeat?: number;
   delayMs?: number;
 }
 

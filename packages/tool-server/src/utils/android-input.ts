@@ -117,13 +117,34 @@ export async function injectAndroidText(serial: string, text: string): Promise<v
   }
 }
 
-/** Press a single android.view.KeyEvent keycode via `adb shell input keyevent`. */
-export async function injectAndroidKeycode(serial: string, keycode: number): Promise<void> {
-  await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+// Max keycodes packed into one `adb shell input keyevent` invocation. Keeping
+// batches bounded avoids long shell commands while cutting N repeated presses
+// (e.g. 30 backspaces) from N app_process launches down to 1.
+const ANDROID_KEYEVENT_BATCH_SIZE = 50;
+
+/** Press an android.view.KeyEvent keycode `repeat` times via `adb shell input keyevent`. */
+export async function injectAndroidKeycode(
+  serial: string,
+  keycode: number,
+  repeat = 1
+): Promise<void> {
+  if (repeat <= 1) {
+    await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+    return;
+  }
+  for (let remaining = repeat; remaining > 0; remaining -= ANDROID_KEYEVENT_BATCH_SIZE) {
+    const batch = Math.min(remaining, ANDROID_KEYEVENT_BATCH_SIZE);
+    const args = Array.from({ length: batch }, () => String(keycode)).join(" ");
+    await adbShell(serial, `input keyevent ${args}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+  }
 }
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */
-export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
+export async function injectAndroidNamedKey(
+  serial: string,
+  name: string,
+  repeat = 1
+): Promise<void> {
   const lower = name.toLowerCase();
   // Own-property check: `key` is a free string, so "constructor" would otherwise
   // pass the nullish guard with Object.prototype.constructor.
@@ -142,5 +163,5 @@ export async function injectAndroidNamedKey(serial: string, name: string): Promi
       }
     );
   }
-  await injectAndroidKeycode(serial, keycode);
+  await injectAndroidKeycode(serial, keycode, repeat);
 }
