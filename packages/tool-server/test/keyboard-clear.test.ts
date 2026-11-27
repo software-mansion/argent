@@ -7,6 +7,29 @@ vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
   isHarmonyEnabled: () => true,
 }));
 
+vi.mock("../src/utils/ios-device/app-session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-device/app-session")>()),
+  requireCurrentIosDeviceApp: vi.fn(() => "com.example.app"),
+}));
+
+const { runnerTypeText } = vi.hoisted(() => ({
+  runnerTypeText: vi.fn(async () => ({ reactivated: false })),
+}));
+vi.mock("../src/utils/ios-device/runner-commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-device/runner-commands")>()),
+  typeText: runnerTypeText,
+}));
+
+const { macosPressKey, resolveMacosApp } = vi.hoisted(() => ({
+  macosPressKey: vi.fn(async () => {}),
+  resolveMacosApp: vi.fn(async () => ({})),
+}));
+vi.mock("../src/utils/macos-input", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/macos-input")>()),
+  macosPressKey,
+  resolveMacosApp,
+}));
+
 const { adbShell, isAndroidTv } = vi.hoisted(() => ({
   adbShell: vi.fn(async (_serial: string, _cmd: string, _opts?: unknown): Promise<string> => ""),
   isAndroidTv: vi.fn(async (_serial: string): Promise<boolean> => false),
@@ -51,19 +74,24 @@ vi.mock("../src/tools/fill/chromium", () => ({
 }));
 
 vi.mock("../src/tools/fill/keys", () => ({
-  fillByDeviceKeys: vi.fn(async () => {}),
+  fillByDeviceKeys: vi.fn(async () => ({ reactivated: false })),
 }));
 
 import { fillIos } from "../src/tools/fill/ios";
 import { fillAndroid } from "../src/tools/fill/android";
 import { fillChromium } from "../src/tools/fill/chromium";
+import { fillByDeviceKeys } from "../src/tools/fill/keys";
 import { createKeyboardTool } from "../src/tools/keyboard";
+import { makeMacosImpl } from "../src/tools/keyboard/platforms/macos";
+import { resolveDevice } from "../src/utils/device-info";
 
 const IOS = "809A848B-1671-4A72-B9C9-B1683D95973E";
+const IOS_DEVICE = "00008110-000978540290401E";
 const ANDROID = "emulator-5554";
 const CHROMIUM = "chromium-cdp-9222";
 const VEGA = "amazon-4a27df03c9777152";
 const HARMONY = "harmony-025DEK236V035771";
+const MACOS = "macos-app-com.example.App";
 
 const pressKey = vi.fn((_direction: "Down" | "Up", _keyCode: number) => {});
 const dispatchKeyEvent = vi.fn(async (_event: { type: string; key?: string }) => {});
@@ -200,6 +228,38 @@ describe("keyboard — clear option", () => {
     await expect(tool.execute({}, { udid: HARMONY, clear: true })).rejects.toThrow(
       UnsupportedOperationError
     );
+
+    const macosImpl = makeMacosImpl(registry());
+    await expect(
+      macosImpl.handler({}, { udid: MACOS, clear: true }, resolveDevice(MACOS))
+    ).rejects.toThrow(UnsupportedOperationError);
+    expect(resolveMacosApp).not.toHaveBeenCalled();
+    expect(macosPressKey).not.toHaveBeenCalled();
+  });
+
+  it("omits `cleared` and preserves `reactivated` on physical iOS", async () => {
+    const tool = createKeyboardTool(registry());
+
+    vi.mocked(fillByDeviceKeys).mockResolvedValueOnce({ reactivated: false });
+    await expect(tool.execute({}, { udid: IOS_DEVICE, clear: true })).resolves.toEqual({
+      typed: "",
+      keys: 0,
+    });
+
+    vi.mocked(fillByDeviceKeys).mockResolvedValueOnce({ reactivated: true });
+    await expect(tool.execute({}, { udid: IOS_DEVICE, clear: true })).resolves.toEqual({
+      typed: "",
+      keys: 0,
+      reactivated: true,
+    });
+
+    vi.mocked(fillByDeviceKeys).mockResolvedValueOnce({ reactivated: true });
+    runnerTypeText.mockResolvedValueOnce({ reactivated: false });
+    await expect(tool.execute({}, { udid: IOS_DEVICE, clear: true, text: "hi" })).resolves.toEqual({
+      typed: "hi",
+      keys: 2,
+      reactivated: true,
+    });
   });
 
   it("propagates clear failure before typing text and rewrites hidden `fill` wording", async () => {

@@ -71,20 +71,28 @@ export function makeIosDeviceImpl(
         };
       }
 
+      // XCTest types whole strings and has no per-keycode HID surface. delayMs is ignored.
+      let keys = 0;
+      let reactivated = false;
+
       if (params.clear) {
-        await fillByDeviceKeys(registry, device, "");
+        // fillByDeviceKeys sends 100 XCTest deletes before the caret with no
+        // forward delete or readback verification, so `cleared` is intentionally
+        // omitted on physical iOS — the caller should read the field before trusting it.
+        const cleared = await fillByDeviceKeys(registry, device, "");
+        reactivated ||= cleared.reactivated;
         if (!params.text) {
-          return { typed: "", keys: 0, cleared: true };
+          return {
+            typed: "",
+            keys: 0,
+            ...(reactivated ? { reactivated: true as const } : {}),
+          };
         }
       }
 
       const bundleId = requireCurrentIosDeviceApp(device.id);
       const ref = iosDeviceRunnerRef(device);
       const api = await registry.resolveService<IosDeviceRunnerApi>(ref.urn, ref.options);
-
-      // XCTest types whole strings and has no per-keycode HID surface. delayMs is ignored.
-      let keys = 0;
-      let reactivated = false;
 
       if (params.text) {
         // Secret placeholders are already resolved by the execute wrapper.
@@ -108,7 +116,6 @@ export function makeIosDeviceImpl(
       return {
         typed: params.text ?? params.key ?? "",
         keys,
-        ...(params.clear ? { cleared: true as const } : {}),
         ...(reactivated ? { reactivated: true as const } : {}),
       };
     },

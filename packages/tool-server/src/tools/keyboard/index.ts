@@ -73,7 +73,8 @@ const zodSchema = z.object({
     .describe(
       "Clear the focused text field before typing `text` (or alone when `text` is omitted). " +
         "Cannot be combined with `key`. Fails if nothing editable has focus. " +
-        "Not supported on TV, Vega<flag:harmonyos>, or HarmonyOS</flag:harmonyos>."
+        "On physical iOS, sends up to 100 deletes before the caret without readback verification and omits `cleared: true`. " +
+        "Not supported on <flag:macos-apps>Mac apps, </flag:macos-apps><flag:harmonyos>HarmonyOS, </flag:harmonyos>Apple TV, Android TV, or Vega."
     ),
   delayMs: z
     .number()

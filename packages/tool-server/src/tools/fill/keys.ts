@@ -4,7 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { RunnerCommandError } from "../../utils/ios-device/runner-client";
-import { typeText } from "../../utils/ios-device/runner-commands";
+import { typeText, type MutationReply } from "../../utils/ios-device/runner-commands";
 import { charToKeyPress, NAMED_KEYS } from "../keyboard/key-codes";
 import { typeSimulatorServer } from "../keyboard/simulator-server-keys";
 import { noFocusedFieldError } from "./errors";
@@ -94,13 +94,13 @@ export async function fillByDeviceKeys(
   registry: Registry,
   device: DeviceInfo,
   text: string
-): Promise<void> {
+): Promise<MutationReply> {
   const bundleId = requireCurrentIosDeviceApp(device.id);
   const ref = iosDeviceRunnerRef(device);
   const api = await registry.resolveService<IosDeviceRunnerApi>(ref.urn, ref.options);
-  const type = async (chars: string) => {
+  const type = async (chars: string): Promise<MutationReply> => {
     try {
-      await typeText(api, bundleId, chars);
+      return await typeText(api, bundleId, chars);
     } catch (err) {
       if (err instanceof RunnerCommandError && err.code === "TEXT_INPUT_NOT_FOCUSED") {
         throw noFocusedFieldError("fill_keys_ios_device_focus");
@@ -108,6 +108,12 @@ export async function fillByDeviceKeys(
       throw err;
     }
   };
-  await type(XCTEST_DELETE.repeat(MAX_CLEAR_KEYS));
-  if (text) await withoutTextInErrors("fill_keys_ios_device", () => type(text));
+  let reactivated = false;
+  const cleared = await type(XCTEST_DELETE.repeat(MAX_CLEAR_KEYS));
+  reactivated ||= cleared.reactivated;
+  if (text) {
+    const typed = await withoutTextInErrors("fill_keys_ios_device", () => type(text));
+    reactivated ||= typed.reactivated;
+  }
+  return { reactivated };
 }

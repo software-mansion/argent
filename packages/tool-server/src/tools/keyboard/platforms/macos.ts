@@ -1,5 +1,6 @@
 import type { Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { UnsupportedOperationError } from "../../../utils/capability";
 import { macosPressKey, macosTypeText, resolveMacosApp } from "../../../utils/macos-input";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
@@ -13,21 +14,24 @@ export function makeMacosImpl(
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
     handler: async (_services, params, device) => {
-      const app = await resolveMacosApp(registry, device, "keyboard");
       if (params.clear) {
-        await macosPressKey(app, "command+a");
-        await macosPressKey(app, "backspace");
+        throw new UnsupportedOperationError(
+          "keyboard",
+          device,
+          'clearing a field with `clear: true` is not supported on Mac apps (send `key: "command+a"` then `key: "backspace"` when a text field is focused)'
+        );
       }
+      const app = await resolveMacosApp(registry, device, "keyboard");
       // ../index.ts rejects a request carrying both, so at most one runs.
       if (params.text) {
         const keys = await macosTypeText(app, params.text, { delayMs: params.delayMs });
-        return { typed: params.text, keys, ...(params.clear ? { cleared: true as const } : {}) };
+        return { typed: params.text, keys };
       }
       if (params.key) {
         await macosPressKey(app, params.key);
         return { typed: params.key, keys: 1 };
       }
-      return { typed: "", keys: 0, ...(params.clear ? { cleared: true as const } : {}) };
+      return { typed: "", keys: 0 };
     },
   };
 }
