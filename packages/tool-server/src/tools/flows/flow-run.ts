@@ -125,7 +125,13 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
+import {
+  bootElectronApp,
+  electronLaunchSpec,
+  forgetElectronLaunchSpec,
+  killChromiumByPortAndWait,
+  withPortLock,
+} from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import {
   isIosPhysicalDevice,
@@ -715,7 +721,8 @@ function refreshMacosDeviceKind(state: ExecState): void {
  * so the run still returns a structured report; a run cancelled mid-launch
  * returns the shared aborted outcome (reported as a skip).
  *
- * Chromium can't relaunch in place — see {@link runChromiumLaunch}.
+ * A Chromium launch boots or attaches instead, and relaunches in place only
+ * the instance the run booted, once a script ran — see {@link runChromiumLaunch}.
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
@@ -809,13 +816,15 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
 /**
  * Execute a `launch` step on a Chromium device. A chromium "device" IS the
- * booted process (its id is the CDP port), so there is no in-place relaunch:
- * only the run's FIRST launch can be satisfied without booting — settling the
- * boot {@link resolveRunDevice} hoisted, or attaching to an instance the runner
- * does not own. Later launches boot their own ({@link bootChromiumForLaunch}).
+ * booted process (its id is the CDP port), and a launch names an app path, not
+ * an instance to relaunch: only the run's FIRST launch can be satisfied without booting — settling the
+ * boot {@link resolveRunDevice} hoisted (restarting it when a script step ran
+ * since), or attaching to an instance the runner does not own. Later launches
+ * boot their own ({@link bootChromiumForLaunch}).
  */
 async function runChromiumLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
-  const { registry, device, signal } = deviceEnv(state);
+  const env = deviceEnv(state);
+  const { registry, device, signal } = env;
 
   if (state.chromiumLaunched) return bootChromiumForLaunch(state, app);
   state.chromiumLaunched = true;
@@ -835,9 +844,20 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
         reason: `launch declares "${declared}" but the instance booted for this run is "${owned.appPath}" — the e2e test file changed after the run started`,
       };
     }
-    // Seconds old and already fronted; just settle. Reported as a boot all the
-    // same — a reason's presence is how a consumer tells an instance the run
-    // owns (and will kill) from one it merely attached to.
+    // A script above this launch ran while the instance was up, so restart it:
+    // the app starts after the script, as a launch does on the other platforms.
+    if (state.scriptRan) {
+      try {
+        await invokeOnDevice(env, "restart-app", { bundleId: "app" });
+      } catch (err) {
+        if (signal?.aborted) return ABORTED_OUTCOME;
+        return { ok: false, reason: `restart-app failed: ${errMsg(err)}` };
+      }
+      await frontChromiumPage(registry, device);
+    }
+    // Then settle. Reported as a boot all the same — a reason's presence is how
+    // a consumer tells an instance the run owns (and will kill) from one it
+    // merely attached to.
     if (!(await sleepOrAbort(POST_LAUNCH_SETTLE_MS, signal))) return ABORTED_OUTCOME;
     return { ok: true, reason: `booted chromium instance ${device.id}` };
   }
@@ -1142,6 +1162,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   hoistedBootMs?: number;
   /** True once a chromium `launch` step has run; every later one boots its own instance. */
   chromiumLaunched: boolean;
+  /** True once a `script` step has run (see {@link runChromiumLaunch}). */
+  scriptRan: boolean;
   /**
    * App identity ({@link snapshotAppIdentity}) each snapshot key in this run was
    * first captured from — run-scoped memory for runSnapshot's cross-app
@@ -1972,6 +1994,7 @@ Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the tes
         owned: resolved.booted ? [resolved.booted] : [],
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
+        scriptRan: false,
         snapshotApps: new Map(),
         secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
@@ -2265,7 +2288,7 @@ function clientRootCanonical(
  * run doesn't begin with a launch, or when the chain can't be read (a broken
  * `run:` target is reported by {@link execRunStep} when it executes).
  */
-async function leadingLaunch(
+export async function leadingLaunch(
   flow: FlowFile,
   stack: RunStackEntry[],
   env: Pick<ExecState, "registry" | "project">
@@ -2437,26 +2460,33 @@ async function bootChromiumForFlow(
 
 /**
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
- * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it. The kill is awaited
+ * run here: kill the process, dispose the CDP session (if a tool opened one),
+ * and forget its port so `list-devices` stops probing it and restart-app does
+ * not relaunch it, after any restart-app of the instance in flight. The kill is awaited
  * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
  * because every next boot of the same app would otherwise race the dying
  * instance's lock.
  */
 async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
-  const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
-  try {
-    const entry = registry.getSnapshot().services.get(urn);
-    if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
-  } catch {
-    /* the kill below frees the real resource regardless */
-  }
-  try {
-    await killChromiumByPortAndWait(booted.port, booted.pid);
-    untrackChromiumPort(booted.port);
-  } catch {
-    /* one unreachable instance must not strand the others */
-  }
+  await withPortLock(booted.port, async () => {
+    try {
+      // A restart-app may have replaced the booted process; the spec tracks its group.
+      const spec = electronLaunchSpec(booted.port);
+      await killChromiumByPortAndWait(booted.port, spec ? spec.pgid : booted.pid);
+      forgetElectronLaunchSpec(booted.port);
+      untrackChromiumPort(booted.port);
+    } catch {
+      /* one unreachable instance must not strand the others */
+    }
+    // After the kill, so a frozen renderer cannot stall the dispose's CDP calls.
+    const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
+    try {
+      const entry = registry.getSnapshot().services.get(urn);
+      if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
+    } catch {
+      /* best-effort, like the kill */
+    }
+  });
 }
 
 /**
@@ -2535,7 +2565,7 @@ function pushReport(state: ExecState, report: StepReport): void {
  * One `run:` chain entry: the cycle guard compares canonical (realpath'd)
  * paths; error messages render the human-readable display names.
  */
-interface RunStackEntry {
+export interface RunStackEntry {
   canonical: string;
   display: string;
 }
@@ -3245,6 +3275,7 @@ async function runScriptStep(
   step: Extract<FlowStep, { kind: "script" }>,
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
+  state.scriptRan = true;
   const env = mergeScriptEnv(scope.fileEnv, step.env, state.runEnv);
   const { outcome, result } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),

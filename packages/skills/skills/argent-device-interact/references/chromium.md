@@ -5,5 +5,6 @@ Everything in the related SKILL.md still applies; this page covers what differs.
 A Chromium (CDP) target is an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. `describe`, `gesture-tap`, `keyboard` and `screenshot` work as on a phone. What differs:
 
 - Scroll with `gesture-scroll` and drag with `gesture-drag`; `gesture-swipe` is touch-only.
+- `restart-app` relaunches only an Electron app that Argent booted (`boot-device`, or an e2e run) in this tool-server session, on the same id. Quit any other app and start it again: an Electron app with `boot-device` and `electronAppPath`, a browser with `--remote-debugging-port`.
 - Tabs and windows: `chromium-tabs`. Every other tool acts on the **active** tab, so `select` before driving a different one. A cross-process navigation (some redirects) can swap a tab's CDP target; `list` again to pick it up under a fresh id.
 - Cookies, HttpOnly included: `chromium-cookies`. Web Storage: `debugger-evaluate`, with `localStorage.getItem("token")` for one key or `Object.fromEntries(Object.entries(localStorage))` for all. A bare `localStorage` comes back as `{}` even when it has data. Use them to seed auth before an e2e test or assert app state after one.

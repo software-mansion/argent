@@ -22,7 +22,7 @@ For a saved QA test case, ticket, or acceptance criterion, load `argent-qa-e2e` 
 2. **Record checks when their states appear.** Record `await-ui-element` live, then convert it during polish. An echo records intent or diagnostic context, not app behavior or a verdict. A screenshot is human evidence, not an executable verdict. For absence, record the same selector as `visible`, perform the removing action, then record it as `hidden`.
 3. **Use semantic targets.** Prefer a strict id, then stable text or an accessibility label. Use `scroll-to` for off-screen elements. Resolve every raw-point warning immediately through the [coordinate fallback gate](references/reliability-and-recovery.md#coordinate-fallback-gate).
 4. **Prove every screen change.** Record a destination-only identity check. During polish, follow it with `await: { idle: true }`. Stillness does not prove identity, and `idle` can pass with a warning.
-5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:`, a navigation `await: { idle: true }`, and the documented Chromium packaging `launch:`.
+5. **Polish only executed behavior.** Convert recorded steps without changing their meaning. Record any missing action or structural check live. The only unrecorded insertions are a planned `snapshot:` and a navigation `await: { idle: true }`.
 6. **Use scripts only when the user requests them.** Read [E2E YAML: Local scripts](references/e2e-yaml.md#local-scripts), then record each script with `e2e-add-script`.
 7. **Replay the final YAML end to end.** A normal e2e test needs one uninterrupted full pass. `argent-qa-e2e` requires two consecutive passes.
 

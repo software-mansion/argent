@@ -118,7 +118,13 @@ import { resolveHdc } from "../../utils/harmony-hdc";
 import { HARMONY_FLAG } from "../../utils/harmony-flag";
 import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { UITEST_TIMEOUT_MS, harmonyDisplay, harmonyDumpLayout } from "../../utils/harmony-uitest";
-import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
+import {
+  assertElectronPortFree,
+  bootElectronApp,
+  forgetElectronLaunchSpec,
+  withPortLock,
+  type ElectronBootResult,
+} from "./boot-electron";
 import { bootMacosApp, type MacosBootResult } from "./boot-macos";
 
 const execFileAsync = promisify(execFile);
@@ -2895,7 +2901,7 @@ const zodSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      "Electron only: CDP remote-debugging port (default: free port; id `chromium-cdp-<port>`)."
+      "Electron only: CDP remote-debugging port (default: free port; id `chromium-cdp-<port>`). Refused if a process already listens on it."
     ),
   electronArgs: z
     .array(z.string())
@@ -3082,11 +3088,27 @@ Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`
           force: params.force,
         });
       }
-      return bootElectronApp({
-        appPath: params.electronAppPath!,
-        port: params.electronPort,
-        extraArgs: params.electronArgs,
-      });
+      const electronBoot = () =>
+        bootElectronApp({
+          appPath: params.electronAppPath!,
+          port: params.electronPort,
+          extraArgs: params.electronArgs,
+        });
+      const fixedPort = params.electronPort;
+      // A fixed port can be one a restart-app or e2e teardown is working on.
+      return fixedPort === undefined
+        ? electronBoot()
+        : withPortLock(fixedPort, async () => {
+            await assertElectronPortFree(fixedPort);
+            try {
+              return await electronBoot();
+            } catch (err) {
+              // This boot was to replace the port's app, so restart-app must not
+              // relaunch the one it replaced.
+              forgetElectronLaunchSpec(fixedPort);
+              throw err;
+            }
+          });
     },
   };
 }

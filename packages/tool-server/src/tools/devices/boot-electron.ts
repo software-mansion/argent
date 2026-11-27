@@ -1,12 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
+import { commandOnPath } from "../../utils/command-on-path";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
 import { electronGuiChildEnv } from "../../utils/electron-env";
 import { pickFreePort } from "../../utils/free-port";
+import { withKeyedLock } from "../../utils/keyed-lock";
 import { scheduleGroupSigkill, signalGroup } from "../../utils/process-kill";
 
 // An Electron app boots as a Chromium/CDP runtime, so the device id, platform
@@ -181,6 +184,159 @@ function killChildEscalating(child: ChildProcess): void {
  */
 const liveChildren = new Map<number, ChildProcess>();
 
+export interface ElectronLaunchSpec {
+  appPath: string;
+  extraArgs: string[];
+  /** The launcher the boot ran ({@link resolveLauncher}). */
+  command: string;
+  /**
+   * Group leader of the most recent boot while it runs; see
+   * {@link killChromiumByPort}. Cleared on exit, as the pid may be recycled.
+   */
+  pid?: number;
+  /**
+   * That boot's process group, kept after the leader exits while the group
+   * lives: restart-app and a run's teardown still reap processes that outlived
+   * their launcher. See {@link watchGroupUntilEmpty}.
+   */
+  pgid?: number;
+}
+
+/**
+ * How the app on each CDP port was last booted. Unlike {@link liveChildren}
+ * an entry outlives the app's exit, so a crashed app can still be relaunched;
+ * a later boot on the same port replaces it.
+ */
+const launchSpecs = new Map<number, ElectronLaunchSpec>();
+
+/** The launch spec of the app this tool-server last booted on `port`, if any. */
+export function electronLaunchSpec(port: number): ElectronLaunchSpec | undefined {
+  return launchSpecs.get(port);
+}
+
+/**
+ * Restarts, run teardowns and fixed-port boots, keyed by port: overlapping,
+ * they would spawn two instances on one port (the readiness probe accepts
+ * either), or leave a relaunched copy running after its teardown.
+ */
+const portLocks = new Map<string, Promise<unknown>>();
+
+/** Run `task` after every earlier {@link portLocks} holder of `port` settles. */
+export function withPortLock<T>(port: number, task: () => Promise<T>): Promise<T> {
+  return withKeyedLock(portLocks, String(port), task);
+}
+
+/**
+ * Why a new copy could not bind `port` now, or null when it could. The boot's
+ * readiness probe accepts whatever answers on the port, so a holder would pass
+ * for the new copy while that copy fails to bind; binding asks what the copy
+ * needs, also of a holder that accepts connections but never answers CDP.
+ * Chromium listens on 127.0.0.1; on Windows it binds with SO_EXCLUSIVEADDRUSE,
+ * which fails beside a holder of 0.0.0.0 or ::, so only there are those probed
+ * too. Linux refuses the loopback bind beside such a holder, and macOS grants
+ * it and routes loopback to Chromium.
+ */
+export async function heldPortError(port: number): Promise<NodeJS.ErrnoException | null> {
+  const held = await bindError(port, "127.0.0.1");
+  if (held || process.platform !== "win32") return held;
+  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
+  for (const host of ["0.0.0.0", "::"]) {
+    const err = await bindError(port, host);
+    if (err?.code === "EADDRINUSE") return err;
+  }
+  return null;
+}
+
+function bindError(port: number, host: string): Promise<NodeJS.ErrnoException | null> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
+    srv.listen(port, host, () => srv.close(() => resolve(null)));
+  });
+}
+
+/** Refuse a fixed `port` that a process already listens on ({@link heldPortError}). */
+export async function assertElectronPortFree(port: number): Promise<void> {
+  const held = await heldPortError(port);
+  if (!held) return;
+  const spec = launchSpecs.get(port);
+  const remedy = spec
+    ? `This tool-server session booted ${spec.appPath} on that port ` +
+      (spec.extraArgs.length
+        ? `with the arguments ${JSON.stringify(spec.extraArgs)}`
+        : `with no extra arguments`) +
+      `, and restart-app relaunches that app with those arguments on chromium-cdp-${port}. ` +
+      `To start another app or other arguments there, quit the process that listens on ` +
+      `port ${port} first, or omit electronPort to boot on a free port.`
+    : `Check which process listens on port ${port} before you quit it, or omit ` +
+      `electronPort to boot on a free port.`;
+  throw new FailureError(
+    `Electron boot: port ${port} is already in use (${held.code ?? held.message}), so the ` +
+      `app could not open CDP there, and nothing was started. ${remedy}`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+      failure_stage: "electron_port_check",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/** Drop `port`'s launch spec, so restart-app no longer relaunches its app. */
+export function forgetElectronLaunchSpec(port: number): void {
+  launchSpecs.delete(port);
+}
+
+/**
+ * Throws the boot's own path errors without launching anything, and fails when
+ * the launcher `spec`'s boot ran is gone (which the boot would only discover
+ * as a spawn ENOENT) or another one would run in its place (a project
+ * directory's node_modules/.bin/electron added, or removed while an `electron`
+ * is on PATH).
+ */
+export async function assertElectronAppLaunchable(spec: ElectronLaunchSpec): Promise<void> {
+  const { command } = resolveLauncher(spec.appPath);
+  const fail = (message: string, stage: string) =>
+    new FailureError(`Electron boot: ${message}`, {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+      failure_stage: stage,
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  if (spec.command === "electron") {
+    if ((await commandOnPath(spec.command)) === null) {
+      throw fail(
+        `${spec.appPath} was booted with the 'electron' command, and no 'electron' is on PATH ` +
+          `now. Install electron globally, or quit the app, run npm install in the app ` +
+          `directory and boot the app again with boot-device.`,
+        "electron_launcher_missing"
+      );
+    }
+  } else if (!isExecutableFile(spec.command)) {
+    throw fail(
+      `${spec.command}, the launcher this app was booted with, is not an executable file.`,
+      "electron_launcher_not_executable"
+    );
+  }
+  if (command !== spec.command) {
+    const name = (c: string) => (c === "electron" ? "the 'electron' on PATH" : c);
+    throw fail(
+      `${spec.appPath} would now launch with ${name(command)}, not with ${name(spec.command)} ` +
+        `it was booted with. Quit the app and boot it again with boot-device to switch.`,
+      "electron_launcher_changed"
+    );
+  }
+}
+
+function isExecutableFile(file: string): boolean {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Terminate a Chromium/Electron app this tool-server booted on `port`, via the
  * retained handle ({@link liveChildren}) when there is one, else best-effort
@@ -222,19 +378,42 @@ export async function killChromiumByPortAndWait(
   // Attached before the kill so an exit between the two can't be missed.
   const exited = alive ? new Promise<void>((resolve) => child.once("exit", () => resolve())) : null;
 
+  const deadline = Date.now() + timeoutMs;
   killChromiumByPort(port, pid);
 
-  if (exited) return Promise.race([exited, sleepUnref(timeoutMs)]);
-  if (!child && pid !== undefined) {
-    // No handle to await (the child exited and was evicted, or an earlier
-    // tool-server booted it), so poll. The probe targets the group, not the
-    // leader: the single-instance lock this wait guards is held by the browser
-    // process, which can outlive the leader.
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (!signalGroup(pid, 0)) return;
-      await sleepUnref(EXIT_POLL_MS);
-    }
+  if (exited) {
+    await Promise.race([exited, sleepUnref(timeoutMs)]);
+    // The leader can be a launcher (electron's cli.js, a wrapper script) that
+    // exits before the browser process holding the lock and the CDP port.
+    if (child?.pid !== undefined) await waitForGroupExit(child.pid, deadline);
+    return;
+  }
+  // No handle to await (the child exited and was evicted, or an earlier
+  // tool-server booted it), so poll.
+  if (!child && pid !== undefined) await waitForGroupExit(pid, deadline);
+}
+
+/**
+ * Clear `spec.pgid` once its group is seen empty: the kernel then hands the id
+ * to new groups, though never while the group has a member. Polling misses
+ * only a reuse within one {@link EXIT_POLL_MS}.
+ */
+function watchGroupUntilEmpty(spec: ElectronLaunchSpec): void {
+  if (spec.pgid !== undefined && signalGroup(spec.pgid, 0)) {
+    setTimeout(() => watchGroupUntilEmpty(spec), EXIT_POLL_MS).unref();
+  } else {
+    spec.pgid = undefined;
+  }
+}
+
+/**
+ * Poll the group, not the leader: the single-instance lock the kill wait
+ * guards is held by the browser process, which can outlive the leader.
+ */
+async function waitForGroupExit(pgid: number, deadline: number): Promise<void> {
+  while (Date.now() < deadline) {
+    if (!signalGroup(pgid, 0)) return;
+    await sleepUnref(EXIT_POLL_MS);
   }
 }
 
@@ -432,20 +611,33 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     // cleanup and reject the orphan promises.
     detachBootListeners();
     killChildEscalating(child);
+    // Until the copy is gone it holds the port, so a retry would find it held.
+    await waitForGroupExit(child.pid, Date.now() + EXIT_WAIT_TIMEOUT_MS);
     throw err;
   }
   // Detach the boot-time listeners: the child is intentionally long-lived, and
   // any later exit / error belongs to whoever manages the session next.
   detachBootListeners();
 
+  const appPath = path.resolve(options.appPath);
+  const spec: ElectronLaunchSpec = {
+    appPath,
+    extraArgs: extra,
+    command: launcher.command,
+    pid: child.pid,
+    pgid: child.pid,
+  };
+  launchSpecs.set(port, spec);
   // Retain the handle so teardown (killChromiumByPort) can kill via the
-  // ChildProcess instead of a recyclable raw pid — see liveChildren. This
-  // listener only clears the map entry, so a natural exit long after boot stays
-  // inert; the identity check keeps a stale child's exit from evicting a newer
-  // boot that reused the same fixed port.
+  // ChildProcess instead of a recyclable raw pid — see liveChildren. The exit
+  // listener rejects nothing, so a natural exit long after boot cannot crash
+  // the tool-server; the identity check keeps a stale child's exit from
+  // evicting a newer boot that reused the same fixed port.
   liveChildren.set(port, child);
   child.once("exit", () => {
     if (liveChildren.get(port) === child) liveChildren.delete(port);
+    spec.pid = undefined;
+    watchGroupUntilEmpty(spec);
   });
 
   trackChromiumPort(port);
@@ -455,7 +647,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     id: chromiumIdFromPort(port),
     port,
     pid: child.pid,
-    appPath: path.resolve(options.appPath),
+    appPath,
     booted: true,
   };
 }

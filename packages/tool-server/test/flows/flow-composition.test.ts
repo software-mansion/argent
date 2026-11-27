@@ -48,6 +48,8 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
   killChromiumByPort: vi.fn(),
+  withPortLock: (_port: number, task: () => Promise<unknown>) => task(),
+  electronLaunchSpec: () => undefined,
 }));
 
 // Runner tests here wait out real-time sleeps of several seconds.

@@ -62,7 +62,7 @@ What the `guidance` does not tell you:
 
 - **Metro not running**: start it yourself unless the user asked you not to, in the background, with the project's own start script (see `argent-react-native-app-workflow`). Wait until it is ready, then retry once. If you cannot determine the project root, ask the user. A non-Metro process on the port lands here too; the `got:` text in `detail` shows what answered.
 - **No app connected**: relaunch with `restart-app`. `debugger-reload-metro` cannot fix this; it needs an attached app too.
-- **Was connected, then tools fail**: the app may have crashed or closed. `restart-app`, then `debugger-connect` again; if you were using a `logicalDeviceId`, use the fresh one it returns.
+- **Was connected, then tools fail**: the app may have crashed or closed. `restart-app`, then `debugger-connect` again; if you were using a `logicalDeviceId`, use the fresh one it returns. On Chromium, `restart-app` relaunches only an Electron app that Argent booted; quit any other and relaunch it (an Electron app with `boot-device` and `electronAppPath`, a browser with `--remote-debugging-port`).
 - **`projectRoot` is `""` and source lookups report no file:line**: not a failure. Legacy Metro (RN 0.72 and older, e.g. Vega) sends no project root. `debugger-evaluate`, console logs and the network inspector still work; do not restart Metro to "fix" it.
 - **`debugger-inspect-element` returns `source: null` for every item**: the app's React build records no source locations. Component names still work: search the code for them.
 

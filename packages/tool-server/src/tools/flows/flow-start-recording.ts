@@ -46,7 +46,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Fragments only: entry state assumed. Omit for standalone tests (Chromium records as a fragment, then add `launch: { chromium: <app path> }` and remove this)."
+      "Fragments only: entry state assumed. Omit for standalone tests. On Chromium, a leading `restart-app` of an app that `boot-device` started in this tool-server session records as `launch: { chromium: <app path> }` (`{ path, args }` with `electronArgs`); for any other Chromium app, add that step by hand."
     ),
   requires: z
     .object({

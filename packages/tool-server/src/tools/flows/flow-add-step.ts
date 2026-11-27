@@ -32,9 +32,11 @@ import {
   describeSelector,
   foldStepFromArgs,
   isLinkedRecorderCall,
+  type FlowFile,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  type Launch,
   type FragmentShutdownReport,
   adoptRecordedFile,
   deferredShutdownFirst,
@@ -44,6 +46,7 @@ import {
   type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
+import { leadingLaunch } from "./flow-run";
 import {
   AWAIT_NETWORK_REQUEST_TOOL_ID,
   AWAIT_UI_ELEMENT_TOOL_ID,
@@ -73,7 +76,8 @@ import { stepAnchor, summarizeShutdownStep, summarizeStep } from "./flow-step-de
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
-import { resolveDevice } from "../../utils/device-info";
+import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { electronLaunchSpec } from "../devices/boot-electron";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { MACOS_MODIFIERS } from "../../utils/macos-modifiers";
@@ -908,6 +912,36 @@ async function captureTapSelector(
   }
 }
 
+/**
+ * The take a step lands in. In "host" mode that is the file, which a hand edit
+ * since the last append can have changed; `session.flow` stays as it was, for
+ * the append to notice that edit.
+ */
+async function recordedTake(session: RecordingSession): Promise<FlowFile> {
+  if (session.persist !== "host") return session.flow;
+  try {
+    return parseFlow(await fs.readFile(session.filePath, "utf8"));
+  } catch {
+    return session.flow; // the append re-reads the file and reports why it cannot
+  }
+}
+
+/**
+ * Whether a launch appended to `take` would be the launch its run begins with,
+ * by the runner's own scan ({@link leadingLaunch}).
+ */
+async function leadsRun(
+  take: FlowFile,
+  filePath: string,
+  env: Parameters<typeof leadingLaunch>[2]
+): Promise<boolean> {
+  const app: Launch = {};
+  const steps: FlowStep[] = [...take.steps, { kind: "launch", app }];
+  const display = path.basename(filePath);
+  const found = await leadingLaunch({ ...take, steps }, [{ canonical: filePath, display }], env);
+  return found?.app === app;
+}
+
 async function activeFlowState(
   session: RecordingSession,
   block: RecordedBlock
@@ -972,7 +1006,10 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewritten: true,
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
-      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it)",
+      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
+      "on Chromium, outside `shutdown:` and for an app this tool-server session booted, as the app's path and boot args " +
+      "(other args are ignored), when only echo and script steps, also inside leading `run:` " +
+      "fragments, come before it in a recording without an executionPrerequisite",
   },
   run: {
     tool: "e2e-execute",
@@ -1877,8 +1914,14 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
       // no args. On a Mac app the step records the arguments the new process
       // got, as a `macos: { app, args }` entry: without `launchArgs` the restart
-      // reuses those of the app's last start. `launch-app` is NOT rewritten — it
-      // foregrounds without terminating.
+      // reuses those of the app's last start. On Chromium the bundleId is a tag
+      // and the other args are ignored, so the step records the relaunched app's
+      // path and boot args instead, and a pinned replay attaches rather than
+      // relaunching (see runChromiumLaunch). Only a leading restart of a
+      // standalone recording maps there: anywhere else a Chromium launch attaches
+      // or boots another instance, so such a restart stays the raw step, which
+      // relaunches the run's instance in place.
+      // `launch-app` is NOT rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1890,14 +1933,25 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
         platformOf(args.udid) === "ios"
           ? (launchArgs as string[])
           : undefined;
+      const chromiumPort =
+        command === "restart-app" && platformOf(args.udid) === "chromium"
+          ? parseChromiumCdpPort(args.udid as string)
+          : null;
+      const chromiumSpec = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
+      const take = chromiumSpec ? await recordedTake(session) : session.flow;
       const isMacos = platformOf(args.udid) === "macos";
       const macosArgs = isMacos ? (toolResult as { args?: string[] } | null)?.args : undefined;
       const isLaunch =
         command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(extraLaunchArgs).length === 0 &&
-        (noLaunchArgs || iosArgs !== undefined || isMacos);
+        (chromiumPort !== null
+          ? chromiumSpec !== undefined &&
+            block === "steps" &&
+            !take.executionPrerequisite &&
+            (await leadsRun(take, session.filePath, { registry, project }))
+          : Object.keys(extraLaunchArgs).length === 0 &&
+            (noLaunchArgs || iosArgs !== undefined || isMacos));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1962,11 +2016,17 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
         const bundleId = strippedArgs.bundleId as string;
         step = {
           kind: "launch",
-          app: iosArgs
-            ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
-            : macosArgs?.length
-              ? { macos: { app: bundleId, args: macosArgs } }
-              : bundleId,
+          app: chromiumSpec
+            ? {
+                chromium: chromiumSpec.extraArgs.length
+                  ? { path: chromiumSpec.appPath, args: chromiumSpec.extraArgs }
+                  : chromiumSpec.appPath,
+              }
+            : iosArgs
+              ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
+              : macosArgs?.length
+                ? { macos: { app: bundleId, args: macosArgs } }
+                : bundleId,
         };
       } else if (foldStep) {
         step = foldStep;

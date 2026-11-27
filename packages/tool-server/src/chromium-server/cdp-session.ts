@@ -140,7 +140,8 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
         ? `Chromium CDP discovery: GET ${url} timed out. ` +
             `Something is holding port ${new URL(url).port} without answering CDP.`
         : `Chromium CDP discovery: GET ${url} could not connect. ` +
-            `Is the app running with --remote-debugging-port?`,
+            `Is the app running with --remote-debugging-port? If boot-device started it in ` +
+            `this tool-server session, restart-app relaunches it on the same device id.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
         failure_stage: "chromium_cdp_discovery_connect",
