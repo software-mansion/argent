@@ -189,6 +189,7 @@ jobs:
           # stay inert. An unset secret bakes in an empty token, which disables
           # telemetry rather than failing the build.
           ARGENT_OTEL_INGEST_TOKEN: ${{ secrets.ARGENT_OTEL_INGEST_TOKEN }}
+          ARGENT_RELEASE_BUILD: "1"
 
       # darwin is always required; the Linux keys (x86_64 "linux", arm64
       # "linux-arm64") and win32 stay gated until radon's artifacts for them are

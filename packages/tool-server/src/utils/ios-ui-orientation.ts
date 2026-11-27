@@ -193,6 +193,8 @@ export function unknownOrientationNote(read: UiOrientationRead, what: string): s
  * An iOS simulator branch of a tool that changes the front app (launch-app,
  * restart-app, open-url, terminate-app, reinstall-app): the new app can lie another way, so what was read
  * of the last one's orientation is forgotten once it ran, as after a rotate.
+ * A fresh read is still the last app's until the ax-service sees the new one
+ * in front, which launch-app and restart-app wait for (`ios-front-app.ts`).
  */
 export function forgettingUiOrientation<S, P, O>(
   impl: PlatformImpl<S, P, O>

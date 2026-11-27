@@ -24,6 +24,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  joinTextOnlyContent,
   type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
@@ -58,6 +59,9 @@ export { fetchWithReconnect } from "./tool-caller.js";
 // reference to the file: a retry after a dropped result finds no session.
 const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
 
+// esbuild stamps the public package version into the bundle, including canaries.
+declare const ARGENT_CLI_VERSION: string | undefined;
+
 export interface StartMcpServerOptions {
   /**
    * Locations of bundled artifacts in the published package, used when no
@@ -84,6 +88,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
   const whatsNewOn = whatsNewEnabled();
+  const installedVersion = getInstalledVersion();
+  // The updater can replace the package while this adapter is serving calls.
+  // Its highlights belong to the loaded bundle; the handshake reports the
+  // installed manifest, including canaries restamped after the bundle build.
+  const highlightsVersion =
+    typeof ARGENT_CLI_VERSION === "string" ? ARGENT_CLI_VERSION : installedVersion;
   const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
   const trees = createTreeMemory();
   const screenshots = createScreenshotMemory();
@@ -295,7 +305,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     if (!whatsNewOn || whatsNewChecked) return [];
     whatsNewChecked = true;
     try {
-      const note = takeWhatsNewNote(getInstalledVersion());
+      const note = takeWhatsNewNote(highlightsVersion);
       return note ? [{ type: "text" as const, text: note }] : [];
     } catch {
       return [];
@@ -303,7 +313,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const server = new Server(
-    { name: "argent", version: getInstalledVersion() },
+    { name: "argent", version: installedVersion },
     {
       capabilities: { tools: {} },
       instructions: SERVER_INSTRUCTIONS,
@@ -475,7 +485,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       if (treeUdid !== undefined && signal.aborted) trees.forget(treeUdid);
       if (screenshotUdid !== undefined && signal.aborted) screenshots.forget(screenshotUdid);
 
-      return { content };
+      return { content: joinTextOnlyContent(content) };
     } catch (err) {
       if (treeUdid !== undefined) trees.forget(treeUdid);
       if (screenshotUdid !== undefined) screenshots.forget(screenshotUdid);

@@ -393,6 +393,7 @@ async function runDetached(
     host,
     idleTimeoutMinutes,
     token,
+    managed: "cli",
   });
   await writeToolsServerState({
     port: actualPort,
@@ -425,6 +426,7 @@ async function runForeground(
     host,
     idleTimeoutMinutes,
     token,
+    managed: "cli",
   });
 
   const cannotStart = (err: unknown): never => {
@@ -559,7 +561,7 @@ function parseSubcommandArgs(
   sub: keyof typeof SUBCOMMAND_HELP,
   argv: string[],
   specs: OptionSpecs
-): Record<string, string | boolean | undefined> | null {
+): ReturnType<typeof parseCommandArgs>["options"] | null {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(SUBCOMMAND_HELP[sub]);
     return null;
