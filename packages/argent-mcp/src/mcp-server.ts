@@ -163,8 +163,6 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const sessionId = crypto.randomUUID();
-  // Calls of this connection never use an exported ARGENT_SESSION.
-  delete process.env.ARGENT_SESSION;
   let sessionCalledTools = false;
   let sessionEnded = false;
 

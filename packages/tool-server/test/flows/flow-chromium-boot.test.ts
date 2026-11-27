@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
+import { deviceClaims } from "../../src/utils/device-claims";
 
 // The runner boots a Chromium standalone flow's app itself. Mock the Electron
 // launcher so we can assert on how it's called + torn down without spawning a
@@ -147,8 +148,9 @@ async function runFlowRaw(
   // verified by the file-input boundary — an uploaded flow would reject the
   // run: composition some of these flows use.
   const flowPath = String(params.e2e_test_file);
-  const { name: _name, e2e_test_file: _flowFile, ...rest } = params;
+  const { name: _name, e2e_test_file: _flowFile, session, ...rest } = params;
   const ctx = {
+    ...(typeof session === "string" ? { session } : {}),
     fileInputs: {
       e2e_test_path: {
         clientPath: flowPath,
@@ -229,6 +231,49 @@ describe("flow-execute chromium boot", () => {
     // single-instance lock.
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
     expect(killChromiumByPort).not.toHaveBeenCalled();
+  });
+
+  it("claims every instance it boots for the run's session until teardown", async () => {
+    const owners: Array<Array<string | undefined>> = [];
+    bootElectronApp.mockImplementation(async (opts) => {
+      owners.push(
+        ["chromium-cdp-12345", "chromium-cdp-12346"].map((id) => deviceClaims.ownerOf(id, "a"))
+      );
+      return defaultBoot(opts);
+    });
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app1 }\n  - launch: { chromium: ./app2 }\n  - launch: { chromium: ./app3 }\n"
+    );
+
+    const result = await runFlow(makeRegistry(), {
+      name: "boot-claims",
+      project_root: PROJECT_ROOT,
+      e2e_test_file: flowFile,
+      session: "a",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(owners[2]).toEqual(["this session", "this session"]);
+    expect(deviceClaims.ownerOf("chromium-cdp-12345", "a")).toBeUndefined();
+    expect(deviceClaims.ownerOf("chromium-cdp-12346", "a")).toBeUndefined();
+  });
+
+  it("tears down the instance it booted when another session holds its id", async () => {
+    deviceClaims.claim("b", ["chromium-cdp-12345"]).done();
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
+    try {
+      await expect(
+        runFlowRaw(makeRegistry(), {
+          name: "stale-claim",
+          project_root: PROJECT_ROOT,
+          e2e_test_file: flowFile,
+          session: "a",
+        })
+      ).rejects.toThrow(/in use by another Argent session/);
+      expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
+    } finally {
+      deviceClaims.release("b");
+    }
   });
 
   it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {

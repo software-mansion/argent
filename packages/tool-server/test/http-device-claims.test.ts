@@ -137,6 +137,29 @@ describe("device claims over HTTP", () => {
     server.close();
   });
 
+  it("refuses release-device with an unknown key and keeps every claim", async () => {
+    const server = app();
+    await tap(server, SIM, "a");
+    await tap(server, OTHER_SIM, "a");
+
+    const res = await request(server)
+      .post("/tools/release-device")
+      .set("x-argent-session", "a")
+      .send({ device_id: SIM });
+    expect(res.status).toBe(400);
+    expect((await tap(server, SIM, "b")).status).toBe(409);
+    expect((await tap(server, OTHER_SIM, "b")).status).toBe(409);
+  });
+
+  it("matches a physical iPhone UDID in any case", async () => {
+    const server = app();
+    await tap(server, "00008110-001A2B3C4D5E801E", "a");
+    expect((await tap(server, "00008110-001a2b3c4d5e801e", "b")).status).toBe(409);
+    expect((await release(server, "a", "00008110-001a2b3c4d5e801e")).body.data).toEqual({
+      released: ["00008110-001A2B3C4D5E801E"],
+    });
+  });
+
   it("asks for a session when release-device has none", async () => {
     const res = await release(app(), undefined);
     expect(res.status).toBe(400);

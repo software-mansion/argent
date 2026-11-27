@@ -334,6 +334,24 @@ describe("createToolsClient options", () => {
     }
   });
 
+  it("never sends ARGENT_SESSION with ignoreEnvSession", async () => {
+    const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      fetchImpl,
+      headers: () => ({}),
+      ignoreEnvSession: true,
+    });
+    vi.stubEnv("ARGENT_SESSION", "my job");
+    try {
+      await callTool("reinstall-app", {});
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+    expect((init.headers as Record<string, string>)["x-argent-session"]).toBeUndefined();
+  });
+
   it("reads the caller's headers when it sends the call, not when the call starts", async () => {
     let ended = false;
     let route = (): void => {};

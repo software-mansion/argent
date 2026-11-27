@@ -137,6 +137,8 @@ export interface CreateToolsClientOptions {
    * secrets is checked against. A session header here replaces `ARGENT_SESSION`.
    */
   headers?: () => Record<string, string>;
+  /** Never send `ARGENT_SESSION`, for a client whose `headers` name its own session. */
+  ignoreEnvSession?: boolean;
   /**
    * Refuse a relative `project_root` or `e2e_test_path` instead of resolving
    * it against `process.cwd()`. For a client whose working directory need not
@@ -624,7 +626,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
     assertFiniteNumbers(args);
-    const envSession = hasSessionHeader(options.headers?.() ?? {}) ? undefined : sessionFromEnv();
+    const envSession =
+      options.ignoreEnvSession || hasSessionHeader(options.headers?.() ?? {})
+        ? undefined
+        : sessionFromEnv();
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the

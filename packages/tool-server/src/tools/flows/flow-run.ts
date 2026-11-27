@@ -147,7 +147,7 @@ import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { describeVega } from "../describe/platforms/vega";
 import { pinStatusBar, restoreStatusBar } from "../../utils/status-bar";
-import { claimPickedDevice } from "../../utils/device-claims";
+import { claimKey, claimPickedDevice, deviceClaims } from "../../utils/device-claims";
 
 // A dual-source call (name + e2e_test_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
@@ -894,7 +894,7 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   if (retiring !== -1) {
     const [prev] = state.owned.splice(retiring, 1);
     retiredId = prev!.deviceId;
-    await teardownBootedChromium(registry, prev!);
+    await retireOwned(state, prev!);
   }
 
   let booted: BootedChromium;
@@ -905,6 +905,7 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   }
   // Recorded before the next await so a cancelled run still reclaims it.
   state.owned.push(booted);
+  state.endClaims.push(claimPickedDevice(state.ctx?.session, booted.deviceId));
   state.device = resolveDevice(booted.deviceId);
 
   await frontChromiumPage(registry, state.device);
@@ -1136,6 +1137,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
+  /** Ends the session's claims on the devices this run picked or booted. */
+  endClaims: Array<() => void>;
   /**
    * Time the hoisted boot took before step 1. The first `launch` step settles
    * that instance, so it adds this time to its own.
@@ -1932,10 +1935,14 @@ Without a link, every step kind runs.`,
       // The device the run STARTS on — `state.device` moves when a chromium
       // launch boots one, so the status-bar restore below must not follow it.
       const device = resolved.device;
-      const endClaim =
-        device && !params.device && !resolved.booted
-          ? claimPickedDevice(ctx?.session, device.id)
-          : undefined;
+      let endClaim: (() => void) | undefined;
+      try {
+        endClaim =
+          device && !params.device ? claimPickedDevice(ctx?.session, device.id) : undefined;
+      } catch (error) {
+        if (resolved.booted) await teardownBootedChromium(registry, resolved.booted);
+        throw error;
+      }
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
@@ -1994,6 +2001,7 @@ Without a link, every step kind runs.`,
         stopped: false,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
+        endClaims: endClaim ? [endClaim] : [],
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
@@ -2055,11 +2063,7 @@ Without a link, every step kind runs.`,
         // Restored on the device the pin was applied to — `state.device` may
         // have moved on since.
         if (state.pinned && device) await restoreStatusBar(device);
-        // Reverse order: a nested flow's instance goes before the parent's.
-        for (let i = state.owned.length - 1; i >= 0; i--) {
-          await teardownBootedChromium(registry, state.owned[i]!);
-        }
-        endClaim?.();
+        await teardownOwned(state);
       }
 
       // The starting device: a run that switched says so on the launch step.
@@ -2865,6 +2869,7 @@ function deferShutdown(
       stopped: false,
       pinned: false,
       owned: [],
+      endClaims: [],
       output,
       scriptLogBudget: createScriptLogBudget(),
       ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
@@ -2875,11 +2880,21 @@ function deferShutdown(
       await execShutdown(later);
     } finally {
       // A launch in shutdown may boot an instance of its own.
-      for (let i = later.owned.length - 1; i >= 0; i--) {
-        await teardownBootedChromium(state.registry, later.owned[i]!);
-      }
+      await teardownOwned(later);
     }
   };
+}
+
+/** Kills the instances the run booted, newest first, then ends the run's claims. */
+async function teardownOwned(state: ExecState): Promise<void> {
+  for (let i = state.owned.length - 1; i >= 0; i--) await retireOwned(state, state.owned[i]!);
+  for (const end of state.endClaims) end();
+}
+
+async function retireOwned(state: ExecState, booted: BootedChromium): Promise<void> {
+  await teardownBootedChromium(state.registry, booted);
+  const session = state.ctx?.session;
+  if (session) deviceClaims.release(session, claimKey(booted.deviceId));
 }
 
 /**

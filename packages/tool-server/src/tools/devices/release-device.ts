@@ -3,12 +3,14 @@ import type { ToolDefinition } from "@argent/registry";
 import { InvalidToolInputError } from "../../utils/capability";
 import { RELEASE_DEVICE_TOOL_ID, claimKey, deviceClaims } from "../../utils/device-claims";
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .optional()
-    .describe("The device to release. Omit it to release every device of the session."),
-});
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .optional()
+      .describe("The device to release. Omit it to release every device of the session."),
+  })
+  .strict();
 
 type Params = z.infer<typeof zodSchema>;
 

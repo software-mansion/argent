@@ -508,6 +508,17 @@ describe("startMcpServer tool calls", () => {
     });
   });
 
+  it("leaves the host process's ARGENT_SESSION in place", async () => {
+    vi.stubEnv("ARGENT_SESSION", "host-job");
+    const second = await connect({
+      bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+      simulatorServerDir: "",
+      nativeDevtoolsDir: "",
+    });
+    expect(process.env.ARGENT_SESSION).toBe("host-job");
+    await second.close();
+  });
+
   it("sends no release for a connection that made no tool call", async () => {
     await client.close();
     await new Promise((resolve) => setTimeout(resolve, 50));

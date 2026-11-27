@@ -220,7 +220,7 @@ A device claim prevents two sessions of one tool-server from using one device:
 
 - Each MCP connection is one session. Subagents that use the MCP connection of their editor share its session.
 - A CLI or SDK process is a session when `ARGENT_SESSION` is set. Processes with the same value share one session. This session is different from the session of an MCP connection.
-- A tool call that names a device claims the device for its session. `e2e-execute` without `device` claims the device that it selects.
+- A tool call that names a device claims the device for its session. `e2e-execute` without `device` claims the device that it selects. `e2e-execute` also claims each Chromium instance that it starts, until the run ends.
 - A call from a different session to a claimed device fails with `DEVICE_IN_USE`. The error names the device and does not name the other session.
 - A call without a session claims no device and is never refused, also when it names a device.
 - `list-devices` adds `claim: "this session"` or `claim: "another session"` to a claimed device.

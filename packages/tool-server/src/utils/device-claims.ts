@@ -10,9 +10,15 @@ export const RELEASE_DEVICE_TOOL_ID = "release-device";
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Scoped teardown matches device ids in any letter case, so claims do too. */
+function foldCase(device: string): string {
+  return device.toLowerCase();
+}
+
 export type ClaimOwner = "this session" | "another session";
 
 interface Claim {
+  device: string;
   session: string;
   lastUsedAt: number;
   activeCalls: number;
@@ -50,10 +56,10 @@ export class DeviceClaims {
     return {
       ok: true,
       done: () => {
-        for (const [index, claim] of held.entries()) {
+        for (const claim of held) {
           claim.activeCalls -= 1;
           claim.lastUsedAt = this.now();
-          if (claim.released && claim.activeCalls === 0) this.claims.delete(devices[index]!);
+          if (claim.released && claim.activeCalls === 0) this.claims.delete(foldCase(claim.device));
         }
       },
     };
@@ -69,10 +75,10 @@ export class DeviceClaims {
     for (const key of [...this.claims.keys()]) {
       const claim = this.liveClaim(key);
       if (!claim || claim.released || claim.session !== session) continue;
-      if (device !== undefined && key !== device) continue;
+      if (device !== undefined && key !== foldCase(device)) continue;
       if (claim.activeCalls > 0) claim.released = true;
       else this.claims.delete(key);
-      released.push(key);
+      released.push(claim.device);
     }
     return released;
   }
@@ -84,10 +90,10 @@ export class DeviceClaims {
   }
 
   private liveClaim(device: string): Claim | undefined {
-    const claim = this.claims.get(device);
+    const claim = this.claims.get(foldCase(device));
     if (!claim) return undefined;
     if (claim.activeCalls === 0 && this.now() - claim.lastUsedAt > this.idleTimeoutMs) {
-      this.claims.delete(device);
+      this.claims.delete(foldCase(device));
       return undefined;
     }
     return claim;
@@ -95,11 +101,11 @@ export class DeviceClaims {
 
   private hold(device: string, session: string): Claim {
     const existing = this.liveClaim(device);
-    const claim = existing ?? { session, lastUsedAt: this.now(), activeCalls: 0 };
+    const claim = existing ?? { device, session, lastUsedAt: this.now(), activeCalls: 0 };
     claim.activeCalls += 1;
     claim.lastUsedAt = this.now();
     claim.released = false;
-    this.claims.set(device, claim);
+    this.claims.set(foldCase(device), claim);
     return claim;
   }
 }

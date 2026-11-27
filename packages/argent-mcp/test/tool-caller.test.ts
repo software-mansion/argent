@@ -235,6 +235,15 @@ describe("createToolCaller", () => {
     expect(sent.appPath).not.toHaveProperty("content");
   });
 
+  it("never sends ARGENT_SESSION, also when its headers name no session", async () => {
+    vi.stubEnv("ARGENT_SESSION", "host-job");
+    const { callTool } = caller();
+
+    await callTool("reinstall-app", { udid: "u", bundleId: "x", appPath });
+
+    expect(postsTo("/tools/reinstall-app")[0]!.headers["x-argent-session"]).toBeUndefined();
+  });
+
   it("refuses a relative project_root, since its cwd is where the editor started it", async () => {
     const { callTool } = caller();
 
