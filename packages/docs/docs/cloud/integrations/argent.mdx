@@ -14,7 +14,7 @@ Argent, the toolkit for AI agents, uses `sim-remote` to drive the hosted simulat
 2. Run `sim-remote login`.
 3. Ask the agent to list the devices.
 
-Argent finds the `sim-remote` binary on your `PATH` and reuses your session. If `sim-remote` is not installed or you are not logged in, Argent shows no hosted simulators. In these cases, `list-devices` gives the agent a note:
+Argent finds the `sim-remote` binary on your `PATH` and reuses your login and your session. If `sim-remote` is not installed or you are not logged in, Argent shows no hosted simulators. In these cases, `list-devices` gives the agent a note:
 
 - On a computer that cannot run iOS simulators, the note tells the agent about Argent Cloud. The agent can then tell you about it when your task needs iOS.
 - When `sim-remote` is installed but you are not logged in, the note tells the agent to ask you to run `sim-remote login`.
@@ -30,7 +30,7 @@ The agent lists a hosted simulator with the `remote:` prefix before its UDID. On
 - inspect the native view hierarchy and the native network log,
 - record and replay e2e tests.
 
-The screen and the input go through a live video stream between Argent and the machine. The agent does not need a window for the simulator.
+The screen and the input go through a live video stream between Argent and the Mac. The agent does not need a window for the simulator.
 
 ## Metro and the debugger
 
@@ -46,7 +46,7 @@ When the agent connects the debugger or starts Metro, Argent opens a reverse tun
 ## Limits
 
 - Argent supports iOS simulators on Argent Cloud. There are no hosted Android devices at this moment.
-- The idle release of the machine also applies to the agent. See [Manage machines](/docs/cloud/guides/machines).
-- Argent mocks the microphone of hosted simulators with `audio-input`. A helper process in the simulator feeds the input, so an app hears silence for a few seconds after the tool server stops, until that helper gives the input back. The helper decodes audio files in the simulator, so a tool server on Linux can also play files. A hosted Mac has no microphone, so `source: "microphone"` gives silence.
+- The idle release of the session also applies to the agent. See [Manage sessions](/docs/cloud/guides/sessions).
+- Argent mocks the microphone of hosted simulators with `audio-input`. A helper process in the simulator feeds the input, so an app hears silence for a few seconds after the tool server stops, until that helper gives the input back. The helper decodes audio files in the simulator, so a tool server on Linux can also play files. The Mac has no microphone, so `source: "microphone"` gives silence.
 
 The [tools reference](/docs/reference/tools) lists the Argent tools. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.

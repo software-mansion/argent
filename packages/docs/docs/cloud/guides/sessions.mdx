@@ -1,0 +1,45 @@
+---
+sidebar_position: 4
+sidebar_label: Manage sessions
+title: Manage sessions
+sidebar_custom_props:
+  icon: key-round
+---
+
+A session is one of the four isolated parts of a Mac, with its own macOS user, disk volume and resources. Argent Cloud reserves it for you. See [How it works](/docs/cloud/fundamentals/how-it-works). This guide reserves, shares and returns sessions.
+
+## Log in and reserve a session
+
+`sim-remote login` authenticates you with your API key and reserves a session. If all sessions of your team are busy, the command waits for a free one. The command prints the ID of the session that you got. The ID names the Mac and the session on it.
+
+```
+Logged in. Acquired machine A1B2C3D4E5/sim2.
+```
+
+You can also log in without a session and reserve one later with `sim-remote acquire`.
+
+## Hold more than one session
+
+One user can hold several sessions at the same time. A session stays responsive with up to two booted simulators. To run more simulators in parallel, hold more than one session. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
+
+`sim-remote list-machines` shows the sessions that you hold and marks the current one. `sim-remote attach` switches the daemon to another session that you hold. A different client, for example the Argent agent, can share a session in this way.
+
+To use several sessions at the same time from one computer, run one daemon per session. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
+
+## Keep a session during a long run
+
+The daemon releases the session after 15 minutes without a `sim-remote` command. During a long test run that does not go through `sim-remote`, run `sim-remote keepalive 30m` to keep the session for 30 minutes. You can hold a session for at most 24 hours.
+
+## Give a session back
+
+`sim-remote release` returns the session and keeps you logged in. `sim-remote logout` returns the session and logs you out. Log out when you are done. A session that you hold is a session that nobody else on your team can use.
+
+When a session is returned, Argent Cloud erases every simulator in it and rebuilds the session volume from a clean image. See [Security and data](/docs/cloud/reference/security-and-data).
+
+## Example instructions
+
+- "Log in to Argent Cloud and reserve a session."
+- "Show which cloud sessions I hold."
+- "Release the cloud session when the tests complete."
+
+The [sessions and limits reference](/docs/cloud/reference/sessions) lists the timeouts. The [CLI reference](/docs/cloud/reference/cli) lists all commands.

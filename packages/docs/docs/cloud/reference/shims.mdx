@@ -47,9 +47,9 @@ The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the bin
 
 | Shim            | Behaviour                                                                                                                                                                                    |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xcrun`         | Sends `simctl ...` to `sim-remote simctl`. Answers `devicectl list devices` with an empty list. Answers `--show-sdk-version` with the newest iOS runtime on the machine                      |
+| `xcrun`         | Sends `simctl ...` to `sim-remote simctl`. Answers `devicectl list devices` with an empty list. Answers `--show-sdk-version` with the newest iOS runtime on the Mac                          |
 | `xcodebuild`    | Installs the XCTest runner on the simulator, launches it, finds its port, and opens a forward tunnel to the local port that the driver polls. Build and inspect calls succeed and do nothing |
-| `plutil`        | Uses `plistutil` from libplist. Falls back to `/usr/bin/plutil` on a Mac                                                                                                                     |
+| `plutil`        | Uses `plistutil` from libplist. Falls back to `/usr/bin/plutil` on macOS                                                                                                                     |
 | `applesimutils` | Maps `--setPermissions` to `simctl privacy`                                                                                                                                                  |
 | `xcode-select`  | Points at the stand-in `Xcode.app`                                                                                                                                                           |
 | `open`          | Does nothing. `simctl boot` boots the simulator                                                                                                                                              |

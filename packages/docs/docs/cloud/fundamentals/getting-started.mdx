@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: rocket
 ---
 
-Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use it to run iOS and React Native applications remotely. CI/CD pipelines on Linux or cloud hosts use it in the same way. Both can execute, inspect, debug and test the applications.
+Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed by Software Mansion. It provides network-accessible, isolated iOS simulators that run on dedicated Apple hardware. AI coding agents, such as Claude Code or Cursor Cloud Agents, use it to run iOS and React Native applications remotely. CI/CD pipelines on Linux or cloud servers use it in the same way. Both can execute, inspect, debug and test the applications.
 
 <Prompt>
 {`
@@ -22,11 +22,11 @@ Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundame
 3. Run \`sim-remote simctl list devices available\`, pick an iPhone,
    boot it and wait with \`sim-remote simctl bootstatus <UDID> -b\`.
 4. Confirm the simulator shows up in argent's list-devices as a remote device.
-   Reply in at most 5 lines: machine name, UDID, state, and one sentence
+   Reply in at most 5 lines: session ID, UDID, state, and one sentence
    telling me what I can ask you to do on it now (e.g. "open the app and
    profile a screen"). No build steps, no command lists.
 
-Do not run sim-remote logout or release. I want to keep the machine.
+Do not run sim-remote logout or release. I want to keep the session.
 `}
 
 </Prompt>
@@ -57,7 +57,7 @@ We issue one API key per user and send it to you directly. If you do not have a 
 
 ### Step 3: Authenticate
 
-Put your API key in the `SIM_REMOTE_API_KEY` environment variable and log in. The command reserves a machine for you and prints its name.
+Put your API key in the `SIM_REMOTE_API_KEY` environment variable and log in. The command reserves a session for you and prints its ID.
 
 ```bash
 export SIM_REMOTE_API_KEY=<API_KEY>
@@ -72,11 +72,11 @@ You can also give the key with the `--api-key` option:
 sim-remote login --api-key <API_KEY>
 ```
 
-`sim-remote` keeps the session in memory only and does not write the key to disk.
+`sim-remote` keeps the login token in memory only and does not write the key to disk.
 
 ### Step 4: Boot a simulator
 
-List the simulators on your machine and copy the UDID of one of them.
+List the simulators in your session and copy the UDID of one of them.
 
 ```bash
 sim-remote simctl list devices available
@@ -104,7 +104,7 @@ sim-remote simctl launch <UDID> com.example.MyApp
 
 ### Step 6: Log out
 
-Log out when you are done. The makes the machine available to other users on your team again.
+Log out when you are done. This makes the session available to other users on your team again.
 
 ```bash
 sim-remote logout
@@ -114,7 +114,7 @@ sim-remote logout
 
 <Cards>
   <Card href="/docs/cloud/fundamentals/how-it-works" title="How it works" icon="network">
-    Learn how sessions, machines, simulators and tunnels fit together.
+    Learn how Macs, sessions, simulators and tunnels fit together.
   </Card>
   <Card href="/docs/cloud/integrations/argent" title="Integrations" icon="plug">
     Connect Argent, Maestro, Appium and GitHub Actions to the hosted simulators.

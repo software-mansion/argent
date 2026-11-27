@@ -6,18 +6,20 @@ sidebar_custom_props:
   icon: network
 ---
 
-Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Argent Cloud server checks your API key and assigns machines. A hosted Mac runs the iOS simulators. The CLI sends each command to the machine and prints the result. The simulator has no window on your screen. You see it through screenshots, screen recordings or Argent.
+Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Argent Cloud server checks your API key and assigns sessions. A Mac, a hosted Mac runner, runs the iOS simulators. The CLI sends each command to your session on the Mac and prints the result. The simulator has no window on your screen. You see it through screenshots, screen recordings or Argent.
 
-## Sessions and machines
+## Macs and sessions
 
-A session is your authenticated connection to Argent Cloud. A machine is a hosted Mac that Argent Cloud reserves for your session. `sim-remote` manages the two separately. You can keep a machine across shells, hand it to another client, or give it back without a logout. See [Manage machines](/docs/cloud/guides/machines).
+A Mac has four sessions. A session is one isolated part of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` reserves a session for you, and `sim-remote release` gives it back. You can keep a session across shells, hand it to another client, or give it back without a logout. See [Manage sessions](/docs/cloud/guides/sessions).
+
+A Mac runs up to six booted simulators at the same time, shared by its four sessions. A session stays responsive with up to two. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
 
 ## Simulator control
 
-`sim-remote simctl` is a drop-in replacement for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. For commands that need access to files on your computer (such as `install`, `addmedia` or `push`) it uploads them to the machine for you. For commands that produce files (`io screenshot`, `io recordVideo`, `get_app_container`) it handles the download. All other subcommands go to the machine without changes. See [Run your app](/docs/cloud/guides/run-your-app).
+`sim-remote simctl` is a drop-in replacement for `xcrun simctl`. The command has the same subcommands, the same arguments, the same output and the same exit codes. For commands that need access to files on your computer (such as `install`, `addmedia` or `push`) it uploads them to the Mac for you. For commands that produce files (`io screenshot`, `io recordVideo`, `get_app_container`) it handles the download. All other subcommands go to the Mac without changes. See [Run your app](/docs/cloud/guides/run-your-app).
 
 ## Networking
 
-Your computer and the hosted simulator are on different networks. Neither side can reach the `localhost` of the other. A reverse tunnel lets the simulator reach a server on your computer. A forward tunnel lets your computer reach a server on the machine. `sim-remote` keeps the tunnels open between commands. See [Connect to local servers](/docs/cloud/guides/local-servers).
+Your computer and the hosted simulator are on different networks. Neither side can reach the `localhost` of the other. A reverse tunnel lets the simulator reach a server on your computer. A forward tunnel lets your computer reach a server on the Mac. `sim-remote` keeps the tunnels open between commands. See [Connect to local servers](/docs/cloud/guides/local-servers).
 
 The [CLI reference](/docs/cloud/reference/cli) lists all commands.

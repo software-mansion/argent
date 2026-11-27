@@ -6,7 +6,7 @@ sidebar_custom_props:
   icon: brand-github
 ---
 
-Argent Cloud provides [GitHub Actions](https://docs.github.com/actions) that install `sim-remote`, reserve a machine for the job, and put the Maestro stand-ins on `PATH`. A job on `ubuntu-latest` can install an app, drive a hosted simulator and run Maestro flows. The job needs no macOS runner and no Xcode. The build of the `.app` still needs a Mac.
+Argent Cloud provides [GitHub Actions](https://docs.github.com/actions) that install `sim-remote`, reserve a session for the job, and put the Maestro stand-ins on `PATH`. A job on `ubuntu-latest` can install an app, drive a hosted simulator and run Maestro flows. The job needs no macOS runner and no Xcode. The build of the `.app` still needs macOS and Xcode.
 
 The actions live in the [argent-cloud-actions](https://github.com/software-mansion-labs/argent-cloud-actions) repository. The examples on this page reference the `v1` tag. The tag moves to the latest `v1.N.N` release. A job that passes a secret to an action trusts the code behind the reference. For the strongest guarantee, pin the reference to the full commit SHA of a release and put the version in a comment:
 
@@ -19,7 +19,7 @@ Review the diff before you move the SHA to a new release. GitHub explains the re
 | Action          | Reference                                                     | What it does                                                                   |
 | --------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `install`       | `software-mansion-labs/argent-cloud-actions/install@v1`       | Downloads the latest `sim-remote` release for the runner and adds it to `PATH` |
-| `acquire`       | `software-mansion-labs/argent-cloud-actions/acquire@v1`       | Logs in, reserves a machine, and releases it when the job ends                 |
+| `acquire`       | `software-mansion-labs/argent-cloud-actions/acquire@v1`       | Logs in, reserves a session, and releases it when the job ends                 |
 | `maestro-shims` | `software-mansion-labs/argent-cloud-actions/maestro-shims@v1` | Writes the Maestro stand-ins and adds them to `PATH` for the rest of the job   |
 
 ## A test job
@@ -49,7 +49,7 @@ jobs:
       - run: maestro --udid "$UDID" test .maestro/flow.yaml
 ```
 
-After the acquire step, `sim-remote` is on `PATH` and the job holds a machine. Every later step uses the session of the daemon and needs no credential.
+After the acquire step, `sim-remote` is on `PATH` and the job holds a session. Every later step uses the login of the daemon and needs no credential.
 
 The actions do not select a simulator. The boot step picks the first available iPhone, boots it, and writes its UDID to `GITHUB_ENV`. Every later step reads `$UDID` from the environment. `simctl bootstatus -b` boots the simulator when it is not booted yet and waits until the boot completes.
 
@@ -61,11 +61,11 @@ The key stays in the job:
 
 - The action passes the key to `sim-remote` as an environment variable, never as an argument.
 - The action does not write the key to `GITHUB_ENV`, `GITHUB_OUTPUT` or `GITHUB_STATE`.
-- `sim-remote` keeps the session token in the memory of the daemon. The token does not reach the disk.
+- `sim-remote` keeps the login token in the memory of the daemon. The token does not reach the disk.
 
 ## `install`
 
-The action needs no credential and reserves no machine.
+The action needs no credential and reserves no session.
 
 | Input          | Default                                                            | Description                                                                                   |
 | -------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
@@ -78,21 +78,21 @@ The action needs no credential and reserves no machine.
 
 ## `acquire`
 
-The action expects `sim-remote` on `PATH`, so it goes after `install`. A post step logs out and releases the machine. The post step runs also when the job fails or is cancelled.
+The action expects `sim-remote` on `PATH`, so it goes after `install`. A post step logs out and releases the session. The post step runs also when the job fails or is cancelled.
 
 | Input             | Default | Description                                                                                                    |
 | ----------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
 | `api-key`         | None    | The API key. Required. Pass it from `secrets.*`                                                                |
-| `acquire`         | `true`  | Reserve a machine after the login. `false` logs in only, for a job that attaches to a machine it already holds |
-| `timeout`         | `300`   | Seconds that one acquire attempt waits for a free machine. The server caps this value                          |
+| `acquire`         | `true`  | Reserve a session after the login. `false` logs in only, for a job that attaches to a session it already holds |
+| `timeout`         | `300`   | Seconds that one acquire attempt waits for a free session. The server caps this value                          |
 | `retries`         | `8`     | The number of acquire attempts before the action gives up                                                      |
 | `retry-delay`     | `30`    | Seconds between two attempts                                                                                   |
-| `release`         | `true`  | Release the machine in the post step. With `false`, the machine stays reserved after the job. See below        |
+| `release`         | `true`  | Release the session in the post step. With `false`, the session stays reserved after the job. See below        |
 | `sim-remote-path` | Empty   | The path of the CLI. The default is `sim-remote` from `PATH`                                                   |
 
-A later job cannot reuse the session of this job. GitHub gives each job a fresh runner, and the session token lives only in the memory of the daemon on that runner. A later job that needs the same machine logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the machines that the API key holds. Log out or release the machine in the last job, because a reserved machine blocks the other jobs of your team until its lease expires.
+A later job cannot reuse the login of this job. GitHub gives each job a fresh runner, and the login token lives only in the memory of the daemon on that runner. A later job that needs the same session logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the sessions that the API key holds. Log out or release the session in the last job, because a reserved session blocks the other jobs of your team until its lease expires.
 
-Your team has a fixed number of machines, so a matrix of jobs waits in a queue. A bad API key fails at once. With the defaults, the action waits about 40 minutes for a machine. To wait longer, increase `retries`. The server caps one attempt, so a larger `timeout` does not help.
+Your team has a fixed number of sessions, so a matrix of jobs waits in a queue. A bad API key fails at once. With the defaults, the action waits about 40 minutes for a session. To wait longer, increase `retries`. The server caps one attempt, so a larger `timeout` does not help.
 
 The action does not forward `SIM_ROUTER_URL` from the job environment. The server URL comes from the binary.
 
