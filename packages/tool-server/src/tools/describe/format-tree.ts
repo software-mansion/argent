@@ -310,10 +310,18 @@ function isRedundantChildImage(parent: DescribeNode, child: DescribeNode): boole
   return normalizeLabel(child.label) === normalizeLabel(parent.label);
 }
 
-// Modal/dialog containers separate foreground controls from the page behind
-// them even without a label; collapsing them would merge modal buttons with
-// background siblings.
-const STRUCTURAL_CONTAINER_ROLES = new Set(["dialog", "alertdialog"]);
+// Modal/dialog/window containers separate foreground controls from the page or
+// window behind them even without a label; collapsing them would merge modal
+// buttons with background siblings.
+const STRUCTURAL_CONTAINER_ROLES = new Set([
+  "dialog",
+  "alertdialog",
+  "AlertDialog",
+  "Dialog",
+  "AXSheet",
+  "AXWindow",
+  "AXPopover",
+]);
 
 function renderNested(
   root: DescribeNode,

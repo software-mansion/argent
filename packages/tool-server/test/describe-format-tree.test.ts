@@ -943,6 +943,86 @@ describe("formatDescribeTree", () => {
     const chromiumOut = formatDescribeTree(chromiumRoot, { source: "cdp-dom" });
     expect(chromiumOut).toContain("  fieldset [disabled]");
     expect(chromiumOut).toContain("  dialog (0.1,0.3,0.8,0.2)");
+
+    const androidDialogRoot: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AlertDialog",
+          frame: { x: 0.1, y: 0.36, width: 0.86, height: 0.11 },
+          children: [
+            leaf({
+              role: "Button",
+              label: "Delete",
+              clickable: true,
+              frame: { x: 0.13, y: 0.43, width: 0.13, height: 0.03 },
+            }),
+          ],
+        },
+      ],
+    };
+    const androidDialogOut = formatDescribeTree(androidDialogRoot, { source: "android-devtools" });
+    expect(androidDialogOut).toContain("  AlertDialog (0.1,0.36,0.86,0.11)");
+    expect(androidDialogOut).toContain('    Button "Delete" [clickable]');
+
+    const macosRoot: DescribeNode = {
+      role: "AXApplication",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "AXSheet",
+          frame: { x: 0.2, y: 0.1, width: 0.6, height: 0.5 },
+          children: [
+            leaf({
+              role: "AXButton",
+              label: "Save",
+              clickable: true,
+              frame: { x: 0.6, y: 0.5, width: 0.1, height: 0.05 },
+            }),
+          ],
+        },
+        {
+          role: "AXWindow",
+          frame: { x: 0.25, y: 0.25, width: 0.5, height: 0.3 },
+          children: [
+            leaf({
+              role: "AXButton",
+              label: "Apply",
+              clickable: true,
+              frame: { x: 0.5, y: 0.45, width: 0.1, height: 0.05 },
+            }),
+          ],
+        },
+      ],
+    };
+    const macosOut = formatDescribeTree(macosRoot, { source: "macos-devtools" });
+    expect(macosOut).toContain("  AXSheet (0.2,0.1,0.6,0.5)");
+    expect(macosOut).toContain('    AXButton "Save" [clickable]');
+    expect(macosOut).toContain("  AXWindow (0.25,0.25,0.5,0.3)");
+    expect(macosOut).toContain('    AXButton "Apply" [clickable]');
+
+    const harmonyDialogRoot: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "Dialog",
+          frame: { x: 0.1, y: 0.3, width: 0.8, height: 0.2 },
+          children: [
+            leaf({
+              role: "Button",
+              label: "Confirm",
+              clickable: true,
+              frame: { x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+            }),
+          ],
+        },
+      ],
+    };
+    const harmonyDialogOut = formatDescribeTree(harmonyDialogRoot, { source: "harmony-uitest" });
+    expect(harmonyDialogOut).toContain("  Dialog (0.1,0.3,0.8,0.2)");
+    expect(harmonyDialogOut).toContain('    Button "Confirm" [clickable]');
   });
 
   it("omits iOS scroll bars by default and keeps them when raw: true", () => {
