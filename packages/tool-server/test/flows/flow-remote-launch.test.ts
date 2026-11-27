@@ -207,7 +207,9 @@ describe("a remote launch waits for the tree source, exactly as a local one does
     // `restart-app` succeeded: the failure is the gate, not the launch.
     expect(result.launched).toEqual(["com.acme.app"]);
     expect(result.steps[0].status).toBe("error");
-    expect(result.steps[0].reason).toContain("com.acme.app did not become the foreground app");
+    expect(result.steps[0].reason).toContain(
+      "com.acme.app was not the foreground app after a wait of"
+    );
     expect(result.steps[0].reason).toContain("com.apple.springboard is in the foreground");
     expect(result.ok).toBe(false);
   });

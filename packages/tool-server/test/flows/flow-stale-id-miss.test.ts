@@ -24,6 +24,12 @@ const APP = "com.example.app";
 const PLAIN =
   'no visible element matched selector id="house.fill" — if it is off-screen, add a scroll-to step before this one';
 const STALE = "no element with this id is in the accessibility tree right now, on screen or off";
+const OLDER_FLOW =
+  "Or an e2e test recorded on an iOS simulator by an older Argent can carry an id or role from " +
+  "the view hierarchy, such as an SF Symbol name on an icon inside a button; re-record the " +
+  "step, or target the control `describe` shows there.";
+// The remedy of a step that neither waited nor scrolled.
+const NOT_THERE_REMEDY = "add an await or scroll-to step before this one";
 
 /** A tab bar whose Home button carries no id, plus whatever `extra` adds. */
 function axTree(extra: AXTreeNode[]): AXTreeResponse {
@@ -62,9 +68,14 @@ interface Sim {
   tools: string[];
 }
 
-function device(extra: AXTreeNode[] = []): Sim {
+/** `extra` as a function gets the swipes dispatched so far, to move the screen. */
+function device(extra: AXTreeNode[] | ((swipes: number) => AXTreeNode[]) = []): Sim {
   const sim: Sim = { urns: [], tools: [], registry: undefined as unknown as Registry };
-  const ax = { degraded: false, tree: async () => axTree(extra) };
+  let swipes = 0;
+  const ax = {
+    degraded: false,
+    tree: async () => axTree(typeof extra === "function" ? extra(swipes) : extra),
+  };
   const android = {
     getHierarchy: async () => ({ xml: ANDROID_XML }),
     getScreenSize: async () => ({ width: 1080, height: 1920 }),
@@ -76,6 +87,7 @@ function device(extra: AXTreeNode[] = []): Sim {
     },
     invokeTool: async (id: string) => {
       if (id === "list-devices") return { devices: [] };
+      if (id === "gesture-swipe") swipes++;
       if (id !== "screenshot") sim.tools.push(id);
       return { ok: true };
     },
@@ -139,8 +151,10 @@ describe.concurrent("a selector miss on an id", () => {
 
     expect(reason).toContain('no visible element matched selector id="house.fill"');
     expect(reason).toContain(STALE);
-    expect(reason).toContain("add an await or scroll-to step before this one");
-    expect(reason).toContain("recorded on an iOS simulator by an older Argent");
+    expect(reason).toContain(
+      "Either the element is not there at this moment (a banner or sheet that already closed, " +
+        `a list row not loaded yet): ${NOT_THERE_REMEDY}. ${OLDER_FLOW}`
+    );
     expect(reason).toContain("re-record the step, or target the control `describe` shows there");
     expect(reason).not.toContain("if it is off-screen");
     expect(extraReads(sim)).toBe(1);
@@ -182,18 +196,71 @@ describe.concurrent("a selector miss on an id", () => {
     }
   );
 
+  it("gives an await step that waited a remedy other than waiting", async ({ expect }) => {
+    const sim = device();
+    const reason = await stepFails(sim, "00000000-0000-0000-0000-0000000000c8", {
+      kind: "await",
+      condition: "visible",
+      selector: ID,
+      timeout: 500,
+    });
+
+    expect(reason).toBe(
+      `no visible element matched selector id="house.fill", and ${STALE}. Either the element ` +
+        "is not there at this moment (a banner or sheet that already closed, a list row further " +
+        "down): for a list row, add a scroll-to step before this one; for a slow load, raise " +
+        `this step's \`timeout:\`. ${OLDER_FLOW}`
+    );
+    expect(reason).not.toContain(NOT_THERE_REMEDY);
+    expect(extraReads(sim)).toBe(1);
+  }, 20_000);
+
   it("names a stale id when scroll-to reaches the end without it", async ({ expect }) => {
     const sim = device();
     const result = await run(sim, "00000000-0000-0000-0000-0000000000c4", [
       { kind: "scroll-to", target: ID, direction: "down" },
     ]);
+    const reason = result.steps[0].reason ?? "";
 
     expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toContain(
-      'reached the end of the scroll without finding id="house.fill", and no element with this id'
+    expect(reason).toBe(
+      `reached the end of the scroll without finding id="house.fill", and ${STALE}. Either the ` +
+        "element is not there at this moment (the list had not loaded its rows, or the element " +
+        "is in the other direction): add an await step before this one for an element of the " +
+        `loaded list, or change \`direction:\`. ${OLDER_FLOW}`
     );
+    expect(reason).not.toContain(NOT_THERE_REMEDY);
     expect(extraReads(sim)).toBe(1);
   }, 20_000);
+
+  it("names a stale id when scroll-to runs out of attempts without it", async ({ expect }) => {
+    // Every swipe brings a new row: the scroll never reaches its end.
+    const sim = device((swipes) => [
+      {
+        index: 2,
+        parentIndex: 0,
+        label: `Row ${swipes}`,
+        traits: ["staticText"],
+        frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.05 },
+      },
+    ]);
+    const result = await run(sim, "00000000-0000-0000-0000-0000000000ca", [
+      { kind: "scroll-to", target: ID, direction: "down" },
+    ]);
+    const reason = result.steps[0].reason ?? "";
+
+    expect(result.steps[0].status).toBe("fail");
+    expect(sim.tools.filter((t) => t === "gesture-swipe")).toHaveLength(25);
+    expect(reason).toBe(
+      `id="house.fill" not found after 25 scroll attempts, and ${STALE}. Either the element is ` +
+        "not there at this moment (the list had not loaded its rows, the element is in the " +
+        "other direction, or it is more than 25 swipes away): add an await step before this " +
+        "one for an element of the loaded list, change `direction:`, or add a scroll-to step " +
+        `for an element on the way. ${OLDER_FLOW}`
+    );
+    expect(reason).not.toContain(NOT_THERE_REMEDY);
+    expect(extraReads(sim)).toBe(1);
+  }, 60_000);
 
   it("fails a scroll-to on a role no iOS element has without swiping", async ({ expect }) => {
     const sim = device();
@@ -203,8 +270,15 @@ describe.concurrent("a selector miss on an id", () => {
       direction: "down",
     });
 
-    expect(reason).toContain('no element on an iOS simulator has the role "AXScrollArea"');
-    expect(reason).toContain("by an older Argent");
+    expect(reason).toBe(
+      'no visible element matched selector text="Home" role="AXScrollArea", and no element on ' +
+        'an iOS simulator has the role "AXScrollArea". Its roles are AXHeading, AXSwitch, ' +
+        "AXButton, AXTextField, AXLink, AXImage, AXStaticText, AXTabBar, AXAdjustable and " +
+        "AXGroup. A role from another tree (the view hierarchy that an older Argent recorded " +
+        "on, a physical iPhone, or another platform) never matches here; re-record the step, " +
+        "or target the control `describe` shows there."
+    );
+    expect(reason).not.toContain("by an older Argent can carry");
     expect(extraReads(sim)).toBe(0);
   }, 20_000);
 

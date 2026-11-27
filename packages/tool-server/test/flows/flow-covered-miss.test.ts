@@ -22,6 +22,10 @@ const APP = "com.example.app";
 const DLG = "com.argent.dlglist";
 const IN_APP =
   "it is covered by an alert, sheet or popover. Dismiss it first, or add an await step for it to close.";
+// An `await` already waited for the cover to close.
+const IN_APP_WAITED =
+  "it is covered by an alert, sheet or popover. Dismiss it first, or raise this step's " +
+  "`timeout:` if it closes by itself.";
 const SYSTEM =
   "a system alert covers it. Add a step before this one that taps a button of the alert, such as " +
   "`tap: { text: Allow }`, or grant the permission before the e2e test with the " +
@@ -244,22 +248,32 @@ describe.concurrent("a miss on a target an in-app alert, sheet or popover covers
   }, 30_000);
 
   it.for<[string, string, Step, string]>([
-    ["assert visible", "e1", { kind: "assert", condition: "visible", selector: U11 }, MISSED],
-    ["await", "e2", { kind: "await", condition: "visible", selector: U11, timeout: 500 }, MISSED],
+    [
+      "assert visible",
+      "e1",
+      { kind: "assert", condition: "visible", selector: U11 },
+      `${MISSED}: ${IN_APP}`,
+    ],
+    [
+      "await",
+      "e2",
+      { kind: "await", condition: "visible", selector: U11, timeout: 500 },
+      `${MISSED}: ${IN_APP_WAITED}`,
+    ],
     [
       "scroll-to",
       "e3",
       { kind: "scroll-to", target: U11, direction: "down" },
-      'reached the end of the scroll without finding text="u11"',
+      `could not scroll to text="u11": ${IN_APP}`,
     ],
   ])(
     "names the cover on a %s step",
     { timeout: 30_000 },
-    async ([, suffix, step, missed], { expect }) => {
+    async ([, suffix, step, expected], { expect }) => {
       const sim = device({ ax: axTree("app") });
       const reason = await reasonOf(sim, `00000000-0000-0000-0000-0000000000${suffix}`, step);
 
-      expect(reason).toBe(`${missed}: ${IN_APP}`);
+      expect(reason).toBe(expected);
       expect(extraReads(sim)).toBe(0);
     }
   );
@@ -325,6 +339,35 @@ describe.concurrent("a miss on a target an in-app alert, sheet or popover covers
     }
   );
 
+  // The id covered after the extra read words its miss by the step too.
+  it.for<[string, string, Step, string]>([
+    [
+      "await",
+      "ea",
+      { kind: "await", condition: "visible", selector: { identifier: "u-9-9" }, timeout: 500 },
+      'no visible element matched selector id="u-9-9": the element with this id is covered by ' +
+        "an alert, sheet or popover. Dismiss it first, or raise this step's `timeout:` if it " +
+        "closes by itself.",
+    ],
+    [
+      "scroll-to",
+      "eb",
+      { kind: "scroll-to", target: { identifier: "u-9-9" }, direction: "down" },
+      'could not scroll to id="u-9-9": the element with this id is covered by an alert, sheet ' +
+        "or popover. Dismiss it first, or add an await step for it to close.",
+    ],
+  ])(
+    "names a covered id off the screen on a %s step",
+    { timeout: 30_000 },
+    async ([, suffix, step, expected], { expect }) => {
+      const sim = device({ ax: axTree("app") });
+      const reason = await reasonOf(sim, `00000000-0000-0000-0000-0000000000${suffix}`, step);
+
+      expect(reason).toBe(expected);
+      expect(extraReads(sim)).toBe(1);
+    }
+  );
+
   it("gives no text and no read to an unmet when guard", async ({ expect }) => {
     const sim = device({ ax: axTree("app") });
     const result = await run(sim, "00000000-0000-0000-0000-0000000000e7", [
@@ -360,6 +403,18 @@ describe.concurrent("a miss on the app below a system alert", () => {
     expect(reason).toBe(`no visible element matched selector id="u-1-1": ${SYSTEM}`);
     expect(extraReads(sim)).toBe(0);
   }, 20_000);
+
+  it("leads with the scroll for a scroll-to step", async ({ expect }) => {
+    const sim = device({ ax: axTree("system") });
+    const reason = await reasonOf(sim, "00000000-0000-0000-0000-0000000000f3", {
+      kind: "scroll-to",
+      target: U11,
+      direction: "down",
+    });
+
+    expect(reason).toBe(`could not scroll to text="u11": ${SYSTEM}`);
+    expect(extraReads(sim)).toBe(0);
+  }, 30_000);
 });
 
 describe.concurrent("an Android miss while a window is on top of the app", () => {
@@ -392,6 +447,24 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
 
     expect(reason).toBe(DIALOG);
   });
+
+  it("gives an await step that waited a remedy other than waiting", async ({ expect }) => {
+    const sim = device({
+      android: androidXml([STATUS_BAR, IME, appWindow(APP, "[28,986][1052,1478]", "OK")]),
+    });
+    const reason = await reasonOf(sim, "emulator-5556", {
+      kind: "await",
+      condition: "visible",
+      selector: { text: "Model" },
+      timeout: 500,
+    });
+
+    expect(reason).toBe(
+      'no visible element matched selector text="Model": a dialog is on top of the app, and ' +
+        "Android leaves the elements below it out of the tree. Dismiss it first, or raise this " +
+        "step's `timeout:` if it closes by itself."
+    );
+  }, 20_000);
 
   it("drops the dialog text once a later read finds no dialog", async ({ expect }) => {
     const dump = { current: androidXml([STATUS_BAR, appWindow(APP, "[28,986][1052,1478]", "OK")]) };
@@ -480,6 +553,24 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       );
     }, 20_000);
 
+    it("gives an await step the waited remedy in a dialog whose list scrolls", async ({
+      expect,
+    }) => {
+      const sim = device({ android: androidXml([BAR, COLORS]), screen: SCREEN });
+      const reason = await reasonOf(sim, "emulator-5582", {
+        kind: "await",
+        condition: "visible",
+        selector: { text: "Color 25" },
+        timeout: 500,
+      });
+
+      expect(reason).toBe(
+        `no visible element matched selector text="Color 25": ${IN_DIALOG} add a scroll-to ` +
+          "step before this one. Else dismiss the dialog first, or raise this step's " +
+          "`timeout:` if it closes by itself."
+      );
+    }, 20_000);
+
     it("names within: on a scroll-to step in a dialog whose list scrolls", async ({ expect }) => {
       const sim = device({ android: androidXml([BAR, COLORS]), screen: SCREEN });
       const reason = await reasonOf(sim, "emulator-5572", {
@@ -489,7 +580,7 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       });
 
       expect(reason).toBe(
-        `reached the end of the scroll without finding text="Color 25": ${IN_DIALOG} add ` +
+        `could not scroll to text="Color 25": ${IN_DIALOG} add ` +
           `within: with the dialog's scroll container to this step. ${ELSE}`
       );
     }, 30_000);
@@ -506,9 +597,9 @@ describe.concurrent("an Android miss while a window is on top of the app", () =>
       });
 
       expect(reason).toBe(
-        'reached the end of the scroll without finding text="Color 25": a dialog is on top of ' +
-          "the app, and Android leaves the elements below it out of the tree. Dismiss it first, " +
-          "or add an await step for it to close."
+        'could not scroll to text="Color 25": a dialog is on top of the app, and Android ' +
+          "leaves the elements below it out of the tree. Dismiss it first, or add an await step " +
+          "for it to close."
       );
     }, 30_000);
 

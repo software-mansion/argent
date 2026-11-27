@@ -1,7 +1,7 @@
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
-import { readIosSimulatorUiTree } from "./flow-ios-tree";
+import { degradedNoAppHint, readIosSimulatorUiTree } from "./flow-ios-tree";
 
 /**
  * How long a launch waits for the platform's tree source to serve the launched
@@ -29,9 +29,12 @@ export async function waitForForegroundApp(
   bundleId: string,
   signal?: AbortSignal
 ): Promise<string | null> {
-  const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  const start = Date.now();
+  const deadline = start + NATIVE_READY_TIMEOUT_MS;
   let last: string;
   let readFailed: boolean;
+  // The last read was degraded and named no app in the foreground.
+  let hiddenByDialog = false;
   for (;;) {
     if (signal?.aborted) return null;
     // Bounded by the abort, as the reads in flow-actions are.
@@ -41,6 +44,7 @@ export async function waitForForegroundApp(
       const tree = read.value;
       if (tree.foregroundApp === bundleId) return null;
       readFailed = false;
+      hiddenByDialog = tree.degraded && tree.foregroundApp === undefined;
       last = tree.foregroundApp
         ? `${tree.foregroundApp} is in the foreground`
         : "no app is in the foreground";
@@ -60,9 +64,11 @@ export async function waitForForegroundApp(
   }
   // The app was never observed: the read's own reason ends with its remedy.
   if (readFailed) return `the launch of ${bundleId} could not be checked: ${last}`;
+  // The deadline is checked after each read, and a read has no budget of its
+  // own, so the wait can run past NATIVE_READY_TIMEOUT_MS: name what it took.
   return (
-    `${bundleId} did not become the foreground app within ${NATIVE_READY_TIMEOUT_MS} ms of its ` +
-    `launch: ${last}. Launch it by hand (launch-app, then screenshot) to see whether it crashes ` +
-    `or shows another app first.`
+    `${bundleId} was not the foreground app after a wait of ${Date.now() - start} ms: ` +
+    `${last}. Launch it by hand (launch-app, then screenshot) to see whether it crashes or shows ` +
+    `another app first.${hiddenByDialog ? ` ${degradedNoAppHint(device)}` : ""}`
   );
 }

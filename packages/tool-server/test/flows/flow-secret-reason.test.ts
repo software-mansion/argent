@@ -504,7 +504,10 @@ describe("the text of a text input once a secret was typed on the device", () =>
     const result = await run([typeToken(), saved()]);
 
     expect(app.fields[0]!.text).toBe(TOKEN);
-    expect(reasonOf(result)).toBe(reason("plain-field", ""));
+    expect(reasonOf(result)).toBe(
+      'element matched id="plain-field", but it is a password field. An e2e test does not read ' +
+        'the text of a password field (wanted to contain "Saved").'
+    );
   });
 });
 
