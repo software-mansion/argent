@@ -36,15 +36,15 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+      "Device ID from `list-devices`: iOS simulator UDID, Android serial<flag:macos-apps>, or Mac app id (`macos-app-<bundle id>`)</flag:macos-apps>."
     ),
   bundleId: z
     .string()
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On macOS, omit the macos-app- prefix</flag:macos-apps>."
+      "Bundle ID (iOS) or package name (Android)<flag:macos-apps>; on macOS, omit `macos-app-`</flag:macos-apps>."
     ),
   port: metroPortField.describe(
-    "Exclude requests to this Metro port on local addresses. Omit it to use the device's Metro port (usually 8081)."
+    "Metro port to exclude from logs (omit for device default, usually 8081)."
   ),
   limit: z
     .number()
@@ -52,15 +52,13 @@ const zodSchema = z.object({
     .nonnegative()
     .optional()
     .default(50)
-    .describe(
-      "Take the newest matching requests and return them oldest first. Use 0 for capture status and totals without entries."
-    ),
+    .describe("Newest requests to return oldest-first (default 50; 0 = status/totals only)."),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Hide existing history from later lists. Cleared request IDs still work in view-network-request-details."
+      "Hide current history from later lists (IDs still work in `view-network-request-details`)."
     ),
   // Declared so this non-strict object refuses the old stop instead of stripping it: the read
   // would succeed while capture records on.
@@ -128,11 +126,9 @@ export function createNativeNetworkLogsTool(
       android: { emulator: true, device: true },
       macos: { app: true, catalyst: true },
     },
-    description: `List native HTTP requests from URLSession and NSURLConnection on iOS simulators<flag:macos-apps> and Mac apps</flag:macos-apps>, or OkHttp in a debuggable Android build. Use when debugging traffic from a native module or SDK. Coverage excludes background URLSession transfers, WKWebView and Network.framework.
-Call network-capture-start before triggering requests. Returns recent requests oldest first, with capture status and coverage in header. The log stays readable after capture stops. Pass an ID to view-network-request-details.<flag:macos-apps> If the Mac log stays stopped after a failed start, check the start result.</flag:macos-apps>
-On an iOS simulator, a blocked read returns status and a message with the next action. Follow the message before retrying.
-If the call fails with NATIVE_DEVTOOLS_NOT_CONNECTED, follow its message.
-An Apple system app is rejected outright (terminal: never retry it).`,
+    description: `List native HTTP requests (URLSession/NSURLConnection on iOS<flag:macos-apps>/Mac apps</flag:macos-apps>; OkHttp on debuggable Android). Call \`network-capture-start\` first.
+Use when inspecting native SDK/module traffic (pass an ID to \`view-network-request-details\` for bodies/headers).
+Returns recent requests oldest-first with capture status in \`header\` (or a precheck status + remedy message on iOS).<flag:macos-apps> If a Mac log stays stopped, check the start result.</flag:macos-apps> Fails on \`NATIVE_DEVTOOLS_NOT_CONNECTED\`. An Apple system app is rejected outright (terminal: never retry it).`,
     zodSchema,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

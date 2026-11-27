@@ -1,6 +1,6 @@
 ---
 name: argent-android-emulator-setup
-description: Set up and connect to an Android emulator using argent MCP tools. Use when starting a new session on Android, booting an emulator, getting a device serial, or before any UI interaction task.
+description: Boot an Android emulator and find its serial with Argent. Use when no Android emulator is running yet or you need to pick and boot one.
 ---
 
 ## 1. Prerequisites
@@ -14,7 +14,7 @@ The Android SDK (platform tools and emulator) and an AVD, created in Android Stu
 
 ## 3. Using the device
 
-Pass the Android serial as `udid` to the same interaction tools as on iOS. See `argent-device-interact` for interaction tooling and the Android notes at the bottom of that skill. If a React Native app can't reach Metro, see `argent-metro-debugger` §1.
+Pass the Android serial as `udid` to the same interaction tools as on iOS. See `argent-device-interact` (and its `references/advanced.md` for Android notes). If a React Native app can't reach Metro, see `argent-metro-debugger` §1.
 
 ## 4. Notes
 
