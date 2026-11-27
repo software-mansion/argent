@@ -38,6 +38,7 @@ export async function invokeSubTool<T = unknown>(
     fileInputs?: Record<string, ResolvedFileInput>;
     flowStack?: InvokeToolOptions["flowStack"];
     flowSecret?: InvokeToolOptions["flowSecret"];
+    flowOutput?: InvokeToolOptions["flowOutput"];
   }
 ): Promise<T> {
   const signal = ctx?.signal;
@@ -48,6 +49,7 @@ export async function invokeSubTool<T = unknown>(
     ...(extra?.fileInputs ? { fileInputs: extra.fileInputs } : {}),
     ...(flowStack ? { flowStack } : {}),
     ...(flowSecret ? { flowSecret } : {}),
+    ...(extra?.flowOutput ? { flowOutput: extra.flowOutput } : {}),
     ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
   };
   if (!recordChildInvocation) {

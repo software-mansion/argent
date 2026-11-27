@@ -117,13 +117,22 @@ export async function injectAndroidText(serial: string, text: string): Promise<v
   }
 }
 
-/** Press a single android.view.KeyEvent keycode via `adb shell input keyevent`. */
-export async function injectAndroidKeycode(serial: string, keycode: number): Promise<void> {
-  await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+/** Press an android.view.KeyEvent keycode `repeat` times in one `adb shell input keyevent`. */
+export async function injectAndroidKeycode(
+  serial: string,
+  keycode: number,
+  repeat = 1
+): Promise<void> {
+  const keycodes = Array(repeat).fill(keycode).join(" ");
+  await adbShell(serial, `input keyevent ${keycodes}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
 }
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */
-export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
+export async function injectAndroidNamedKey(
+  serial: string,
+  name: string,
+  repeat = 1
+): Promise<void> {
   const lower = name.toLowerCase();
   // Own-property check: `key` is a free string, so "constructor" would otherwise
   // pass the nullish guard with Object.prototype.constructor.
@@ -142,5 +151,5 @@ export async function injectAndroidNamedKey(serial: string, name: string): Promi
       }
     );
   }
-  await injectAndroidKeycode(serial, keycode);
+  await injectAndroidKeycode(serial, keycode, repeat);
 }

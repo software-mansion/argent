@@ -301,6 +301,7 @@ describe("stepRequiresDevice", () => {
       "fold": true,
       "snapshot": true,
       "script": false,
+      "output-check": false,
     };
     const samples: Record<FlowStep["kind"], FlowStep> = {
       "echo": { kind: "echo", message: "x" },
@@ -322,6 +323,10 @@ describe("stepRequiresDevice", () => {
       "fold": { kind: "fold", posture: "open" },
       "snapshot": { kind: "snapshot", name: "s" },
       "script": { kind: "script", path: "seed.mjs" },
+      "output-check": {
+        kind: "output-check",
+        check: { path: "a", test: "exists", expected: true },
+      },
     };
 
     const { registry } = mockRegistry();

@@ -64,6 +64,7 @@ function startServer(cap: Captured): Promise<{ url: string; close: () => Promise
                   command: { type: "string" },
                   args: { type: "string" },
                   delayMs: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+                  shutdown: { type: "boolean" },
                 },
                 required: ["name", "project_root", "command"],
               },
@@ -199,8 +200,8 @@ describe("CLI run — flow-add-step --args reaches the payload (issue #452)", ()
   });
 
   it("coerces --delayMs by its declared integer type and omits absent optionals", async () => {
-    // `delayMs` is the only non-string field in the schema, so it is the one
-    // place the payload can arrive with the wrong JSON type: a string "250"
+    // `delayMs` is the one numeric field in the schema, so it is the one
+    // place a number can arrive with the wrong JSON type: a string "250"
     // fails the server's zod validation. `args` is optional — omitting the flag
     // must leave the key out rather than sending null/"".
     await run(

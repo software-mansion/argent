@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getUpdateState, isUpdateNoteSuppressed } from "../../utils/update-checker";
+import { isUpdateCheckDisabled } from "../../utils/update-check-env";
 import { isReleaseBuild } from "../../utils/release-build";
 import { getActiveScreenRecordings } from "../../utils/screen-recording-reminder";
 import { listActiveRecordings } from "../flows/flow-utils";
@@ -228,6 +229,7 @@ export const updateArgentTool: ToolDefinition<{
   description:
     "Apply a pending Argent update. Call this only when the user has explicitly consented in this conversation to updating Argent, e.g. after an update notification reports a new version. Returns { message } with the update status, version info, and whether the tool server restarts. Fails if no update is available or an update is already in progress.",
   zodSchema,
+  hideWhen: isUpdateCheckDisabled,
   interaction: {
     startedMsg: () => `Updating Argent to ${getUpdateState().installableVersion ?? "latest"}`,
     completedMsg: () => `Updated Argent to ${getUpdateState().installableVersion ?? "latest"}`,

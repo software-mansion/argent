@@ -158,7 +158,7 @@ describe("when: parse/serialize", () => {
 
   it("requires exactly one condition key and no timeout", () => {
     expect(() => parseFlow("steps:\n  - when: {}\n    steps: [{ tap: A }]\n")).toThrow(
-      /exactly one condition key \(exists, visible, hidden, text, platform\)/i
+      /exactly one condition key \(exists, visible, hidden, text, platform, output\)/i
     );
     expect(() =>
       parseFlow("steps:\n  - when: { visible: X, hidden: Y }\n    steps: [{ tap: A }]\n")

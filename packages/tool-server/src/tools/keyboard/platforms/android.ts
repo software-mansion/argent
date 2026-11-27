@@ -23,8 +23,9 @@ async function typeAndroidPhone(
     keysPressed += params.text.length;
   }
   if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    await injectAndroidNamedKey(device.id, params.key, count);
+    keysPressed += count;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
 }
