@@ -191,7 +191,7 @@ Argent finds a value in these forms:
 
 A value shorter than 6 characters counts only where no letter or digit is next to it. Thus a PIN `4821` stays in the number `14821`. A body preview that ends inside a value shows the placeholder, not the start of the value.
 
-Argent does not find a value that the app changed or encoded in another way, for example in base64. Data that is not a secret stays visible, for example a token that the server issues.
+Argent does not find a value that the app or a URL parser changed, for example a value in base64 or a URL that loses its tabs and line breaks. Data that is not a secret stays visible, for example a token that the server issues.
 
 ### Secrets over a link
 
