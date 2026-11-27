@@ -131,7 +131,7 @@ async function resolveNativeDevtools(
  * shut down has no env; a new one makes its attempt in its factory.
  */
 async function armNow(registry: Registry, udid: string): Promise<void> {
-  if (externalClaimForAnyId(udid)) return;
+  if (externalClaimForAnyId(udid) ?? externalClaimForNativeId(udid.toUpperCase())) return;
   const running = await runningNativeDevtools(registry, udid);
   if (running) {
     await running.ensureEnvReady().catch(() => {});

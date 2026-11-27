@@ -460,6 +460,18 @@ describe("simulator-watcher against a provider's simulator", () => {
     expect(resolvedUdids(resolveService)).not.toContain(CLAIMED_UDID);
   });
 
+  it("leaves a claimed simulator to its provider when a tool call targets it in lower case", async () => {
+    publishDescriptor({ capabilities: ["simctl"], nativeId: LETTERED_UDID });
+    const { registry, resolveService } = makeRegistry();
+
+    const { ready, stop } = startSimulatorWatcher(registry);
+    await ready;
+    await armSimulator(LETTERED_UDID.toLowerCase());
+    stop();
+
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
   /** The claim is only as live as the process behind it. */
   it("ignores a claim whose provider process is gone", async () => {
     publishDescriptor({ capabilities: ["simctl"], pid: DEAD_PID });
