@@ -46,14 +46,41 @@ export function mapNativeTraitsToDescribeRole(traits: string[]): string {
   return "AXGroup";
 }
 
+// UIKit exposes every UIScrollView's vertical and horizontal scroll indicators
+// as adjustable elements ("Vertical scroll bar, 1 page" value="0%"), even for
+// single-page containers and inside table cells. They are not actionable tap
+// targets (scroll with `gesture-swipe`), matching macOS, HarmonyOS and physical
+// iOS which already drop scroll bars. Real adjustable controls (sliders,
+// steppers, pickers, section indices) and anything with an explicit identifier
+// or hint stay.
+const IOS_SCROLL_BAR_LABEL = /^(Vertical|Horizontal) scroll bar, .+\bpages?$/;
+const PERCENT_VALUE = /^\d+(?:\.\d+)?%$/;
+
+export function isIosScrollBar(
+  role: string,
+  el: { label?: string; value?: string; identifier?: string; hint?: string }
+): boolean {
+  return (
+    role === "AXAdjustable" &&
+    !el.identifier &&
+    !el.hint &&
+    typeof el.label === "string" &&
+    IOS_SCROLL_BAR_LABEL.test(el.label) &&
+    (el.value === undefined || PERCENT_VALUE.test(el.value))
+  );
+}
+
 export function adaptNativeDescribeElementToDescribeNode(
   element: NativeDescribeElement
 ): DescribeNode | null {
   const frame = clampNormalizedFrame(element.normalizedFrame);
   if (!frame) return null;
 
+  const role = mapNativeTraitsToDescribeRole(element.traits);
+  if (isIosScrollBar(role, element)) return null;
+
   return {
-    role: mapNativeTraitsToDescribeRole(element.traits),
+    role,
     frame,
     children: [],
     label: element.label,

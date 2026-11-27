@@ -1,6 +1,6 @@
 import { AXDescribeElement, AXDescribeResponse } from "../../../../blueprints/ax-service";
 import { DescribeNode, parseDescribeResult } from "../../contract";
-import { mapNativeTraitsToDescribeRole } from "./ios-native-adapter";
+import { isIosScrollBar, mapNativeTraitsToDescribeRole } from "./ios-native-adapter";
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -21,8 +21,11 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
   if (width <= 0 || height <= 0) return null;
 
   const traits = el.traits ?? [];
+  const role = mapNativeTraitsToDescribeRole(traits);
+  if (isIosScrollBar(role, el)) return null;
+
   return {
-    role: mapNativeTraitsToDescribeRole(traits),
+    role,
     frame: {
       x: roundNormalized(x1),
       y: roundNormalized(y1),

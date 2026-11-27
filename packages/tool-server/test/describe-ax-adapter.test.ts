@@ -286,4 +286,52 @@ describe("describe ax-service adapter", () => {
     expect(root.children).toHaveLength(1);
     expect(root.children[0]?.label).toBe("Visible");
   });
+
+  it("drops UIKit vertical and horizontal scroll bar indicators", () => {
+    const frame = { x: 0.91, y: 0.12, width: 0.08, height: 0.7 };
+    expect(
+      adaptAXElement({
+        label: "Vertical scroll bar, 1 page",
+        value: "0%",
+        frame,
+        traits: ["adjustable"],
+      })
+    ).toBeNull();
+    expect(
+      adaptAXElement({
+        label: "Horizontal scroll bar, 5 pages",
+        value: "34%",
+        frame,
+        traits: ["adjustable"],
+      })
+    ).toBeNull();
+  });
+
+  it("preserves real adjustable controls and scroll bars with an explicit identifier", () => {
+    const frame = { x: 0.1, y: 0.5, width: 0.8, height: 0.05 };
+    expect(
+      adaptAXElement({
+        label: "Text Size",
+        value: "50%",
+        frame,
+        traits: ["adjustable"],
+      })?.role
+    ).toBe("AXAdjustable");
+    expect(
+      adaptAXElement({
+        label: "Section index",
+        frame,
+        traits: ["adjustable"],
+      })?.role
+    ).toBe("AXAdjustable");
+    expect(
+      adaptAXElement({
+        label: "Vertical scroll bar, 2 pages",
+        value: "0%",
+        identifier: "customScrollBar",
+        frame,
+        traits: ["adjustable"],
+      })?.role
+    ).toBe("AXAdjustable");
+  });
 });
