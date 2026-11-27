@@ -336,6 +336,16 @@ describe("ios.additionalDeviceSets — additive union across scopes", () => {
     ]);
   });
 
+  it("adds Radon IDE's device set when it exists, without duplicating a configured entry", () => {
+    const radonSet = path.join(homeDir, "Library/Caches/com.swmansion.radon-ide/Devices/iOS");
+    fs.mkdirSync(radonSet, { recursive: true });
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([radonSet]);
+    setConfigValue("ios.additionalDeviceSets", ["/abs/set", radonSet], "global", opts());
+    expect(getAdditionalIosDeviceSets(opts())).toEqual([path.resolve("/abs/set"), radonSet]);
+    // The config value itself stays exactly what the user set.
+    expect(getConfigValueByKey("ios.additionalDeviceSets", opts())).toEqual(["/abs/set", radonSet]);
+  });
+
   it("drops duplicates that only converge after normalization", () => {
     setConfigValue("ios.additionalDeviceSets", ["~/DeviceSets/ci"], "global", opts());
     setConfigValue(
