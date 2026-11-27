@@ -117,26 +117,14 @@ export async function injectAndroidText(serial: string, text: string): Promise<v
   }
 }
 
-// Max keycodes packed into one `adb shell input keyevent` invocation. Keeping
-// batches bounded avoids long shell commands while cutting N repeated presses
-// (e.g. 30 backspaces) from N app_process launches down to 1.
-const ANDROID_KEYEVENT_BATCH_SIZE = 50;
-
-/** Press an android.view.KeyEvent keycode `repeat` times via `adb shell input keyevent`. */
+/** Press an android.view.KeyEvent keycode `repeat` times in one `adb shell input keyevent`. */
 export async function injectAndroidKeycode(
   serial: string,
   keycode: number,
   repeat = 1
 ): Promise<void> {
-  if (repeat <= 1) {
-    await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
-    return;
-  }
-  for (let remaining = repeat; remaining > 0; remaining -= ANDROID_KEYEVENT_BATCH_SIZE) {
-    const batch = Math.min(remaining, ANDROID_KEYEVENT_BATCH_SIZE);
-    const args = Array.from({ length: batch }, () => String(keycode)).join(" ");
-    await adbShell(serial, `input keyevent ${args}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
-  }
+  const keycodes = Array(repeat).fill(keycode).join(" ");
+  await adbShell(serial, `input keyevent ${keycodes}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
 }
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */

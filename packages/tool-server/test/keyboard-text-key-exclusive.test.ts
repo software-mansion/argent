@@ -498,7 +498,7 @@ describe("keyboard — repeating a named key", () => {
     ).toHaveLength(3);
   });
 
-  it("batches repeated Android keyevents into chunks of 50", async () => {
+  it("packs repeated Android keyevents into a single adb call", async () => {
     const tool = createKeyboardTool(registry());
 
     const res5 = await tool.execute({}, { udid: "emulator-5554", key: "backspace", repeat: 5 });
@@ -513,9 +513,8 @@ describe("keyboard — repeating a named key", () => {
     vi.clearAllMocks();
     const res60 = await tool.execute({}, { udid: "emulator-5554", key: "backspace", repeat: 60 });
     expect(res60).toEqual({ typed: "backspace", keys: 60 });
-    expect(adbShell).toHaveBeenCalledTimes(2);
-    expect(adbShell.mock.calls[0]![1]).toBe(`input keyevent ${Array(50).fill("67").join(" ")}`);
-    expect(adbShell.mock.calls[1]![1]).toBe(`input keyevent ${Array(10).fill("67").join(" ")}`);
+    expect(adbShell).toHaveBeenCalledTimes(1);
+    expect(adbShell.mock.calls[0]![1]).toBe(`input keyevent ${Array(60).fill("67").join(" ")}`);
   });
 
   it("rejects `repeat` with `text` before resolving secret placeholders", async () => {

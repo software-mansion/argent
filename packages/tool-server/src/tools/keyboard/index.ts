@@ -65,7 +65,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Use `repeat` to press the key multiple times in one call. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
     ),
   repeat: z
     .number()
@@ -74,7 +74,7 @@ const zodSchema = z.object({
     .max(100)
     .optional()
     .describe(
-      'Press `key` this many times in one call (1–100, default 1), e.g. `{ key: "backspace", repeat: 12 }`. Only valid with `key`.'
+      'Press `key` this many times in one call, e.g. `{ key: "backspace", repeat: 12 }`. Only valid with `key`.'
     ),
   delayMs: z
     .number()
