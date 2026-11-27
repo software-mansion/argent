@@ -52,9 +52,13 @@ export function formatWhatsNewNote(version: string, highlights: readonly string[
  * The record only moves forward: local-mode repos on older versions share it.
  */
 export function takeWhatsNewNote(current: string): string | undefined {
-  const seen = getWhatsNewSeenVersion();
-  if (!isNewerThanSeen(current, seen)) return undefined;
-  setWhatsNewSeenVersion(current);
-  const highlights = highlightsSince(seen, current);
-  return highlights.length > 0 ? formatWhatsNewNote(current, highlights) : undefined;
+  let seen = getWhatsNewSeenVersion();
+  while (isNewerThanSeen(current, seen)) {
+    if (setWhatsNewSeenVersion(current, { ifSeen: seen })) {
+      const highlights = highlightsSince(seen, current);
+      return highlights.length > 0 ? formatWhatsNewNote(current, highlights) : undefined;
+    }
+    seen = getWhatsNewSeenVersion();
+  }
+  return undefined;
 }

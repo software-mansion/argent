@@ -386,6 +386,7 @@ async function runDetached(
     host,
     idleTimeoutMinutes,
     token,
+    managed: "cli",
   });
   await writeToolsServerState({
     port: actualPort,
@@ -418,6 +419,7 @@ async function runForeground(
     host,
     idleTimeoutMinutes,
     token,
+    managed: "cli",
   });
 
   const cannotStart = (err: unknown): never => {

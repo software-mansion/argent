@@ -133,6 +133,96 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(describeIosMock).not.toHaveBeenCalled();
   });
 
+  it("settles a static screen when the window ends", async () => {
+    // The 250 ms window is longer than the 200 ms poll, so a read at the poll
+    // interval landed short of it and every remote press waited a further poll.
+    // The read after it is sent when the window ends.
+    const res = await runIdle(makeTvApi([SCREEN]));
+
+    expect(res.settled).toBe(true);
+    expect(res.polls).toBe(3);
+    expect(res.waitedMs).toBe(250);
+  });
+
+  it("does not wait longer for that read when reads are slow", async () => {
+    // A 100 ms read already starts the second one past the window: one 200 ms
+    // poll between them, as before.
+    const api = makeTvApi([SCREEN]);
+    api.describe = () => new Promise((resolve) => setTimeout(resolve, 100, SCREEN));
+
+    const res = await runIdle(api);
+
+    expect(res.polls).toBe(2);
+    expect(res.waitedMs).toBe(400);
+  });
+
+  it("sees a change that lasts less than the window between two reads", async () => {
+    // With 20 ms reads, another screen shows from 60 to 260 ms. A wait longer
+    // than the poll interval reads at 0 and 270 ms and misses it.
+    const changed = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
+    const start = Date.now();
+    const api = makeTvApi([SCREEN]);
+    api.describe = () =>
+      new Promise((resolve) =>
+        setTimeout(() => {
+          const at = Date.now() - start;
+          resolve(at >= 60 && at < 260 ? changed : SCREEN);
+        }, 20)
+      );
+
+    const res = await runIdle(api);
+
+    expect(res.settled).toBe(true);
+    // Settled on the screen after the change, once it held for 250 ms.
+    expect(res.waitedMs).toBeGreaterThanOrEqual(510);
+  });
+
+  it("does not count a slow first read as time the screen held", async () => {
+    // The first read is blocked for 600 ms while the screen renders, so it shows
+    // a screen that appeared during it. That screen changes 420 ms after the read
+    // came back, so it never held for the 1000 ms window.
+    const changed = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
+    const start = Date.now();
+    let reads = 0;
+    const api = makeTvApi([SCREEN]);
+    api.describe = () => {
+      const ms = reads++ === 0 ? 600 : 10;
+      return new Promise((resolve) =>
+        setTimeout(() => resolve(Date.now() - start < 1020 ? SCREEN : changed), ms)
+      );
+    };
+
+    const res = await runIdle(api, { minStableMs: 1000, timeoutMs: 3000 });
+
+    expect(res.settled).toBe(true);
+    // Settled on the changed screen, once it held for 1000 ms.
+    expect(res.waitedMs).toBeGreaterThanOrEqual(2020);
+  });
+
+  it("waits for the cursor to land when the keyboard closes", async () => {
+    // Captured on tvOS 27: after `select` on the keyboard's `done`, `done` keeps
+    // focus with nothing focusable for about 550 ms (three 200 ms polls), and
+    // then the cursor lands on the field.
+    const closing: TvDescribeResponse = {
+      bundleId: "com.example.app",
+      focused: row("done", 0.9, { isFocused: true }),
+      focusable: [],
+    };
+    const field: TvDescribeResponse = {
+      bundleId: "com.example.app",
+      focused: row("hello", 0.3, { isFocused: true }),
+      focusable: [row("hello", 0.3, { isFocused: true }), row("Probe button", 0.4)],
+    };
+    const api = makeTvApi([closing, closing, closing, field]);
+
+    const res = await runIdle(api);
+
+    expect(res.settled).toBe(true);
+    expect(res.note).toBeUndefined();
+    // The field's read, one at the poll interval, and the one that confirms it.
+    expect(api.calls()).toBe(6);
+  });
+
   it("does not settle while the cursor is still moving", async () => {
     // Only the cursor differs between the two reads.
     const moved: TvDescribeResponse = {
@@ -279,6 +369,20 @@ describe("await-screen-idle on an Apple TV", () => {
 
     expect(res.settled).toBe(false);
     expect(res.note).toMatch(/stopped answering/);
+  });
+
+  it("stays quiet when the deadline falls in the read after a long confirming wait", async () => {
+    // The 10 ms read waits 400 ms for the window's end, and the 30 ms read
+    // after it is still in flight at the deadline. The reader answered.
+    const api = makeTvApi([SCREEN]);
+    let reads = 0;
+    api.describe = () =>
+      new Promise((resolve) => setTimeout(resolve, reads++ === 0 ? 10 : 30, SCREEN));
+
+    const res = await runIdle(api, { timeoutMs: 420, minStableMs: 400 });
+
+    expect(res.settled).toBe(false);
+    expect(res.note).toBeUndefined();
   });
 
   it("stays quiet on a moving screen whose last read merely straddled the deadline", async () => {

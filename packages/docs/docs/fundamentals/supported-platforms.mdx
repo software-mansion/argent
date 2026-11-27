@@ -38,6 +38,14 @@ iOS simulators and Android emulators or devices are driven with taps, swipes, pi
   caption="The same interaction model on a physical Pixel connected over adb"
 />
 
+On a physical Android device, Argent starts a screen-sharing agent on the device over adb. When the session ends, Argent stops this agent. This cleanup is best-effort: it needs a working adb connection at that moment. The agent can stay active in these cases:
+
+- The user or the system sends a kill signal to the host process.
+- The host computer goes to sleep.
+- The user disconnects the cable.
+
+To stop the agent manually, connect the device again and run `adb -s <serial> shell pkill -f 'screensharing[.]Main'`. This command also stops the device mirror of Android Studio.
+
 ### Shared Android emulators
 
 Several agents can boot the same AVD at the same time. Each agent boots a read-only emulator on its own console port. A read-only emulator keeps the AVD and its snapshot unchanged. The emulator does not run a read-only instance next to a writable one, so start your own emulator of that AVD read-only too. See the [tools reference](/docs/reference/tools#devices-and-apps).

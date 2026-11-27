@@ -41,10 +41,10 @@ const zodSchema = z.object({
   bundleId: z
     .string()
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On macOS, omit the macos-app- prefix</flag:macos-apps>."
     ),
   port: metroPortField.describe(
-    "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
+    "Exclude requests to this Metro port on local addresses. Omit it to use the device's Metro port (usually 8081)."
   ),
   limit: z
     .number()
@@ -53,14 +53,14 @@ const zodSchema = z.object({
     .optional()
     .default(50)
     .describe(
-      "Maximum number of requests to return: the most recent ones, oldest first. 0 returns only the header and the total."
+      "Take the newest matching requests and return them oldest first. Use 0 for capture status and totals without entries."
     ),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. The IDs of cleared requests still work in view-network-request-details"
+      "Hide existing history from later lists. Cleared request IDs still work in view-network-request-details."
     ),
   // Declared so this non-strict object refuses the old stop instead of stripping it: the read
   // would succeed while capture records on.
@@ -71,7 +71,7 @@ const zodSchema = z.object({
     })
     .optional()
     .describe(
-      "Retired: native-network-logs only reads. Call network-capture-stop with the same udid and bundleId to stop capture; drop `stop: false`, which was a plain read."
+      "Retired. Omit even when false. Use network-capture-stop with the same udid and bundleId."
     ),
 });
 
@@ -128,18 +128,11 @@ export function createNativeNetworkLogsTool(
       android: { emulator: true, device: true },
       macos: { app: true, catalyst: true },
     },
-    description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, OkHttp on Android.
-Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
-On iOS<flag:macos-apps> and Mac apps</flag:macos-apps> it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code<flag:macos-apps>, and react-native-macos fetch</flag:macos-apps>. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing.
-Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12<flag:macos-apps>, macos-3f9a-12</flag:macos-apps>), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. Pass a request's id to view-network-request-details for its headers and bodies, and on Android its redirects. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
-Call network-capture-start before triggering requests. This tool reads existing records, including after network-capture-stop. Check the header for readiness or the reason capture is unavailable.<flag:macos-apps> If the Mac native header says stopped after a failed start, check the start result for the reason.</flag:macos-apps>
-On iOS: when capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, call restart-app, then network-capture-start (a relaunch ends JS capture), then this tool, unless the header says the launch cannot be recorded on that device. On a local simulator, launch-app and restart-app return networkCapture saying whether capture is armed in the new process.
-<flag:macos-apps>On a Mac app: when capture started while the app was already running, the header of the first answer says that its requests before the start were not recorded. Capture stays on across restart-app, and requests sent while the app starts can be missing.
-</flag:macos-apps>On iOS: If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
-On Android: needs a debuggable build. A header that says not attached means this tool-server did not attach capture to the app's current process: network-capture-start attaches it.
-Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
-Android results also carry capture and captureDetail. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing.`,
+    description: `List native HTTP requests from URLSession and NSURLConnection on iOS simulators<flag:macos-apps> and Mac apps</flag:macos-apps>, or OkHttp in a debuggable Android build. Use when debugging traffic from a native module or SDK. Coverage excludes background URLSession transfers, WKWebView and Network.framework.
+Call network-capture-start before triggering requests. Returns recent requests oldest first, with capture status and coverage in header. The log stays readable after capture stops. Pass an ID to view-network-request-details.<flag:macos-apps> If the Mac log stays stopped after a failed start, check the start result.</flag:macos-apps>
+On an iOS simulator, a blocked read returns status and a message with the next action. Follow the message before retrying.
+If the call fails with NATIVE_DEVTOOLS_NOT_CONNECTED, follow its message.
+An Apple system app is rejected outright (terminal: never retry it).`,
     zodSchema,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
