@@ -116,6 +116,47 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("url");
   });
 
+  it("has no readOnly annotation, because `out` can replace a file", () => {
+    expect(createScreenshotTool({} as never).readOnly).toBeUndefined();
+  });
+
+  it("accepts a trimmed, absolute `out` and leaves it off the result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ url: "http://localhost/screenshot.png", path: "/tmp/screenshot.png" }),
+      })
+    );
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue({ apiUrl: "http://localhost:4949" }),
+    } as unknown as import("@argent/registry").Registry;
+    const screenshotTool = createScreenshotTool(registry);
+
+    const outOf = (out: string) => screenshotTool.zodSchema!.parse({ udid: "ABC", out }).out;
+    expect(outOf(" /shots/base.png ")).toBe("/shots/base.png");
+    expect(outOf("C:\\shots\\base.png")).toBe("C:\\shots\\base.png");
+    for (const out of [
+      "   ",
+      "",
+      "shots/base.png",
+      "./base.png",
+      "~",
+      "~/base.png",
+      "C:base.png",
+    ]) {
+      expect(() => outOf(out)).toThrow();
+    }
+
+    const result = await screenshotTool.execute(
+      {},
+      { udid: "ABC", includeImageInContext: true, out: "/shots/base.png" },
+      { artifacts: new ArtifactStore() }
+    );
+    expect(result).not.toHaveProperty("out");
+  });
+
   it("refuses a rotation override on HarmonyOS rather than returning an unrotated capture", async () => {
     const registry = {
       resolveService: vi.fn(),

@@ -59,6 +59,6 @@ Use `await-ui-element` to gate a step on a screen transition. To gate on an HTTP
 ## Screenshots & Android Notes
 
 - Call `screenshot` for initial state, baselines before visible UI changes, state after a delay, or when an attached capture shows a transitional/loading frame.
-- Keep the default downscaled capture for routine checks; reserve `scale: 1.0` (with `includeImageInContext: false`) for saving baselines/currents for `argent-screenshot-diff`.
+- Keep the default downscaled capture for routine checks; reserve `scale: 1.0` (with `includeImageInContext: false` and `out` at an absolute path unique to this run) for saving baselines/currents for `argent-screenshot-diff`.
 - If `screenshot` times out, restart the device transport with `stop-simulator-server`.
 - **Android first-launch permissions:** `reinstall-app` on Android installs with `-g`, pre-granting runtime permissions on first launch.
