@@ -74,21 +74,24 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   }
 
   // Fast path: index already built by react-profiler-analyze.
+  let index: CpuSampleIndex | null = null;
   if (sessionPaths.cpuSampleIndexPath) {
     try {
       const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
-      const index = deserializeCpuSampleIndex(raw);
-      return { index, commitTree: await readStoredCommits(sessionPaths) };
+      index = deserializeCpuSampleIndex(raw);
     } catch {
       // Fall through to building from the raw profile.
     }
   }
+  if (!index) {
+    index = buildCpuSampleIndex(await readCpuProfile(sessionPaths.cpuProfilePath));
+  }
 
-  const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
-  return {
-    index: buildCpuSampleIndex(cpuProfile),
-    commitTree: await readStoredCommits(sessionPaths),
-  };
+  /**
+   * Read outside the fallback so a corrupt commits file reports itself instead
+   * of discarding a good cached index first.
+   */
+  return { index, commitTree: await readStoredCommits(sessionPaths) };
 }
 
 /**
