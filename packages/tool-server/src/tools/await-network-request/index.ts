@@ -54,7 +54,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "URL text or a pattern. Match a part with no secrets. The result includes the full URL and secret placeholders are rejected."
+        "URL text or a pattern. Match a part with no secrets: secret placeholders are rejected."
       ),
     urlMatch: z
       .enum(["contains", "equals", "matches"])
@@ -102,7 +102,7 @@ const zodSchema = z
         code: z.ZodIssueCode.custom,
         path: ["url"],
         message:
-          "url takes no {{secret:...}} placeholder: a matcher never resolves secrets, and the match is returned in the result. Match on another part of the URL.",
+          "url takes no {{secret:...}} placeholder: a matcher never resolves secrets. Match on another part of the URL.",
       });
     }
     if (params.urlMatch === "matches") {

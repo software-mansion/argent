@@ -195,7 +195,7 @@ export function secretRedactor(
       }
     });
     // A marker already in the text keeps its characters, whichever value they spell.
-    for (const marker of text.matchAll(MARKER_IN_TEXT_RE)) {
+    for (const marker of text.matchAll(SECRET_PLACEHOLDER_RE)) {
       owner.fill(none, marker.index, marker.index + marker[0].length);
     }
   };
@@ -276,9 +276,6 @@ export function secretRedactor(
   });
 }
 
-/** `{{secret:NAME}}` as text, for {@link SecretRedactorOptions.wholeValues}. */
-const MARKER_IN_TEXT_RE = /\{\{secret:[A-Za-z_][A-Za-z0-9_]*\}\}/g;
-
 function isAsciiAlnum(code: number): boolean {
   return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
@@ -302,23 +299,55 @@ function startsAlone(text: string, from: number): boolean {
 /**
  * The spellings of {@link spellingsOf} and those the common client stacks
  * write into a request: `/` written `\/` (Android's org.json, Foundation's
- * JSONSerialization), `<`, `>`, `&`, `=`, `'` and every character outside
- * ASCII written `\u` and 4 lowercase hex digits (Gson's default, Python's
- * json), and a form body (`URLSearchParams`, OkHttp's `FormBody`), which
- * percent-encodes all but letters, digits and `*-._` and writes a space `+`.
+ * JSONSerialization), `<`, `>`, `&`, `=` and `'` written `\u003c` and so on
+ * (Gson's default), every character outside ASCII written `\u` and 4
+ * lowercase hex digits (Python's json), and a form body (`URLSearchParams`,
+ * OkHttp's `FormBody`), which percent-encodes all but letters, digits and
+ * `*-._` and writes a space `+`. A value the app put in a URL unencoded comes
+ * back as a URL parser serializes it (Chrome's records, `new URL`), which
+ * escapes only a few characters: see {@link urlSerialized}.
  */
 function dataSpellingsOf(value: string): Set<string> {
   const spellings = spellingsOf(value);
   const json = JSON.stringify(value).slice(1, -1);
+  const unicodeEscape = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
   spellings.add(json.replaceAll("/", "\\/"));
-  spellings.add(
-    json.replace(
-      /[<>&='\u0080-\uffff]/g,
-      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
-    )
-  );
+  spellings.add(json.replace(/[<>&='\u2028\u2029]/g, unicodeEscape));
+  spellings.add(json.replace(/[\u0080-\uffff]/g, unicodeEscape));
   spellings.add(new URLSearchParams([["", value]]).toString().slice(1));
+  for (const escaped of URL_ESCAPED) spellings.add(urlSerialized(value, escaped));
   return spellings;
+}
+
+/**
+ * The ASCII characters the WHATWG URL standard percent-encodes in a query of
+ * an http(s) URL, and in a path, with and without `^`, which newer parsers
+ * escape too. Controls and characters outside ASCII are escaped in all of them.
+ */
+const URL_ESCAPED = [/[ "#<>']/, /[ "#<>?`{}]/, /[ "#<>?`{}^]/];
+
+/** `value` as a URL parser writes it where it escapes the ASCII characters `escaped` matches. */
+function urlSerialized(value: string, escaped: RegExp): string {
+  let out = "";
+  for (const char of value) {
+    const code = char.codePointAt(0)!;
+    if (code > 0x20 && code < 0x7f && !escaped.test(char)) {
+      out += char;
+      continue;
+    }
+    // encodeURIComponent leaves some of these as they are, such as `'`.
+    if (code < 0x80) {
+      out += `%${code.toString(16).toUpperCase().padStart(2, "0")}`;
+      continue;
+    }
+    try {
+      out += encodeURIComponent(char);
+    } catch {
+      // A lone surrogate, which a parser writes as the replacement character.
+      out += "%EF%BF%BD";
+    }
+  }
+  return out;
 }
 
 function spellingsOf(value: string): Set<string> {

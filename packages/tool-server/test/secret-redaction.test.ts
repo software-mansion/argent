@@ -147,6 +147,26 @@ describe("secretRedactor for network data (wholeValues)", () => {
     expect(out).not.toMatch(/p w|p%20w|p\+w/);
   });
 
+  it.each([
+    // Gson escapes `&` and leaves `ä` as it is; Python's json does the reverse.
+    ["Gson", '{"p":"p\u00e4\\u0026ss1234"}'],
+    ["Python's json", '{"p": "p\\u00e4&ss1234"}'],
+  ])("finds a value with a non-ASCII character and an `&` as %s writes it", (_title, text) => {
+    const own = secretRedactor([{ name: "PW", value: "p\u00e4&ss1234" }], { wholeValues: true });
+    expect(own(text)).toMatch(/^\{"p": ?"\{\{secret:PW\}\}"\}$/);
+  });
+
+  it.each(["p@ss word", "Za\u017c\u00f3\u0142\u0107:1", "ab|cd e9", "pa ss'wd{^}"])(
+    "finds %j left unencoded in a URL, as a URL parser writes it",
+    (value) => {
+      const own = secretRedactor([{ name: "PW", value }], { wholeValues: true });
+      expect(own(new URL(`https://h.test/x?pw=${value}`).href)).toBe(
+        "https://h.test/x?pw={{secret:PW}}"
+      );
+      expect(own(new URL(`https://h.test/u/${value}`).pathname)).toBe("/u/{{secret:PW}}");
+    }
+  );
+
   it("finds no fragment, so a password that holds a common word leaves keys alone", () => {
     const own = secretRedactor([{ name: "P", value: "password1" }], { wholeValues: true });
     expect(own('{"password":"x","passwords":2}')).toBe('{"password":"x","passwords":2}');

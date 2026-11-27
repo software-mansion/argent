@@ -457,16 +457,16 @@ If iOS native devtools blocks a read, follow the recovery action in `message` be
 
 Call `network-capture-start`, trigger the request, then call `await-network-request`. The wait can match a request that has already finished since the latest capture start. It works on the same targets as start, including Chromium. On Chromium, match the final URL, method, and status after redirects.
 
-| Parameter          | Meaning                                                                                                                                    |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `udid`, `bundleId` | Use the device and app IDs from start. The wait reuses the Metro target from that call.                                                    |
-| `url`              | URL text or a regular expression. Match a part that contains no secrets. The wait rejects secret placeholders and can return the full URL. |
-| `urlMatch`         | `contains` (default) and `equals` ignore case. `matches` uses a case-sensitive JavaScript regular expression with no implicit anchors.     |
-| `method`           | HTTP method, matched without regard to case.                                                                                               |
-| `status`           | Exact HTTP status (100–599) or a class such as `"2xx"`. A failed request can match a status if it received response headers.               |
-| `outcome`          | `complete` (default) accepts a finished response, including HTTP errors. `failed` accepts a request error. `any` accepts either.           |
-| `timeoutMs`        | Wait limit in milliseconds. Default 10,000, maximum 120,000.                                                                               |
-| `pollIntervalMs`   | Interval between reads in milliseconds. Default 400, range 50–5,000.                                                                       |
+| Parameter          | Meaning                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`, `bundleId` | Use the device and app IDs from start. The wait reuses the Metro target from that call.                                                |
+| `url`              | URL text or a regular expression. Match a part that contains no secrets. The wait rejects secret placeholders.                         |
+| `urlMatch`         | `contains` (default) and `equals` ignore case. `matches` uses a case-sensitive JavaScript regular expression with no implicit anchors. |
+| `method`           | HTTP method, matched without regard to case.                                                                                           |
+| `status`           | Exact HTTP status (100–599) or a class such as `"2xx"`. A failed request can match a status if it received response headers.           |
+| `outcome`          | `complete` (default) accepts a finished response, including HTTP errors. `failed` accepts a request error. `any` accepts either.       |
+| `timeoutMs`        | Wait limit in milliseconds. Default 10,000, maximum 120,000.                                                                           |
+| `pollIntervalMs`   | Interval between reads in milliseconds. Default 400, range 50–5,000.                                                                   |
 
 The wait uses retained requests that started inside the latest capture window. Its JavaScript search requires that the start included JavaScript. A native layer already recording can also supply requests that started after the latest start. Clearing the native log listing leaves those records available to the wait. The wait can search a stopped window while the records remain available. For stopped JS capture, the wait needs an existing debugger connection. Requests that are still open or whose outcome Argent missed cannot match.
 

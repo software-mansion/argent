@@ -12,11 +12,11 @@ import { typedSecrets } from "../../utils/typed-secrets";
  */
 
 /**
- * A redactor for the values of every secret exposed to argent: the client's
- * forwarded secrets, every value of every secret source (also one an earlier
- * source shadows), and every value typed on any device since the tool-server
- * started, so an edit of a secrets file does not bring back a value already in
- * a field. A value under 2 names is named by the first: the client, then the
+ * A redactor for the values of every secret exposed to argent: the secrets the
+ * client forwarded with this call (an e2e run passes them to each step), every
+ * value of every secret source (also one an earlier source shadows), and the
+ * values typed on each device (see `typedSecrets`), so an edit of a secrets
+ * file does not bring back a value already in a field. A value under 2 names is named by the first: the client, then the
  * sources in the order a placeholder resolves, then typing. Read fresh on each
  * call, so an edited secrets file applies to the next one.
  */

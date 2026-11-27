@@ -502,7 +502,7 @@ describe("secret values on the Chromium branch", () => {
     ["PIN", "4821"],
   ]);
 
-  it("view-network-logs redacts the path and the error, and keeps the id, sizes and durations", async () => {
+  it("view-network-logs redacts the path and the error, and keeps the id and the duration", async () => {
     const requests = [
       rec({
         requestId: "4821",

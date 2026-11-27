@@ -1023,7 +1023,8 @@ describe("secret values in the result", () => {
     await startIos();
     ios.add(11, { url: `/v1/login?token=${TOKEN}`, status: 200 });
 
-    const result = await waitWith({ url: "/v1/login", status: 200 });
+    // The pattern holds the token as sent, which only the record as sent contains.
+    const result = await waitWith({ url: `token=${TOKEN}`, status: 200 });
 
     expect(result.match).toMatchObject({
       id: "ios-t7-11",

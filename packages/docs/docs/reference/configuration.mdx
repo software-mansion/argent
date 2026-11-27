@@ -176,13 +176,22 @@ A text field that is not secure shows the typed value on the screen. A tool that
 
 ### Secrets in network results
 
-`view-network-logs`, `view-network-request-details`, `native-network-logs` and `await-network-request` show each secret value as its placeholder, on every capture layer. The values come from every source in the table, a value that an earlier source overrides included, from the secrets that the client forwards, and from every value typed since the tool-server started. Argent finds a value in these forms:
+`view-network-logs`, `view-network-request-details`, `native-network-logs` and `await-network-request` show each secret value as its placeholder, on every capture layer. The values come from these places:
+
+- Every source in the table, also a value that an earlier source overrides.
+- The secrets that the client forwards with the call, for example in an e2e run with the `forward-secrets` flag.
+- The values that `keyboard`, `fill` and `paste` typed since the tool-server started, up to 256 per device.
+
+Argent finds a value in these forms:
 
 - As written, in a URL, a header, a body, an error or a redirect.
-- JSON-escaped, also with `/` written `\/` or with `<`, `>`, `&`, `=`, `'` and non-ASCII characters written `\uXXXX`.
+- JSON-escaped, also with `/` written `\/`, or with characters written `\u` and 4 lowercase hex digits.
 - URL-encoded, as `encodeURIComponent` or a form body writes it, with `+` for a space.
+- In a URL that the app did not encode, as the browser or a URL parser writes it.
 
-A value shorter than 6 characters counts only where no letter or digit is next to it, so a PIN `4821` stays in the number `14821`. A body preview that ends inside a value shows the placeholder, not the start of the value. Argent does not find a value that the app changed or encoded in another way, for example in base64, and does not hide data that is not a secret, such as a token that the server issues.
+A value shorter than 6 characters counts only where no letter or digit is next to it. Thus a PIN `4821` stays in the number `14821`. A body preview that ends inside a value shows the placeholder, not the start of the value.
+
+Argent does not find a value that the app changed or encoded in another way, for example in base64. Data that is not a secret stays visible, for example a token that the server issues.
 
 ### Secrets over a link
 

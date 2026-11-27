@@ -149,9 +149,18 @@ An Apple system app is rejected outright (terminal: never retry it).`,
       return live(ref.urn) ? { nativeDevtools: ref } : {};
     },
     async execute(services, params, ctx) {
-      // The ids are argent's own; a short secret value must not break them.
+      /**
+       * The request lines are app data. The rest is argent's own text and the
+       * in-app agent's capture state, as network-capture-start returns it, and
+       * holds numbers a short secret value would replace, such as a pid.
+       */
       return redactNetworkResult(await readListing(services, params), networkSecretRedactor(ctx), [
+        "status",
+        "header",
+        "capture",
+        "captureDetail",
         "requests.*.id",
+        "requests.*.state",
       ]);
     },
   };

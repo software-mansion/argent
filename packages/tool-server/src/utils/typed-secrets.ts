@@ -57,12 +57,12 @@ export function noteTypedSecrets(
 }
 
 /**
- * Every secret value typed on any device, by name, newest first per device. A
- * value typed under a name that now resolves to another value is still here.
+ * Every secret value kept for any device, by name. A value typed under a name
+ * that now resolves to another value is still here.
  */
 export function typedSecrets(): Array<{ name: string; value: string }> {
   return [...devices.values()].flatMap((values) =>
-    [...values].reverse().map(([value, placeholder]) => ({
+    [...values].map(([value, placeholder]) => ({
       name: placeholder.slice(SECRET_PLACEHOLDER_MARKER.length, -2),
       value,
     }))
