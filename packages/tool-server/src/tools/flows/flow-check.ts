@@ -46,8 +46,9 @@ export function createCheckFlowTool(
   return {
     id: "e2e-check",
     description: `Check an e2e test without a device and without running a step.
-Returns { problems }: each problem that makes e2e-execute refuse the e2e test before its first step.
-Each problem holds code? and message.
+Returns { problems }: each problem that makes e2e-execute refuse the e2e test before its first step,
+in this e2e test and in the run: fragments and nested e2e tests its steps reach. Each problem holds
+at?, code? and message. at lists the steps from the e2e test to the problem, each { step, run?, e2e?, when? }.
 Pass exactly one e2e test source: name (under project_root) or e2e_test_path.`,
     zodSchema,
     readOnly: true,

@@ -1,22 +1,39 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  canonicalFlowPath,
+  canonicalToolId,
+  classifyOnDiskSpelling,
   FAILURE_CODES,
   getFailureSignal,
   MAX_RUN_DEPTH,
+  nestedFlowTarget,
+  pickE2eFile,
   type FailureCode,
+  type NestedFlowTarget,
 } from "@argent/registry";
 import {
   blockSteps,
   chromiumLaunchSpec,
   escapeInline,
+  flowNameCasingError,
+  flowPathCasingError,
+  hostFileArgumentStat,
+  intoStep,
   parseFlow,
   precedesLeadingLaunch,
   runTargetName,
   type FlowFile,
   type FlowStep,
   type Launch,
+  type StepLevel,
 } from "./flow-utils";
-import { resolveRunTarget, type ProjectAccess } from "./project-access";
+import {
+  resolveRunTarget,
+  resolveSavedTest,
+  type ProjectAccess,
+  type ResolvedFlowFile,
+} from "./project-access";
 import { typeScriptScriptRefusal } from "./flow-script-step";
 
 /** A tool's JSON `inputSchema` by tool id, or undefined for a tool this tool-server lacks. */
@@ -47,13 +64,21 @@ interface LeadingLaunchEnv {
 export function* walkSteps(
   steps: FlowStep[],
   within = "",
+  levels: StepLevel[] = [],
   label = "step"
-): Generator<{ step: FlowStep; where: string }> {
+): Generator<{ step: FlowStep; where: string; at: StepLevel[] }> {
   for (const [i, step] of steps.entries()) {
     const where = `${label} ${i + 1}${within}`;
-    yield { step, where };
+    const at = [...levels, { step: i + 1 }];
+    yield { step, where, at };
     const inner = blockSteps(step);
-    if (inner) yield* walkSteps(inner, ` of the ${step.kind}: block at ${where}`);
+    if (inner) {
+      yield* walkSteps(
+        inner,
+        ` of the ${step.kind}: block at ${where}`,
+        intoStep(at, { [step.kind]: true })
+      );
+    }
   }
 }
 
@@ -63,7 +88,7 @@ export function* walkFlow(
   within = ""
 ): Generator<{ step: FlowStep; where: string }> {
   yield* walkSteps(flow.steps, within);
-  if (flow.shutdown) yield* walkSteps(flow.shutdown, within, "shutdown step");
+  if (flow.shutdown) yield* walkSteps(flow.shutdown, within, [], "shutdown step");
 }
 
 /** A retired key reaching a tool through a `tool:` step, with the guidance that tool declares. */
@@ -255,6 +280,161 @@ export function runDisplayFor(target: string, rootDisplay: string): string {
   return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Why a run is refused. `cycleAt` is the stack index a cycle closes on, and
+ * `tooDeep` marks a stack past {@link MAX_RUN_DEPTH}.
+ */
+export interface RunRefusal {
+  refusal: string;
+  cycleAt?: number;
+  tooDeep?: true;
+}
+
+/**
+ * A `run:` target resolved against the top of `stack` and passed through
+ * `execRunStep`'s guards (cycle, depth, on-disk casing), or the reason that
+ * fails the `run:` step. `display` names the fragment in reports.
+ */
+export async function guardRunHop(
+  project: ProjectAccess,
+  stack: RunStackEntry[],
+  rootDisplay: string,
+  target: string
+): Promise<RunRefusal | { hop: ResolvedFlowFile; display: string }> {
+  // Reasons quote the target escaped. A YAML error stays raw (its code frame
+  // is multi-line); a file system error quotes the path, so it is escaped.
+  const shown = escapeInline(target);
+  const display = runDisplayFor(target, rootDisplay);
+
+  // One resolution through the project seam: on this host, or in the files
+  // the client sent with an uploaded flow (a member carries its text, which
+  // `read` in {@link loadRunHop} hands over). A target the client did not send fails this
+  // step with the reason.
+  let hop: ResolvedFlowFile;
+  try {
+    hop = await resolveRunTarget(project, path.dirname(stack[stack.length - 1]!.canonical), target);
+  } catch (err) {
+    return { refusal: `could not load fragment "${shown}": ${escapeInline(errMsg(err))}` };
+  }
+  const { canonical, spelling } = hop;
+
+  // The cycle guard deliberately runs before the depth guard. A loop that
+  // happens to close on the MAX_RUN_DEPTH-th hop is still a loop, and reporting
+  // it as "max run depth exceeded" would send the author looking for excessive
+  // nesting instead of the repeated reference — and would drop the chain, the
+  // one piece of output that identifies the offending edge. The depth guard
+  // immediately below still stops the recursion.
+  const cycleAt = stack.findIndex((entry) => entry.canonical === canonical);
+  if (cycleAt !== -1) {
+    return {
+      refusal: `cyclic e2e test reference: ${[...stack.map((entry) => entry.display), display].join(" → ")}`,
+      cycleAt,
+    };
+  }
+
+  if (stack.length >= MAX_RUN_DEPTH) {
+    return { refusal: "max run depth exceeded", tooDeep: true };
+  }
+
+  // The canonical path above resolves the spelling by the FILESYSTEM's rules,
+  // and a case-insensitive one (APFS, NTFS) opens a file really named
+  // "frag.yaml" for `run: Frag.yaml`. Every expanded step is then attributed to
+  // a fragment no directory entry carries, and the identical tree fails with
+  // ENOENT on a case-sensitive volume (Linux CI). Only a case-folded verdict
+  // refuses: a basename matching nothing at all is an ordinary missing fragment,
+  // which the read's own ENOENT reports far better, and an unreadable listing
+  // vouches for nothing so it must refuse nothing.
+  const suppliedBase = path.posix.basename(target);
+  if (spelling.state === "case_folded") {
+    // Quote a replacement target only when parseRunTarget would accept one —
+    // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies —
+    // keeping the target's own directory prefix so the hint is a line the author
+    // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
+    // that fork asks for the rename it really needs.
+    const recovery = spelling.addressable
+      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
+      : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
+        `lowercase .yaml`;
+    return {
+      refusal:
+        `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
+        `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
+        `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
+        `checkout could not find the file at all — ${recovery}`,
+    };
+  }
+  return { hop, display };
+}
+
+/**
+ * The fragment a {@link guardRunHop} hop names, read and parsed, or the reason
+ * that fails the `run:` step.
+ */
+export async function loadRunHop(
+  hop: ResolvedFlowFile,
+  target: string
+): Promise<{ refusal: string } | { fragment: FlowFile }> {
+  const shown = escapeInline(target);
+  // There is deliberately NO path fence on the host read. A `run:` target is
+  // reachable exactly when the tool-server user can read it, the same reach the
+  // front door already grants: an operator can point e2e_test_path at any YAML on
+  // the host, so restricting composition below that only breaks documented
+  // layouts — a fragment shared sideways (`../shared/login.yaml`), and a flows
+  // dir symlinked to a tree kept outside the project. The one route that
+  // carries untrusted content, an uploaded flow, never reads from this host:
+  // assertUploadSelfContained refuses its `run:` steps unless the client sent
+  // their fragments, and then the resolution above is a lookup of what the
+  // client resolved on its own disk, fenced to the roots the client chose: the
+  // project, its .argent/flows, the root flow's directory, and the project of a
+  // flow saved under .argent/flows. Over a link each layout above works alone,
+  // but a sideways fragment of a flows dir symlinked outside the project lands
+  // under none of those roots, so the client refuses it and the run stops
+  // before step 1.
+  //
+  // A missing file reports the same ENOENT shape on both sides, so a reason
+  // reads the same whichever machine lacked the fragment.
+  let text: string | null;
+  try {
+    text = await hop.read();
+  } catch (err) {
+    return { refusal: `could not load fragment "${shown}": ${escapeInline(errMsg(err))}` };
+  }
+  if (text === null) {
+    return {
+      refusal: `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(hop.canonical)}'`,
+    };
+  }
+  try {
+    return { fragment: parseFlow(text) };
+  } catch (err) {
+    return { refusal: `could not load fragment "${shown}": ${errMsg(err)}` };
+  }
+}
+
+/**
+ * `e2e-execute`'s refusal of a nested run of `root` inside the runs `enclosing`
+ * it: a cycle, or a run stack past {@link MAX_RUN_DEPTH}.
+ */
+export function nestedRunRefusal(
+  enclosing: readonly RunStackEntry[],
+  root: RunStackEntry
+): RunRefusal | undefined {
+  const cycleAt = enclosing.findIndex((entry) => entry.canonical === root.canonical);
+  if (cycleAt !== -1) {
+    return {
+      refusal: `cyclic e2e test reference: ${[...enclosing, root].map((entry) => entry.display).join(" → ")}`,
+      cycleAt,
+    };
+  }
+  if (enclosing.length >= MAX_RUN_DEPTH)
+    return { refusal: "max run depth exceeded", tooDeep: true };
+  return undefined;
+}
+
 /** {@link scanLeadingLaunch}'s "keep scanning the parent" outcome. */
 const NO_EXECUTABLE_STEP = "no-executable-step";
 
@@ -414,26 +594,282 @@ export async function leadingLaunchRefusal(
 
 /** One problem `e2e-check` reports; `code` is the failure code `e2e-execute` would give. */
 export interface CheckProblem {
+  at?: StepLevel[];
   code?: string;
   message: string;
+}
+
+/** What one {@link checkFlow} call shares across the files it follows. */
+interface CheckWalk {
+  schemas: ToolSchemaLookup;
+  project: ProjectAccess;
+  /** The deepest stack length each `<reach>:<canonical path>` was walked at. */
+  reached: Map<string, number>;
+  problems: CheckProblem[];
+}
+
+function report(
+  walk: Pick<CheckWalk, "problems">,
+  at: StepLevel[] | undefined,
+  message: string,
+  code?: string
+): void {
+  walk.problems.push({
+    ...(at !== undefined && { at }),
+    ...(code !== undefined && { code }),
+    message,
+  });
+}
+
+/**
+ * Whether to walk a file reached this way at stack length `depth`: always the
+ * first time, and again when deeper, where its own `run:` chains can pass
+ * {@link MAX_RUN_DEPTH}.
+ */
+function reach(
+  walk: CheckWalk,
+  kind: "test" | "fragment",
+  canonical: string,
+  depth: number
+): "first" | "deeper" | undefined {
+  const key = `${kind}:${canonical}`;
+  const deepest = walk.reached.get(key);
+  if (deepest !== undefined && depth <= deepest) return undefined;
+  walk.reached.set(key, depth);
+  return deepest === undefined ? "first" : "deeper";
+}
+
+/**
+ * The stack index of the file a walk revisits deeper (`floor`), or undefined
+ * on a first walk, for its child reached as `visit`.
+ */
+function childFloor(
+  floor: number | undefined,
+  visit: "first" | "deeper",
+  stack: RunStackEntry[]
+): number | undefined {
+  return visit === "first" ? undefined : (floor ?? stack.length);
+}
+
+/**
+ * Whether a refusal is new in a walk that revisits the file at stack index
+ * `floor`: only a run past the depth limit, or a cycle closing below it.
+ */
+function isNewRefusal(floor: number | undefined, refusal: RunRefusal): boolean {
+  return (
+    floor === undefined ||
+    refusal.tooDeep === true ||
+    (refusal.cycleAt !== undefined && refusal.cycleAt < floor)
+  );
+}
+
+/**
+ * The checks `e2e-execute` runs on the test it is called for, then the files
+ * its steps reach. A nested test's problems go on the step `edge.at` that runs
+ * it, without a code: there they fail only that step. A revisit (`floor` set)
+ * only follows the references.
+ */
+async function checkTest(
+  walk: CheckWalk,
+  flow: FlowFile,
+  flowName: string,
+  stack: RunStackEntry[],
+  edge?: { at: StepLevel[]; prefix: StepLevel[] },
+  floor?: number
+): Promise<void> {
+  if (floor !== undefined) {
+    return followReferences(walk, flow.steps, stack, flowName, edge?.prefix ?? [], floor);
+  }
+  const refusals = [
+    retiredArgRefusal(walk.schemas, flow, flowName),
+    await unrunnableScriptRefusal(flow, flowName),
+    flow.executionPrerequisite
+      ? await leadingLaunchRefusal(
+          flow,
+          stack,
+          { schemas: walk.schemas, project: walk.project },
+          flowName,
+          undefined
+        )
+      : undefined,
+  ];
+  for (const refusal of refusals) {
+    if (refusal) report(walk, edge?.at, refusal.message, edge ? undefined : refusal.code);
+  }
+  await followReferences(walk, flow.steps, stack, flowName, edge?.prefix ?? [], undefined);
+}
+
+/** Follow every `run:` and nested `tool: e2e-execute` step in `steps`, `when:` blocks included. */
+async function followReferences(
+  walk: CheckWalk,
+  steps: FlowStep[],
+  stack: RunStackEntry[],
+  rootDisplay: string,
+  prefix: StepLevel[],
+  floor: number | undefined
+): Promise<void> {
+  for (const { step, at } of walkSteps(steps, "", prefix)) {
+    if (step.kind === "run") {
+      await followRun(walk, step.flow, stack, rootDisplay, at, floor);
+    } else if (step.kind === "tool" && canonicalToolId(step.name) === "e2e-execute") {
+      const target = nestedFlowTarget(step.args);
+      if (target) await followNested(walk, step.name, target, stack, at, floor);
+    }
+  }
+}
+
+/** A `run:` fragment gets the checks `execRunStep` makes when it loads one. */
+async function followRun(
+  walk: CheckWalk,
+  target: string,
+  stack: RunStackEntry[],
+  rootDisplay: string,
+  at: StepLevel[],
+  floor: number | undefined
+): Promise<void> {
+  const guarded = await guardRunHop(walk.project, stack, rootDisplay, target);
+  if ("refusal" in guarded) {
+    if (isNewRefusal(floor, guarded)) report(walk, at, guarded.refusal);
+    return;
+  }
+  const { hop, display } = guarded;
+  const visit = reach(walk, "fragment", hop.canonical, stack.length + 1);
+  if (visit === undefined) return;
+  const inner = childFloor(floor, visit, stack);
+  const loaded = await loadRunHop(hop, target);
+  if ("refusal" in loaded) {
+    if (inner === undefined) report(walk, at, loaded.refusal);
+    return;
+  }
+  if (inner === undefined) {
+    const refusal = await fragmentLoadRefusal(walk.schemas, loaded.fragment, target);
+    if (refusal !== undefined) report(walk, at, refusal);
+  }
+  await followReferences(
+    walk,
+    loaded.fragment.steps,
+    [...stack, { canonical: hop.canonical, display }],
+    rootDisplay,
+    intoStep(at, { run: target }),
+    inner
+  );
+}
+
+/** A nested test gets the checks `e2e-execute` makes on this host for the call the step makes. */
+async function followNested(
+  walk: CheckWalk,
+  toolName: string,
+  target: NestedFlowTarget,
+  stack: RunStackEntry[],
+  at: StepLevel[],
+  floor: number | undefined
+): Promise<void> {
+  const nested = await readNestedTest(walk.project, target, toolName);
+  if ("refusal" in nested) {
+    if (floor === undefined) report(walk, at, nested.refusal);
+    return;
+  }
+  const entry: RunStackEntry = { canonical: nested.canonical, display: nested.flowName };
+  const nesting = nestedRunRefusal(stack, entry);
+  if (nesting !== undefined) {
+    if (isNewRefusal(floor, nesting)) report(walk, at, nesting.refusal);
+    return;
+  }
+  const visit = reach(walk, "test", nested.canonical, stack.length + 1);
+  if (visit === undefined) return;
+  const inner = childFloor(floor, visit, stack);
+  let flow: FlowFile;
+  try {
+    flow = parseFlow(nested.text);
+  } catch (err) {
+    if (inner === undefined) report(walk, at, errMsg(err));
+    return;
+  }
+  await checkTest(
+    walk,
+    flow,
+    nested.flowName,
+    [...stack, entry],
+    { at, prefix: intoStep(at, { e2e: target.kind === "name" ? target.name : target.path }) },
+    inner
+  );
+}
+
+/**
+ * The test a nested `tool: e2e-execute` step names, found and read as
+ * `e2e-execute` finds and reads it, or the reason it fails.
+ */
+async function readNestedTest(
+  project: ProjectAccess,
+  target: NestedFlowTarget,
+  toolName: string
+): Promise<{ refusal: string } | { canonical: string; flowName: string; text: string }> {
+  // An upload names a nested test only by name: assertUploadSelfContained refuses the rest.
+  if (project.mode === "client" && target.kind === "name") {
+    try {
+      const hop = await resolveSavedTest(project, target.paths);
+      if (hop.spelling.state === "case_folded") {
+        return { refusal: flowNameCasingError(target.name, hop.spelling).message };
+      }
+      const text = await hop.read();
+      if (text === null) {
+        return { refusal: `ENOENT: no such file or directory, open '${hop.canonical}'` };
+      }
+      return { canonical: hop.canonical, flowName: target.name, text };
+    } catch (err) {
+      return { refusal: errMsg(err) };
+    }
+  }
+  let filePath: string;
+  let flowName: string;
+  if (target.kind === "name") {
+    flowName = target.name;
+    const picked = await pickE2eFile(target.paths);
+    filePath = picked.path;
+    const dirs = picked.exists
+      ? [path.dirname(filePath)]
+      : target.paths.map((candidate) => path.dirname(candidate));
+    for (const dir of dirs) {
+      const spelling = await classifyOnDiskSpelling(dir, `${flowName}.yaml`);
+      if (spelling.state === "case_folded") {
+        return { refusal: flowNameCasingError(flowName, spelling).message };
+      }
+    }
+  } else {
+    filePath = target.path;
+    const stat = await hostFileArgumentStat(toolName, "e2e_test_path", filePath);
+    if ("refusal" in stat) return stat;
+    const spelling = await classifyOnDiskSpelling(path.dirname(filePath), path.basename(filePath));
+    if (spelling.state !== "listed") {
+      return { refusal: flowPathCasingError(filePath, spelling).message };
+    }
+    flowName = path.basename(filePath, ".yaml");
+  }
+  const canonical = await canonicalFlowPath(filePath);
+  try {
+    return { canonical, flowName, text: await fs.readFile(canonical, "utf8") };
+  } catch (err) {
+    return { refusal: errMsg(err) };
+  }
 }
 
 /**
  * The e2e test in `text`, or the problem that keeps it from parsing, with its code.
  */
 export function parseForCheck(text: string): { flow: FlowFile } | { problems: CheckProblem[] } {
+  const parsing: { problems: CheckProblem[] } = { problems: [] };
   try {
     return { flow: parseFlow(text) };
   } catch (err) {
-    const code = getFailureSignal(err)?.error_code;
-    const message = err instanceof Error ? err.message : String(err);
-    return { problems: [{ ...(code !== undefined && { code }), message }] };
+    report(parsing, undefined, errMsg(err), getFailureSignal(err)?.error_code);
   }
+  return parsing;
 }
 
 /**
  * The problems `e2e-execute` would refuse the e2e test for before it touches
- * a device, collected instead of thrown. `canonical` is the test's path where
+ * a device, and those of the `run:` fragments and nested tests its steps
+ * reach, collected instead of thrown. `canonical` is the test's path where
  * `project` has it.
  */
 export async function checkFlow(input: {
@@ -444,20 +880,8 @@ export async function checkFlow(input: {
   project: ProjectAccess;
 }): Promise<CheckProblem[]> {
   const { flow, flowName, canonical, schemas, project } = input;
-  const refusals = [
-    retiredArgRefusal(schemas, flow, flowName),
-    await unrunnableScriptRefusal(flow, flowName),
-    flow.executionPrerequisite
-      ? await leadingLaunchRefusal(
-          flow,
-          [{ canonical, display: flowName }],
-          { schemas, project },
-          flowName,
-          undefined
-        )
-      : undefined,
-  ];
-  return refusals.flatMap((refusal) =>
-    refusal ? [{ code: refusal.code, message: refusal.message }] : []
-  );
+  const walk: CheckWalk = { schemas, project, reached: new Map(), problems: [] };
+  reach(walk, "test", canonical, 1);
+  await checkTest(walk, flow, flowName, [{ canonical, display: flowName }]);
+  return walk.problems;
 }

@@ -24,7 +24,6 @@ import type {
   DeviceInfo,
   FailureSignal,
   FileInputSpec,
-  OnDiskSpelling,
   Registry,
   ResolvedFileInput,
   ToolContext,
@@ -43,6 +42,7 @@ import {
   escapeInline,
   flowEnvProblem,
   flowNameCasingError,
+  flowPathCasingError,
   isBlockStep,
   parseFlow,
   flowFormatVersion,
@@ -60,12 +60,7 @@ import {
   mergeScriptEnv,
   type FlowScriptLogBudget,
 } from "./script/flow-script-executor";
-import {
-  ClientProjectAccess,
-  HostProjectAccess,
-  resolveRunTarget,
-  type ProjectAccess,
-} from "./project-access";
+import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
 import {
   UPLOAD_STAGE_BY_KIND,
   prepareToolStepInputs,
@@ -80,8 +75,11 @@ import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep } from "./flow-script-step";
 import {
   fragmentLoadRefusal,
+  guardRunHop,
   leadingLaunch,
   leadingLaunchRefusal,
+  loadRunHop,
+  nestedRunRefusal,
   retiredArgRefusal,
   runDisplayFor,
   walkFlow,
@@ -1621,12 +1619,8 @@ Without a link, every step kind runs.`,
       // through `tool: flow-execute` never stops. Checked before the
       // prerequisite handshake and before any device work.
       const enclosing = ctx?.flowStack ?? [];
-      if (enclosing.some((entry) => entry.canonical === rootEntry.canonical)) {
-        throw nestingFailure(
-          `cyclic e2e test reference: ${[...enclosing, rootEntry].map((entry) => entry.display).join(" → ")}`
-        );
-      }
-      if (enclosing.length >= MAX_RUN_DEPTH) throw nestingFailure("max run depth exceeded");
+      const nesting = nestedRunRefusal(enclosing, rootEntry);
+      if (nesting !== undefined) throw nestingFailure(nesting.refusal);
       const seed: RunStackEntry[] = [...enclosing, rootEntry];
 
       // Run-time analog of validateFlow's e2e-has-prerequisite rule: parse sees
@@ -2797,8 +2791,6 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
-  // Reasons quote the target escaped. A YAML error stays raw (its code frame
-  // is multi-line); a file system error quotes the path, so it is escaped.
   const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
@@ -2820,96 +2812,12 @@ async function execRunStep(
     state.stopped = true;
   };
 
-  // One resolution through the project seam: on this host, or in the files
-  // the client sent with an uploaded flow (a member carries its text, which
-  // `read` below hands over). A target the client did not send fails this
-  // step with the reason.
-  let hop: Awaited<ReturnType<ProjectAccess["resolveFlowFile"]>>;
-  try {
-    hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
-  } catch (err) {
-    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
-  }
-  const { canonical, spelling } = hop;
-
-  // The cycle guard deliberately runs before the depth guard. A loop that
-  // happens to close on the MAX_RUN_DEPTH-th hop is still a loop, and reporting
-  // it as "max run depth exceeded" would send the author looking for excessive
-  // nesting instead of the repeated reference — and would drop the chain, the
-  // one piece of output that identifies the offending edge. The depth guard
-  // immediately below still stops the recursion.
-  if (scope.runStack.some((entry) => entry.canonical === canonical)) {
-    return fail(
-      `cyclic e2e test reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
-    );
-  }
-
-  if (scope.runStack.length >= MAX_RUN_DEPTH) {
-    return fail("max run depth exceeded");
-  }
-
-  // The canonical path above resolves the spelling by the FILESYSTEM's rules,
-  // and a case-insensitive one (APFS, NTFS) opens a file really named
-  // "frag.yaml" for `run: Frag.yaml`. Every expanded step is then attributed to
-  // a fragment no directory entry carries, and the identical tree fails with
-  // ENOENT on a case-sensitive volume (Linux CI). Only a case-folded verdict
-  // refuses: a basename matching nothing at all is an ordinary missing fragment,
-  // which the read's own ENOENT reports far better, and an unreadable listing
-  // vouches for nothing so it must refuse nothing.
-  const suppliedBase = path.posix.basename(target);
-  if (spelling.state === "case_folded") {
-    // Quote a replacement target only when parseRunTarget would accept one —
-    // `addressable` tests the same FLOW_FILE_NAME_PATTERN that gate applies —
-    // keeping the target's own directory prefix so the hint is a line the author
-    // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
-    // that fork asks for the rename it really needs.
-    const recovery = spelling.addressable
-      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
-      : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
-        `lowercase .yaml`;
-    return fail(
-      `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
-        `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
-        `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
-        `checkout could not find the file at all — ${recovery}`
-    );
-  }
-
-  // There is deliberately NO path fence on the host read. A `run:` target is
-  // reachable exactly when the tool-server user can read it, the same reach the
-  // front door already grants: an operator can point e2e_test_path at any YAML on
-  // the host, so restricting composition below that only breaks documented
-  // layouts — a fragment shared sideways (`../shared/login.yaml`), and a flows
-  // dir symlinked to a tree kept outside the project. The one route that
-  // carries untrusted content, an uploaded flow, never reads from this host:
-  // assertUploadSelfContained refuses its `run:` steps unless the client sent
-  // their fragments, and then the resolution above is a lookup of what the
-  // client resolved on its own disk, fenced to the roots the client chose: the
-  // project, its .argent/flows, the root flow's directory, and the project of a
-  // flow saved under .argent/flows. Over a link each layout above works alone,
-  // but a sideways fragment of a flows dir symlinked outside the project lands
-  // under none of those roots, so the client refuses it and the run stops
-  // before step 1.
-  //
-  // A missing file reports the same ENOENT shape on both sides, so a reason
-  // reads the same whichever machine lacked the fragment.
-  let text: string | null;
-  try {
-    text = await hop.read();
-  } catch (err) {
-    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
-  }
-  if (text === null) {
-    return fail(
-      `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
-    );
-  }
-  let fragment: FlowFile;
-  try {
-    fragment = parseFlow(text);
-  } catch (err) {
-    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
-  }
+  const guarded = await guardRunHop(state.project, scope.runStack, scope.rootDisplay, target);
+  if ("refusal" in guarded) return fail(guarded.refusal);
+  const { canonical } = guarded.hop;
+  const loaded = await loadRunHop(guarded.hop, target);
+  if ("refusal" in loaded) return fail(loaded.refusal);
+  const { fragment } = loaded;
 
   // Charged to the run: step, so the fragment is refused whole rather than
   // part-executed up to the offending step.
@@ -3458,42 +3366,6 @@ function flowNameOf(clientPath: string): string {
   const flowName = bareExtension ? "" : path.basename(clientPath, ".yaml");
   assertSafeFlowName(flowName);
   return flowName;
-}
-
-/**
- * The refusal of an `e2e_test_path` whose basename is not in its directory's listing
- * as spelled. Thrown for the listing on this host ({@link resolveFlowSource})
- * and for the one on the client, which a linked run that composes reads from
- * the root's wire ({@link clientRootCanonical}), so one call fails alike on
- * both routes.
- */
-function flowPathCasingError(
-  clientPath: string,
-  spelling: Exclude<OnDiskSpelling, { state: "listed" }>
-): FailureError {
-  const suppliedBase = path.basename(clientPath);
-  // Hint the real spelling only when this same ladder would accept it (a
-  // stem-case slip like Checkout.yaml); an invalid real name (Upper.YAML)
-  // needs a rename.
-  const recovery =
-    spelling.state === "absent"
-      ? `Pass the basename exactly as it appears on disk.`
-      : spelling.addressable
-        ? `Pass e2e_test_path with the on-disk basename "${spelling.actual}".`
-        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — e2e test files must be lowercase .yaml.`;
-  return new FailureError(
-    `Invalid e2e_test_path "${clientPath}": the file must be named as it appears on disk — this ` +
-      `filesystem matched "${suppliedBase}" case-insensitively` +
-      (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
-      `, so the e2e test name (which keys the report and __baselines__/) would be one no ` +
-      `directory entry carries. ${recovery}`,
-    {
-      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-      failure_stage: "flow_path_casing",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
 }
 
 /**

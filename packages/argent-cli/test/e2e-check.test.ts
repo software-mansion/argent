@@ -40,7 +40,10 @@ describe("argent e2e check", () => {
         problems:
           path.basename(args.e2e_test_path) === "bad.yaml"
             ? [
-                { message: 'Tool "gesture-swpie" not found' },
+                {
+                  at: [{ step: 2, run: "frag.yaml" }, { step: 1, when: true }, { step: 3 }],
+                  message: 'Tool "gesture-swpie" not found',
+                },
                 { code: "FLOW_FILE_INVALID", message: "retired key" },
               ]
             : [],
@@ -79,7 +82,10 @@ describe("argent e2e check", () => {
   it("exits 1 and prints each problem under the path of its test", async () => {
     await expect(e2e(["check", "bad.yaml"], opts)).rejects.toThrow("process.exit:1");
 
-    expect(errs).toEqual(['bad.yaml: Tool "gesture-swpie" not found', "bad.yaml: retired key"]);
+    expect(errs).toEqual([
+      'bad.yaml: step 2 > run: frag.yaml: step 1 > when: step 3: Tool "gesture-swpie" not found',
+      "bad.yaml: retired key",
+    ]);
     expect(logs).toEqual(["2 errors in 1 of 1 e2e test"]);
   });
 
