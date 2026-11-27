@@ -25,6 +25,8 @@ export function simRemoteExecError(err: unknown): { killed?: boolean } {
 interface SimRemoteOptions {
   timeoutMs?: number;
   stdin?: string;
+  /** Kills the CLI when it aborts. */
+  signal?: AbortSignal;
 }
 
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
@@ -34,6 +36,7 @@ async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
       input: options?.stdin,
+      signal: options?.signal,
     } as Parameters<typeof execFileAsync>[2]);
     return { stdout: typeof stdout === "string" ? stdout : stdout.toString("utf8") };
   } catch (err) {
@@ -379,10 +382,18 @@ export type RemoteFold = z.infer<typeof remoteFoldSchema>;
 // and the runner then waits for the device to hand over to the other panel.
 const FOLD_TIMEOUT_MS = 60_000;
 
-/** Fold a remote foldable to `target`: a posture, or an angle in degrees. */
-export async function fold(udid: string, target: string): Promise<RemoteFold> {
+/**
+ * Fold a remote foldable to `target`: a posture, or an angle in degrees.
+ * `signal` stops the wait for the CLI; a fold the runner has begun is still
+ * carried through there.
+ */
+export async function fold(
+  udid: string,
+  target: string,
+  signal?: AbortSignal
+): Promise<RemoteFold> {
   const args = ["fold", stripRemotePrefix(udid), target, "--json"];
-  const { stdout } = await run(args, { timeoutMs: FOLD_TIMEOUT_MS });
+  const { stdout } = await run(args, { timeoutMs: FOLD_TIMEOUT_MS, signal });
   try {
     return remoteFoldSchema.parse(JSON.parse(stdout));
   } catch (err) {

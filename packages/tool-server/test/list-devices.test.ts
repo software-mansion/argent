@@ -318,6 +318,34 @@ describe("list-devices", () => {
     ]);
   });
 
+  it("asks this machine's Xcode once more, not once per device type it does not know", async () => {
+    const types = ["iPhone-19", "iPhone-19-Pro", "iPhone-19-Air", "iPhone-20"];
+    const devices = {
+      "com.apple.CoreSimulator.SimRuntime.iOS-28-0": types.map((type, i) => ({
+        udid: `NEW-${i}`,
+        name: type,
+        state: "Shutdown",
+        deviceTypeIdentifier: `com.apple.CoreSimulator.SimDeviceType.${type}`,
+      })),
+    };
+    let listings = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl") {
+        return { stderr: "", stdout: JSON.stringify({ devices }) };
+      }
+      if (cmd === "xcrun" && args.includes("devicetypes")) {
+        listings += 1;
+        return { stderr: "", stdout: JSON.stringify({ devicetypes: [] }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    await listDevicesTool.execute!({}, {});
+    await listDevicesTool.execute!({}, {});
+
+    expect(listings).toBeLessThanOrEqual(2);
+  });
+
   it("marks a remote iPhone Duo foldable, on a machine whose Xcode does not know the device type", async () => {
     const devices = {
       "com.apple.CoreSimulator.SimRuntime.iOS-27-2": [

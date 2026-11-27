@@ -13,6 +13,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
   isFoldableDeviceType,
+  KNOWN_FOLDABLE_DEVICE_TYPES,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -295,14 +296,6 @@ function readinessRank(d: ListedDevice): number {
   return d.state === "Booted" ? 0 : 1; // ios + ios-remote
 }
 
-/**
- * The device types known to be foldable, for a remote simulator. Its profile
- * is on the runner, and the runner's listing does not say whether the type is
- * foldable. This machine's Xcode is asked first, and may not know the type or
- * not be there at all.
- */
-const REMOTE_FOLDABLE_DEVICE_TYPES = new Set(["com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"]);
-
 // Asking this machine's Xcode about a device type takes seconds on a cold
 // cache. The listing does not wait longer than this for all of them: a type
 // still unanswered counts as not foldable this time, and its answer is cached
@@ -320,7 +313,7 @@ async function remoteFoldableTypes(
   const foldable = new Set<string>();
   const asked: Promise<void>[] = [];
   for (const type of deviceTypes) {
-    if (REMOTE_FOLDABLE_DEVICE_TYPES.has(type)) foldable.add(type);
+    if (KNOWN_FOLDABLE_DEVICE_TYPES.has(type)) foldable.add(type);
     else asked.push(isFoldableDeviceType(type).then((is) => void (is && foldable.add(type))));
   }
   let timer: NodeJS.Timeout | undefined;

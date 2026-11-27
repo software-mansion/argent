@@ -343,6 +343,10 @@ Fails if the device is not foldable or is a physical Android device.`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
   },
+  // A fold can outlast the MCP adapter's per-attempt timeout, which would
+  // send it again while the first is still moving the hinge. Every wait in
+  // it has a bound of its own.
+  longRunning: true,
   capability,
   // The Android hinge is moved through `adb` and a remote one by its runner,
   // so no simulator-server is spawned for either; the server follows the new
