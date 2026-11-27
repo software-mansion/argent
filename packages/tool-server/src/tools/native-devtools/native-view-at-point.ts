@@ -12,42 +12,25 @@ export const viewAtPointParams = {
   x: z
     .number()
     .describe(
-      "Raw X coordinate in points, on the axes of the UI as the user sees it (the axes of screenshots and describe frames)<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
+      "Raw X in upright UI points<flag:macos-apps> (Mac app: from describe area top-left)</flag:macos-apps>. Not normalized [0,1]."
     ),
-  y: z
-    .number()
-    .describe("Raw Y coordinate in points, on the same axes as x. NOT normalized [0,1] tap space."),
-  includeAncestors: z
-    .boolean()
-    .optional()
-    .describe("Include ancestor chain for the matched view (default true)"),
-  includeChildren: z
-    .boolean()
-    .optional()
-    .describe("Include child views for the matched view (default false)"),
+  y: z.number().describe("Raw Y in upright UI points. Not normalized [0,1]."),
+  includeAncestors: z.boolean().optional().describe("Include ancestor chain (default true)."),
+  includeChildren: z.boolean().optional().describe("Include child views (default false)."),
   fields: z
     .array(z.string())
     .optional()
     .describe(
-      "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
-        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
+      "View fields to return (defaults: pointer, className, tag, frame, windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, userInteractionEnabled, depth, identifier, label, layerName, nativeID; extra: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder)."
     ),
-  skipClasses: z
-    .array(z.string())
-    .optional()
-    .describe("Exact UIView class names whose entire subtree should be pruned"),
-  skipClassPrefixes: z
-    .array(z.string())
-    .optional()
-    .describe("Class name prefixes to prune entire subtrees"),
+  skipClasses: z.array(z.string()).optional().describe("Exact UIView class names to prune."),
+  skipClassPrefixes: z.array(z.string()).optional().describe("Class name prefixes to prune."),
   maxDepth: z
     .number()
     .int()
     .positive()
     .optional()
-    .describe("Maximum depth for returned child/ancestor serialization (default 150)"),
+    .describe("Max serialization depth (default 150)."),
 };
 
 const zodSchema = z.object({
@@ -56,7 +39,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "true returns the view that would receive a touch at the point: it respects userInteractionEnabled, close to UIKit hit-testing. Default false: the deepest visible view."
+      "true: touch-receiving view (UIKit hit-test). false (default): deepest visible view."
     ),
 });
 
@@ -84,28 +67,11 @@ export function queryViewAtPoint(
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
-  description: `Inspect the deepest UIView at a raw native window point: the one drawn there, or with hitTest: true the one that would receive a touch.
-
-Without hitTest it ignores userInteractionEnabled and answers "what is visually here?".
-Use when a screenshot shows something the accessibility tree does not name (an
-unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
-identifier or nativeID of whatever draws it.
-
-With hitTest: true it answers "what would receive the touch?". Use when a tap lands
-somewhere unexpected or does nothing, to see which control UIKit would hand the
-touch to: a transparent overlay swallowing it, a parent recognizer, a disabled button.
-
-Returns { status: "ok", view }: the matched view with its class name, frames,
-identifier, label and layer name, plus its ancestors and subviews as requested.
-view is null when nothing is drawn at that point, or with hitTest when no touchable view sits under it.
-
-To get x and y from a normalized describe frame, multiply its values by the
-screen size in points, on the same axes (landscape when the UI is).
-native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).<flag:macos-apps> On a Mac app,
-multiply them by the size of the area describe reports instead.</flag:macos-apps>
-
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-An Apple system app is rejected outright (terminal: never retry it).`,
+  description: `Inspect the deepest drawn UIView at raw point (x, y) by default, or the touch-receiving UIView with \`hitTest: true\`.
+Use when debugging unlabeled/custom views not in \`describe\` or checking which view swallows a tap (use \`hitTest: true\`).
+Convert normalized \`describe\` coords by multiplying by \`screen\` points from \`native-full-hierarchy\` (\`maxDepth: 1\`)<flag:macos-apps>; on a Mac app, multiply by the area \`describe\` reports</flag:macos-apps>.
+Returns \`{ status: "ok", view }\` (null if none).
+Status handling: If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {
