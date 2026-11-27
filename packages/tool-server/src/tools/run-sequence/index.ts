@@ -167,7 +167,7 @@ export function createRunSequenceTool(
   return {
     id: "run-sequence",
     description: `Run multiple interaction steps in one call, with one screenshot + tree captured after the last step.
-Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Fails/stops on the first error or unmet wait (\`success=false\`). Returns { completed, total, steps }. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
+Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Stops at the first error or unmet wait (\`success=false\`) and returns \`{ completed, total, steps }\` normally — compare \`completed\` with \`total\` to check for partial failure. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
 
 Allowed tools (coords are [0,1] screen fractions; ? = optional):
   gesture-tap: x, y, clickCount?<flag:macos-apps>, button?, modifiers?</flag:macos-apps>
@@ -177,7 +177,7 @@ Allowed tools (coords are [0,1] screen fractions; ? = optional):
   gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX+radiusY), durationMs?
-  button: button ("home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton")
+  button: button ("home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton")<flag:harmonyos>  [harmony: home/back/power]</flag:harmonyos>
   keyboard: text? or key? (one per step), delayMs?
   paste: text (real paste flows only)
   rotate: orientation ("Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown")

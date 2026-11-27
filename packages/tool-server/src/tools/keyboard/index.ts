@@ -50,7 +50,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Named key. Cannot be combined with `text` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
-        "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete, home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
+        "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
     ),
   delayMs: z
     .number()
@@ -96,7 +96,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     id: "keyboard",
     description: `Type text or press a named key on the focused field (tap or focus the field first; with no focus input is silently dropped).
 Use when entering text or triggering named keys (enter, escape, backspace, arrows).
-Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: prefer \`key: "enter"\` over tapping outside to dismiss the keyboard.`,
+Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

@@ -117,7 +117,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   // Never interpolate into this description: extract-tools scans it statically,
   // so a `${}` in it drops the tool out of the scan.
   description: `Swipe/drag between two normalized [0,1] points on touch devices (swipe up, fromY > toY, to scroll down).
-Use when scrolling a list, dismissing a modal, or swiping between pages (not Chromium<flag:macos-apps>/Mac</flag:macos-apps> — use \`gesture-scroll\` / \`gesture-drag\`). Returns { swiped: true, timestampMs, reactivated?, warning? }. Fails if the touch backend is unreachable.`,
+Use when scrolling a list, dismissing a modal, or swiping between pages (not Chromium<flag:macos-apps>/Mac</flag:macos-apps> — use \`gesture-scroll\` / \`gesture-drag\`). Physical iOS: an edge gesture (back-swipe) needs \`fromX: 0\` exactly; \`durationMs\` sets drag speed, not time; \`momentum: false\` only rests 300ms at the end.<flag:harmonyos> HarmonyOS: \`durationMs\` sets drag speed, clamped to 200–40000 px/s.</flag:harmonyos> Returns { swiped: true, timestampMs, reactivated?, warning? }. Fails if the touch backend is unreachable.`,
   zodSchema,
   alwaysLoad: true,
   // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,

@@ -259,14 +259,16 @@ const zodSchema = z.object({
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
-    .describe("Orientation override (rarely needed; captures already follow UI orientation)."),
+    .describe(
+      "Orientation override (rarely needed; captures already follow UI orientation).<flag:harmonyos> Rejected on HarmonyOS (captures display in current orientation).</flag:harmonyos> Ignored on physical iPhones."
+    ),
   scale: z
     .number()
     .min(0.01)
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (default 0.25 on mobile or `ARGENT_SCREENSHOT_SCALE`, 576px long side on TV, 1.0 on Chromium<flag:macos-apps>, <=768px on Mac</flag:macos-apps>)."
+      "Scale factor (default 0.25 on iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos> or `ARGENT_SCREENSHOT_SCALE`, 576px long side on TV, 1.0 on Chromium<flag:macos-apps>, <=768px on Mac</flag:macos-apps>)."
     ),
   includeImageInContext: z
     .boolean()

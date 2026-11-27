@@ -2834,13 +2834,13 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Overall boot budget in ms (Android default 480000, Vega 120000<flag:harmonyos>, HarmonyOS 180000</flag:harmonyos>)."
+      "Overall boot budget in ms (Android default 480000, Vega 120000<flag:harmonyos>, HarmonyOS 180000 — spans shutdown too with `force`</flag:harmonyos>)."
     ),
   force: z
     .boolean()
     .optional()
     .describe(
-      "Shut down and reboot even if already running.<flag:macos-apps> Quits and restarts the same Mac .app build.</flag:macos-apps> Ignored for Electron."
+      "Shut down and reboot even if already running.<flag:harmonyos> On HarmonyOS, also ties a running instance to its `hdc` connect key.</flag:harmonyos><flag:macos-apps> On a Mac app, quits and restarts the same .app build, including a copy running without the argent library (losing its unsaved changes); fails if the app shows a save prompt.</flag:macos-apps> Ignored for Electron."
     ),
   sound: z
     .boolean()
@@ -2924,7 +2924,7 @@ export function createBootDeviceTool(
     longRunning: true,
     description: `Boot a target device or app and wait until ready: iOS simulator, Android emulator, Vega VVD, <flag:harmonyos>HarmonyOS emulator, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Electron app.
 Use when starting a stopped target; pass exactly one target key (\`udid\`, \`avdName\`, \`vvdImage\`, <flag:harmonyos>\`harmonyInstance\`, </flag:harmonyos><flag:macos-apps>\`macosAppPath\`, </flag:macos-apps>or \`electronAppPath\`).
-Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`id\`), \`booted\`, and optional \`note\`. Fails if the target is missing or cannot boot (failed Android/Electron spawns are cleaned up automatically).`,
+Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`id\`), \`booted\`, and optional \`note\`.<flag:harmonyos> HarmonyOS starts the instance via DevEco Studio's Emulator manager and waits for its \`hdc\` connect key as \`udid\` (images are served only in mainland China; \`note\` explains any unproven key/readiness).</flag:harmonyos> Fails if the target is missing or cannot boot (failed Android/Electron spawns are cleaned up automatically).`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

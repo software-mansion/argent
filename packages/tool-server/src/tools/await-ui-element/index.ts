@@ -340,7 +340,7 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
     description: `Block server-side until a UI element matches \`condition\` on the \`describe\` tree or times out (never poll screenshot/describe manually).
-Use when waiting for UI to appear, disappear, or update after an action. Returns { success, elapsed, note?, cause? }. On timeout (\`success: false\`), \`cause\` is \`unmet\` (condition false on live tree), \`unreadable\` (blind/failed read), or \`cancelled\`; only \`unmet\` means the selector didn't match. Fails if the target backend is unreachable.`,
+Use when waiting for UI to appear, disappear, or update after an action. Returns { success, elapsed, note?, cause? }. On timeout (\`success: false\`), \`cause\` is \`unmet\` (live tree read, condition false — absent for \`visible\`, still present for \`hidden\`, or mismatched text for \`text\`), \`unreadable\` (blind/failed read), or \`cancelled\`; only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos> Fails if the target backend is unreachable.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

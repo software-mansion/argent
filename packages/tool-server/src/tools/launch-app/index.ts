@@ -43,7 +43,7 @@ const zodSchema = z.object({
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega app id, or Chromium tag)."
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega interactive component app id from manifest.toml e.g. `com.example.app.main`,<flag:harmonyos> HarmonyOS bundle name from `bm dump -a`,</flag:harmonyos> or Chromium tag)."
     ),
   activity: z
     .string()
@@ -71,7 +71,7 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
     id: "launch-app",
     // Android's device probes plus `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Open an installed app, or refresh a Chromium target (use \`open-url\` to navigate Chromium).<flag:macos-apps> On a Mac app, starts it in the background if stopped.</flag:macos-apps> Also prepares native-devtools injection on iOS/tvOS and registers the active app on physical iPhones.
+    description: `Open an installed app, or refresh a Chromium target (use \`open-url\` to navigate Chromium).<flag:macos-apps> On a Mac app, starts it in the background if stopped.</flag:macos-apps> Also prepares native-devtools injection on iOS/tvOS and registers the active app on physical iPhones (\`com.apple.springboard\` registers without launching so \`describe\` can read system dialogs).
 Use when starting an app; prefer this over tapping home-screen icons.
 Returns { launched, bundleId, <flag:macos-apps>kind?, appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed.
 Common iOS ids: com.apple.Preferences, com.apple.mobilesafari, com.apple.MobileSMS, com.apple.Maps, com.apple.mobileslideshow, com.apple.MobileAddressBook.

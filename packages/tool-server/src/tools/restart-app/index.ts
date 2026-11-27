@@ -40,7 +40,7 @@ const zodSchema = z.object({
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, or Vega app id)."
+      "App identifier (iOS<flag:macos-apps>/Mac app</flag:macos-apps> bundle id, Android package name, Vega interactive component app id<flag:harmonyos>, or HarmonyOS bundle name</flag:harmonyos>)."
     ),
   activity: z
     .string()
