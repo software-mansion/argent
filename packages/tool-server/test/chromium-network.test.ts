@@ -580,6 +580,26 @@ describe("secret values on the Chromium branch", () => {
     expect(out).not.toMatch(/tok3n|wait=|stored-key|page=/);
   });
 
+  it("view-network-logs leaves a query out after a secret that holds the query's own `?`", async () => {
+    const webhook = "https://hooks.test/services/T0/B1/tok3nXYZ?wait=true";
+    const requests = [
+      rec({ requestId: "1", method: "POST", url: `${webhook}&trace=private-id`, status: 204 }),
+      rec({ requestId: "2", method: "POST", url: `${webhook}#frag`, status: 204 }),
+    ];
+    const services = { chromium: { server: { network: { requests: () => requests } } } } as never;
+    const out = (await networkLogsTool.execute(
+      services,
+      { device_id: "chromium-cdp-9222", port: 8081, pageIndex: "latest" },
+      {
+        artifacts: {},
+        clientSecrets: new Map([["WEBHOOK_URL", webhook]]),
+      } as unknown as ToolContext
+    )) as string;
+    expect(out).toContain('{id: 1} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).toContain('{id: 2} "POST {{secret:WEBHOOK_URL}}" 204');
+    expect(out).not.toMatch(/tok3n|trace|private-id|frag/);
+  });
+
   it("view-network-request-details redacts a copy, so the record's initiator keeps its URL", async () => {
     const record = rec({
       requestId: "4821",

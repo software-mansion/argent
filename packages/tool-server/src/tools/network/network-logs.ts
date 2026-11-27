@@ -220,13 +220,20 @@ function shortName(url: string, from?: string): string {
 /**
  * The short name of a URL with its secrets redacted. A secret can reach past
  * the short name, such as a whole webhook URL, and its path alone is a piece no
- * redaction finds. So a URL that holds a secret is redacted whole, and the
- * short name is cut from that text: a marker has no `/`, `?`, `#` or `@`.
+ * redaction finds. So a URL that holds a secret is redacted whole and cut at
+ * its own query or fragment, or past a secret that holds that `?` or `#`. The
+ * short name is then taken from that text: a marker has no `/` or `@`.
  */
 function redactedName(url: string, redact: SecretRedactor, from?: string): string {
-  const whole = redact(url);
-  if (whole === url) return redact(shortName(url, from));
-  const beforeQuery = whole.split(/[?#]/, 1)[0]!;
+  const owner = redact.claims(url);
+  if (redact.render(url, owner) === url) return redact(shortName(url, from));
+  const query = url.search(/[?#]/);
+  let end = query === -1 ? url.length : query;
+  const claimed = (i: number) => redact.render(url[i]!, owner.subarray(i, i + 1)) !== url[i];
+  if (end > 0 && end < url.length && claimed(end - 1) && owner[end] === owner[end - 1]) {
+    while (end < url.length && owner[end] === owner[end - 1]) end++;
+  }
+  const beforeQuery = redact.render(url.slice(0, end), owner.subarray(0, end));
   const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(beforeQuery)?.[0];
   // A marker in place of the scheme: the secret begins the URL.
   if (scheme === undefined) return beforeQuery;
