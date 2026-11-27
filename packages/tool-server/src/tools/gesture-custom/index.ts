@@ -195,7 +195,7 @@ export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
   description: `Send a custom sequence of normalized [0,1] touch events.
 Use when you need long-press, drag-and-drop, edge/system gestures (\`edge\` on local iOS sim), or multi-waypoint/two-finger paths. Prefer \`gesture-tap\`, \`gesture-swipe\`, \`gesture-pinch\`, or \`gesture-rotate\` for standard gestures.<flag:macos-apps> Not supported on Mac apps (use \`gesture-tap\`, \`gesture-drag\`, \`gesture-scroll\`).</flag:macos-apps>
-Physical iOS: must be Down, optional Moves, then Up (multi-waypoint/two-finger needs portrait).
+Physical iOS: Down, optional Moves, then Up (\`x2\`/\`y2\` = second finger). Plain Down then Up: same point = press-hold, other point = drag (\`Up delayMs\` = rest before move); one Move at Down point between them = long-press pickup (\`Move delayMs\` = hold, \`Up delayMs\` = move time); any other train plays as timed paths (each waiting its \`delayMs\`, portrait required).
 Example long-press + drag: \`[{"type":"Down","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.6,"delayMs":800},{"type":"Up","x":0.5,"y":0.3,"delayMs":500}]\`.
 Returns \`{ events, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if device is not booted or events are invalid.`,
   zodSchema,

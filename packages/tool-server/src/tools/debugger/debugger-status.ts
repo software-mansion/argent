@@ -41,7 +41,7 @@ export function createDebuggerStatusTool(
     id: "debugger-status",
     description: `Check JS runtime debugger connectivity and diagnostics.
 Use when verifying debugger health before other \`debugger-*\` tools.
-Returns \`{ status: "connected", port, projectRoot, deviceName, appName, logicalDeviceId, isNewDebugger, loadedScripts, sourceMapReady }\` or \`{ status: "not_connected", reason, detail, guidance }\` (follow \`guidance\`; don't retry in a loop). Fails only on invalid input.`,
+Returns \`{ status: "connected", port, projectRoot, deviceName, appName, logicalDeviceId, isNewDebugger, loadedScripts, sourceMapReady }\` or \`{ status: "not_connected", reason, detail, guidance }\` (follow \`guidance\`; don't retry in a loop). Never fails when the runtime is simply unreachable.`,
     zodSchema,
     readOnly: true,
     interaction: {

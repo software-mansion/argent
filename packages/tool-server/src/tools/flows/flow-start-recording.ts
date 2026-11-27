@@ -80,7 +80,7 @@ export const flowStartRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-start-recording",
-  description: `Start recording a new e2e test, resetting \`.argent/e2e/<name>.yaml\` (replaces any existing file and runs pending fragment cleanup on restart).
+  description: `Start recording a new e2e test, resetting \`.argent/e2e/<name>.yaml\`. Starting over an existing test replaces the whole file, including its \`requires:\` and \`env:\` blocks (pass \`requires\` and \`env\` to keep them), and runs pending fragment cleanup on restart.
 Use when capturing a reusable sequence of device actions for replay; load the \`argent-create-e2e\` skill first. Not for Apple TV or Android TV.
 Record live steps with \`e2e-add-step\` (start standalone tests with \`restart-app\`; use \`executionPrerequisite\` for fragments), \`e2e-add-echo\`, and \`e2e-add-script\`, then call \`e2e-finish-recording\`. Edit the YAML only after finishing.
 Returns \`{ message, e2eTestFile, savedTo, restarted?, discardedSteps?, fragmentShutdown? }\`. Fails if the target file or directory cannot be written.`,

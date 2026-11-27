@@ -155,7 +155,12 @@ const zodSchema = z.object({
   env: envRecordSchema(z.string())
     .optional()
     .describe("Env overrides (supports `{{secret:NAME}}` and `{{output:PATH}}`)."),
-  shutdown: z.boolean().optional().describe("Record into `shutdown:` instead of `steps:`."),
+  shutdown: z
+    .boolean()
+    .optional()
+    .describe(
+      "Save the script in the shutdown list. Pending fragment cleanup runs before the script. The script's output reaches only later shutdown steps. stepCount counts shutdown entries."
+    ),
 });
 
 export const flowAddScriptTool: ToolDefinition<
@@ -165,7 +170,7 @@ export const flowAddScriptTool: ToolDefinition<
   id: "e2e-add-script",
   description: `Run a local JS/TS script and record it as a \`script:\` step (requires no \`argent link\` / \`ARGENT_TOOLS_URL\`).
 Use when adding a setup/seed/cleanup script during an open recording (output is available to later steps via \`{{output:PATH}}\`).
-Returns \`{ status, reason?, outputJson?, stepCount, recorded? }\`. Fails (recording nothing) if the script errors or recording is over a link.`,
+Returns \`{ status, reason?, outputJson?, stepCount, recorded? }\`. A failed script returns \`status: "fail"\` or \`"error"\` without recording (check \`reason\` and affected state before retrying). Fails on invalid input, no open recording, or recording over a link.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],

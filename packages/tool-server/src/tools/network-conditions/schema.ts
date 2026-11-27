@@ -16,7 +16,12 @@ export const networkConditionsZodSchema = z
     latencyMs: z.number().int().min(0).max(60_000).optional().describe("Added latency in ms."),
     downloadKbps: z.number().int().min(1).optional().describe("Download cap in kbps."),
     uploadKbps: z.number().int().min(1).optional().describe("Upload cap in kbps."),
-    offline: z.boolean().optional().describe("Simulate offline (`false` alone resets conditions)."),
+    offline: z
+      .boolean()
+      .optional()
+      .describe(
+        "Simulate offline (on Android, `adb reverse` ports stay reachable while Metro at `10.0.2.2` does not; `false` alone resets conditions)."
+      ),
   })
   .strict();
 

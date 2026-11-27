@@ -47,7 +47,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   longRunning: true,
   description: `Uninstall any existing build and install a fresh app package (clears app data and permissions).
 Use when installing a new build or resetting to clean state.
-Returns \`{ reinstalled, bundleId }\`. Fails if \`appPath\` is invalid or mismatched with \`bundleId\` (checked before uninstall) or install/uninstall fails.`,
+Returns \`{ reinstalled, bundleId }\`. Fails if \`appPath\` is invalid or \`bundleId\` does not match it (not checked on Vega or remote simulators; checks run before uninstall), or if install/uninstall fails.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,

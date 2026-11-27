@@ -1551,7 +1551,9 @@ const zodSchema = z.object({
   shutdown: z
     .boolean()
     .optional()
-    .describe("Record into the `shutdown:` block instead of `steps:`."),
+    .describe(
+      "Save the call in the shutdown list. Pending fragment cleanup runs before the call. stepCount counts shutdown entries."
+    ),
 });
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<

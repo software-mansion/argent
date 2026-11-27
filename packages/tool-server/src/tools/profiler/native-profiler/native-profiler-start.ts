@@ -55,7 +55,7 @@ export const nativeProfilerStartTool: ToolDefinition<
   // iOS can outlast the 30s MCP fetch timeout, whose replay would start a second xctrace.
   longRunning: true,
   description: `Start native profiling: Instruments (CPU, hangs, leaks) on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, or Perfetto (CPU, jank, memory) on Android.
-Use when profiling native performance — launch the target app first, reproduce the scenario, then call \`native-profiler-stop\` while it runs.<flag:macos-apps> Mac apps need a dev-signed build launched via Argent (use "Time Profiler" if signing/WebKit blocks the bundled template, or set \`malloc_stack_logging: true\` for leak stacks).</flag:macos-apps>
+Use when profiling native performance — launch the target app first, wait for this call to return before reproducing the scenario, then call \`native-profiler-stop\` while the app is still running.<flag:macos-apps> Mac apps need a dev-signed build launched via Argent (use "Time Profiler" if signing/WebKit blocks the bundled template, or set \`malloc_stack_logging: true\` for leak stacks).</flag:macos-apps>
 Returns \`{ status: "recording", pid, traceFile, warning? }\` (warns on iOS/Android if native network capture is active). Fails if the app, xctrace, or adb is unavailable.`,
   zodSchema,
   interaction: {

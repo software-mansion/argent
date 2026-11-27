@@ -1668,7 +1668,7 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Set true to confirm a fragment's `executionPrerequisite` is met; otherwise returns the prerequisite text without running."
+        "Set true to confirm a fragment's `executionPrerequisite` is met; otherwise returns the prerequisite text without running. Not a dry run: a test with no prerequisite runs in full (read `executionPrerequisite` in the YAML to inspect without running)."
       ),
     env: z
       .record(z.string(), z.string())
@@ -1703,8 +1703,8 @@ export function createRunFlowTool(
   return {
     id: "e2e-execute",
     description: `Run a saved YAML e2e test end to end. Use when replaying a recorded path or QA regression (use gesture tools for one-off actions, \`e2e-start-recording\` to author tests). Pass exactly one e2e test source: \`name\` or \`e2e_test_path\`.
-Returns a per-step report. A main-step failure skips remaining main steps, then runs \`shutdown:\` steps (marked \`shutdown: true\`; failure sets \`shutdownFailed\`).
-Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the test, \`run:\` fragments, baselines, and absolute \`.png\`/\`.yaml\` args; steps needing other client files (e.g. \`script:\`, recording tools, directories) fail before step 1. Fails if the YAML is invalid, no unique matching device is booted, or a step fails.`,
+Returns a per-step report (\`ok: false\` on step failure). A main-step failure skips remaining main steps, then runs \`shutdown:\` steps (marked \`shutdown: true\`; failure sets \`shutdownFailed\`).
+Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the test, \`run:\` fragments, baselines, and absolute \`.png\`/\`.yaml\` args; steps needing other client files (e.g. \`script:\`, recording tools, directories) fail before step 1. Fails if the YAML is invalid, no unique matching device is booted, or pre-step link validation fails.`,
     zodSchema,
     aliases: ["flow-execute"],
     interaction: {

@@ -41,7 +41,7 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
   description: `Search UIViews by \`className\`, \`identifier\`, \`label\`, \`tag\`, or \`nativeID\` (at least one required).
 Use when locating a specific view without dumping \`native-full-hierarchy\`.
-Returns \`{ status: "ok", matches }\` (frames in points; \`screenFrame\` uses upright UI axes; divide its center by \`screen\` from \`native-full-hierarchy\` to tap, verifying hit-test with \`native-view-at-point\` first).
+Returns \`{ status: "ok", matches }\` (frames in points; \`screenFrame\` uses upright UI axes; divide its center by \`screen\` from \`native-full-hierarchy\` to tap, verifying first with \`native-view-at-point\` \`hitTest: true\` and \`skipClasses: ["UITextEffectsWindow"]\`).
 <flag:macos-apps>Mac app: searches NSViews across visible windows; an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. Tap recipe and statuses below are iOS only.
 </flag:macos-apps>If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. Fails if an Apple system app is targeted (An Apple system app is rejected outright — terminal, never retry it).`,
   zodSchema,

@@ -27,10 +27,17 @@ const capability: ToolCapability = {
 
 const zodSchema = z.object({
   udid: z.string().describe("Chromium device id (`chromium-cdp-<port>`)."),
-  action: z.enum(["get", "set", "delete", "clear"]).describe("Cookie operation."),
+  action: z
+    .enum(["get", "set", "delete", "clear"])
+    .describe(
+      "get: read cookies. set: create/update a cookie. delete: remove matching cookies. clear: remove ALL browser cookies across all domains (ignores url/domain)."
+    ),
   name: z.string().optional().describe("Cookie name (required for `set`/`delete`)."),
   value: z.string().optional().describe("Cookie value (required for `set`)."),
-  url: z.string().optional().describe("URL filter (`get`) or scope (`set`/`delete`)."),
+  url: z
+    .string()
+    .optional()
+    .describe("URL filter for `get` (defaults to the active page) or scope for `set`/`delete`."),
   domain: z.string().optional().describe("Domain scope (`set`/`delete`)."),
   path: z.string().optional().describe("Path scope (default `/`)."),
   secure: z.boolean().optional().describe("Secure flag (`set`)."),
@@ -44,7 +51,7 @@ type Params = z.infer<typeof zodSchema>;
 export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
   id: "chromium-cookies",
   description: `Read, set, delete, or clear cookies (including HttpOnly) in a Chromium (CDP) app.
-Use when seeding an auth session or asserting cookie state (\`set\`/\`delete\` need \`url\` or \`domain\`).
+Use when seeding an auth session or asserting cookie state (\`set\`/\`delete\` need \`url\` or \`domain\`). \`clear\` wipes ALL browser cookies across every domain (ignores \`url\`/\`domain\`); use \`get\` + \`delete\` to clear a single domain.
 Returns \`{ cookies, count }\` (\`get\`) or \`{ set }\` / \`{ deleted }\` / \`{ cleared }\`. Fails on non-Chromium targets or missing required params.`,
   zodSchema,
   searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",

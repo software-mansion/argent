@@ -85,7 +85,7 @@ export function createDebuggerLogRegistryTool(
     id: "debugger-log-registry",
     description: `Summarize JS console logs captured from React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> or Chromium, with newest \`entries\` inline (truncated to 300 chars).
 Use when investigating warnings, errors, or console output. Check \`entries\` first; Grep \`file\` for older/full lines (never Read it whole; up to 50k lines). Use \`debugger-status\` to check connection health.
-Returns \`{ status: "connected", file, entries, clusters, note? }\` (\`note\` flags missing/crashed prior sessions), or \`{ status: "not_connected", reason, guidance }\` (follow guidance; don't retry in a loop). Fails only on invalid input.`,
+Returns \`{ status: "connected", file, entries, clusters, note? }\` (\`note\` flags missing/crashed prior sessions), or \`{ status: "not_connected", reason, guidance }\` (follow guidance; don't retry in a loop). Never fails when the runtime is simply unreachable.`,
     zodSchema,
     readOnly: true,
     interaction: {
