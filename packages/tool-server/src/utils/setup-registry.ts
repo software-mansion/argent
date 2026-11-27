@@ -24,6 +24,7 @@ import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listDevicesTool } from "../tools/devices/list-devices";
+import { releaseDeviceTool } from "../tools/devices/release-device";
 import { createBootDeviceTool } from "../tools/devices/boot-device";
 import { createLaunchAppTool } from "../tools/launch-app";
 import { createRestartAppTool } from "../tools/restart-app";
@@ -158,6 +159,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(androidNetworkShaperBlueprint);
 
   registry.registerTool(listDevicesTool);
+  registry.registerTool(releaseDeviceTool);
   registry.registerTool(createBootDeviceTool(registry));
   registry.registerTool(createLaunchAppTool(registry));
   registry.registerTool(createRestartAppTool(registry));

@@ -299,6 +299,85 @@ describe("createToolsClient options", () => {
     }
   });
 
+  it("sends ARGENT_SESSION as the session header, and a session the caller sets wins", async () => {
+    const sessionOf = async (headers?: () => Record<string, string>) => {
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        fetchImpl,
+        ...(headers ? { headers } : {}),
+      });
+      await callTool("reinstall-app", {});
+      const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+      return (init.headers as Record<string, string>)["x-argent-session"];
+    };
+    vi.stubEnv("ARGENT_SESSION", "");
+    try {
+      expect(await sessionOf()).toBeUndefined();
+      vi.stubEnv("ARGENT_SESSION", " ci-job-7 ");
+      expect(await sessionOf()).toBe("ci-job-7");
+      expect(await sessionOf(() => ({ "x-argent-session": "mcp-1" }))).toBe("mcp-1");
+      expect(await sessionOf(() => ({ "X-Argent-Session": "mcp-2" }))).toBeUndefined();
+      vi.stubEnv("ARGENT_SESSION", "my job");
+      const baseUrl = vi.fn(async () => ({ url, token: "t", remote: true }));
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({ baseUrl, fetchImpl });
+      const sentBefore = requests.length;
+      await expect(callTool("reinstall-app", { appPath: TEST_HOME })).rejects.toThrow(
+        /ARGENT_SESSION must be/
+      );
+      expect(baseUrl).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(sentBefore);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("never sends ARGENT_SESSION with ignoreEnvSession", async () => {
+    const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      fetchImpl,
+      headers: () => ({}),
+      ignoreEnvSession: true,
+    });
+    vi.stubEnv("ARGENT_SESSION", "my job");
+    try {
+      await callTool("reinstall-app", {});
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+    expect((init.headers as Record<string, string>)["x-argent-session"]).toBeUndefined();
+  });
+
+  it("reads the caller's headers when it sends the call, not when the call starts", async () => {
+    let ended = false;
+    let route = (): void => {};
+    const routed = new Promise<void>((resolve) => (route = resolve));
+    const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+    const { callTool } = createToolsClient({
+      baseUrl: async () => {
+        await routed;
+        return { url, token: "t", remote: false };
+      },
+      fetchImpl,
+      headers: (): Record<string, string> => (ended ? {} : { "x-argent-session": "mcp-1" }),
+    });
+    vi.stubEnv("ARGENT_SESSION", "ci-job-7");
+    try {
+      const call = callTool("reinstall-app", {});
+      ended = true;
+      route();
+      await call;
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+    expect((init.headers as Record<string, string>)["x-argent-session"]).toBeUndefined();
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);

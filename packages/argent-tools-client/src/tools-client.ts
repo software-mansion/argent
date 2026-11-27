@@ -15,6 +15,8 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  SESSION_HEADER,
+  isValidSession,
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
@@ -132,9 +134,11 @@ export interface CreateToolsClientOptions {
   /**
    * Headers added to GET /tools and POST /tools/:name. Set here rather than in
    * `fetchImpl`, so they count toward the header limit a call that forwards
-   * secrets is checked against.
+   * secrets is checked against. A session header here replaces `ARGENT_SESSION`.
    */
   headers?: () => Record<string, string>;
+  /** Never send `ARGENT_SESSION`, for a client whose `headers` name its own session. */
+  ignoreEnvSession?: boolean;
   /**
    * Refuse a relative `project_root` or `e2e_test_path` instead of resolving
    * it against `process.cwd()`. For a client whose working directory need not
@@ -541,6 +545,21 @@ function failedRun(result: unknown): unknown {
   return result;
 }
 
+function sessionFromEnv(): string | undefined {
+  const session = process.env.ARGENT_SESSION?.trim();
+  if (!session) return undefined;
+  if (!isValidSession(session)) {
+    throw new ToolInvocationError(
+      "ARGENT_SESSION must be 1 to 128 printable ASCII characters without spaces."
+    );
+  }
+  return session;
+}
+
+function hasSessionHeader(headers: Record<string, string>): boolean {
+  return Object.keys(headers).some((name) => name.toLowerCase() === SESSION_HEADER);
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -607,6 +626,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // An aborted signal must not start a tool-server.
     opts?.signal?.throwIfAborted();
     assertFiniteNumbers(args);
+    const envSession =
+      options.ignoreEnvSession || hasSessionHeader(options.headers?.() ?? {})
+        ? undefined
+        : sessionFromEnv();
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
@@ -702,6 +725,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     }
     const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
     const headers: Record<string, string> = {
+      ...(envSession ? { [SESSION_HEADER]: envSession } : {}),
       ...options.headers?.(),
       "Content-Type": "application/json",
       // Tells the tool-server the call came over a link, a link to

@@ -51,6 +51,7 @@ export async function invokeSubTool<T = unknown>(
     ...(flowSecret ? { flowSecret } : {}),
     ...(extra?.flowOutput ? { flowOutput: extra.flowOutput } : {}),
     ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
+    ...(ctx?.session ? { session: ctx.session } : {}),
   };
   if (!recordChildInvocation) {
     return signal || Object.keys(forwarded).length > 0

@@ -43,6 +43,7 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import { claimKey, deviceClaims, type ClaimOwner } from "../../utils/device-claims";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -161,7 +162,7 @@ type AndroidAvdEntry = {
 
 type ChromiumListedDevice = ChromiumDevice & { kind: "app" };
 
-type ListedDevice =
+type ListedDevice = (
   | AndroidDevice
   | AndroidAvdEntry
   | ChromiumListedDevice
@@ -171,7 +172,8 @@ type ListedDevice =
   | IosPhysicalDevice
   | IosRemoteDevice
   | MacosAppDevice
-  | VegaDevice;
+  | VegaDevice
+) & { claim?: ClaimOwner };
 
 type ListDevicesResult = {
   devices: ListedDevice[];
@@ -444,6 +446,19 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
+function listedDeviceId(device: ListedDevice): string | undefined {
+  if ("udid" in device && typeof device.udid === "string") return device.udid;
+  if ("serial" in device && typeof device.serial === "string") return device.serial;
+  if ("id" in device && typeof device.id === "string") return device.id;
+  return undefined;
+}
+
+function withClaim(device: ListedDevice, session: string | undefined): ListedDevice {
+  const id = listedDeviceId(device);
+  const claim = id === undefined ? undefined : deviceClaims.ownerOf(claimKey(id), session);
+  return claim ? { ...device, claim } : device;
+}
+
 function toListedExternal(device: ExternalDevice): ExternalListedDevice {
   return {
     capabilities: Array.from(device.capabilities).sort(),
@@ -483,7 +498,7 @@ const zodSchema = z.object({});
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
   description: `List available targets (ready devices first): iOS simulators/iPhones, Android emulators/AVDs/phones, Chromium apps, Vega devices, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>Mac apps, </flag:macos-apps>and Argent Cloud simulators (\`ios-remote\`).
-Use when starting a session to discover target ids. Returns { devices, notes? }. Pass a ready device's \`udid\`, \`serial\`, or \`id\` to other tools; start stopped targets via \`boot-device\`. Use physical phones (\`kind: 'device'\`) only when asked. \`runtimeKind: 'tv'\` uses \`tv-remote\`, not gestures. Fails if device discovery errors; surface \`notes\` if a needed platform is unavailable.`,
+Use when starting a session to discover target ids. Returns { devices, notes? }. Pass a ready device's \`udid\`, \`serial\`, or \`id\` to other tools; start stopped targets via \`boot-device\`. Use physical phones (\`kind: 'device'\`) only when asked. \`runtimeKind: 'tv'\` uses \`tv-remote\`, not gestures. Fails if device discovery errors; surface \`notes\` if a needed platform is unavailable. Skip a device with \`claim: 'another session'\`: another Argent session drives it.`,
   zodSchema,
   alwaysLoad: true,
   searchHint:
@@ -496,7 +511,7 @@ Use when starting a session to discover target ids. Returns { devices, notes? }.
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
   services: () => ({}),
-  async execute(_services, _params) {
+  async execute(_services, _params, ctx) {
     const harmonyEnabled = isHarmonyEnabled();
     const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
@@ -686,6 +701,7 @@ Use when starting a session to discover target ids. Returns { devices, notes? }.
       ...external.map(toListedExternal),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+    const listed = devices.map((device) => withClaim(device, ctx?.session));
 
     const [localIos, androidSdk] = await Promise.all([
       xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
@@ -706,6 +722,6 @@ Use when starting a session to discover target ids. Returns { devices, notes? }.
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
-    return { devices, ...(notes.length > 0 ? { notes } : {}) };
+    return { devices: listed, ...(notes.length > 0 ? { notes } : {}) };
   },
 };

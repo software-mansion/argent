@@ -214,6 +214,26 @@ On Android, offline mode removes Argent's proxy and turns off Wi-Fi and mobile d
 
 **Chromium and Electron (`tab`).** Conditions apply to the active page. Workers and cross-site iframes remain outside its scope. Argent reapplies settings when `chromium-tabs` changes the active tab. Reapply the settings if the tab closes outside Argent or another DevTools client detaches.
 
+### Device claims
+
+A device claim prevents two sessions of one tool-server from using one device:
+
+- Each MCP connection is one session. Subagents that use the MCP connection of their editor share its session.
+- A CLI or SDK process is a session when `ARGENT_SESSION` is set. Processes with the same value share one session. This session is different from the session of an MCP connection.
+- A tool call that names a device claims the device for its session. `e2e-execute` without `device` claims the device that it selects. `e2e-execute` also claims each Chromium instance that it starts, until the run ends.
+- A call from a different session to a claimed device fails with `DEVICE_IN_USE`. The error names the device and does not name the other session.
+- A call without a session claims no device and is never refused, also when it names a device.
+- `list-devices` adds `claim: "this session"` or `claim: "another session"` to a claimed device.
+- Each tool-server keeps its own claims, and each [Argent home](/docs/reference/configuration#argent-home) starts its own tool-server. A session of a different tool-server, for example of an install with a different `ARGENT_HOME_DIR`, does not see them.
+
+A claim ends when one of these events occurs:
+
+- The session calls `release-device`. With `udid`, the call releases that device. Without `udid`, for example `argent run release-device`, the call releases all devices of the session. A device with a call of the session in progress stays claimed until that call ends. A release of a device that the session does not hold does nothing.
+- The MCP connection closes, or the MCP server gets `SIGTERM`, `SIGINT` or `SIGHUP`.
+- No call of the session to the device is in progress, and the last call ended more than 10 minutes ago. This also frees the device of an MCP server that was killed.
+
+A screen recording, a profiler session or a network capture between two calls does not count as a call. The claims are in the memory of the tool-server. A restart of the tool-server removes all claims.
+
 ## Inspecting the screen
 
 | Tool                | Description                                                                      |
@@ -1143,6 +1163,7 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `react-profiler-renders`                 | Count mounted instances of each component in the live fiber tree         | `profiler-commit-query`, mode `render_counts`    |
 | `e2e-read-prerequisite`                  | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
 | `gather-workspace-data`                  | Fetch a structured snapshot of the app project's workspace               | None                                             |
+| `release-device`                         | End the [device claim](#device-claims) of the session                    | None                                             |
 
 Some agent tools do not always give the same result as the hidden tool:
 

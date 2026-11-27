@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
+  SESSION_HEADER,
   canonicalToolId,
   ensureToolsServer,
   getResolvedToolsUrl,
@@ -51,6 +52,7 @@ import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
+import { releaseOnExit } from "./release-on-exit.js";
 import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
@@ -160,6 +162,15 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return {};
   }
 
+  const sessionId = crypto.randomUUID();
+  let sessionCalledTools = false;
+  let sessionEnded = false;
+
+  function callerHeaders(): Record<string, string> {
+    if (sessionEnded) return aiClientHeaders();
+    return { ...aiClientHeaders(), [SESSION_HEADER]: sessionId };
+  }
+
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
@@ -196,7 +207,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     getHandle: () => ({ url: TOOLS_URL, token: AUTH_TOKEN }),
     remote,
     reconnect,
-    extraHeaders: aiClientHeaders,
+    extraHeaders: callerHeaders,
   });
 
   /**
@@ -365,6 +376,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
     const t0 = Date.now();
+    sessionCalledTools = true;
     const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
       ? undefined
       : signal;
@@ -560,6 +572,23 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }, HEALTH_INTERVAL_MS);
     healthInterval.unref();
   }
+
+  let release: Promise<unknown> | undefined;
+  function releaseSessionDevices(): Promise<unknown> {
+    if (!sessionCalledTools) return Promise.resolve();
+    release ??= fetch(`${TOOLS_URL}/tools/release-device`, {
+      method: "POST",
+      headers: { ...authHeader(), ...callerHeaders(), "Content-Type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(2_000),
+    }).catch(() => {});
+    // Follow-up calls of a call still in flight would claim the device again.
+    sessionEnded = true;
+    return release;
+  }
+
+  server.onclose = () => void releaseSessionDevices();
+  if (!options.transport) releaseOnExit(releaseSessionDevices);
 
   if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {

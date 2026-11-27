@@ -117,7 +117,9 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
+import type { ToolContext } from "@argent/registry";
 import { BRANCH_DEADLINE_MS, listDevicesTool } from "../src/tools/devices/list-devices";
+import { deviceClaims } from "../src/utils/device-claims";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { xcodeFirstLaunchHint, xcodeInstallInstruction } from "../src/utils/xcode-first-launch";
 import {
@@ -1219,6 +1221,38 @@ describe("list-devices — platform reach notes", () => {
       expect(result.notes).toEqual([expect.stringMatching(/^Android: no SDK found/)]);
     } finally {
       vi.mocked(resolveAndroidBinary).mockImplementation(async (name) => name);
+    }
+  });
+
+  it("marks a claimed device with the session that holds it", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {
+        return { stdout: simctlJson(), stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    deviceClaims.claim("a", ["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]);
+    try {
+      const claimOf = async (session?: string) => {
+        const ctx = session ? ({ session } as ToolContext) : undefined;
+        const result = await listDevicesTool.execute!({}, {}, ctx);
+        return Object.fromEntries(
+          result.devices.map((d) => [
+            "udid" in d ? d.udid : "serial" in d ? d.serial : d.platform,
+            d.claim,
+          ])
+        );
+      };
+      const mine = await claimOf("a");
+      expect(mine["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]).toBe("this session");
+      expect(mine["emulator-5554"]).toBeUndefined();
+      expect((await claimOf("b"))["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]).toBe("another session");
+      expect((await claimOf())["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"]).toBe("another session");
+    } finally {
+      deviceClaims.release("a");
     }
   });
 });

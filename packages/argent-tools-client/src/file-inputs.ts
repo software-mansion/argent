@@ -254,6 +254,10 @@ function removeArchivesOnSignal(signal: NodeJS.Signals): void {
   // A listener replaces the signal's default action. When no other code
   // handles the signal, raise it again so the process ends as it would have.
   if (process.listenerCount(signal) > 0) return;
+  raiseSignal(signal);
+}
+
+export function raiseSignal(signal: NodeJS.Signals): void {
   try {
     process.kill(process.pid, signal);
   } catch {

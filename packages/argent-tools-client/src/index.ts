@@ -40,7 +40,7 @@ export {
 
 export { ToolInvocationError } from "./errors.js";
 
-export { canonicalToolId } from "@argent/registry";
+export { SESSION_HEADER, canonicalToolId } from "@argent/registry";
 
 export {
   readLinkConfig,
@@ -74,6 +74,7 @@ export {
 export {
   prepareFileInputs,
   applyClientFileDirectives,
+  raiseSignal,
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
   type FileInputSpec,
