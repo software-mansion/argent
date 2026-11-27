@@ -38,24 +38,21 @@ const capability: ToolCapability = {
 
 const zodSchema = z
   .object({
-    udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-    centerX: z.number().describe("Center of rotation, horizontal."),
-    centerY: z.number().describe("Center of rotation, vertical."),
-    radius: z.number().optional().describe("Distance from the center to each finger."),
+    udid: z.string().describe("Device id from `list-devices` (iOS UDID or Android serial)."),
+    centerX: z.number().describe("Normalized rotation center x."),
+    centerY: z.number().describe("Normalized rotation center y."),
+    radius: z.number().optional().describe("Normalized finger orbit radius (e.g. 0.15)."),
     radiusX: z
       .number()
       .optional()
-      .describe("Finger distance along the horizontal axis, as a fraction of screen WIDTH."),
+      .describe("Horizontal radius fraction of screen width (pair with `radiusY`)."),
     radiusY: z
       .number()
       .optional()
-      .describe("Finger distance along the vertical axis, as a fraction of screen HEIGHT."),
-    startAngle: z.number().describe("Starting angle in degrees (0 = right, 90 = down)"),
-    endAngle: z.number().describe("Ending angle in degrees."),
-    durationMs: z
-      .number()
-      .optional()
-      .describe("Total gesture duration in milliseconds (default 300)"),
+      .describe("Vertical radius fraction of screen height (pair with `radiusX`)."),
+    startAngle: z.number().describe("Start angle in degrees (0 = right, 90 = down)."),
+    endAngle: z.number().describe("End angle in degrees (> startAngle = clockwise)."),
+    durationMs: z.number().optional().describe("Duration in ms (default 300)."),
   })
   .refine((p) => (p.radiusX === undefined) === (p.radiusY === undefined), {
     message: "radiusX and radiusY must be given together (one physical radius, two normalizations)",
@@ -68,10 +65,9 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureRotateTool: ToolDefinition<Params, Result> = {
   id: "gesture-rotate",
-  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees (endAngle > startAngle = clockwise). All positions and radii are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same coordinate space as gesture-tap and gesture-swipe. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
-Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected. A single radius traces a physical ellipse on a non-square screen (finger separation varies through the turn); for a physically circular orbit, pass radiusX and radiusY with radiusX·width = radiusY·height.
-Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend is not reachable for the given device, or on a physical iPhone when the app is not drawn in portrait.`,
+  description: `Send a two-finger circular arc gesture in normalized [0,1] coords to rotate content from \`startAngle\` to \`endAngle\`. Pass \`radius\`, or \`radiusX\`+\`radiusY\` with \`radiusX·width = radiusY·height\` for a circular physical orbit (a single radius or equal values trace an ellipse on a non-square screen; one half of the pair alone is rejected).
+Use when rotating a map, photo, or canvas (use \`gesture-pinch\` for zoom).
+Returns \`{ rotated: true, timestampMs, reactivated? }\` (on physical iOS, \`reactivated: true\` means re-describe). Fails if the backend is unreachable or a physical iPhone app is not in portrait.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => {

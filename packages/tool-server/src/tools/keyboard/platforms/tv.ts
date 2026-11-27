@@ -10,6 +10,13 @@ export async function typeTv(
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
+  if (params.clear) {
+    throw new UnsupportedOperationError(
+      "keyboard",
+      device,
+      "clearing a field with `clear: true` is not supported on a TV target"
+    );
+  }
   if (params.key) {
     throw new UnsupportedOperationError(
       "keyboard",

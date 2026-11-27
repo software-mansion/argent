@@ -32,33 +32,17 @@ const zodSchema = z
     udid: z
       .string()
       .describe(
-        "Target Chromium device id from `list-devices` (chromium-cdp-<port>)<flag:macos-apps>, or a Mac app id</flag:macos-apps>."
+        "Chromium device id (`chromium-cdp-<port>`)<flag:macos-apps> or Mac app id</flag:macos-apps> from `list-devices`."
       ),
-    x: z
-      .number()
-      .min(0)
-      .max(1)
-      .describe(
-        "Anchor x. The wheel events land here; put it over the element you want to scroll."
-      ),
-    y: z.number().min(0).max(1).describe("Anchor y."),
-    deltaX: z
-      .number()
-      .optional()
-      .describe(
-        "Horizontal scroll distance as a fraction of the window width. Positive reveals content to the right; negative scrolls back left."
-      ),
-    deltaY: z
-      .number()
-      .optional()
-      .describe(
-        "Vertical scroll distance as a fraction of the window height (0.5 = half a window). Positive scrolls down (reveals content below), like rolling a mouse wheel toward you; negative scrolls back up."
-      ),
+    x: z.number().min(0).max(1).describe("Normalized anchor x over the scrollable element."),
+    y: z.number().min(0).max(1).describe("Normalized anchor y."),
+    deltaX: z.number().optional().describe("Horizontal scroll fraction (+ right, - left)."),
+    deltaY: z.number().optional().describe("Vertical scroll fraction (+ down, - up; e.g. 0.5)."),
     durationMs: z
       .number()
       .optional()
       .describe(
-        "Spread the scroll over this many milliseconds in wheel-event steps (default 300) so scroll handlers fire progressively.<flag:macos-apps> Ignored on a Mac app.</flag:macos-apps>"
+        "Scroll duration in ms (default 300)<flag:macos-apps>; ignored on Mac apps</flag:macos-apps>."
       ),
   })
   .refine((p) => (p.deltaX ?? 0) !== 0 || (p.deltaY ?? 0) !== 0, {
@@ -69,9 +53,9 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureScrollTool: ToolDefinition<Params, Result> = {
   id: "gesture-scroll",
-  description: `Send mouse-wheel events at a point to scroll content in a Chromium app<flag:macos-apps> or a Mac app</flag:macos-apps>. The anchor x/y and the deltas are fractions of the window (not pixels); x/y match gesture-tap and describe.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium<flag:macos-apps> and Mac apps</flag:macos-apps> only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
-Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device<flag:macos-apps>, or on a Mac app when nothing under the point scrolls</flag:macos-apps>.`,
+  description: `Send mouse-wheel scroll events at normalized [0,1] anchor (x, y) in Chromium<flag:macos-apps> or a Mac app</flag:macos-apps>.
+Use when scrolling desktop lists or off-screen content (use \`gesture-swipe\` on iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>).
+Returns \`{ scrolled: true, timestampMs }\`. Fails if CDP is unreachable<flag:macos-apps> or nothing under the point scrolls on a Mac app</flag:macos-apps>.`,
   zodSchema,
   searchHint:
     "scroll wheel list page chromium<flag:macos-apps> mac</flag:macos-apps> mouse down up content fold",

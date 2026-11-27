@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { chromiumIdFromPort } from "./device-info";
 import { ensureCdpReachable, discoverPrimaryPage } from "../blueprints/chromium-cdp";
+import { argentHomeDir } from "@argent/configuration-core";
 
 export interface ChromiumDevice {
   platform: "chromium";
@@ -49,8 +49,7 @@ const TRACKED_PORTS = new Set<number>();
  */
 function portsFilePath(): string {
   return (
-    process.env.ARGENT_CHROMIUM_PORTS_FILE ??
-    path.join(os.homedir(), ".argent", "chromium-cdp-ports.json")
+    process.env.ARGENT_CHROMIUM_PORTS_FILE ?? path.join(argentHomeDir(), "chromium-cdp-ports.json")
   );
 }
 

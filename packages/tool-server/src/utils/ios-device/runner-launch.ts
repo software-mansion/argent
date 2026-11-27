@@ -2,12 +2,12 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
 import { sleep } from "../timing";
+import { argentHomeDir } from "@argent/configuration-core";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,11 +16,11 @@ const execFileAsync = promisify(execFile);
  */
 
 function logsRoot(): string {
-  return path.join(os.homedir(), ".argent", "ios-device-runner", "logs");
+  return path.join(argentHomeDir(), "ios-device-runner", "logs");
 }
 
 function resultsRoot(): string {
-  return path.join(os.homedir(), ".argent", "ios-device-runner", "results");
+  return path.join(argentHomeDir(), "ios-device-runner", "results");
 }
 
 /**

@@ -67,7 +67,11 @@ function renderFocusView(res: TvDescribeResponse): string {
  * device): the focus-driven view instead of the touch element tree, since a TV
  * UI has no tap coordinates — the agent moves the highlight with `tv-remote`.
  */
-export async function describeTv(registry: Registry, device: DeviceInfo): Promise<DescribeResult> {
+export async function describeTv(
+  registry: Registry,
+  device: DeviceInfo,
+  raw?: boolean
+): Promise<DescribeResult> {
   const api: TvControlApi = await resolveTvApi(registry, device.id);
 
   // Ride out a brief post-launch transition window (see EMPTY_RETRY_*). Apple TV
@@ -102,6 +106,7 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     return {
       description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
         source: data.source,
+        raw,
       })}`,
       source: data.source,
       hint: ANDROID_FOCUS_EMPTY_HINT,

@@ -976,6 +976,19 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
   });
 
+  it("skips tree memory on describe({ raw: true }) so later pruned auto-describes keep the last pruned base", async () => {
+    const pruned = await describeScreen();
+    const prunedId = treeId(pruned);
+
+    describeText = "ROOT AXGroup (0,0,1,1)\n  button Done (0.1,0.2,0.3,0.1)";
+    const raw = await client.callTool({ name: "describe", arguments: { udid: "u", raw: true } });
+    expect(textOf(raw)).not.toContain("Tree id:");
+
+    describeText = "button Done (0.1,0.2,0.3,0.1)";
+    const followUp = await wait();
+    expect(lastText(followUp)).toBe(note(prunedId, "describe"));
+  });
+
   it("still sends a changed screenshot when the tree is identical", async () => {
     const first = await tap();
     screenshotPng = PNG_CHANGED;

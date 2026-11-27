@@ -20,27 +20,18 @@ const MACOS_NO_MATCH_NOTE =
 
 const zodSchema = z.object({
   ...nativeAppTarget,
-  className: z.string().optional().describe("UIView class name to match (exact, e.g. UIButton)"),
-  identifier: z.string().optional().describe("Accessibility identifier to match (exact)"),
-  label: z.string().optional().describe("Accessibility label to match (exact)"),
-  tag: z.number().int().optional().describe("UIView tag integer to match"),
-  nativeID: z.string().optional().describe("React Native nativeID prop to match (exact)"),
-  includeAncestors: z
-    .boolean()
-    .optional()
-    .describe("Include ancestor chain for each matched view (default true)"),
-  includeChildren: z
-    .boolean()
-    .optional()
-    .describe("Include child views for each matched view (default true)"),
+  className: z.string().optional().describe("Exact UIView class name (e.g. UIButton)."),
+  identifier: z.string().optional().describe("Exact accessibility identifier."),
+  label: z.string().optional().describe("Exact accessibility label."),
+  tag: z.number().int().optional().describe("UIView integer tag."),
+  nativeID: z.string().optional().describe("Exact React Native nativeID."),
+  includeAncestors: z.boolean().optional().describe("Include ancestor chain (default true)."),
+  includeChildren: z.boolean().optional().describe("Include child views (default true)."),
   fields: z
     .array(z.string())
     .optional()
     .describe(
-      "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
-        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
+      "View fields to return (defaults: pointer, className, tag, frame, windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, userInteractionEnabled, depth, identifier, label, layerName, nativeID; extra: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder)."
     ),
 });
 
@@ -48,12 +39,11 @@ type Params = z.infer<typeof zodSchema>;
 
 export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
-  description: `Search for specific UIViews in the running app by class name, accessibility identifier, accessibility label, tag or React Native nativeID; at least one of these params is required.
-Use when you need to locate a specific view by its properties without dumping the entire native-full-hierarchy.
-Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children. Frames are in points. frame and center are relative to the superview, and windowFrame turns with the UI. screenFrame is on the axes of the UI as the user sees it, also when the UI is landscape. To tap a view, divide the centre of its screenFrame by the screen size in points, which native-full-hierarchy returns as screen (maxDepth: 1 is enough), and pass the result to gesture-tap. Matches are not filtered for visibility. Before tapping, call native-view-at-point with hitTest: true at that centre, with skipClasses ["UITextEffectsWindow"]. If it does not return the match or a descendant, check a screenshot.
-<flag:macos-apps>On a Mac app it searches the NSViews of every visible window: className is the NSView class, and identifier matches the accessibility identifier or the view identifier. SwiftUI sets a control's identifier and label on an accessibility element, not on an NSView, so an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. The tap recipe above and the statuses below are iOS only.
-</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-An Apple system app is rejected outright (terminal: never retry it).`,
+  description: `Search UIViews by \`className\`, \`identifier\`, \`label\`, \`tag\`, or \`nativeID\` (at least one required).
+Use when locating a specific view without dumping \`native-full-hierarchy\`.
+Returns \`{ status: "ok", matches }\` (frames in points; \`screenFrame\` uses upright UI axes). Matches are not filtered for visibility: before tapping one, check its \`screenFrame\` center with \`native-view-at-point\` \`hitTest: true\` and \`skipClasses: ["UITextEffectsWindow"]\` (check a screenshot if it returns some other view), then divide that center by \`screen\` from \`native-full-hierarchy\` for \`gesture-tap\`.
+<flag:macos-apps>Mac app: searches NSViews across visible windows; an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. Tap recipe and statuses below are iOS only.
+</flag:macos-apps>If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {
