@@ -101,8 +101,11 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
     expect(out).toContain("Mode: flat");
-    expect(out).toContain("ROOT  AXGroup");
+    expect(out).not.toContain("ROOT ");
     expect(elementLines(out)).toHaveLength(0);
+
+    const raw = formatDescribeTree(root, { source: "ax-service", raw: true });
+    expect(raw).toContain("ROOT AXGroup (0,0,1,1)");
   });
 
   // Regression for the user-reported bug: a Bluesky landing screen full of
@@ -136,7 +139,7 @@ describe("formatDescribeTree", () => {
   // Regression for issue #3 — the header already prints
   // `ROOT  <role>  <frame>`, so renderNested must not re-emit the root as the
   // first body line.
-  it("does not duplicate the root node in nested mode", () => {
+  it("does not emit the synthetic root node in nested mode", () => {
     const root: DescribeNode = {
       role: "Screen",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -156,8 +159,10 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "uiautomator" });
-    // Exactly one mention of Screen — the ROOT header line, never the body.
-    const screenLines = out.split("\n").filter((l) => l.includes("Screen"));
+    expect(out.split("\n").filter((l) => l.includes("Screen"))).toHaveLength(0);
+    // In raw mode, Screen appears only once as the ROOT header line, never duplicated in body.
+    const raw = formatDescribeTree(root, { source: "uiautomator", raw: true });
+    const screenLines = raw.split("\n").filter((l) => l.includes("Screen"));
     expect(screenLines).toHaveLength(1);
     expect(screenLines[0]).toMatch(/^ROOT\s/);
   });
@@ -200,6 +205,7 @@ describe("formatDescribeTree", () => {
       children: [
         {
           role: "androidx.compose.ui.platform.ComposeView",
+          label: "Feed",
           frame: { x: 0, y: 0.1, width: 1, height: 0.4 },
           children: [
             leaf({
@@ -213,8 +219,7 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toContain("androidx.compose.ui.platform.ComposeView");
-    // Each body line: indentation, then the role token, then a single space,
-    // then either annotations + double-space + frame, or directly the frame.
+    // Each body line: indentation, then the role token, then a single space.
     for (const line of elementLines(out)) {
       const match = line.match(/^(\s+)(\S+)( .*)?$/);
       expect(match).not.toBeNull();
@@ -276,24 +281,17 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("Mode: flat");
   });
 
-  // The header text is part of the agent-visible response, so it must keep
-  // pointing at gesture-tap / gesture-swipe / gesture-pinch and the centre
-  // formula. If this drifts again the runtime help is silently misleading.
-  it("renders the coordinate-space + tap-formula header on every call", () => {
+  it("renders a compact header naming source, mode, and frame format", () => {
     const empty: DescribeNode = {
       role: "AXGroup",
       frame: { x: 0, y: 0, width: 1, height: 1 },
       children: [],
     };
     const out = formatDescribeTree(empty, { source: "ax-service" });
-    expect(out).toContain("normalized [0,1] screen (x,y,w,h), not pixels");
-    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
-    expect(out).toContain("tap centre = (x+w/2, y+h/2)");
+    expect(out).toContain("Source: ax-service | Mode: flat | Frame: (x,y,w,h) [0,1]");
   });
 
-  // Physical iOS plays two fingers through the runner's touch synthesizer, so
-  // the header recommends gesture-pinch there like on every other source.
-  it("recommends gesture-pinch in the xcuitest-runner header", () => {
+  it("renders the xcuitest-runner header in nested mode without two-finger caveats", () => {
     const root: DescribeNode = {
       role: "Application",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -306,9 +304,7 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "xcuitest-runner" });
-    expect(out).toContain("Source: xcuitest-runner");
-    expect(out).toContain("Mode: nested");
-    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
+    expect(out).toContain("Source: xcuitest-runner | Mode: nested | Frame: (x,y,w,h) [0,1]");
     expect(out).not.toContain("No two-finger gestures");
   });
 
@@ -321,7 +317,7 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(empty, { source: "ax-service" });
     expect(out).toContain("Source: ax-service");
     expect(out).toContain("Mode: flat");
-    expect(out).toContain("ROOT  AXGroup (0.000,0.000,1.000,1.000)");
+    expect(elementLines(out)).toHaveLength(0);
   });
 
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate
@@ -447,7 +443,7 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toContain('AXLink "Poland"  (');
+    expect(out).toContain('AXLink "Poland" (');
     expect(out).toContain('AXLink "Warsaw" hint="Capital of Poland"');
     expect(out).toContain('AXButton "Save" hint="save"');
   });
@@ -469,10 +465,10 @@ describe("formatDescribeTree", () => {
         ],
       };
       expect(elementLines(formatDescribeTree(root, { source }))).toEqual([
-        '  AXGroup hint="Opens the menu"  (0.100,0.200,0.300,0.100)',
-        "  AXGroup [disabled]  (0.100,0.200,0.300,0.100)",
-        "  AXGroup [selected]  (0.100,0.200,0.300,0.100)",
-        '  AXGroup hint="Current tab" [selected]  (0.100,0.200,0.300,0.100)',
+        '  AXGroup hint="Opens the menu" (0.1,0.2,0.3,0.1)',
+        "  AXGroup [disabled] (0.1,0.2,0.3,0.1)",
+        "  AXGroup [selected] (0.1,0.2,0.3,0.1)",
+        '  AXGroup hint="Current tab" [selected] (0.1,0.2,0.3,0.1)',
       ]);
     }
   );
@@ -537,10 +533,9 @@ describe("formatDescribeTree", () => {
     expect(lines[2]).toContain('"third"');
   });
 
-  // Frames are always rendered to exactly three decimals. This is the
-  // precision agents pass back to gesture-tap; drifting it would silently
-  // change tap targets across screens.
-  it("always renders frames to three decimal places", () => {
+  // Frames round to 3 decimal places and drop trailing fractional zeros while
+  // keeping leading zeros so copied coordinates stay valid JSON numbers.
+  it("rounds frames to up to three decimal places without trailing zeros", () => {
     const root: DescribeNode = {
       role: "AXGroup",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -553,7 +548,7 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toMatch(/\(0\.123,0\.500,0\.100,0\.050\)/);
+    expect(out).toMatch(/\(0\.123,0\.5,0\.1,0\.05\)/);
   });
 
   it("keeps the sign and the leading zero of a negative coordinate", () => {
@@ -569,11 +564,12 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toContain("(-0.125,0.500,1.000,0.050)");
+    expect(out).toContain("(-0.125,0.5,1,0.05)");
   });
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses
-  // an iterative DFS specifically to avoid a recursive stack overflow there.
+  // an iterative DFS specifically to avoid a recursive stack overflow there,
+  // collapsing bare wrappers by default and keeping all layers with `raw: true`.
   it("handles deeply nested trees without recursing the JS stack", () => {
     let inner: DescribeNode = leaf({
       role: "Button",
@@ -593,9 +589,12 @@ describe("formatDescribeTree", () => {
       frame: { x: 0, y: 0, width: 1, height: 1 },
       children: [inner],
     };
-    const out = formatDescribeTree(root, { source: "uiautomator" });
-    expect(out).toContain('"deep"');
-    expect(out.split("\n").length).toBeGreaterThan(500);
+    const compact = formatDescribeTree(root, { source: "uiautomator" });
+    expect(elementLines(compact)).toEqual(['  Button "deep" [clickable] (0.4,0.4,0.2,0.05)']);
+
+    const raw = formatDescribeTree(root, { source: "uiautomator", raw: true });
+    expect(raw).toContain('"deep"');
+    expect(raw.split("\n").length).toBeGreaterThan(500);
   });
 
   // The trim rule must only strip "value === label" — value strings that
@@ -705,5 +704,113 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "android-devtools" });
     expect(out).toContain("Mode: nested");
     expect(out).toMatch(/Button\s+"Like"/);
+  });
+
+  it("prunes contained duplicate iOS rows and decorative chevrons by default, keeping them with raw: true", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        // Row 1: outer AXGroup + inner AXButton with same id/label + 2 contained StaticTexts
+        leaf({
+          role: "AXGroup",
+          label: "Model Name, iPhone 17 Pro",
+          identifier: "ProductModelName",
+          frame: { x: 0.05, y: 0.27, width: 0.9, height: 0.06 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "Model Name",
+          frame: { x: 0.09, y: 0.29, width: 0.24, height: 0.02 },
+        }),
+        leaf({
+          role: "AXStaticText",
+          label: "iPhone 17 Pro",
+          frame: { x: 0.65, y: 0.29, width: 0.26, height: 0.02 },
+        }),
+        leaf({
+          role: "AXButton",
+          label: "Model Name, iPhone 17 Pro",
+          identifier: "ProductModelName",
+          frame: { x: 0.09, y: 0.29, width: 0.82, height: 0.02 },
+        }),
+        // Row 2: outer AXButton + duplicate inner AXButton + disabled chevron + distinct-id text
+        leaf({
+          role: "AXButton",
+          label: "About",
+          identifier: "About",
+          frame: { x: 0.05, y: 0.45, width: 0.9, height: 0.06 },
+        }),
+        leaf({
+          role: "AXButton",
+          label: "About",
+          identifier: "About",
+          frame: { x: 0.085, y: 0.46, width: 0.22, height: 0.03 },
+        }),
+        leaf({
+          role: "AXButton",
+          label: "chevron",
+          disabled: true,
+          frame: { x: 0.875, y: 0.47, width: 0.026, height: 0.016 },
+        }),
+        // Distinct sibling buttons with the same label at non-overlapping positions must both survive.
+        leaf({
+          role: "AXButton",
+          label: "Delete",
+          frame: { x: 0.1, y: 0.6, width: 0.2, height: 0.05 },
+        }),
+        leaf({
+          role: "AXButton",
+          label: "Delete",
+          frame: { x: 0.1, y: 0.7, width: 0.2, height: 0.05 },
+        }),
+      ],
+    };
+
+    const compact = elementLines(formatDescribeTree(root, { source: "ax-service" }));
+    expect(compact).toEqual([
+      '  AXButton "Model Name, iPhone 17 Pro" id="ProductModelName" (0.09,0.29,0.82,0.02)',
+      '  AXButton "About" id="About" (0.05,0.45,0.9,0.06)',
+      '  AXButton "Delete" (0.1,0.6,0.2,0.05)',
+      '  AXButton "Delete" (0.1,0.7,0.2,0.05)',
+    ]);
+
+    const raw = elementLines(formatDescribeTree(root, { source: "ax-service", raw: true }));
+    expect(raw).toHaveLength(9);
+  });
+
+  it("drops redundant child Image matching its clickable parent label in nested mode unless raw: true", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "List",
+          frame: { x: 0, y: 0.1, width: 1, height: 0.2 },
+          children: [
+            {
+              role: "View",
+              label: "Wikipedia",
+              clickable: true,
+              frame: { x: 0.1, y: 0.12, width: 0.3, height: 0.04 },
+              children: [
+                leaf({
+                  role: "Image",
+                  label: "Wikipedia",
+                  frame: { x: 0.1, y: 0.12, width: 0.3, height: 0.04 },
+                }),
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const compact = formatDescribeTree(root, { source: "android-devtools" });
+    expect(elementLines(compact)).toEqual(['  View "Wikipedia" [clickable] (0.1,0.12,0.3,0.04)']);
+
+    const raw = formatDescribeTree(root, { source: "android-devtools", raw: true });
+    expect(raw).toContain("  List (0,0.1,1,0.2)");
+    expect(raw).toContain('      Image "Wikipedia" (0.1,0.12,0.3,0.04)');
   });
 });

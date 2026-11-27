@@ -24,9 +24,9 @@ import { formatDescribeTree } from "./format-tree";
 
 // Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
 // never pays for the JSON tree. Pruning stays in the per-platform adapters.
-function withDescription(data: DescribeTreeData): DescribeResult {
+function withDescription(data: DescribeTreeData, raw?: boolean): DescribeResult {
   const out: DescribeResult = {
-    description: formatDescribeTree(data.tree, { source: data.source }),
+    description: formatDescribeTree(data.tree, { source: data.source, raw }),
     source: data.source,
   };
   if (data.should_restart) out.should_restart = data.should_restart;
@@ -85,13 +85,14 @@ function makeDescribeExecute(
               withBootCaveatOncePerDevice(
                 device.id,
                 await describeIos(registry, device, params, { isTvOs: false })
-              )
+              ),
+              params.raw
             ),
     },
     iosDevice: {
       requires: iosRequires,
-      handler: async (_services, _params, device) =>
-        withDescription(await describeIosDevice(registry, device)),
+      handler: async (_services, params, device) =>
+        withDescription(await describeIosDevice(registry, device), params.raw),
     },
     iosRemote: {
       // Both the ax-service and native-devtools blueprints route through
@@ -103,7 +104,8 @@ function makeDescribeExecute(
           withBootCaveatOncePerDevice(
             device.id,
             await describeIos(registry, device, params, { isTvOs: false })
-          )
+          ),
+          params.raw
         ),
     },
     android: {
@@ -113,25 +115,30 @@ function makeDescribeExecute(
         // through so describeAndroid doesn't re-probe.
         (await isAndroidTv(device.id))
           ? describeTv(registry, device)
-          : withDescription(await describeAndroid(registry, params.udid, params.bundleId, false)),
+          : withDescription(
+              await describeAndroid(registry, params.udid, params.bundleId, false),
+              params.raw
+            ),
     },
     chromium: {
-      handler: async (services) => withDescription(await describeChromium(services.chromium)),
+      handler: async (services, params) =>
+        withDescription(await describeChromium(services.chromium), params.raw),
     },
     vega: {
       requires: vegaRequires,
-      handler: async (_services, params) => withDescription(await describeVega(params.udid)),
+      handler: async (_services, params) =>
+        withDescription(await describeVega(params.udid), params.raw),
     },
     harmony: {
       requires: harmonyRequires,
-      handler: async (_services, _params, device) =>
-        withDescription(await describeHarmony(harmonyConnectKey(device.id))),
+      handler: async (_services, params, device) =>
+        withDescription(await describeHarmony(harmonyConnectKey(device.id)), params.raw),
     },
     // The in-app library's connection resolves through the closed-over
     // registry, after the macos-apps flag check, as the iOS services do.
     macos: {
-      handler: async (_services, _params, device) =>
-        withDescription(await describeMacos(registry, device)),
+      handler: async (_services, params, device) =>
+        withDescription(await describeMacos(registry, device), params.raw),
     },
   });
 }
@@ -151,6 +158,12 @@ const zodSchema = z.object({
         "and describe falls back to native-devtools inspection. " +
         "If omitted, the fallback auto-detects the frontmost connected app. Ignored on every other platform, " +
         "including a physical iOS device."
+    ),
+  raw: z
+    .boolean()
+    .optional()
+    .describe(
+      "Return the unpruned tree, keeping bare structural wrapper containers and duplicate child labels omitted by default."
     ),
 });
 
