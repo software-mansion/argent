@@ -26,12 +26,14 @@ import {
 } from "./utils.js";
 import { yarnClassicNote } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
+import { probeGlobalInstallTarget, unwritableGlobalTargetMessage } from "./global-prefix.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
 import type { InstallMode } from "./install-record.js";
 import {
   InitTelemetry,
   INSTALL_GLOBAL_PACKAGE_FAILED,
+  INSTALL_GLOBAL_PREFIX_UNWRITABLE,
   INSTALL_LOCAL_PACKAGE_FAILED,
   INSTALL_LOCAL_PRECONDITION_FAILED,
   INSTALL_FROM_TAR_PACKAGE_FAILED,
@@ -231,6 +233,28 @@ async function runGlobal(opts: {
   const pm = detectGlobalPackageManager();
 
   if (!globallyInstalled) {
+    const preflightStartedAt = performance.now();
+    const globalTarget = probeGlobalInstallTarget(pm);
+    if (globalTarget?.blocked) {
+      // No `argent` on PATH yet, so the per-project remedy goes through npx.
+      p.log.error(
+        unwritableGlobalTargetMessage(
+          globalTarget,
+          pm,
+          "install",
+          `npx ${PACKAGE_NAME} init --local`
+        )
+      );
+      await tel.trackPackageAction(
+        "fresh_install",
+        preflightStartedAt,
+        false,
+        INSTALL_GLOBAL_PREFIX_UNWRITABLE
+      );
+      await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+      process.exit(1);
+    }
+
     // No consent prompt here: choosing "Globally" (or --global) in the
     // install-mode step directly above IS the consent to install it.
     p.log.info(`Argent is not installed globally — installing.`);
@@ -271,6 +295,12 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
+    const globalTarget = probeGlobalInstallTarget(pm);
+    if (globalTarget?.blocked) {
+      p.log.error(unwritableGlobalTargetMessage(globalTarget, pm, "install"));
+      await tel.finalize(INSTALL_GLOBAL_PREFIX_UNWRITABLE);
+      process.exit(1);
+    }
     const cmd = globalInstallCommand(pm, installSpec(fromTar));
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
@@ -320,6 +350,8 @@ async function runGlobal(opts: {
   } else if (latest && isNewerVersion(latest, version)) {
     const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
     const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
+    // --yes skips the update, so it skips the probe too.
+    const globalTarget = nonInteractive ? null : probeGlobalInstallTarget(pm);
     if (nonInteractive) {
       // Emit the same update_decision as the interactive branches so the
       // upgrade funnel isn't blind to --yes/CI runs.
@@ -329,6 +361,20 @@ async function runGlobal(opts: {
         decision: "skip",
       });
       await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
+    } else if (globalTarget?.blocked) {
+      // init still works against the installed version, so warn, don't abort.
+      p.log.warn(unwritableGlobalTargetMessage(globalTarget, pm, "update"));
+      track("installation:update_decision", {
+        from_major: fromMajor,
+        to_major: toMajor,
+        decision: "skip",
+      });
+      await tel.trackPackageAction(
+        "update_failed",
+        packageActionStartedAt,
+        false,
+        INSTALL_GLOBAL_PREFIX_UNWRITABLE
+      );
     } else {
       const updateChoice = await p.select({
         message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,

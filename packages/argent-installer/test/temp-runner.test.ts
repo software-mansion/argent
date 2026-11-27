@@ -21,8 +21,14 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
 }));
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
 
+// Only the PATH lookup and the binaries it finds answer; any other command
+// (e.g. the global-prefix probe's `pnpm root -g`) fails as if unavailable.
 function whichFinds(path: string): void {
-  childProcessMock.execFileSync.mockReturnValue(`${path}\n`);
+  childProcessMock.execFileSync.mockImplementation((cmd: string) => {
+    if (cmd === "which" || cmd === "where") return `${path}\n`;
+    if (path.split("\n").includes(cmd)) return "";
+    throw new Error(`${cmd}: not available in this test`);
+  });
 }
 
 // Where each runner puts its own copy of argent: the POSIX layouts as observed
