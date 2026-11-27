@@ -37,19 +37,7 @@
   "ignoreWorkspaces": ["packages/argent-private"],
 
   // Host tools spawned by name, never npm packages.
-  "ignoreBinaries": [
-    "ffmpeg",
-    "ffprobe",
-    "jq",
-    "locale",
-    "mkfifo",
-    "netstat",
-    "pgrep",
-    "pkill",
-    "plutil",
-    "tail",
-    "xctrace",
-  ],
+  "ignoreBinaries": ["ffmpeg", "ffprobe", "jq", "locale", "netstat", "xctrace"],
 
   "workspaces": {
     // Knip finds the root scripts on its own — via package.json `scripts`, the
