@@ -3,6 +3,8 @@
 
 <p align="center"><b>English</b> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a></p>
 
+<p align="center"><a href="https://glama.ai/mcp/servers/software-mansion/argent"><img alt="software-mansion/argent MCP server" src="https://glama.ai/mcp/servers/software-mansion/argent/badges/score.svg" /></a></p>
+
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-1?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-1&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
