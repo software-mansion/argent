@@ -101,7 +101,8 @@ describe("hidden assert against an unreadable tree (end-to-end)", () => {
 });
 
 // A walk the ax-service cut short (node, depth or time cap) still finds what it
-// read, so a large screen stays usable; only an absence on it is unconfirmed.
+// read, so a large screen stays usable. The cut never changes a result: an
+// absence on it passes, and says that it proves nothing.
 describe("assert against a cut-short tree (end-to-end)", () => {
   const cutShort = (withGeneral: boolean): Pick<AXServiceApi, "degraded" | "tree"> => ({
     degraded: false,
@@ -127,9 +128,31 @@ describe("assert against a cut-short tree (end-to-end)", () => {
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:pass"]);
   });
 
-  it("does not pass hidden on an element the walk did not reach", async () => {
+  it("passes hidden on an element the walk did not reach, with the absence warning", async () => {
     const result = await runHiddenAssert(cutShort(false));
+    expect(result.ok).toBe(true);
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:pass"]);
+    expect(result.steps[0].warning).toBe(
+      'The UI tree was cut at a size limit, and no element before the cut matched id="General". ' +
+        "An element past the cut is not in the tree, so this result does not prove that the " +
+        "element is absent."
+    );
+  });
+
+  it("fails visible on an element the walk did not reach, naming the cut", async () => {
+    const result = await runHiddenAssert(cutShort(false), "visible");
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
-    expect(result.steps[0].reason).toMatch(/more elements than the accessibility service reads/);
+    expect(result.steps[0].reason).toBe(
+      'no element matched selector id="General": the UI tree was cut at a size limit, and an ' +
+        "element past the cut is not in the tree. Reduce what the screen shows before this step " +
+        "(for example, close a long list or web page)."
+    );
+    expect(result.steps[0].warning).toBeUndefined();
+  });
+
+  it("gives a hidden that the walk disproves no warning", async () => {
+    const result = await runHiddenAssert(cutShort(true));
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["assert:fail"]);
+    expect(result.steps[0].warning).toBeUndefined();
   });
 });

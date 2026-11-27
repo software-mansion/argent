@@ -273,6 +273,40 @@ Thus a label copied from `describe` can miss in an e2e test. A `text` selector m
 
 On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. A step can then miss its target. The reason of the failed step says that a dialog or a sheet is on top of the app. A dialog of the app can hold a list that scrolls, with the target further down. The reason then also suggests a `scroll-to` step, or `within` on a `scroll-to` step. A full-screen sheet of the app looks like a screen, so the reason does not mention it. The same holds for apps side by side, in split screen or in freeform windows.
 
+#### Cut runner tree
+
+Each read of the runner tree stops at a size limit. Then the tree is cut, and an element past the cut is not in the tree.
+
+| Platform        | Limit of one read                                                           | The runner knows of the cut |
+| --------------- | --------------------------------------------------------------------------- | --------------------------- |
+| iOS simulator   | A node, depth and time limit of the accessibility service                   | Yes                         |
+| Physical iPhone | 1500 nodes. Also a depth limit, and a lower limit for a hosted view service | For the node limit only     |
+| Android         | 12000 nodes or depth 128                                                    | Yes                         |
+| Chromium        | 12000 visible elements or depth 96                                          | Yes                         |
+| Mac app         | 12000 elements or depth 40, and 12000 items for each web view               | Yes                         |
+| Vega            | None                                                                        | Not applicable              |
+
+A cut tree alone does not change the result of a step. When the part past the cut can change the result, the step gets a warning:
+
+| Step                                                              | Result on a cut tree                                                                         |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| A `hidden` condition that no element before the cut matches       | Passes. The warning says that the result does not prove that the element is absent           |
+| A `when:` guard with no match                                     | Skips its block. The warning is on the `when` step, and the e2e test continues               |
+| An action whose `text` matches only a part of a label             | Acts on that element. The warning says to use the full text or the id                        |
+| A `text` condition that reads the text of a container             | Keeps its result. The warning says that the text holds only the elements before the cut      |
+| A step that finds no element (`tap`, `visible`, `scroll-to`, ...) | Fails. The reason says that the tree was cut, in place of the hint to add a `scroll-to` step |
+| A `scroll-to` that reaches the end of the scroll                  | Fails. The reason says that the end of the scroll is not certain                             |
+
+More rules:
+
+- A `text` condition warns only for an `equals` or `matches` check that passes on the text of the container, and for a check that fails. A `contains` check that passes gets no warning. A check that passes on the own text of the element gets no warning.
+- On Chromium, only a container whose text the cut shortened gets the container warning. On the other platforms, each container on a cut tree gets it.
+- An exact match of a `text` selector gets no warning. A second exact match past the cut is not in the tree.
+- When a dialog, a sheet or an alert covers the target, the reason says that the target is covered, not that the tree was cut.
+- A version 1 e2e test on an iOS simulator does not get these warnings.
+
+To make a step that has this warning reliable, reduce what the screen shows before the step. For example, close a long list or web page. After a `hidden` condition, add an `await: { visible: ... }` step for an element of the next screen.
+
 ### On-screen keyboard
 
 When the on-screen keyboard shows, its elements are in the runner tree and in the `describe` tree. These elements are the keys, the prediction bar and the other buttons of the keyboard. On iOS, the input accessory view above the keys is part of the app, for example a toolbar with a `Done` button.

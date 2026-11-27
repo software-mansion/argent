@@ -66,6 +66,13 @@ export interface FlatNode<T> {
    * self-identified component in it.
    */
   shield: boolean;
+  /**
+   * A cut of the source's walk left out text of this node's subtree
+   * (Chromium's `cutInside`): the text holds only what came before the cut.
+   * Carried to the leaf whose `subtreeText` that text gives, the node's own
+   * or its nearest ancestor leaf's, which the source marks too.
+   */
+  cutInside?: boolean;
 }
 
 /**
@@ -186,7 +193,10 @@ export function flattenHoisting<T>(
   if (view.leaf) {
     // Against the leaf's own text, not `ownText`: a projection may leave part
     // of it out (a toggle's 0/1), and the text check must then read the rest.
-    if (subtree && subtree !== nodeText(view.leaf)) view.leaf.subtreeText = subtree;
+    if (subtree && subtree !== nodeText(view.leaf)) {
+      view.leaf.subtreeText = subtree;
+      if (view.cutInside) view.leaf.cutInside = true;
+    }
     out.push(view.leaf);
   }
   return view.shield ? "" : subtree;

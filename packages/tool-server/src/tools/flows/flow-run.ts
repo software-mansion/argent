@@ -2835,6 +2835,7 @@ async function execWhenStep(
   const guardStartedAt = Date.now();
 
   let met: boolean;
+  let guardWarning: { warning?: string } = {};
   if (step.condition.kind === "output") {
     const check = evaluateOutputCheck(step.condition.check, state.output.doc);
     label += `: ${escapeInline(check.reason)}`;
@@ -2848,8 +2849,10 @@ async function execWhenStep(
     met = platform === step.condition.platform;
   } else {
     const probe = await probeWhenCondition(deviceEnv(state), step.condition);
+    // The guard's warning (a cut tree) rides its marker, whatever the verdict.
+    if (probe.warning !== undefined) guardWarning = { warning: probe.warning };
     if (probe.aborted) {
-      pushReport(state, { ...marker, status: "skip", reason: "run aborted" });
+      pushReport(state, { ...marker, status: "skip", reason: "run aborted", ...guardWarning });
       reportBlockSkipped(state, step.steps, inner, "run aborted");
       return;
     }
@@ -2859,6 +2862,7 @@ async function execWhenStep(
         status: "error",
         reason: `could not evaluate when guard (${label}): ${probe.reason}`,
         durationMs: Date.now() - guardStartedAt,
+        ...guardWarning,
       });
       state.stopped = true;
       reportBlockSkipped(state, step.steps, inner, "when guard errored");
@@ -2874,6 +2878,7 @@ async function execWhenStep(
       status: "skip",
       reason: `condition not met (${label}) — block skipped (${n} step${n === 1 ? "" : "s"})`,
       durationMs: Date.now() - guardStartedAt,
+      ...guardWarning,
     });
     reportBlockSkipped(state, step.steps, inner, "when block skipped");
     return;
@@ -2886,6 +2891,7 @@ async function execWhenStep(
     status: "pass",
     reason: `condition met (${label})`,
     durationMs: Date.now() - guardStartedAt,
+    ...guardWarning,
   });
   await execSteps(state, step.steps, inner);
 }
@@ -3208,17 +3214,20 @@ async function execLeafStep(
     case "rotate": {
       // A directive that *throws* (vs. reporting a failed outcome) must still
       // land in the structured report rather than abort the whole run
-      // unreported.
+      // unreported. Every status carries the step's warning.
+      let legacyWarning: string | undefined;
       try {
         const env = deviceEnv(state);
         const legacy = scope.legacyPoints
           ? await uprightLegacyPoints(env.device, step)
           : { step, warning: undefined };
+        legacyWarning = legacy.warning;
         const r = await runDirective(env, legacy.step);
         const warning = [legacy.warning, r.warning].filter((w) => w !== undefined).join(" ");
+        const warned = warning ? { warning } : {};
         // A run cancelled mid-directive is a skip (matching the pre-step guard
         // and `wait`), never a step failure — the app did nothing wrong.
-        if (r.aborted) return { ...base, status: "skip", reason: r.reason };
+        if (r.aborted) return { ...base, status: "skip", reason: r.reason, ...warned };
         // `indeterminate` is `idle`'s only non-passing outcome: a screen that
         // merely kept moving passes with a warning, and so does one that
         // rendered nothing, so what is left here is a wait that could not run
@@ -3233,16 +3242,21 @@ async function execLeafStep(
           r.indeterminate &&
           (step.kind === "idle" || (device !== null && !supportsFlowTree(device.platform)))
         ) {
-          return { ...base, status: "error", reason: r.reason };
+          return { ...base, status: "error", reason: r.reason, ...warned };
         }
         return {
           ...base,
           status: r.ok ? "pass" : "fail",
           reason: r.reason,
-          ...(warning ? { warning } : {}),
+          ...warned,
         };
       } catch (err) {
-        return { ...base, status: "error", reason: errMsg(err) };
+        return {
+          ...base,
+          status: "error",
+          reason: errMsg(err),
+          ...(legacyWarning !== undefined ? { warning: legacyWarning } : {}),
+        };
       }
     }
 

@@ -38,7 +38,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const MAX_DEPTH = ${intForScript(maxDepth, DEFAULT_WALK_LIMITS.maxDepth)};
   const MAX_NODES = ${intForScript(maxNodes, DEFAULT_WALK_LIMITS.maxNodes)};
   let nodeBudget = MAX_NODES;
+  // The node budget ran out: the walk stops there.
   let truncated = false;
+  // An element the walk would emit was past MAX_DEPTH: the walk left it out
+  // and went on with its siblings.
+  let depthCut = false;
+  // Cut points so far: a depth cut, the element where the node budget ran out,
+  // and each element the walk skipped after that. A node is marked
+  // \`cutInside\` when its text lost something to a cut (see \`walk\`).
+  let cutCount = 0;
   const w = window.innerWidth;
   const h = window.innerHeight;
   if (!w || !h) return JSON.stringify({ tree: null, error: "viewport is zero" });
@@ -1226,6 +1234,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const cuts = [];
   // Each emitted node's unclipped extent and the scrollers measured against it.
   const extents = nodeMap();
+  // Each emitted node's cut points: those that came while its walk ran.
+  const cutsIn = nodeMap();
 
   // An element's parent in the flat tree: its slot, else its parent, a shadow root's host.
   function flatParent(n) {
@@ -2177,11 +2187,38 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
+  // Whether an element past MAX_DEPTH holds something the walk would emit: not
+  // hidden(), and an element inside it, or text, a name, a tap or an id of its own.
+  function emitsPastDepth(el, style) {
+    if (getChildrenEls.call(el).length > 0) return true;
+    const shadow = getShadowRoot.call(el);
+    if (shadow && shadow.children.length > 0) return true;
+    if (style.visibility !== "visible") return false;
+    return Boolean(
+      ownText(el, style) ||
+        accessibleName(el) ||
+        isInteractive(el) ||
+        getAttr.call(el, "id") ||
+        getAttr.call(el, "data-testid") ||
+        getAttr.call(el, "data-test-id")
+    );
+  }
+
   function walk(el, depth, clips = NO_CLIP, unseenSlot = false, base = IDENTITY) {
-    if (truncated) return null;
-    if (depth > MAX_DEPTH) return null;
+    if (truncated) {
+      cutCount++;
+      return null;
+    }
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
+    if (depth > MAX_DEPTH) {
+      // A hidden or empty element there is no cut: the walk would emit nothing for it.
+      if (!hidden(el, style) && emitsPastDepth(el, style)) {
+        depthCut = true;
+        cutCount++;
+      }
+      return null;
+    }
     const t = linearTransform(el, style, base);
     if (hidden(el, style)) {
       pruned.set(el, clips);
@@ -2197,10 +2234,23 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (style.visibility === "visible") {
       if (nodeBudget <= 0) {
         truncated = true;
+        cutCount++;
         return null;
       }
       nodeBudget--;
     }
+    const cutsBefore = cutCount;
+    // Whether a cut left out text this node's flow text holds: a child the cut
+    // dropped, a cut a promoted child does not account for, or a child whose own
+    // text lost some. Not a child with an id or a password: the flow flatten keeps
+    // its text off this node, so a cut inside it shortens only its own.
+    let lostText = false;
+    const took = (c, before) => {
+      const cuts = cutCount - before;
+      if (cuts === 0) return;
+      if (!c || cuts > (cutsIn.get(c) || 0)) lostText = true;
+      else if (c.cutInside && !c.identifier && !c.password) lostText = true;
+    };
 
     if (inTopLayer(el, style)) clips = NO_CLIP;
     let clip = ownClip(clips, style);
@@ -2228,7 +2278,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (shadow) {
       for (const child of shadow.children) {
         const kidClips = legendClips.has(child) ? legendClips.get(child) : inner;
+        const before = cutCount;
         const c = walk(child, depth + 1, kidClips, false, t);
+        took(c, before);
         if (c) shadowResults.push(c);
       }
     }
@@ -2262,7 +2314,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
                 ? slotClips.get(slot)
                 : unwalked || inner;
       const kidBase = slot ? linears.get(slot) : t;
+      const before = cutCount;
       const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot, kidBase);
+      took(c, before);
       if (c) childResults.push(c);
     }
     childResults.push(...shadowResults);
@@ -2397,6 +2451,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       frame: selfFrame,
       children: childResults,
     };
+    // The node's text holds only what came before a cut.
+    if (lostText) node.cutInside = true;
+    if (cutCount > cutsBefore) cutsIn.set(node, cutCount - cutsBefore);
     if (scs && r) extents.set(node, { r, scs });
     if (clipBounds) {
       node.clipBounds = clipBounds;
@@ -2446,7 +2503,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (cutsX.length) node.clipAnchors.x = wheelAnchor(r, scs, cutsX, win, "sx");
     if (cutsY.length) node.clipAnchors.y = wheelAnchor(r, scs, cutsY, win, "sy");
   }
-  return JSON.stringify({ tree: root, truncated });
+  return JSON.stringify({ tree: root, truncated, depthCut });
 })()`;
 
 // Exported for test/describe-chromium-script.test.ts, which evals it against a
@@ -2486,7 +2543,12 @@ export async function evaluateDescribeDom(
       failure_stage: "chromium_describe_no_value",
     });
   }
-  let parsed: { tree?: DescribeNode | null; truncated?: boolean; error?: string };
+  let parsed: {
+    tree?: DescribeNode | null;
+    truncated?: boolean;
+    depthCut?: boolean;
+    error?: string;
+  };
   try {
     parsed = JSON.parse(payload);
   } catch (err) {
@@ -2509,6 +2571,10 @@ export async function evaluateDescribeDom(
     });
   }
   const data: DescribeTreeData = { tree: parsed.tree, source: "cdp-dom" };
+  // Either cut leaves elements out (`describe` sends no `truncated`).
+  if (parsed.truncated || parsed.depthCut) data.truncated = true;
+  // The hint names the node budget only: a depth cut is common on deep pages,
+  // and `describe` has no remedy for it.
   if (parsed.truncated) {
     process.stderr.write(
       `[chromium-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`

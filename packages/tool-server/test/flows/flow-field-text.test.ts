@@ -209,5 +209,10 @@ describe.concurrent("the text a filled field holds on an iOS simulator", () => {
     expect(result.steps[0].status).toBe("fail");
     expect(sim.taps).toEqual([]);
     expect(result.steps[0].reason).not.toContain("only a text field holds this text");
+    expect(result.steps[0].reason).toBe(
+      'no visible element matched selector text="Paris": the UI tree was cut at a size limit, ' +
+        "and an element past the cut is not in the tree. Reduce what the screen shows before " +
+        "this step (for example, close a long list or web page)."
+    );
   }, 20_000);
 });

@@ -751,4 +751,17 @@ describe("queryMacosTree", () => {
       expect(findAll(data.tree, { identifier: "web-button" })).toHaveLength(1);
     }
   );
+
+  it.each<[string, LibraryOpts]>([
+    ["a tree cut at the node limit", { trees: [{ ...probeTree(), truncated: true }] }],
+    ["web content cut at the item limit", { web: { ...probeWeb(), truncated: true } }],
+  ])("flags %s truncated, for the runner's cut warnings", async (_name, opts) => {
+    const data = await queryMacosTree(macosRegistry(fakeMacosLibrary(opts).api), device);
+    expect(data.truncated).toBe(true);
+  });
+
+  it("sets no truncated on a whole read", async () => {
+    const data = await queryMacosTree(macosRegistry(fakeMacosLibrary().api), device);
+    expect("truncated" in data).toBe(false);
+  });
 });

@@ -269,6 +269,8 @@ export async function runSnapshot(
   // tree there is no frame, and degrading to a full-screen capture would
   // "compare" the whole screen against a cropped baseline.
   let cropFrame: DescribeFrame | undefined;
+  // On a cut tree, the crop element matched only a part of its text.
+  let cropWarning: string | undefined;
   if (opts.cropOn !== undefined) {
     const frame = await waitForFrame(env, opts.cropOn);
     if (frame === "aborted") {
@@ -279,7 +281,8 @@ export async function runSnapshot(
       if (miss.aborted) return { status: "skip", reason: "run aborted while resolving cropOn" };
       return { status: "fail", reason: miss.reason };
     }
-    cropFrame = frame;
+    cropFrame = frame.frame;
+    cropWarning = frame.warning;
   }
 
   const store = requireArtifacts(env.ctx);
@@ -291,10 +294,11 @@ export async function runSnapshot(
     scale: 1.0,
     includeImageInContext: false,
   })) as { image: ArtifactHandle; warning?: string };
-  // The screenshot tool's warning (a foldable whose panel could not be
-  // resolved) rides every outcome built on this capture.
-  let captureWarned: { warning?: string } =
-    shot.warning !== undefined ? { warning: shot.warning } : {};
+  // The crop's warning (a part match on a cut tree) and the screenshot tool's
+  // (a foldable whose panel could not be resolved) ride every outcome built on
+  // this capture.
+  const captureWarnings = [cropWarning, shot.warning].filter((w) => w !== undefined).join(" ");
+  let captureWarned: { warning?: string } = captureWarnings ? { warning: captureWarnings } : {};
 
   // The key stays on the FULL capture's dimensions even under cropOn: its job
   // is device-class identity (wrong-simulator/rotation detection), which
