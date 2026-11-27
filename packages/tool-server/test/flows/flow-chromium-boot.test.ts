@@ -258,6 +258,36 @@ describe("flow-execute chromium boot", () => {
     expect(deviceClaims.ownerOf("chromium-cdp-12346", "a")).toBeUndefined();
   });
 
+  it("ends the claim on an instance a relaunch retires, before the run ends", async () => {
+    const otherSessionClaims: boolean[] = [];
+    bootElectronApp.mockImplementation(async (opts) => {
+      const boots = bootElectronApp.mock.calls.length;
+      if (boots > 1) {
+        const claim = deviceClaims.claim("b", [`chromium-cdp-${12345 + boots - 2}`]);
+        otherSessionClaims.push(claim.ok);
+        if (claim.ok) claim.done();
+      }
+      return defaultBoot(opts);
+    });
+    const flowFile = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n  - launch: { chromium: ./app }\n"
+    );
+
+    try {
+      const result = await runFlow(makeRegistry(), {
+        name: "relaunch-claims",
+        project_root: PROJECT_ROOT,
+        e2e_test_file: flowFile,
+        session: "a",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(otherSessionClaims).toEqual([true, true]);
+    } finally {
+      deviceClaims.release("b");
+    }
+  });
+
   it("tears down the instance it booted when another session holds its id", async () => {
     claimPickedDevice("b", "chromium-cdp-12345")();
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");

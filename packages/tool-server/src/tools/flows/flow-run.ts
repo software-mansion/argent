@@ -905,7 +905,7 @@ async function bootChromiumForLaunch(state: ExecState, app: Launch): Promise<Dir
   }
   // Recorded before the next await so a cancelled run still reclaims it.
   state.owned.push(booted);
-  state.endClaims.push(claimPickedDevice(state.ctx?.session, booted.deviceId));
+  state.endClaims.set(booted.deviceId, claimPickedDevice(state.ctx?.session, booted.deviceId));
   state.device = resolveDevice(booted.deviceId);
 
   await frontChromiumPage(registry, state.device);
@@ -1137,8 +1137,8 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
-  /** Ends the session's claims on the devices this run picked or booted. */
-  endClaims: Array<() => void>;
+  /** Ends the session's claim on each device this run picked or booted, by device id. */
+  endClaims: Map<string, () => void>;
   /**
    * Time the hoisted boot took before step 1. The first `launch` step settles
    * that instance, so it adds this time to its own.
@@ -1982,7 +1982,7 @@ Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the tes
         stopped: false,
         pinned: statusBarPinned,
         owned: resolved.booted ? [resolved.booted] : [],
-        endClaims: endClaim ? [endClaim] : [],
+        endClaims: new Map(endClaim && device ? [[device.id, endClaim]] : []),
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
@@ -2850,7 +2850,7 @@ function deferShutdown(
       stopped: false,
       pinned: false,
       owned: [],
-      endClaims: [],
+      endClaims: new Map(),
       output,
       scriptLogBudget: createScriptLogBudget(),
       ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
@@ -2869,13 +2869,16 @@ function deferShutdown(
 /** Kills the instances the run booted, newest first, then ends the run's claims. */
 async function teardownOwned(state: ExecState): Promise<void> {
   for (let i = state.owned.length - 1; i >= 0; i--) await retireOwned(state, state.owned[i]!);
-  for (const end of state.endClaims) end();
+  for (const end of state.endClaims.values()) end();
+  state.endClaims.clear();
 }
 
 async function retireOwned(state: ExecState, booted: BootedChromium): Promise<void> {
   await teardownBootedChromium(state.registry, booted);
   const session = state.ctx?.session;
   if (session) deviceClaims.release(session, claimKey(booted.deviceId));
+  state.endClaims.get(booted.deviceId)?.();
+  state.endClaims.delete(booted.deviceId);
 }
 
 /**
