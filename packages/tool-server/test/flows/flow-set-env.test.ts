@@ -247,7 +247,7 @@ describe("e2e-add-script with env", () => {
       `import * as fs from "node:fs";\nfs.writeFileSync(${JSON.stringify(path.join(root, "MARK"))}, "ran");`
     );
     await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
-    await fs.writeFile(flowFile("t"), `steps:\n  - echo: "created {{output:user.id}}"\n`, "utf8");
+    await fs.writeFile(flowFile("t"), `steps:\n  - echo: "created {{output:user[0]}}"\n`, "utf8");
 
     // The file could not take the step, so the script's side effects would be
     // for nothing.

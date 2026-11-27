@@ -47,6 +47,7 @@ import {
   parseFlow,
   flowFormatVersion,
   precedesLeadingLaunch,
+  resolveStepOutputs,
   runTargetName,
   type BlockStep,
   type FlowEnv,
@@ -80,6 +81,7 @@ import {
 import { RECORDING_TOOL_IDS } from "./flow-add-step";
 import { runFlowScriptStep, typeScriptScriptRefusal } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
+import { evaluateOutputCheck, OutputReferenceError, type FlowOutput } from "./flow-output";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
@@ -1169,6 +1171,13 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    * its own args pass.
    */
   runEnv: FlowEnv;
+  /**
+   * What the run's script steps returned: each gets it as `output`, and what
+   * it leaves there replaces it. `run:` fragments share it; a `tool:
+   * e2e-execute` step is a separate run with its own. A holder, so a recorder
+   * can share its own (`ToolContext.flowOutput`).
+   */
+  output: { doc: FlowOutput };
   scriptLogBudget: FlowScriptLogBudget;
   /**
    * The last native network capture note this run reported for each app (see
@@ -1959,6 +1968,7 @@ Without a link, every step kind runs.`,
         secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
         runEnv,
+        output: ctx?.flowOutput ?? { doc: {} },
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
@@ -2696,12 +2706,29 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
     if (step.kind !== "script" && JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) {
       state.secret.typed = true;
     }
+    let leaf: typeof step;
+    try {
+      leaf = resolveStepOutputs(step, state.output.doc);
+    } catch (err) {
+      if (!(err instanceof OutputReferenceError)) throw err;
+      pushReport(state, {
+        index,
+        kind: step.kind,
+        status: "error",
+        e2eTest: scopeFlow(scope),
+        target: stepTarget(step),
+        ...depthOf(scope),
+        reason: escapeInline(err.message),
+      });
+      state.stopped = true;
+      continue;
+    }
     // A version 1 file's raw tool step runs in the native coordinates it was
     // recorded in; everything else, also a nested run such a step starts, in
     // the upright ones.
     const report = await inCoordinateSpace(
       scope.legacyPoints && step.kind === "tool" ? "native" : "upright",
-      () => execLeafStep(state, step, index, scope)
+      () => execLeafStep(state, leaf, index, scope)
     );
     if (report.status !== "skip" && !SCREEN_READING_STEPS.has(step.kind)) {
       state.lastActionAt = Date.now();
@@ -2799,26 +2826,40 @@ async function execBlockStep(state: ExecState, step: BlockStep, scope: StepScope
  */
 async function execWhenStep(
   state: ExecState,
-  step: Extract<FlowStep, { kind: "when" }>,
+  authored: Extract<FlowStep, { kind: "when" }>,
   scope: StepScope
 ): Promise<void> {
   const index = state.reports.length;
-  const label = describeWhenCondition(step.condition);
-  const target = stepTarget(step);
   // The marker sits at the enclosing depth; the guarded steps one deeper —
   // whether they execute or report as skipped.
-  const marker = {
+  const unresolved = {
     index,
     kind: "when",
     e2eTest: scopeFlow(scope),
-    target,
+    target: stepTarget(authored),
     ...depthOf(scope),
   } as const;
   const inner = childScope(scope);
+  let step: typeof authored;
+  try {
+    step = resolveStepOutputs(authored, state.output.doc);
+  } catch (err) {
+    if (!(err instanceof OutputReferenceError)) throw err;
+    pushReport(state, { ...unresolved, status: "error", reason: escapeInline(err.message) });
+    state.stopped = true;
+    reportBlockSkipped(state, authored.steps, inner, "when guard errored");
+    return;
+  }
+  const marker = { ...unresolved, target: stepTarget(step) } as const;
+  let label = describeWhenCondition(step.condition);
   const guardStartedAt = Date.now();
 
   let met: boolean;
-  if (step.condition.kind === "platform") {
+  if (step.condition.kind === "output") {
+    const check = evaluateOutputCheck(step.condition.check, state.output.doc);
+    label += `: ${escapeInline(check.reason)}`;
+    met = check.ok;
+  } else if (step.condition.kind === "platform") {
     // A guard names an authoring platform ({@link authoringPlatform}): the
     // parser rejects "ios-remote" as a guard spelling, so without the fold
     // every iOS-only block would silently skip on a remote simulator.
@@ -3066,15 +3107,17 @@ async function runScriptStep(
   scope: StepScope
 ): Promise<ScriptStepOutcome> {
   const env = mergeScriptEnv(scope.fileEnv, step.env, state.runEnv);
-  const { outcome } = await runFlowScriptStep({
+  const { outcome, result } = await runFlowScriptStep({
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
     env,
+    output: state.output.doc,
     ...(state.ctx?.clientSecrets ? { clientSecrets: state.ctx.clientSecrets } : {}),
     logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });
+  if (outcome.status === "pass" && result?.output) state.output.doc = result.output;
   return outcome.reason === undefined
     ? outcome
     : { ...outcome, reason: oneLineReason(outcome.reason) };
@@ -3418,6 +3461,11 @@ async function execLeafStep(
     case "script": {
       const outcome = await runScriptStep(state, step, scope);
       return { ...base, ...outcome };
+    }
+
+    case "output-check": {
+      const check = evaluateOutputCheck(step.check, state.output.doc);
+      return { ...base, status: check.ok ? "pass" : "fail", reason: escapeInline(check.reason) };
     }
 
     default: {

@@ -64,6 +64,8 @@ An e2e test can [check that an action sends a request](/docs/features/network#wa
 
 Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. Use environment values to run the same script against different servers. Use a secret placeholder to pass credentials without storing them in the e2e test file.
 
+A script can return a value, such as the ID of a user it creates. Later steps can use that ID to find the user in the app or pass it to a cleanup script.
+
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 
 <a id="replaying-a-flow" />

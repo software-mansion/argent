@@ -153,13 +153,13 @@ const zodSchema = z.object({
   env: envRecordSchema(z.string())
     .optional()
     .describe(
-      "Environment overrides for this script. Argent uses them immediately and saves them on the step. Values can include {{secret:NAME}}."
+      "Environment overrides for this script. Argent uses them immediately and saves them on the step. Values can include {{secret:NAME}} or {{output:PATH}}."
     ),
 });
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
   id: "e2e-add-script",
-  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
+  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a script step. Use when the user requests a local script in an active recording. Call it where the script must run. A successful script updates the shared output and returns it as \`outputJson\`. Later steps can read it with \`{{output:PATH}}\`. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before retrying. Record without a link (argent link or ARGENT_TOOLS_URL).`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],
@@ -212,7 +212,8 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
         ...(params.env !== undefined ? { env: params.env } : {}),
       },
     };
-    const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
+    const envProblem =
+      params.env === undefined ? undefined : flowEnvProblem(params.env, { references: true });
     if (envProblem) throw new InvalidToolInputError(`env ${envProblem}`);
     const step: Extract<FlowStep, { kind: "script" }> = {
       kind: "script",
@@ -240,6 +241,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       step,
       projectRoot: params.project_root,
       env,
+      output: session.output ?? {},
       ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
@@ -319,6 +321,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       );
     }
 
+    if (result?.output) session.output = result.output;
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,

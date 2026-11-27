@@ -411,11 +411,11 @@ describe("a step the recorder refuses", () => {
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "one" });
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user.id}}" })
+      .execute({}, { name: "poison", project_root: tmpDir, message: "created {{output:user[0]}}" })
       .catch((e: unknown) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain("takes no {{output:...}} reference");
     expect(parseFlow(await onDisk("poison")).steps).toEqual([{ kind: "echo", message: "one" }]);
 
     await flowInsertEchoTool.execute({}, { name: "poison", project_root: tmpDir, message: "two" });
@@ -441,39 +441,68 @@ describe("a step the recorder refuses", () => {
     );
 
     const err = await flowInsertEchoTool
-      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user.id}}" })
+      .execute({}, { name: "poison", project_root: clientRoot, message: "{{output:user[0]}}" })
       .catch((e: unknown) => e as Error);
 
-    expect((err as Error).message).toContain("unsupported template syntax");
+    expect((err as Error).message).toContain("takes no {{output:...}} reference");
     const session = await getRecordingSession(clientRoot, "poison");
     expect(session?.flow.steps).toEqual([{ kind: "echo", message: "one" }]);
   });
 
-  it("says the tool call already ran when the refusal lands after it", async () => {
+  it("refuses a malformed reference before the call runs", async () => {
     const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 15 } } });
     const tool = createFlowAddStepTool(registry);
     await flowStartRecordingTool.execute(
       {},
-      { name: "already-ran", project_root: tmpDir, executionPrerequisite: PREREQ }
+      { name: "not-run", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
 
-    const err = await tool
-      .execute(
-        {},
-        {
-          name: "already-ran",
-          project_root: tmpDir,
-          command: "keyboard",
-          args: '{"text":"{{output:code}}"}',
-        }
-      )
-      .catch((e: unknown) => e as Error);
+    for (const text of ["{{output:code[0]}}", "{{output:code}}"]) {
+      const err = await tool
+        .execute(
+          {},
+          {
+            name: "not-run",
+            project_root: tmpDir,
+            command: "keyboard",
+            args: JSON.stringify({ text }),
+          }
+        )
+        .catch((e: unknown) => e as Error);
+      expect((err as Error).message).toContain("Nothing ran and no step was recorded");
+    }
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(parseFlow(await onDisk("not-run")).steps).toEqual([]);
+  });
 
-    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: "{{output:code}}" });
-    expect((err as Error).message).toContain("`keyboard` call ran");
-    expect((err as Error).message).toContain("unsupported template syntax");
-    expect(getFailureSignal(err as Error)?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
-    expect(parseFlow(await onDisk("already-ran")).steps).toEqual([]);
+  it("runs the call with what the recorded scripts returned and keeps the reference", async () => {
+    const registry = createMockRegistry({ keyboard: { result: { typed: "…", keys: 4 } } });
+    const tool = createFlowAddStepTool(registry);
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "resolved", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    (await getRecordingSession(tmpDir, "resolved"))!.output = { otp: { code: 1234 } };
+
+    await tool.execute(
+      {},
+      {
+        name: "resolved",
+        project_root: tmpDir,
+        command: "keyboard",
+        args: '{"text":"{{output:otp.code}}","delayMs":"{{output:otp.code}}"}',
+      }
+    );
+
+    // A whole-value reference keeps its JSON type, as the runner gives it.
+    expect(registry.invokeTool).toHaveBeenCalledWith("keyboard", { text: 1234, delayMs: 1234 });
+    expect(parseFlow(await onDisk("resolved")).steps).toEqual([
+      {
+        kind: "tool",
+        name: "keyboard",
+        args: { text: "{{output:otp.code}}", delayMs: "{{output:otp.code}}" },
+      },
+    ]);
   });
 
   // A host-mode append re-parses the file, so the same guard also judges the
@@ -488,7 +517,7 @@ describe("a step the recorder refuses", () => {
     );
     await fs.writeFile(
       path.join(flowsDirFor(tmpDir), "hand-edited.yaml"),
-      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user.id}}"\n`
+      `executionPrerequisite: ${PREREQ}\nsteps:\n  - echo: "created {{output:user[0]}}"\n`
     );
 
     const err = await tool

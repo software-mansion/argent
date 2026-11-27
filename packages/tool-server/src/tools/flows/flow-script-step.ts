@@ -16,6 +16,7 @@ import {
   type FlowScriptSecret,
 } from "./script/flow-script-executor";
 import { resolveSecretPlaceholders } from "../../utils/secrets";
+import { OutputReferenceError, resolveOutputText, type FlowOutput } from "./flow-output";
 import { InvalidToolInputError } from "../../utils/capability";
 
 /**
@@ -50,6 +51,8 @@ interface FlowScriptStepRequest {
   projectRoot: string;
   /** The step's environment values, already merged across layers; placeholders unresolved. */
   env?: FlowEnv;
+  /** The run's output document: the script's `output`, and what env references read. */
+  output?: FlowOutput;
   /** Secrets the argent client forwarded (`ctx.clientSecrets`); they win over local sources. */
   clientSecrets?: ReadonlyMap<string, string>;
   logBudget?: FlowScriptLogBudget;
@@ -87,6 +90,25 @@ export function resolveScriptEnv(
     }
   }
   return { env: resolved, secrets };
+}
+
+/**
+ * `env` with each `{{output:...}}` reference replaced. Before the secrets: a
+ * value from an output never names a secret (see `resolveOutputText`).
+ */
+function outputsInEnv(env: FlowEnv, output: FlowOutput): FlowEnv {
+  const resolved: FlowEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    try {
+      resolved[name] = resolveOutputText(value, output);
+    } catch (err) {
+      if (err instanceof OutputReferenceError) {
+        throw new InvalidToolInputError(`The value of ${name}: ${err.message}.`);
+      }
+      throw err;
+    }
+  }
+  return resolved;
 }
 
 export async function runFlowScriptStep(
@@ -147,7 +169,8 @@ export async function runFlowScriptStep(
   let resolved: ReturnType<typeof resolveScriptEnv> | undefined;
   try {
     if (request.env) {
-      resolved = resolveScriptEnv(request.env, request.projectRoot, request.clientSecrets);
+      const env = outputsInEnv(request.env, request.output ?? {});
+      resolved = resolveScriptEnv(env, request.projectRoot, request.clientSecrets);
     }
   } catch (err) {
     return {
@@ -158,7 +181,7 @@ export async function runFlowScriptStep(
 
   const result = await flowScriptExecutor().execute({
     scriptPath: canonical,
-    output: {},
+    output: request.output ?? {},
     ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}),
     projectRoot: request.projectRoot,
     flowDir,

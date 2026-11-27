@@ -231,7 +231,7 @@ Use `when:` only for optional setup or an interstitial that reconverges:
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden`, or `text` condition, or `{ platform: ios|android|chromium|vega|macos }`. A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
+Use a UI condition (`exists`, `visible`, `hidden`, or `text`), an [output check](#pass-values-between-steps), or a platform guard (`{ platform: ios|android|chromium|vega|macos }`). A run on a remote simulator matches `ios`. UI guards use the short assert grace and reject `timeout`. There is no `else` or per-step `optional`. Put separate behavioral paths in separate tests. Never place a required acceptance check inside `when:`.
 
 ## Composition and platform limits
 
@@ -271,6 +271,14 @@ Node runs `.mts` and `.ts` by removing the types, and it does not read `tsconfig
 If the reason says that the Node.js of the tool-server cannot run TypeScript, use `.mjs` or `.js` files.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
+
+### Pass values between steps
+
+Save JSON data to the global `output`, for example `output.user = { id: "user-7" }`. Record scripts one at a time so each starts with the previous output. Inspect `e2e-add-script.outputJson` before writing a reference. A `run:` fragment shares output. For a separate `tool: e2e-execute` run, pass inputs through `env`.
+
+Quote references in YAML, such as `"{{output:user.id}}"`. Use dotted keys and indexes (`items.0.id`). If a script may be skipped, guard the use with an output check or provide a literal fallback, such as `"{{output:user.id ?? guest}}"`. For a required check, use `assert: { output: user.id, exists: true }`.
+
+Use references in selectors, typed text, equality or contains checks, tool arguments, and script-step environment values. A whole-value tool argument keeps its JSON type. Return a string when the tool expects text. Keep secret placeholders in the YAML. See [Script output](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#script-output) for supported fields and fallback syntax.
 
 ## Snapshots and CLI runs
 

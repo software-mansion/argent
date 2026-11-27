@@ -21,7 +21,9 @@ import {
 import {
   requireRecordingSession,
   appendStepToFlow,
+  stepOutputReferenceProblem,
   holdsOutputReference,
+  resolveStepOutputs,
   appIdForPlatform,
   authoringPlatform,
   parseFlow,
@@ -74,6 +76,8 @@ import {
 } from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
+import { OutputReferenceError } from "./flow-output";
+import { InvalidToolInputError } from "../../utils/capability";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
 import {
@@ -1293,8 +1297,8 @@ async function rewriteSiblingFlowPath(
  * resolve beside the recording's real file — compared canonically, since those
  * two anchors reach it by different spellings — and that directory must list
  * `<name>.yaml` byte-for-byte. Every refusal keeps the raw step rather than
- * throwing: unlike the rewrite, this runs AFTER the nested flow ran on the
- * device, so a throw would discard the record of a step that already happened.
+ * throwing: unlike the rewrite, a refusal here is no reason to refuse the call,
+ * which a raw step records as well.
  * The raw step names the flow that ran by `name` and the caller's own
  * `project_root`. Without a link, a replay reads that flow on this host. Over a
  * link, a replay reads it from the files the client sends with the call, and
@@ -1478,9 +1482,11 @@ function replayRefusal(
 function withRecordedPanelKind(
   command: string,
   args: Record<string, unknown>,
-  toolResult: unknown
+  toolResult: unknown,
+  // The action that ran: a recorded `action: "{{output:...}}"` is still a stub.
+  ranAction: unknown = args.action
 ): Record<string, unknown> {
-  if (command !== "file-panel" || args.action !== "stub" || args.panelKind !== undefined) {
+  if (command !== "file-panel" || ranAction !== "stub" || args.panelKind !== undefined) {
     return args;
   }
   const panelKind = (toolResult as { panelKind?: unknown } | null)?.panelKind;
@@ -1542,7 +1548,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   return {
     id: "e2e-add-step",
     description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Use \`{{output:PATH}}\` in arguments to read prior script output. The tool resolves the values for the live call and saves the references in a \`tool:\` step.
 Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     zodSchema,
     aliases: ["flow-add-step"],
@@ -1616,6 +1622,24 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         await rewriteSiblingFlowPath(session, args, project, linked);
       }
 
+      // The call runs with each output reference resolved against what this
+      // recording's scripts returned, and the step keeps the references. It is
+      // recorded as the raw tool step: a directive the call would convert to
+      // (a captured tap selector, a `launch`) is built from resolved values.
+      const authored: FlowStep = { kind: "tool", name: command, args };
+      const referencedArgs = holdsOutputReference(authored) ? args : undefined;
+      if (referencedArgs) {
+        const problem = stepOutputReferenceProblem(authored);
+        if (problem)
+          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${problem}`);
+        try {
+          args = resolveStepOutputs(authored, session.output ?? {}).args;
+        } catch (err) {
+          if (!(err instanceof OutputReferenceError)) throw err;
+          throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${err.message}`);
+        }
+      }
+
       // Refused before the tap capture and the invoke, so nothing runs.
       if (linked) {
         const issue = toolStepUploadIssue(
@@ -1631,6 +1655,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
       // the tapped element is gone by the time the tap returns.
       const isTap =
+        !referencedArgs &&
         command === "gesture-tap" &&
         params.delayMs === undefined &&
         typeof args.udid === "string" &&
@@ -1649,6 +1674,18 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // replay does: a file argument, or the flow a nested flow-execute names,
       // which finds its own files there too. The step is recorded from `args`,
       // which keep the client paths.
+      // Running a fragment via flow-execute mid-recording is recorded as a
+      // `run:` composition directive rather than a raw, non-portable tool call.
+      // Decided before the call: a call that records as `run:` shares the
+      // recording's document, as the fragment shares the run's at replay, and
+      // one kept raw starts from an empty one, as its replay does.
+      const runTarget =
+        command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
+          ? await captureRunTarget(session, args, project)
+          : undefined;
+      const sharedOutput = runTarget?.flow
+        ? { doc: structuredClone(session.output ?? {}) }
+        : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1668,6 +1705,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           // with no enclosing run, which marks it as nested: its refusals name
           // the flow it runs, and this call returns the baselines it writes.
           ...(nestedFromClient ? { flowStack: ctx?.flowStack ?? [] } : {}),
+          ...(sharedOutput ? { flowOutput: sharedOutput } : {}),
         });
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
@@ -1776,13 +1814,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         if (probed) waitWarning = { warning: probed, kind: "conversion" };
       }
 
-      // Running a fragment via flow-execute mid-recording is recorded as a
-      // `run:` composition directive rather than a raw, non-portable tool call.
-      const runTarget =
-        command === RUN_TARGET_COMMAND && params.delayMs === undefined
-          ? await captureRunTarget(session, args, project)
-          : undefined;
-
       // A recorded `restart-app` is captured as the portable `launch` directive
       // (same terminate-and-relaunch semantics, plus the runner's post-launch
       // settle and readiness gate at replay). Recorded first, it makes the flow
@@ -1839,7 +1870,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let step: FlowStep;
       let warning: string | undefined;
-      if (captured?.selector) {
+      if (referencedArgs) {
+        step = {
+          kind: "tool",
+          name: command,
+          args: withRecordedPanelKind(
+            command,
+            stripDeviceKeys(referencedArgs),
+            toolResult,
+            args.action
+          ),
+          delayMs: params.delayMs,
+        };
+        warning = waitWarning?.warning;
+      } else if (captured?.selector) {
         step = {
           kind: "tap",
           selector: captured.selector,
@@ -1894,11 +1938,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       } catch (err) {
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
-        // A host-mode append re-parses the file, so the scan that refuses an
-        // output reference sees the steps ALREADY there as well — and a
-        // mid-recording hand edit is a supported way for one of those to carry
-        // one. Blaming the just-run call for that step's field would send the
-        // author back over a call whose args were clean.
+        // A host-mode append re-parses the file, so the scan that checks
+        // output references sees the steps ALREADY there as well — and a
+        // mid-recording hand edit is a supported way for one of those to break
+        // one. The call's own references were checked before it ran.
         throw wrapFailure(
           err,
           {
@@ -1907,13 +1950,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
             failure_area: "tool_server",
             error_kind: "validation",
           },
-          holdsOutputReference(step)
-            ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
-                `recorded. Check the call's changes before you retry. ${refused}`
-            : `The \`${params.command}\` call ran, but an existing e2e test step failed validation. ` +
-                `Fix the step named below. Check the call's changes before you retry. ${refused}`
+          `The \`${params.command}\` call ran, but an existing e2e test step failed validation. ` +
+            `Fix the step named below. Check the call's changes before you retry. ${refused}`
         );
       }
+
+      // Only a recorded `run:` step keeps what its nested run returned, as a
+      // replay would; a step that failed to append leaves the document as it was.
+      if (step.kind === "run" && sharedOutput) session.output = sharedOutput.doc;
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by

@@ -12,6 +12,7 @@ import {
   type WhenCondition,
 } from "./flow-utils";
 import type { TextMatchMode, WaitCondition } from "../../utils/ui-tree-match";
+import type { OutputCheck } from "./flow-output";
 
 /**
  * The UI condition shape shared by `await`, `assert` and the UI arm of a
@@ -158,7 +159,14 @@ function swipeLabel(
  * on every surface, so only the UI arm is parameterized.
  */
 function whenLabel(cond: WhenCondition, renderUi: (cond: UiCondition) => string): string {
-  return cond.kind === "platform" ? `platform ${cond.platform}` : renderUi(cond);
+  if (cond.kind === "platform") return `platform ${cond.platform}`;
+  if (cond.kind === "output") return outputCheckLabel(cond.check);
+  return renderUi(cond);
+}
+
+/** `output user.role equals "admin"`, the same on every surface. */
+function outputCheckLabel(check: OutputCheck): string {
+  return `output ${escapeInline(check.path)} ${check.test} ${escapeInline(JSON.stringify(check.expected))}`;
 }
 
 /** A compact rendering of a when guard for report reasons. */
@@ -432,6 +440,11 @@ const FLOW_STEP_DEFINITIONS: {
     summary: (step) =>
       `${escapeInline(step.path)}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
     target: (step) => escapeInline(step.path),
+  },
+  "output-check": {
+    summaryKind: "assert",
+    summary: (step) => outputCheckLabel(step.check),
+    target: (step) => outputCheckLabel(step.check),
   },
   "snapshot": {
     // `name` interpolates raw on both surfaces. It becomes a baseline filename,

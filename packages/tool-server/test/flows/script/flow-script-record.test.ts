@@ -347,7 +347,7 @@ describe("recording a script step", () => {
       "scripts/seed.mjs",
       `import * as fs from "node:fs";\n` +
         `fs.writeFileSync(${JSON.stringify(flowPath("handedited"))}, ` +
-        `${JSON.stringify(`steps:\n  - echo: "created {{output:user.id}}"\n`)});\n` +
+        `${JSON.stringify(`steps:\n  - echo: "created {{output:user[0]}}"\n`)});\n` +
         `output.ok = true;`
     );
 

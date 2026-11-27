@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
+  canonicalToolId,
   E2E_DIRS,
   FAILURE_CODES,
   FailureError,
@@ -45,6 +46,17 @@ import { MACOS_APPS_FLAG, isFlagOffered } from "../../utils/capability";
 import { MACOS_MODIFIERS, type MacosModifier } from "../../utils/macos-modifiers";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
+import {
+  holdsOutputMarker,
+  OUTPUT_CHECK_TESTS,
+  OutputReferenceError,
+  outputPathProblem,
+  outputReferenceProblem,
+  resolveOutputText,
+  resolveOutputValue,
+  type FlowOutput,
+  type OutputCheck,
+} from "./flow-output";
 
 /**
  * The refusal for a Windows client path on a macOS or Linux tool-server, which
@@ -374,6 +386,13 @@ export interface RecordingSession {
    * because the verdicts themselves are gone by then.
    */
   discardedWarnings?: number;
+  /**
+   * What the recorded script steps returned, in recording order: the document
+   * a replay holds at the same point. `e2e-add-script` hands it to the script
+   * and `e2e-add-step` resolves references against it. A hand edit to the file
+   * does not change it.
+   */
+  output?: FlowOutput;
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -751,7 +770,8 @@ export type WhenCondition =
       expectedText?: string;
       textMatch?: TextMatchMode;
     }
-  | { kind: "platform"; platform: WhenPlatform };
+  | { kind: "platform"; platform: WhenPlatform }
+  | { kind: "output"; check: OutputCheck };
 
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
@@ -817,7 +837,9 @@ export type FlowStep =
    */
   | { kind: "fold"; posture?: FoldPosture; angle?: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
-  | { kind: "script"; path: string; timeout?: number; env?: FlowEnv };
+  | { kind: "script"; path: string; timeout?: number; env?: FlowEnv }
+  /** `assert: { output: PATH, … }`: a check on a script's output, with no device. */
+  | { kind: "output-check"; check: OutputCheck };
 
 /** Environment values a `script` step's process receives, by variable name. */
 export type FlowEnv = Record<string, string>;
@@ -887,6 +909,7 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
   switch (step.kind) {
     case "echo":
     case "script":
+    case "output-check":
       return true;
     case "launch":
     case "run":
@@ -1100,7 +1123,10 @@ type YamlScrollBody =
  * `timeout` stays out by construction — the await step type adds it as a
  * sibling key, not here.
  */
-type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform };
+type YamlWhenBody = YamlWaitCondition | { platform: WhenPlatform } | YamlOutputCheck;
+
+/** `{ output: PATH, <test>: <expected> }`. */
+type YamlOutputCheck = { output: string } & Record<string, unknown>;
 
 type YamlStep =
   | { echo: string }
@@ -1113,7 +1139,7 @@ type YamlStep =
   | { swipe: SwipeBody }
   | { type: { into: YamlSelector; text: string; submit?: boolean } }
   | { await: (YamlWaitCondition & { timeout?: number }) | YamlIdleCondition }
-  | { assert: YamlWaitCondition }
+  | { assert: YamlWaitCondition | YamlOutputCheck }
   | { wait: number }
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
@@ -1603,13 +1629,15 @@ function toYamlStep(step: FlowStep): YamlStep {
       const when: YamlWhenBody =
         step.condition.kind === "platform"
           ? { platform: step.condition.platform }
-          : waitToYaml(
-              step.condition.condition,
-              step.condition.selector,
-              step.condition.expectedText,
-              step.condition.textMatch,
-              undefined
-            );
+          : step.condition.kind === "output"
+            ? outputCheckToYaml(step.condition.check)
+            : waitToYaml(
+                step.condition.condition,
+                step.condition.selector,
+                step.condition.expectedText,
+                step.condition.textMatch,
+                undefined
+              );
       return { when, steps: step.steps.map(toYamlStep) };
     }
     case "tap": {
@@ -1704,6 +1732,8 @@ function toYamlStep(step: FlowStep): YamlStep {
           undefined
         ),
       };
+    case "output-check":
+      return { assert: outputCheckToYaml(step.check) };
     case "wait":
       return { wait: step.ms };
     case "scroll-to": {
@@ -2115,7 +2145,12 @@ function parseWaitFields(raw: unknown, kind: "await" | "assert" | "when"): WaitF
   // condition, or more than one — and omitting `idle` left the one condition
   // they may have been reaching for out of the answer. Only `await` gains it;
   // `assert` and `when:` have no readiness form.
-  const legalKeys = kind === "await" ? [...WAIT_CONDITIONS, IDLE_CONDITION] : WAIT_CONDITIONS;
+  const legalKeys =
+    kind === "await"
+      ? [...WAIT_CONDITIONS, IDLE_CONDITION]
+      : kind === "assert"
+        ? [...WAIT_CONDITIONS, "output"]
+        : WAIT_CONDITIONS;
   if (raw === null || typeof raw !== "object") {
     badEntry({ [kind]: raw }, `${kind} needs a condition (${legalKeys.join(", ")})`);
   }
@@ -2961,13 +2996,56 @@ export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | unde
 }
 
 /**
+ * `{ output: PATH, exists|equals|contains|matches: … }`, the body of an
+ * `assert:` or a `when:` guard. The value to compare with is quoted text, as
+ * an env value is: YAML would read `1.10` as 1.1.
+ */
+function parseOutputCheck(b: Record<string, unknown>, kind: "assert" | "when"): OutputCheck {
+  const entry = { [kind]: b };
+  const pathProblem = outputPathProblem(b.output);
+  if (pathProblem) badEntry(entry, `${kind} ${pathProblem}`);
+  rejectUnknownKeys(entry, b, ["output", ...OUTPUT_CHECK_TESTS], `${kind}.output`);
+  const tests = OUTPUT_CHECK_TESTS.filter((test) => test in b);
+  if (tests.length !== 1) {
+    badEntry(
+      entry,
+      `${kind} output needs exactly one of \`exists\`, \`equals\`, \`contains\` or \`matches\`, e.g. \`${kind}: { output: user.role, equals: admin }\``
+    );
+  }
+  const test = tests[0]!;
+  const path = b.output as string;
+  const value = b[test];
+  if (test === "exists") {
+    if (typeof value !== "boolean")
+      badEntry(entry, `${kind} output \`exists\` takes true or false`);
+    return { path, test, expected: value };
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    badEntry(
+      entry,
+      `${kind} output \`${test}\` compares text: quote the value, e.g. \`${test}: "${value}"\``
+    );
+  }
+  const expected = value;
+  if (typeof expected !== "string" || (expected === "" && test !== "equals")) {
+    badEntry(entry, `${kind} output \`${test}\` needs a non-empty string`);
+  }
+  if (test === "matches") validatePattern(entry, expected, `${kind} output`);
+  return { path, test, expected };
+}
+
+function outputCheckToYaml(check: OutputCheck): YamlOutputCheck {
+  return { output: check.path, [check.test]: check.expected };
+}
+
+/**
  * Parse a `when:` guard — exactly one condition key: a UI condition
  * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a static
  * per-run test). No `timeout` sibling: the guard is always evaluated with the
  * short assert grace, so a skipped block stays cheap on every clean run.
  */
 function parseWhenCondition(raw: unknown): WhenCondition {
-  const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform`;
+  const conditionKeys = `${WAIT_CONDITIONS.join(", ")}, platform, output`;
   if (raw === null || typeof raw !== "object") {
     badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
   }
@@ -2982,6 +3060,7 @@ function parseWhenCondition(raw: unknown): WhenCondition {
         "Put `await: { idle: true }` before the block instead"
     );
   }
+  if ("output" in b) return { kind: "output", check: parseOutputCheck(b, "when") };
   const present = [...WAIT_CONDITIONS, "platform"].filter((c) => c in b);
   if (present.length !== 1) {
     badEntry({ when: raw }, `when needs exactly one condition key (${conditionKeys})`);
@@ -3201,7 +3280,7 @@ function parseScriptStep(raw: unknown, body: unknown): FlowStep {
   };
   if (b.timeout !== undefined) step.timeout = parseScriptTimeout(raw, b.timeout);
   if (b.env !== undefined) {
-    const problem = flowEnvProblem(b.env);
+    const problem = flowEnvProblem(b.env, { references: true });
     if (problem) badEntry(raw, `script.env ${problem}`);
     step.env = b.env as FlowEnv;
   }
@@ -3216,8 +3295,16 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * refuses the same inputs. Values must be strings: YAML would turn an unquoted
  * `0800` into the number 800 and `yes` into true, and a script would receive
  * something other than what the file shows.
+ *
+ * Only a script step's own `env:` takes `{{output:...}}` references
+ * (`references: true`). The file's, a fragment's and the run's values reach
+ * every script, the first included, which runs before any script returned a
+ * value, so a reference there would fail it.
  */
-export function flowEnvProblem(value: unknown): string | undefined {
+export function flowEnvProblem(
+  value: unknown,
+  { references = false }: { references?: boolean } = {}
+): string | undefined {
   // A plain record only: a YAML `!!omap` or `!!set` parses to a Map or a Set,
   // whose entries Object.entries would silently drop.
   if (
@@ -3238,9 +3325,14 @@ export function flowEnvProblem(value: unknown): string | undefined {
     if (typeof entry !== "string") return `has a non-string value for ${name}`;
     // The operating system ends an environment value at a NUL.
     if (entry.includes("\0")) return `has a NUL character in the value of ${name}`;
-    if (entry.includes(OUTPUT_REFERENCE_MARKER)) {
-      return `uses unsupported template syntax in ${name}: only {{secret:NAME}} placeholders are resolved`;
+    if (!references && holdsOutputMarker(entry)) {
+      return (
+        `has an {{output:...}} reference in the value of ${name}: only the env: of the script ` +
+        "step that reads it takes one"
+      );
     }
+    const problem = outputReferenceProblem(entry);
+    if (problem) return `${name} ${problem}`;
   }
   return undefined;
 }
@@ -3357,8 +3449,6 @@ export function parseScriptTimeout(raw: unknown, value: unknown): number {
   return value as number;
 }
 
-const OUTPUT_REFERENCE_MARKER = "{{output:";
-
 interface StepField {
   where: string;
   /**
@@ -3368,26 +3458,55 @@ interface StepField {
    */
   altWhere?: string;
   value: string;
+  /**
+   * Writes the resolved value back. Absent on a field that takes no output
+   * reference: a regex pattern, or what decides which test or file a step
+   * names.
+   */
+  set?: (value: unknown) => void;
+  /** A `tool:` argument: a whole-value reference keeps its JSON type. */
+  typed?: boolean;
+  /**
+   * What the parser asks of the field as written, asked again of the resolved
+   * value: `visible` for a selector, which an empty or blank value would let
+   * match any element, `nonEmpty` for text a check compares with or a step
+   * types.
+   */
+  required?: "visible" | "nonEmpty";
 }
 
-/**
- * A selector's own string leaves, addressed by their YAML spellings.
- *
- * `patterns` adds the regex spelling `text: { matches }`, which the walk
- * otherwise skips — see {@link outputReferenceFields} for the one context that
- * asks for it.
- */
-function* selectorFields(sel: FlowSelector, where: string, patterns = false): Generator<StepField> {
-  if (sel.text !== undefined) yield { where: `${where}.text`, value: sel.text };
-  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
-  if (patterns && sel.textMatches !== undefined) {
-    yield { where: `${where}.text.matches`, value: sel.textMatches };
+/** A selector's own string leaves, addressed by their YAML spellings. */
+function* selectorFields(sel: FlowSelector, where: string): Generator<StepField> {
+  if (sel.text !== undefined) {
+    yield {
+      where: `${where}.text`,
+      value: sel.text,
+      set: (v) => (sel.text = v as string),
+      required: "visible",
+    };
   }
-  if (sel.identifier !== undefined) yield { where: `${where}.id`, value: sel.identifier };
-  if (sel.role !== undefined) yield { where: `${where}.role`, value: sel.role };
+  // `textMatches` spells `text: { matches }` in the file (see selectorToYaml).
+  if (sel.textMatches !== undefined)
+    yield { where: `${where}.text.matches`, value: sel.textMatches };
+  if (sel.identifier !== undefined) {
+    yield {
+      where: `${where}.id`,
+      value: sel.identifier,
+      set: (v) => (sel.identifier = v as string),
+      required: "visible",
+    };
+  }
+  if (sel.role !== undefined) {
+    yield {
+      where: `${where}.role`,
+      value: sel.role,
+      set: (v) => (sel.role = v as string),
+      required: "visible",
+    };
+  }
   for (const relation of SELECTOR_RELATIONS) {
     const nested = sel[relation];
-    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`, patterns);
+    if (nested !== undefined) yield* selectorFields(nested, `${where}.${relation}`);
   }
 }
 
@@ -3400,34 +3519,80 @@ function* selectorFields(sel: FlowSelector, where: string, patterns = false): Ge
  * only: a node reached twice down two different branches is two real leaves and
  * must be yielded twice, while a node that contains itself is dropped at the
  * point it closes the loop.
+ *
+ * `set` is absent under the arguments of `e2e-execute` other than `env`:
+ * which test a nested run starts, and from where, is checked before the run
+ * and must be spelled in the file.
  */
 function* argFields(
   value: unknown,
   where: string,
+  set: ((value: unknown) => void) | undefined,
+  typed = true,
   seen: Set<object> = new Set()
 ): Generator<StepField> {
   if (typeof value === "string") {
-    yield { where, value };
+    yield { where, value, ...(set ? { set, typed } : {}) };
     return;
   }
   if (value === null || typeof value !== "object") return;
   if (seen.has(value)) return;
   seen.add(value);
+  const settable = set !== undefined;
   if (Array.isArray(value)) {
-    for (const [i, item] of value.entries()) yield* argFields(item, `${where}[${i}]`, seen);
+    for (const [i, item] of value.entries()) {
+      yield* argFields(
+        item,
+        `${where}[${i}]`,
+        settable ? (v) => (value[i] = v) : undefined,
+        typed,
+        seen
+      );
+    }
   } else if (value instanceof Map) {
     // `%YAML 1.1` + `!!omap` materializes a real Map, whose entries
     // Object.entries reports as none.
-    for (const [key, item] of value) yield* argFields(item, `${where}.${String(key)}`, seen);
+    for (const [key, item] of value) {
+      yield* argFields(
+        item,
+        `${where}.${String(key)}`,
+        settable ? (v) => value.set(key, v) : undefined,
+        typed,
+        seen
+      );
+    }
   } else if (value instanceof Set) {
     // `!!set` members ARE the values, so they carry no key of their own and the
     // path stays the container's.
-    for (const item of value) yield* argFields(item, where, seen);
+    for (const item of value) yield* argFields(item, where, undefined, typed, seen);
   } else {
-    for (const [key, item] of Object.entries(value))
-      yield* argFields(item, `${where}.${key}`, seen);
+    const record = value as Record<string, unknown>;
+    for (const [key, item] of Object.entries(record)) {
+      // A key is spelled in the file: only values resolve.
+      if (holdsOutputMarker(key)) yield { where: `${where}.${key}`, value: key };
+      yield* argFields(
+        item,
+        `${where}.${key}`,
+        settable ? (v) => (record[key] = v) : undefined,
+        typed,
+        seen
+      );
+    }
   }
   seen.delete(value);
+}
+
+function* toolArgFields(step: Extract<FlowStep, { kind: "tool" }>): Generator<StepField> {
+  if (canonicalToolId(step.name) !== "e2e-execute") {
+    yield* argFields(step.args, "args", () => {});
+    return;
+  }
+  // An env value is text, as in a script step; `env: "{{output:map}}"` names a whole map.
+  for (const [key, item] of Object.entries(step.args)) {
+    if (holdsOutputMarker(key)) yield { where: `args.${key}`, value: key };
+    const settable = key === "env" ? (v: unknown) => (step.args[key] = v) : undefined;
+    yield* argFields(item, `args.${key}`, settable, typeof item === "string");
+  }
 }
 
 /**
@@ -3458,46 +3623,63 @@ function* conditionFields(
     selector: FlowSelector;
     expectedText?: string;
     textMatch?: TextMatchMode;
-  },
-  patterns = false
+  }
 ): Generator<StepField> {
   yield* selectorFields(
     cond.selector,
-    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`,
-    patterns
+    cond.condition === "text" ? `${kind}.text.in` : `${kind}.${cond.condition}`
   );
-  if (cond.expectedText !== undefined && (patterns || cond.textMatch !== "matches")) {
+  if (cond.expectedText !== undefined) {
     yield {
       where: cond.textMatch ? `${kind}.text.${cond.textMatch}` : `${kind}.text`,
       value: cond.expectedText,
+      ...(cond.textMatch === "matches"
+        ? {}
+        : { set: (v) => (cond.expectedText = v as string), required: "nonEmpty" as const }),
     };
   }
 }
 
+function* outputCheckFields(kind: string, check: OutputCheck): Generator<StepField> {
+  if (typeof check.expected !== "string") return;
+  yield {
+    where: `${kind}.${check.test}`,
+    value: check.expected,
+    ...(check.test === "matches" ? {} : { set: (v) => (check.expected = v as string) }),
+    ...(check.test === "contains" ? { required: "nonEmpty" as const } : {}),
+  };
+}
+
+/** The string fields of a step's own body, not of the steps a block holds. */
 function* outputReferenceFields(step: FlowStep): Generator<StepField> {
   switch (step.kind) {
+    // Narration: a run's verdict never counts an echo, so one that could not
+    // resolve a reference would stop the run and still read as a pass.
     case "echo":
       yield { where: "echo", value: step.message };
       return;
     case "tool":
-      yield* argFields(step.args, "args");
+      yield* toolArgFields(step);
       return;
     case "type":
       yield* selectorFields(step.into, "type.into");
-      yield { where: "type.text", value: step.text };
+      yield {
+        where: "type.text",
+        value: step.text,
+        set: (v) => (step.text = v as string),
+        required: "nonEmpty",
+      };
       return;
     case "await":
     case "assert":
       yield* conditionFields(step.kind, step);
       return;
+    case "output-check":
+      yield* outputCheckFields("assert", step.check);
+      return;
     case "when":
-      // Patterns included HERE and nowhere else. `{{output:…}}` is on no
-      // resolver list, so a regex carrying one matches nothing — which a `tap`,
-      // an `await` or an `assert` reports on its first run. A `when` does not:
-      // an unmatchable guard is simply not met, the block is skipped, and the
-      // run is green. Same reasoning, and same field set, as the `{{secret:`
-      // scan in parseWhenCondition.
-      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition, true);
+      if (step.condition.kind === "ui") yield* conditionFields("when", step.condition);
+      if (step.condition.kind === "output") yield* outputCheckFields("when", step.condition.check);
       return;
     case "tap":
     case "long-press":
@@ -3528,12 +3710,23 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
       if (step.within) yield* selectorFields(step.within, "scroll-to.within");
       return;
     case "snapshot":
-      if (step.cropOn) yield* selectorFields(step.cropOn, "snapshot.cropOn");
+      // The baseline is keyed by the crop selector, so it is spelled in the file.
+      if (step.cropOn) {
+        for (const field of selectorFields(step.cropOn, "snapshot.cropOn")) {
+          yield { where: field.where, value: field.value };
+        }
+      }
       return;
-    case "script":
-      return;
+    // Which app and which test a step starts are spelled in the file.
     case "launch":
+      yield* argFields(step.app, "launch", undefined);
+      return;
     case "run":
+      yield { where: "run", value: step.flow };
+      return;
+    // A script's env values resolve when the step runs, merged across the
+    // layers (`runFlowScriptStep`), and parse through `flowEnvProblem`.
+    case "script":
     case "idle":
     case "wait":
     case "fold":
@@ -3549,43 +3742,91 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
 /**
  * Whether this step, or one nested in it, spells an output reference.
  *
- * {@link assertNoOutputReferences} judges a WHOLE flow, and a host-mode append
+ * {@link assertOutputReferences} judges a WHOLE flow, and a host-mode append
  * re-parses the file before it pushes — so its refusal can name a step that was
  * already there (a mid-recording hand edit) rather than the one being appended.
  * A caller that reports the refusal asks this which of the two it is holding.
  */
 export function holdsOutputReference(step: FlowStep): boolean {
   for (const field of outputReferenceFields(step)) {
-    if (field.value.includes(OUTPUT_REFERENCE_MARKER)) return true;
+    if (holdsOutputMarker(field.value)) return true;
+  }
+  if (step.kind === "script" && step.env) {
+    if (Object.values(step.env).some(holdsOutputMarker)) return true;
   }
   return blockSteps(step)?.some(holdsOutputReference) ?? false;
 }
 
-function assertNoOutputReferences(steps: FlowStep[], trail: number[] = []): void {
-  steps.forEach((step, i) => {
-    const at = [...trail, i + 1];
-    for (const field of outputReferenceFields(step)) {
-      if (!field.value.includes(OUTPUT_REFERENCE_MARKER)) continue;
-      const rendered =
-        field.value.length > MAX_ENTRY_RENDER_CHARS
-          ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
-          : field.value;
-      const locator = field.altWhere
-        ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
-        : `\`${field.where}\``;
-      throw new FailureError(
-        `Step ${at.join(".")} (\`${step.kind}\`): ${locator} uses unsupported template syntax. ` +
-          `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`,
-        {
-          error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
-          failure_stage: "flow_output_reference",
-          failure_area: "tool_server",
-          error_kind: "validation",
-        }
+/**
+ * `step` with each output reference in its own fields resolved against
+ * `output`, as a copy; the steps a block holds resolve when they run. Throws
+ * {@link OutputReferenceError}.
+ */
+export function resolveStepOutputs<S extends FlowStep>(step: S, output: FlowOutput): S {
+  if (![...outputReferenceFields(step)].some((field) => holdsOutputMarker(field.value))) {
+    return step;
+  }
+  const copy = structuredClone(step);
+  const fields = [...outputReferenceFields(copy)];
+  for (const field of fields) {
+    if (!field.set || !holdsOutputMarker(field.value)) continue;
+    const value = field.typed
+      ? resolveOutputValue(field.value, output)
+      : resolveOutputText(field.value, output);
+    if (field.required === "visible" && !hasVisibleText(value as string)) {
+      throw new OutputReferenceError(
+        `\`${field.where}\` resolved to ${JSON.stringify(value)}, which has no visible text and would match any element`
       );
     }
+    if (field.required === "nonEmpty" && value === "") {
+      throw new OutputReferenceError(`\`${field.where}\` resolved to an empty value`);
+    }
+    field.set(value);
+  }
+  return copy;
+}
+
+/**
+ * Why a field of the step's own body holds a reference it cannot, or
+ * undefined. A recorder asks it of a call before the call runs.
+ */
+export function stepOutputReferenceProblem(step: FlowStep): string | undefined {
+  for (const field of outputReferenceFields(step)) {
+    if (!holdsOutputMarker(field.value)) continue;
+    const locator = field.altWhere
+      ? `\`${field.where}\` (spelled \`${field.altWhere}\` if the target sits under \`on:\`)`
+      : `\`${field.where}\``;
+    if (field.set) {
+      const problem = outputReferenceProblem(field.value);
+      if (problem) return `${locator} ${problem}`;
+      continue;
+    }
+    const rendered =
+      field.value.length > MAX_ENTRY_RENDER_CHARS
+        ? `${field.value.slice(0, MAX_ENTRY_RENDER_CHARS)}…`
+        : field.value;
+    return (
+      `${locator} takes no {{output:...}} reference. ` +
+      `Replace it with the literal value the step needs: ${JSON.stringify(rendered)}`
+    );
+  }
+  return undefined;
+}
+
+function assertOutputReferences(steps: FlowStep[], trail: number[] = []): void {
+  steps.forEach((step, i) => {
+    const at = [...trail, i + 1];
+    const problem = stepOutputReferenceProblem(step);
+    if (problem) {
+      throw new FailureError(`Step ${at.join(".")} (\`${step.kind}\`): ${problem}`, {
+        error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+        failure_stage: "flow_output_reference",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
+    }
     const inner = blockSteps(step);
-    if (inner) assertNoOutputReferences(inner, at);
+    if (inner) assertOutputReferences(inner, at);
   });
 }
 
@@ -3824,6 +4065,12 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   // takes no selector. The body's key decides which.
   if ("await" in raw) {
     const body = (raw as { await: unknown }).await;
+    if (body !== null && typeof body === "object" && "output" in body) {
+      badEntry(
+        raw,
+        "await has no output form — a script's output does not change while the step waits; use `assert: { output: … }`"
+      );
+    }
     if (isIdleCondition(body, "await")) {
       return parseIdleFields(body as Record<string, unknown>, "await");
     }
@@ -3832,6 +4079,12 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("assert" in raw) {
     const body = (raw as { assert: unknown }).assert;
+    if (body !== null && typeof body === "object" && "output" in body) {
+      return {
+        kind: "output-check",
+        check: parseOutputCheck(body as Record<string, unknown>, "assert"),
+      };
+    }
     if (isIdleCondition(body, "assert")) {
       return parseIdleFields(body as Record<string, unknown>, "assert");
     }
@@ -4037,7 +4290,7 @@ export function serializeFlow(flow: FlowFile): string {
 }
 
 export function validateFlow(flow: FlowFile): void {
-  assertNoOutputReferences(flow.steps);
+  assertOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
       "An e2e test whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",

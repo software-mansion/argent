@@ -398,6 +398,8 @@ The step reports `fail` when the wait returns `success: false`. The failure reas
 | `hidden`  | No visible element matches the selector                          |
 | `text`    | The text of the element in `in` satisfies exactly one comparator |
 
+An `assert` can also check a value that a script returned. See [Check an output](#check-an-output).
+
 The `text` comparators:
 
 | Comparator | Match                           |
@@ -458,7 +460,7 @@ On HarmonyOS, the runner has no UI tree, so `idle` cannot run. The step errors i
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, an [`output` check](#check-an-output), or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
 
 ## Composition
 
@@ -534,7 +536,7 @@ Parsing rejects each other extension, such as `.cjs` or `.tsx`. See [Module type
 
 Over a link, the tool-server rejects an e2e test with a `script` step, and the `e2e-add-script` tool refuses to record one. Record and replay an e2e test with a `script` step without a link. An argent client that is older than the tool-server can record a `script` step when the computer of the tool-server has the `project_root` path, for example over a link to `127.0.0.1`. A replay over the link then rejects the e2e test. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-A `script` step needs no device. An e2e test of script steps alone runs with no simulator, emulator or browser, and the report names no device. A `run` step or a `when` step beside it makes the e2e test resolve one again, so a script inside a `when: { platform: ios }` block needs a booted iOS device.
+Scripts and output checks can run without a device. A test that calls a fragment with `run:` or uses a UI or platform guard still needs a target.
 
 The value is always a map. Parsing rejects a bare `script: scripts/seed.mjs`.
 
@@ -609,6 +611,8 @@ A fragment called with `run:` inherits the caller's defaults. Its own `env` fill
 
 Use names that match `[A-Za-z_][A-Za-z0-9_]*`, except `__proto__`. Quote YAML values such as `"8080"` or `"true"` to keep them as strings. Values cannot contain NUL characters. The script runner rejects reserved names such as `NODE_OPTIONS` and lists them in the error.
 
+To pass a value from an earlier script, put an [output reference](#script-output) in the script step's `env`. File defaults and run overrides support `{{secret:NAME}}` as their only placeholder.
+
 #### Set values while recording
 
 - Pass `env` to `e2e-start-recording` to set the file's defaults. Starting again under the same name replaces the file and its defaults.
@@ -624,6 +628,58 @@ Use `{{secret:NAME}}` for credentials. A placeholder can be the whole value or p
 If a secret is missing from the file or step environment, the script step errors before it starts. If a run override refers to a missing secret, Argent rejects the run before the first step.
 
 Argent replaces resolved secrets with their placeholders in script logs and failure details. It matches raw, URL-encoded, and JSON-escaped forms. Argent also matches fragments of six or more characters. Unrelated text that matches a fragment can be redacted too. For shorter secrets, Argent matches the full value. Plain-text credentials and encodings such as base64 or hex can still appear in logs. Keep credentials out of script logs.
+
+### Script output
+
+Scripts share one JSON object per run through the global `output`. A successful script can add, change, or delete values. Assigning to `output` replaces the object. A failed script leaves it unchanged. The object can hold up to 1 MiB of JSON data. Convert values such as a `Date` to strings before storing them.
+
+For example, a script that creates a user can save the ID as `output.user = { id: user.id }`. Later steps can check the ID and pass it to another script.
+
+```yaml
+steps:
+  - script: { path: ../../scripts/create-user.mjs }
+  - assert: { output: user.id, exists: true }
+  - script:
+      path: ../../scripts/delete-user.mjs
+      env: { USER_ID: "{{output:user.id}}" }
+```
+
+A `run:` fragment shares its caller's output. A `tool: e2e-execute` step starts with an empty output object and keeps its results in that run. Pass inputs to it through its `env` argument.
+
+#### References
+
+Quote each YAML value containing `{{output:PATH}}`. Join keys and zero-based array indexes with dots, as in `items.0.name`. Start a key with an ASCII letter or underscore. The remaining characters can also include digits and hyphens.
+
+Argent resolves references when the step runs. A missing or `null` value causes a step error unless you supply a fallback, as in `{{output:user.role ?? guest}}`. The error identifies where the path stopped. Use a JSON number, boolean, `null`, double-quoted JSON string, or plain text as the fallback. An empty fallback produces an empty string. Keep templates and `}}` out of fallback values.
+
+#### Fields that take a reference
+
+Use references in tool arguments, selectors and their scopes, `type` text, `equals` or `contains` comparisons, and a script step's `env` values.
+
+- When a tool argument is exactly one reference, Argent keeps its JSON type. Return a string from the script if the argument requires text. The `env` argument of `tool: e2e-execute` accepts a reference to a whole map or references in individual values.
+- In text fields, Argent converts numbers and booleans to text. A fallback uses its written form, so `1.10` remains `"1.10"`. Reference a scalar inside an object or list to use it as text.
+- After substitution, each selector value needs a visible character. The `type` text and `contains` value must be non-empty.
+
+Use literal values for `echo`, `launch`, `run`, `snapshot.cropOn`, and `matches` regular expressions. For `tool: e2e-execute`, only `env` accepts references.
+
+#### Check an output
+
+Use `assert: { output: user.role, equals: admin }` to require a value, or use the same condition with `when` to guard a block. Write the path without braces and supply one comparator.
+
+- `exists: true` requires a value. `exists: false` requires a missing or `null` value.
+- `equals`, `contains`, and `matches` compare strings, numbers, and booleans as case-sensitive text. Quote comparison values such as `"3"`. The `matches` comparator uses a JavaScript regular expression.
+
+Output checks need no device. To check the screen against a script value, use a UI assertion such as `assert: { text: { in: { id: user-name }, equals: "{{output:user.name}}" } }`. The UI comparison is case-insensitive.
+
+#### Secrets in output
+
+Argent redacts resolved secrets from output strings using the same rules as script logs. Object keys can still expose secrets. Argent errors if substituting an output reference would create a secret placeholder. Put secret placeholders directly in the e2e test file.
+
+#### Record a script output
+
+Record scripts one at a time so each script sees the previous script's output. `e2e-add-script` returns the updated object in `outputJson` and resolves its `env` references against prior output. If `outputTruncated` is true, the response shows only part of the object. Later steps still have the full object.
+
+`e2e-add-step` resolves references before running the call, then saves the original references in a `tool:` step. If a reference fails to resolve, the tool runs and records nothing. A call recorded as a `run:` fragment shares the recording's output. Editing the YAML during recording does not update the output object.
 
 ### Module type
 
