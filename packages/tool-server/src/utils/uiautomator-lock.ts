@@ -1,4 +1,5 @@
 import { adbCommandPrefix } from "./adb-server";
+import { externalNativeId } from "./external-devices";
 import { withKeyedLock } from "./keyed-lock";
 
 // Keyed by adb serial. Overlapping `uiautomator dump`s on one device get one of
@@ -20,7 +21,7 @@ export function uiautomatorKilledMessage(output: string, serial: string): string
     `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
     `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
     `the accessibility connection. Stop it, for the helper with ` +
-    `\`${adbCommandPrefix(process.env)}adb -s ${serial} shell am force-stop com.argent.androiddevtools\`, ` +
+    `\`${adbCommandPrefix(process.env)}adb -s ${externalNativeId(serial)} shell am force-stop com.argent.androiddevtools\`, ` +
     `and try again.`
   );
 }

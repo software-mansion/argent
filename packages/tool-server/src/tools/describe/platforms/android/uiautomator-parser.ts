@@ -416,9 +416,13 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
     // Everything below a WebView is web DOM Chromium mapped onto widget class
     // names, which the scroll and role rules read differently.
     inWebView: boolean;
+    // Android copies `selected` onto every descendant of a selected view.
+    inSelected: boolean;
     visited: boolean;
   };
-  const stack: Frame[] = [{ parsed: root, scrollClip: null, inWebView: false, visited: false }];
+  const stack: Frame[] = [
+    { parsed: root, scrollClip: null, inWebView: false, inSelected: false, visited: false },
+  ];
   const outputs = new Map<ParsedXmlNode, UiNode[]>();
 
   while (stack.length > 0) {
@@ -431,6 +435,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
       // Children inherit my bounds if I scroll, else the clip I was handed.
       const childClip = isScroll && myBounds ? myBounds : top.scrollClip;
       const childInWebView = top.inWebView || WEBVIEW_CLASSES.has(attrs.class ?? "");
+      const childInSelected = top.inSelected || attrIsTrue(attrs, "selected");
       for (let i = top.parsed.children.length - 1; i >= 0; i--) {
         const c = top.parsed.children[i]!;
         if (c.tag === "node") {
@@ -438,6 +443,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
             parsed: c,
             scrollClip: childClip,
             inWebView: childInWebView,
+            inSelected: childInSelected,
             visited: false,
           });
         }
@@ -445,7 +451,7 @@ function pruneSubtree(root: ParsedXmlNode, opts: PruneOptions): UiNode[] {
     } else {
       outputs.set(
         top.parsed,
-        computeNodeOutput(top.parsed, top.scrollClip, top.inWebView, outputs, opts)
+        computeNodeOutput(top.parsed, top.scrollClip, top.inWebView, top.inSelected, outputs, opts)
       );
       stack.pop();
     }
@@ -457,6 +463,7 @@ function computeNodeOutput(
   parsed: ParsedXmlNode,
   scrollClip: PixelRect | null,
   inWebView: boolean,
+  inSelected: boolean,
   outputs: Map<ParsedXmlNode, UiNode[]>,
   opts: PruneOptions
 ): UiNode[] {
@@ -527,8 +534,9 @@ function computeNodeOutput(
     label = "[password]";
   }
 
-  // A list that holds focus marks its D-pad cursor row selected.
-  const selected = attrIsTrue(attrs, "selected");
+  // A list that holds focus marks its D-pad cursor row selected. Only the
+  // outermost selected view counts; the rest inherited the flag.
+  const selected = attrIsTrue(attrs, "selected") && !inSelected;
 
   // Decorative ImageView — drop it, passing surviving descendants through.
   if (cls.endsWith(".ImageView") && !interactive && !label && !selected) {

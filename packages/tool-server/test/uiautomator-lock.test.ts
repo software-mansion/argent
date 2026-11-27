@@ -106,4 +106,13 @@ describe("a dump the system killed", () => {
 
     await expect(api.describe()).rejects.toThrow(remedy);
   });
+
+  it("gives adb a provider device's own serial", async () => {
+    const id = "ext:acme:emulator-5554";
+    const phone = await describeAndroid(undefined, id, undefined, false).catch((e: unknown) => e);
+    const tv = await (await tvApi(id)).describe().catch((e: unknown) => e);
+
+    expect((phone as Error).message).toMatch(remedy);
+    expect((tv as Error).message).toMatch(remedy);
+  });
 });
