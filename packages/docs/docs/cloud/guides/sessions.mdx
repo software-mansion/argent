@@ -22,9 +22,9 @@ You can also log in without a session and reserve one later with `sim-remote acq
 
 One user can hold several sessions at the same time. A session stays responsive with up to two booted simulators. To run more simulators in parallel, hold more than one session. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
 
-`sim-remote list-machines` shows the sessions that you hold and marks the current one. `sim-remote attach` switches the daemon to another session that you hold. A different client, for example the Argent agent, can share a session in this way.
+One daemon holds one session. `sim-remote acquire` does nothing when the daemon already holds a session. To hold several sessions from one computer, run one daemon per session. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
 
-To use several sessions at the same time from one computer, run one daemon per session. Set `SIM_REMOTE_SESSION` to a different name in each shell or agent before you run `sim-remote login`. See [Sessions and limits](/docs/cloud/reference/sessions#several-sessions-on-one-computer).
+`sim-remote list-machines` shows all the sessions that you hold and marks the session of the current daemon. `sim-remote attach <MACHINE_ID>` switches the current daemon to another session that you hold and releases the session that the daemon held before. Two daemons can share one session in this way. The session stays reserved until both daemons release it.
 
 ## Keep a session during a long run
 
@@ -32,9 +32,9 @@ The daemon releases the session after 15 minutes without a `sim-remote` command.
 
 ## Give a session back
 
-`sim-remote release` returns the session and keeps you logged in. `sim-remote logout` returns the session and logs you out. Log out when you are done. A session that you hold is a session that nobody else on your team can use.
+`sim-remote release` returns the session and keeps you logged in. `sim-remote logout` returns the session and logs you out. Log out when you are done. Nobody else on your team can use a session that you hold.
 
-When a session is returned, Argent Cloud erases every simulator in it and rebuilds the session volume from a clean image. See [Security and data](/docs/cloud/reference/security-and-data).
+When a session is returned, Argent Cloud erases every simulator in it and rebuilds the session volume from a clean image. The reset takes about a minute. See [Security and data](/docs/cloud/reference/security-and-data).
 
 ## Example instructions
 

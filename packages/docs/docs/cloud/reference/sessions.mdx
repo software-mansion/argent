@@ -10,28 +10,28 @@ A Mac has four sessions. A session is one isolated part of a Mac, with its own m
 
 ## Lifecycle
 
-| Event        | Trigger                                      | Effect                                                                                        |
-| ------------ | -------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Login        | `sim-remote login`                           | The server checks the API key and returns a login token. The daemon holds the token in memory |
-| Acquire      | `login` without `--no-acquire`, or `acquire` | The server reserves a free session of your team for you                                       |
-| Attach       | `attach <MACHINE_ID>`                        | The daemon switches to another session that you already hold. Open tunnels close              |
-| Release      | `release`                                    | The session returns to your team. You stay logged in                                          |
-| Logout       | `logout` or `daemon stop`                    | The session returns to your team and the daemon forgets the token                             |
-| Idle release | No command for the idle timeout              | The daemon releases the session on its own. You stay logged in                                |
-| Lifetime cap | The session is held for the maximum lifetime | The server releases the session                                                               |
+| Event        | Trigger                                      | Effect                                                                                                             |
+| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Login        | `sim-remote login`                           | The server checks the API key and returns a login token. The daemon holds the token in memory                      |
+| Acquire      | `login` without `--no-acquire`, or `acquire` | The server reserves a free session of your team for you                                                            |
+| Attach       | `attach <MACHINE_ID>`                        | The daemon switches to another session that you already hold and releases its previous session. Open tunnels close |
+| Release      | `release`                                    | The session returns to your team. You stay logged in                                                               |
+| Logout       | `logout` or `daemon stop`                    | The session returns to your team and the daemon forgets the token                                                  |
+| Idle release | No command for the idle timeout              | The daemon releases the session on its own. You stay logged in                                                     |
+| Lifetime cap | The session is held for the maximum lifetime | The server releases the session                                                                                    |
 
-When a session returns to your team, Argent Cloud revokes its credentials, closes the live connections, erases the simulators, and rebuilds the session volume from a clean image.
+A session returns to your team when the last daemon that holds it releases it. Argent Cloud then revokes its credentials, closes the live connections, erases the simulators, and rebuilds the session volume from a clean image. The reset takes about a minute.
 
 ## Limits
 
-| Limit                       | Value                                         | Notes                                                                                            |
-| --------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Idle release                | 900 seconds (15 minutes)                      | Set `SIM_REMOTE_IDLE_TIMEOUT_SECS` to change it. The server has its own idle limit of 16 minutes |
-| Maximum time on one session | 24 hours                                      | Enforced by the server                                                                           |
-| Login token                 | 24 hours                                      | Run `sim-remote login` again after it expires                                                    |
-| Wait for a free session     | 1800 seconds by default, 3600 seconds maximum | `--timeout` sets the client value. The server caps it                                            |
-| Upload size                 | 1 GiB                                         | Applies to every file that `sim-remote` uploads                                                  |
-| Sessions per user           | More than one                                 | Each `acquire` reserves one more session                                                         |
+| Limit                       | Value                                         | Notes                                                                                                   |
+| --------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Idle release                | 900 seconds (15 minutes)                      | Set `SIM_REMOTE_IDLE_TIMEOUT_SECS` to change it. The server has its own idle limit of 16 minutes        |
+| Maximum time on one session | 24 hours                                      | Enforced by the server                                                                                  |
+| Login token                 | 24 hours                                      | Run `sim-remote login` again after it expires                                                           |
+| Wait for a free session     | 1800 seconds by default, 3600 seconds maximum | `--timeout` sets the client value. The server caps it                                                   |
+| Upload size                 | 1 GiB                                         | Applies to every file that `sim-remote` uploads                                                         |
+| Sessions per user           | More than one                                 | One daemon holds one session. See [Several sessions on one computer](#several-sessions-on-one-computer) |
 
 ## Simulators per session
 
@@ -41,11 +41,11 @@ When a session returns to your team, Argent Cloud revokes its credentials, close
 | Booted simulators per Mac     | 6 in total, shared by its four sessions |
 | Booted simulators per session | 2, including the pre-booted simulator   |
 
-A session stays responsive with up to two booted simulators. To run more simulators at the same time, hold more than one session and boot at most two simulators in each. For six simulators, use three or four sessions. See [Several sessions on one computer](#several-sessions-on-one-computer).
+To run more than two simulators at the same time, hold more than one session and boot at most two simulators in each. For six simulators, use three or four sessions. See [Several sessions on one computer](#several-sessions-on-one-computer).
 
 A new session has one pre-booted simulator by default. Shut it down before you boot two other simulators. The pre-booted simulator is a setting of your account. [Contact us](https://argent.swmansion.com/cloud#contact) to turn it off or to change the device. Without it, the first boot is slower.
 
-With more than two booted simulators, the session can stop starting new processes. The session does not recover from the client. See [Troubleshooting](/docs/cloud/reference/troubleshooting#symptoms).
+With more than two booted simulators, the session can stop starting new processes. The session does not recover from the client. Release it and acquire a new session. See [Troubleshooting](/docs/cloud/reference/troubleshooting#symptoms).
 
 ## The daemon
 
@@ -62,7 +62,7 @@ The daemon keeps the login token in memory. `sim-remote` writes no login token, 
 
 ## Several sessions on one computer
 
-One daemon works with one session at a time. Set `SIM_REMOTE_SESSION` to a name to use several sessions at the same time from one computer. Each name has its own daemon and its own login.
+One daemon holds one session. Set `SIM_REMOTE_SESSION` to a name to use several sessions at the same time from one computer. Each name has its own daemon and its own login.
 
 ```bash
 export SIM_REMOTE_SESSION=agent-1

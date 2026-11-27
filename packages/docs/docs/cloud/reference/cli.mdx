@@ -27,8 +27,8 @@ sim-remote [OPTIONS] <COMMAND>
 | `sim-remote logout`              | Release the session and log out. Prints `Logged out.` and never fails                                                                                                                                      |
 | `sim-remote acquire`             | Reserve a session. Does nothing if the daemon already holds one. Accepts `--timeout <SECS>` and `--no-wait`                                                                                                |
 | `sim-remote release`             | Release the session and stay logged in. Prints `Released.`                                                                                                                                                 |
-| `sim-remote attach <MACHINE_ID>` | Switch the daemon to a session that you already hold. Prints `Attached to <MACHINE_ID>.`                                                                                                                   |
-| `sim-remote list-machines`       | Print one line per session that you hold. `*` marks the current session. Prints `No machines.` when you hold none                                                                                          |
+| `sim-remote attach <MACHINE_ID>` | Switch the daemon to a session that you already hold and release its previous session. Prints `Attached to <MACHINE_ID>.`                                                                                  |
+| `sim-remote list-machines`       | Print one line per session that you hold. `*` marks the session of the current daemon. Prints `No machines.` when you hold none                                                                            |
 | `sim-remote keepalive [TIME]`    | Reset the idle clock of the daemon. Without `TIME`, ping one time and exit. With `TIME` (`90s`, `30m`, `2h`, or a number of seconds), ping every 5 seconds for that long. `0` and other units are rejected |
 | `sim-remote daemon stop`         | Stop the background daemon. This releases the session and logs you out. Prints `Daemon stopped.`                                                                                                           |
 
@@ -109,7 +109,7 @@ The bundle contains the manifest `.sim-remote-logs.json`:
 | `sim-remote forward stop <LOCAL_PORT>`           | Close the forward tunnel that is bound to the local port. Prints `Forward tunnel on local port <LOCAL_PORT> closed.`                                                                                    |
 | `sim-remote forward status`                      | Print a table with the columns `UDID`, `LOCAL PORT` and `REMOTE PORT`, or `No active forward tunnels.`                                                                                                  |
 
-A forward tunnel reaches only the servers that your own session started on the Mac. Both tunnel types close when the daemon moves to another session through `attach`, `acquire`, `release` or a new `login`.
+A forward tunnel reaches only the servers that your own session started on the Mac. Both tunnel types close when the daemon releases its session or switches to another session, for example through `attach`, `release` or `logout`.
 
 ## Test driver commands
 

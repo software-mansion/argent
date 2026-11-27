@@ -6,13 +6,13 @@ sidebar_custom_props:
   icon: network
 ---
 
-Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Argent Cloud server checks your API key and assigns sessions. A Mac, a hosted Mac runner, runs the iOS simulators. The CLI sends each command to your session on the Mac and prints the result. The simulator has no window on your screen. You see it through screenshots, screen recordings or Argent.
+Argent Cloud has three parts. The `sim-remote` CLI runs on your computer. The Argent Cloud server checks your API key and assigns sessions. A hosted Mac runner runs the iOS simulators. These docs call it a Mac. The CLI sends each command to your session on the Mac and prints the result. The simulator has no window on your screen. You see it through screenshots, screen recordings or Argent.
 
 ## Macs and sessions
 
 A Mac has four sessions. A session is one isolated part of a Mac, with its own macOS user, disk volume and resources. `sim-remote login` reserves a session for you, and `sim-remote release` gives it back. You can keep a session across shells, hand it to another client, or give it back without a logout. See [Manage sessions](/docs/cloud/guides/sessions).
 
-A Mac runs up to six booted simulators at the same time, shared by its four sessions. A session stays responsive with up to two. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
+A Mac runs up to six booted simulators at the same time, shared by its four sessions. A session stays responsive with up to two booted simulators. See [Simulators per session](/docs/cloud/reference/sessions#simulators-per-session).
 
 ## Simulator control
 

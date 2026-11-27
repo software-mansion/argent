@@ -90,7 +90,7 @@ The action expects `sim-remote` on `PATH`, so it goes after `install`. A post st
 | `release`         | `true`  | Release the session in the post step. With `false`, the session stays reserved after the job. See below        |
 | `sim-remote-path` | Empty   | The path of the CLI. The default is `sim-remote` from `PATH`                                                   |
 
-A later job cannot reuse the login of this job. GitHub gives each job a fresh runner, and the login token lives only in the memory of the daemon on that runner. A later job that needs the same session logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the sessions that the API key holds. Log out or release the session in the last job, because a reserved session blocks the other jobs of your team until its lease expires.
+A later job cannot reuse the login of this job. GitHub gives each job a fresh runner, and the login token lives only in the memory of the daemon on that runner. A later job that needs the same session logs in with `acquire: false` and runs `sim-remote attach <MACHINE_ID>`. `sim-remote list-machines` prints the sessions that the API key holds. Log out or release the session in the last job, because a reserved session blocks the other jobs of your team until the server releases it.
 
 Your team has a fixed number of sessions, so a matrix of jobs waits in a queue. A bad API key fails at once. With the defaults, the action waits about 40 minutes for a session. To wait longer, increase `retries`. The server caps one attempt, so a larger `timeout` does not help.
 

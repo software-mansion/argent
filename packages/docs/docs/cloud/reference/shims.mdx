@@ -67,5 +67,5 @@ The shims call the binary in `SIM_REMOTE_BIN`, so they cannot drift from the bin
 
 - The `xcodebuild` shim reads the runner port from a log line. If the runner never logs a port, the shim reports it.
 - The runner install, the launch, the port discovery and the tunnel must fit in the driver timeout.
-- The `xcodebuild` shim installs the runner one time per session. A Maestro upgrade in the middle of a session keeps the old runner. Pin the Maestro version.
+- The `xcodebuild` shim installs the runner on a simulator one time and keeps it until you release the session. A Maestro upgrade before the release keeps the old runner. Pin the Maestro version.
 - Each `log stream` that the shim starts leaves a `log` process in the simulator until the simulator shuts down.
