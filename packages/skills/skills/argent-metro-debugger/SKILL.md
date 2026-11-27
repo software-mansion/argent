@@ -14,14 +14,14 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 ## 2. Tools
 
-Use the `device_id` from `list-devices` and keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
+Pass the `device_id` from `list-devices` to every tool in the table except `restart-app`, which takes that ID as `udid`, never a `logicalDeviceId`. Keep the same ID and Metro port across calls. On shared Metro, if `debugger-connect` cannot match an iOS simulator UDID or Android serial, it lists logical IDs. Choose the requested device's `logicalDeviceId` for subsequent debugger calls. If you later tear down this session, include that ID in `stop-all-simulator-servers`'s `devices`.
 
 | Tool                       | Use for                                                                                                                |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `debugger-status`          | Diagnosing the connection. Call it first when anything fails                                                           |
 | `debugger-connect`         | Opening the session and starting console capture                                                                       |
 | `debugger-reload-metro`    | Reloading the JS bundle of an attached app                                                                             |
-| `restart-app`              | Relaunching the app when it lost its Metro connection                                                                  |
+| `restart-app`              | Relaunching the app when it lost its Metro connection. Takes `udid` and `bundleId`, not `device_id`                    |
 | `debugger-component-tree`  | Component names and testIDs on screen. Find tap targets with `describe`                                                |
 | `debugger-inspect-element` | Which component is at a point and where it is defined (source file:line). Takes **logical pixels**, not normalized 0–1 |
 | `debugger-log-registry`    | Console log summary, the newest entries inline, and the log file path (§4)                                             |
