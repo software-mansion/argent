@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
-import { deviceClaims } from "../../src/utils/device-claims";
+import { claimPickedDevice, deviceClaims } from "../../src/utils/device-claims";
 
 // The runner boots a Chromium standalone flow's app itself. Mock the Electron
 // launcher so we can assert on how it's called + torn down without spawning a
@@ -259,7 +259,7 @@ describe("flow-execute chromium boot", () => {
   });
 
   it("tears down the instance it booted when another session holds its id", async () => {
-    deviceClaims.claim("b", ["chromium-cdp-12345"]).done();
+    claimPickedDevice("b", "chromium-cdp-12345")();
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
     try {
       await expect(
