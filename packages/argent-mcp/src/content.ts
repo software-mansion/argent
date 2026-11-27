@@ -89,6 +89,20 @@ export async function toMcpContent(
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
+type TextBlock = Extract<ContentBlock, { type: "text" }>;
+
+/**
+ * Joins the blocks of a result that has no image into one text block, each
+ * starting on a new line. Claude Code shows such a result as one string with
+ * nothing between its blocks, which ran the tool result, the
+ * unchanged-screenshot note, the element tree and its `Tree id` together. A
+ * result with an image keeps its blocks, which reach the agent apart.
+ */
+export function joinTextOnlyContent(blocks: ContentBlock[]): ContentBlock[] {
+  if (blocks.length < 2 || !blocks.every((b): b is TextBlock => b.type === "text")) return blocks;
+  return [{ type: "text", text: blocks.map((b) => b.text).join("\n") }];
+}
+
 /**
  * Inline length past which containers break their entries onto separate lines
  * (without indentation), keeping lists and nested trees scannable without the

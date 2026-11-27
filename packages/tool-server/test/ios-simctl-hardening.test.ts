@@ -62,11 +62,7 @@ vi.mock("@argent/native-devtools-ios", async () => {
   };
 });
 
-import {
-  clearAutomationEnabled,
-  ensureAutomationEnabled,
-  isEntitlementBypassActive,
-} from "../src/utils/ax-prefs";
+import { clearAutomationEnabled, ensureAutomationEnabled } from "../src/utils/ax-prefs";
 import { listIosSimulators } from "../src/utils/ios-devices";
 import { audioDir, localIosHost } from "../src/utils/ios-host";
 
@@ -109,16 +105,6 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
     }
   });
 
-  it("isEntitlementBypassActive passes killSignal SIGKILL + a finite timeout", async () => {
-    await isEntitlementBypassActive("UDID-2");
-    const simctl = xcrunCalls();
-    expect(simctl.length).toBeGreaterThan(0);
-    for (const c of simctl) {
-      expect(c.options?.killSignal).toBe("SIGKILL");
-      expect(typeof c.options?.timeout).toBe("number");
-    }
-  });
-
   it("listIosSimulators (the isTvOsSimulator/describe probe) passes killSignal SIGKILL", async () => {
     await listIosSimulators();
     const simctl = xcrunCalls();
@@ -133,7 +119,7 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
   // rather than the internal functions. This is the block that guards
   // `listRunningUIKitApplicationBundleIds` (the call this fix added a
   // previously-missing timeout+kill to) and the six other ios-host simctl spawns.
-  it("localIosHost.bootstrapAx (clearAutomationEnabled + entitlement probe) passes killSignal SIGKILL", async () => {
+  it("localIosHost.bootstrapAx passes killSignal SIGKILL", async () => {
     await localIosHost.bootstrapAx("UDID-HOST-1");
     const simctl = xcrunCalls();
     expect(simctl.length).toBeGreaterThan(0);

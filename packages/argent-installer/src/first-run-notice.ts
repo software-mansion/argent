@@ -35,7 +35,7 @@ export function printFirstRunNotice(): void {
  * an update must not swallow that update's highlights.
  */
 export function seedWhatsNewVersion(version: string): void {
-  if (getWhatsNewSeenVersion() === null) setWhatsNewSeenVersion(version);
+  if (getWhatsNewSeenVersion() === null) setWhatsNewSeenVersion(version, { ifSeen: null });
 }
 
 type TelemetryConsentOutcome =

@@ -23,13 +23,23 @@ interface ResolvedUpdateTarget {
 export async function resolveInstallableUpdateTarget(
   pm: PackageManager,
   current: string | null,
-  cwd?: string
+  cwd?: string,
+  candidate?: string
 ): Promise<ResolvedUpdateTarget | null> {
   const info = await fetchRegistryInfo(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
   if (info === null) return null;
 
   const minReleaseAgeMs = await detectMinReleaseAgeMsForPm(pm, cwd);
-  const target = pickInstallableTarget(info.latest, info.times, current, minReleaseAgeMs);
+  // A background check may have selected an older release under a stricter
+  // policy. Check that exact release against the installing manager's policy.
+  let { latest, times } = info;
+  if (candidate) {
+    const publishedAt = times[candidate] ?? null;
+    latest = { version: candidate, publishedAt };
+    times = publishedAt ? { [candidate]: publishedAt } : {};
+    if (candidate !== info.latest.version && !publishedAt) return null;
+  }
+  const target = pickInstallableTarget(latest, times, current, minReleaseAgeMs);
 
   return {
     latestVersion: info.latest.version,
