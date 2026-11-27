@@ -454,6 +454,7 @@ describe("recording a script step", () => {
       "name",
       "path",
       "project_root",
+      "shutdown",
       "timeout",
     ]);
 

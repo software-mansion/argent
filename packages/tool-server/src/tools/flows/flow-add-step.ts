@@ -34,6 +34,11 @@ import {
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
+  adoptRecordedFile,
+  keepRecordingOutput,
+  recordedCount,
+  recordingOutput,
+  type RecordedBlock,
   type RecordingSession,
 } from "./flow-utils";
 import {
@@ -61,7 +66,7 @@ import {
   resolveSavedTest,
   type ProjectAccess,
 } from "./project-access";
-import { stepAnchor, summarizeStep } from "./flow-step-definitions";
+import { stepAnchor, summarizeShutdownStep, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
@@ -76,7 +81,7 @@ import {
 } from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { OutputReferenceError } from "./flow-output";
+import { OutputReferenceError, type FlowOutput } from "./flow-output";
 import { InvalidToolInputError } from "../../utils/capability";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import { IOS_TEXT_INPUT_ROLE } from "./flow-ios-tree";
@@ -117,9 +122,18 @@ const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
  * rather than first: a mid-recording relaunch retargets what follows, exactly as
  * a nested `launch:` retargets a run.
  */
-function recordedLaunchedApp(session: RecordingSession, platform: string): string | undefined {
-  for (let i = session.flow.steps.length - 1; i >= 0; i--) {
-    const step = session.flow.steps[i];
+function recordedLaunchedApp(
+  session: RecordingSession,
+  platform: string,
+  block: RecordedBlock
+): string | undefined {
+  // A replay runs the shutdown list after every step.
+  const steps =
+    block === "shutdown"
+      ? [...session.flow.steps, ...(session.flow.shutdown ?? [])]
+      : session.flow.steps;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
     if (step.kind === "launch") return appIdForPlatform(step.app, platform) ?? undefined;
   }
   return undefined;
@@ -433,13 +447,13 @@ const SPELLING_CLAUSE =
 /**
  * `await-ui-element` reports an unmet condition by returning
  * `{ success: false }` rather than throwing, so the recorder writes the step
- * anyway. At replay the same step FAILS and stops the run, so the message must
- * not read as fine.
+ * anyway. At replay the same step FAILS, and in `steps:` stops the run, so the
+ * message must not read as fine. A failed shutdown step does not stop the next.
  */
-const UNMET_WAIT_WARNING =
+const unmetWaitWarning = (block: RecordedBlock): string =>
   "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
   "returning success:false instead of failing, so the step was written to the e2e test anyway. At " +
-  "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
+  `replay an unmet wait FAILS the step and ${block === "shutdown" ? "the run" : "stops the run there"}, so re-record it once the ` +
   "condition can actually hold, and delete the failed step after `e2e-finish-recording` rather " +
   "than mid-recording: over a link the in-memory copy is authoritative and the next " +
   "append writes the step straight back, and without a link the recorder re-reads the file before " +
@@ -471,10 +485,10 @@ const CANCELLED_WAIT_WARNING =
   "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
-function unmetWaitWarningFor(cause: UnmetWaitCause): string {
+function unmetWaitWarningFor(cause: UnmetWaitCause, block: RecordedBlock): string {
   if (cause === "unreadable") return UNREADABLE_WAIT_WARNING;
   if (cause === "cancelled") return CANCELLED_WAIT_WARNING;
-  return UNMET_WAIT_WARNING;
+  return unmetWaitWarning(block);
 }
 
 /**
@@ -819,11 +833,12 @@ async function captureTapSelector(
   registry: Registry,
   session: RecordingSession,
   udid: string,
-  point: { x: number; y: number }
+  point: { x: number; y: number },
+  block: RecordedBlock
 ): Promise<{ selector?: Selector; warning?: string }> {
   try {
     const device = resolveDevice(udid);
-    const launched = recordedLaunchedApp(session, device.platform);
+    const launched = recordedLaunchedApp(session, device.platform, block);
     const data = await fetchFlowTree(
       registry,
       device,
@@ -891,33 +906,44 @@ async function captureTapSelector(
 }
 
 async function activeFlowState(
-  session: RecordingSession
+  session: RecordingSession,
+  block: RecordedBlock
 ): Promise<{ stepCount: number; note?: string }> {
   if (session.persist === "host") {
     try {
-      session.flow = parseFlow(await fs.readFile(session.filePath, "utf8"));
+      adoptRecordedFile(session, parseFlow(await fs.readFile(session.filePath, "utf8")));
     } catch (err) {
       return {
-        stepCount: session.flow.steps.length,
+        stepCount: recordedCount(session.flow, block),
         note:
           `The persisted e2e test could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
           `the step count is from the last valid in-memory snapshot.`,
       };
     }
   }
-  return { stepCount: session.flow.steps.length };
+  return { stepCount: recordedCount(session.flow, block) };
+}
+
+/** Whether a nested run's report holds a step of a `shutdown:` block. */
+function reportsShutdown(result: unknown): boolean {
+  const steps = (result as { steps?: unknown } | null)?.steps;
+  return (
+    Array.isArray(steps) &&
+    steps.some((s) => (s as { shutdown?: unknown } | null)?.shutdown === true)
+  );
 }
 
 async function recordNothing(
   session: RecordingSession,
-  guidance: string
+  guidance: string,
+  block: RecordedBlock
 ): Promise<{
   message: string;
   toolResult: undefined;
   stepCount: number;
   savedTo: FlowSavedTo;
 }> {
-  const { stepCount, note } = await activeFlowState(session);
+  const { stepCount, note } = await activeFlowState(session, block);
   return {
     message: `${guidance} Nothing was executed and no step was recorded.${note ? ` ${note}` : ""}`,
     toolResult: undefined,
@@ -1531,6 +1557,12 @@ const zodSchema = z.object({
     .min(0)
     .optional()
     .describe("Milliseconds to sleep before executing this step during replay."),
+  shutdown: z
+    .boolean()
+    .optional()
+    .describe(
+      "Save the call in the shutdown list. The call still runs immediately. stepCount counts shutdown entries."
+    ),
 });
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
@@ -1549,6 +1581,7 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     id: "e2e-add-step",
     description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
 A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`. Use \`{{output:PATH}}\` in arguments to read prior script output. The tool resolves the values for the live call and saves the references in a \`tool:\` step.
+Use \`shutdown: true\` for cleanup actions such as logging out.
 Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     zodSchema,
     aliases: ["flow-add-step"],
@@ -1573,6 +1606,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
+      const block: RecordedBlock = params.shutdown ? "shutdown" : "steps";
       // Compared and recorded by the tool's current id; run by the id as called.
       const command = canonicalToolId(params.command);
 
@@ -1582,7 +1616,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, command)
         ? NESTED_RECORDER_TOOLS[command]
         : undefined;
-      if (nested) return recordNothing(session, nested);
+      if (nested) return recordNothing(session, nested, block);
 
       let args: Record<string, unknown>;
       try {
@@ -1593,7 +1627,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         // table alone, so a real tool of that name still reports its own error.
         if (registry.getTool(params.command) === undefined) {
           const hint = directiveCommandHint(params.command);
-          if (hint) return recordNothing(session, hint);
+          if (hint) return recordNothing(session, hint, block);
         }
         throw err;
       }
@@ -1633,7 +1667,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         if (problem)
           throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${problem}`);
         try {
-          args = resolveStepOutputs(authored, session.output ?? {}).args;
+          args = resolveStepOutputs(authored, recordingOutput(session, block)).args;
         } catch (err) {
           if (!(err instanceof OutputReferenceError)) throw err;
           throw new InvalidToolInputError(`Nothing ran and no step was recorded: ${err.message}`);
@@ -1664,10 +1698,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       let captured: { selector?: Selector; warning?: string } | undefined;
       if (isTap) {
-        captured = await captureTapSelector(registry, session, args.udid as string, {
-          x: args.x as number,
-          y: args.y as number,
-        });
+        captured = await captureTapSelector(
+          registry,
+          session,
+          args.udid as string,
+          { x: args.x as number, y: args.y as number },
+          block
+        );
       }
 
       // Over a link the call reads its files from those the client sent, as a
@@ -1683,9 +1720,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         command === RUN_TARGET_COMMAND && params.delayMs === undefined && !referencedArgs
           ? await captureRunTarget(session, args, project)
           : undefined;
-      const sharedOutput = runTarget?.flow
-        ? { doc: structuredClone(session.output ?? {}) }
-        : undefined;
+      const ranAgainst = recordingOutput(session, block);
+      const sharedOutput: { doc: FlowOutput; shutdownDoc?: FlowOutput } | undefined =
+        runTarget?.flow ? { doc: structuredClone(ranAgainst) } : undefined;
       let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
@@ -1711,7 +1748,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         const hint = isToolNotFound(err, params.command)
           ? directiveCommandHint(params.command)
           : undefined;
-        if (hint) return recordNothing(session, hint);
+        if (hint) return recordNothing(session, hint, block);
 
         const reframed = describeNestedParamError(
           registry,
@@ -1793,7 +1830,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A wait that HELD is asked the runner's tree as well, so the author
       // learns now — rather than after polish — whether the conversion is safe.
       // One that came back success:false is reported by CAUSE instead: only a
-      // genuine miss fails the step at replay (see {@link UNMET_WAIT_WARNING});
+      // genuine miss fails the step at replay (see {@link unmetWaitWarning});
       // an unreadable tree or a cancellation observed nothing (see
       // {@link UNREADABLE_WAIT_WARNING}).
       //
@@ -1806,7 +1843,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           warning:
             command === AWAIT_NETWORK_REQUEST_TOOL_ID
               ? unmetNetworkWaitWarningFor(cause)
-              : unmetWaitWarningFor(cause),
+              : unmetWaitWarningFor(cause, block),
           kind: "wait",
         };
       } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
@@ -1934,7 +1971,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       let savedTo: FlowSavedTo;
       let stepCount: number;
       try {
-        ({ savedTo, stepCount } = await appendStepToFlow(session, step));
+        ({ savedTo, stepCount } = await appendStepToFlow(session, step, block));
       } catch (err) {
         if (getFailureSignal(err)?.failure_stage !== "flow_output_reference") throw err;
         const refused = err instanceof Error ? err.message : String(err);
@@ -1957,7 +1994,15 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // Only a recorded `run:` step keeps what its nested run returned, as a
       // replay would; a step that failed to append leaves the document as it was.
-      if (step.kind === "run" && sharedOutput) session.output = sharedOutput.doc;
+      // The fragment's own shutdown ran in the call, after its steps. Recorded
+      // into `steps:`, what that shutdown returned is dropped: a replay hands it
+      // only to this test's shutdown, and keeping it apart would hide the
+      // output of the steps recorded after this one from the shutdown list.
+      if (step.kind === "run" && sharedOutput) {
+        const { doc, shutdownDoc = doc } = sharedOutput;
+        if (block === "shutdown") keepRecordingOutput(session, "shutdown", shutdownDoc, ranAgainst);
+        else keepRecordingOutput(session, "steps", doc, ranAgainst);
+      }
 
       // Keep the probe's verdict for `flow-finish-recording`. It answers a
       // polish-time question, and polish starts after the recording closes — by
@@ -1971,7 +2016,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
       // A step that breaks on conversion renders like one that does not.
       if (waitWarning) {
-        (session.stepWarnings ??= new Map()).set(stepCount, {
+        const verdicts = block === "shutdown" ? "shutdownStepWarnings" : "stepWarnings";
+        (session[verdicts] ??= new Map()).set(stepCount, {
           ...waitWarning,
           step: stepAnchor(step),
         });
@@ -1981,11 +2027,19 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         project instanceof ClientProjectAccess && ctx?.flowStack === undefined
           ? project.baselineDirectives()
           : [];
+      // A fragment recorded as `run:` ran here as a run of its own, so its
+      // `shutdown:` already ran. A replay runs it at the end of the test, or,
+      // for a `run:` in shutdown, right after it, as here.
+      const fragmentShutdown =
+        block === "steps" && step.kind === "run" && reportsShutdown(toolResult)
+          ? `${step.flow} ran its shutdown: steps at the end of this call; a replay runs them at the end of the e2e test, after its later steps. If a later step needs what that shutdown undid (a login, a test user), record the fragment's steps one by one instead, its cleanup with shutdown: true, and swap them for the run: line after e2e-finish-recording`
+          : undefined;
+      const notes = [warning, fragmentShutdown].filter((n) => n !== undefined).join("; ");
       return {
-        message: `Step added to "${params.name}" e2e test${warning ? ` — ${warning}` : ""}`,
+        message: `${params.shutdown ? "Shutdown step" : "Step"} added to "${params.name}" e2e test${notes ? ` — ${notes}` : ""}`,
         toolResult,
         stepCount,
-        recorded: summarizeStep(step, stepCount),
+        recorded: (params.shutdown ? summarizeShutdownStep : summarizeStep)(step, stepCount),
         savedTo,
         ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };

@@ -489,6 +489,11 @@ export function summarizeSteps(flow: FlowFile): string[] {
   return flow.steps.map((step, i) => summarizeStep(step, i + 1));
 }
 
+/** {@link summarizeStep} for the `n`th step of a `shutdown:` list. */
+export function summarizeShutdownStep(step: FlowStep, n: number): string {
+  return `shutdown ${summarizeStep(step, n)}`;
+}
+
 /**
  * WHICH step this is, told apart from where it sits.
  *

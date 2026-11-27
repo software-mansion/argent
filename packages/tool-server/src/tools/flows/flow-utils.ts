@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
@@ -378,6 +379,12 @@ export interface RecordingSession {
    */
   stepWarnings?: Map<number, RecordedStepWarning>;
   /**
+   * The same verdicts for the steps recorded into `shutdown:`, by their 1-based
+   * number in that list. The finish attaches one only to the shutdown step it
+   * still anchors to.
+   */
+  shutdownStepWarnings?: Map<number, RecordedStepWarning>;
+  /**
    * How many verdicts this recording raised and then DROPPED, because a hand
    * edit moved the step each one judged (see {@link dropMovedWarnings}).
    *
@@ -393,6 +400,15 @@ export interface RecordingSession {
    * does not change it.
    */
   output?: FlowOutput;
+  /**
+   * The top-level keys the recorded `shutdown:` steps set, or removed
+   * ({@link REMOVED_OUTPUT_KEY}). A replay runs them after every step, so what
+   * they return never reaches a step, and each one starts from {@link output},
+   * as the later steps leave it, with these changes on top. A key a shutdown
+   * step wrote back unchanged is not kept. Like {@link output}, it keeps what a
+   * step hand-deleted from the file set.
+   */
+  shutdownChanges?: Map<string, unknown>;
   /** LRU order for the eviction backstop. See {@link touch}. */
   lastTouchedSeq: number;
 }
@@ -4783,13 +4799,25 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * would understate the loss in exactly the case that caused it. The caller
  * reports no count instead.
  */
-export async function countStepsOnDisk(filePath: string): Promise<number | undefined> {
+export async function countStepsOnDisk(
+  filePath: string,
+  block: RecordedBlock | "both" = "steps"
+): Promise<number | undefined> {
   try {
-    return parseFlow(await fs.readFile(filePath, "utf8")).steps.length;
+    const flow = parseFlow(await fs.readFile(filePath, "utf8"));
+    const shutdown = flow.shutdown?.length ?? 0;
+    return block === "steps"
+      ? flow.steps.length
+      : block === "shutdown"
+        ? shutdown
+        : flow.steps.length + shutdown;
   } catch {
     return undefined;
   }
 }
+
+/** The step list of a flow file a recorder appends to. */
+export type RecordedBlock = "steps" | "shutdown";
 
 /**
  * Set or remove names in a recording's top-level `env:`, persisted the way
@@ -4825,16 +4853,12 @@ export async function setRecordingEnv(
     }
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
-      const before = session.flow.steps;
       const flow = apply(parseFlow(await fs.readFile(session.filePath, "utf8")));
       validateFlow(flow);
       const updated = serializeFlow(flow);
       await writeFlowFile(session.filePath, updated);
-      session.flow = parseFlow(updated);
       // The re-read may take in a hand edit, as an append's does.
-      session.discardedWarnings =
-        (session.discardedWarnings ?? 0) +
-        dropMovedWarnings(session.stepWarnings, session.flow.steps, before);
+      adoptRecordedFile(session, parseFlow(updated));
       return { env: session.flow.env ?? {}, savedTo: session.filePath };
     }
     const flow = apply(session.flow);
@@ -4846,10 +4870,10 @@ export async function setRecordingEnv(
 }
 
 /** Read and parse the flow file, append a step, write it back. */
-async function appendStep(filePath: string, step: FlowStep): Promise<string> {
+async function appendStep(filePath: string, step: FlowStep, block: RecordedBlock): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
-  flow.steps.push(step);
+  (block === "shutdown" ? (flow.shutdown ??= []) : flow.steps).push(step);
   // Re-validate with the new step: a leading `launch` recorded into a
   // prerequisite-bearing recording must error here (nothing written), not
   // produce a file that fails to validate at replay.
@@ -5070,6 +5094,34 @@ function dropMovedWarnings(
 }
 
 /**
+ * Take a host-mode re-read of the file as the recorder's view, and drop the
+ * verdicts of both lists that a hand edit in it moved ({@link dropMovedWarnings}).
+ * `appended` names the list the re-read added one step to, which the previous
+ * view did not hold.
+ */
+export function adoptRecordedFile(
+  session: RecordingSession,
+  flow: FlowFile,
+  appended?: RecordedBlock
+): void {
+  const before = session.flow;
+  session.flow = flow;
+  const { steps, shutdown = [] } = flow;
+  session.discardedWarnings =
+    (session.discardedWarnings ?? 0) +
+    dropMovedWarnings(
+      session.stepWarnings,
+      appended === "steps" ? steps.slice(0, -1) : steps,
+      before.steps
+    ) +
+    dropMovedWarnings(
+      session.shutdownStepWarnings,
+      appended === "shutdown" ? shutdown.slice(0, -1) : shutdown,
+      before.shutdown ?? []
+    );
+}
+
+/**
  * Append a step to a recording and persist it. In "host" mode the file on disk
  * is re-read first, so a manual edit made mid-recording is honored; in "client"
  * mode this process never sees the client's disk, so the in-memory copy is
@@ -5081,7 +5133,8 @@ function dropMovedWarnings(
  */
 export async function appendStepToFlow(
   session: RecordingSession,
-  step: FlowStep
+  step: FlowStep,
+  block: RecordedBlock = "steps"
 ): Promise<{ savedTo: FlowSavedTo; stepCount: number }> {
   // The session's OWN key, not a fresh resolution of it: the lock this append
   // takes and the identity {@link assertSessionStillLive} checks must be the
@@ -5092,22 +5145,15 @@ export async function appendStepToFlow(
     assertSessionStillLive(session, step);
     session.lastTouchedSeq = touch();
     if (session.persist === "host") {
-      const before = session.flow.steps;
-      const flowFile = await appendStep(session.filePath, step);
-      session.flow = parseFlow(flowFile);
-      // `appendStep` adds exactly one step, so everything before the last one
-      // is what the file already held — the recorder's previous view, unless a
-      // hand edit landed in between.
-      session.discardedWarnings =
-        (session.discardedWarnings ?? 0) +
-        dropMovedWarnings(session.stepWarnings, session.flow.steps.slice(0, -1), before);
+      adoptRecordedFile(session, parseFlow(await appendStep(session.filePath, step, block)), block);
       // Count inside the lock, off the just-refreshed `session.flow`: a caller
       // reading `session.flow.steps.length` after this returns would be racing a
       // concurrent same-key append, which can reassign `session.flow` between
       // the release here and that read.
-      return { savedTo: session.filePath, stepCount: session.flow.steps.length };
+      return { savedTo: session.filePath, stepCount: recordedCount(session.flow, block) };
     }
-    session.flow.steps.push(step);
+    const list = block === "shutdown" ? (session.flow.shutdown ??= []) : session.flow.steps;
+    list.push(step);
     try {
       // Both can reject on a bad step — validateFlow on a cross-field
       // violation, serializeFlow on an unrepresentable one (e.g. a tap with
@@ -5118,11 +5164,59 @@ export async function appendStepToFlow(
       const flowFile = serializeFlow(session.flow);
       return {
         savedTo: clientFileDirective(session.filePath, flowFile),
-        stepCount: session.flow.steps.length,
+        stepCount: list.length,
       };
     } catch (err) {
-      session.flow.steps.pop(); // nothing was recorded
+      list.pop(); // nothing was recorded
+      if (session.flow.shutdown?.length === 0) delete session.flow.shutdown;
       throw err;
     }
   });
+}
+
+/** Marks a key a shutdown step removed, in {@link RecordingSession.shutdownChanges}. */
+const REMOVED_OUTPUT_KEY = Symbol("removed");
+
+/** The output document a call recorded into `block` runs against ({@link RecordingSession.shutdownChanges}). */
+export function recordingOutput(session: RecordingSession, block: RecordedBlock): FlowOutput {
+  const doc = session.output ?? {};
+  if (block !== "shutdown" || !session.shutdownChanges) return doc;
+  const merged = { ...doc };
+  for (const [key, value] of session.shutdownChanges) {
+    if (value === REMOVED_OUTPUT_KEY) delete merged[key];
+    else merged[key] = value;
+  }
+  return merged;
+}
+
+/**
+ * Keep what a call recorded into `block` returned, for the calls recorded after
+ * it there. `ranAgainst` is the document the call started from: a shutdown call
+ * keeps only what it changed in it, since other calls may have moved the
+ * session's document while it ran.
+ */
+export function keepRecordingOutput(
+  session: RecordingSession,
+  block: RecordedBlock,
+  doc: FlowOutput,
+  ranAgainst: FlowOutput
+): void {
+  if (block === "steps") {
+    session.output = doc;
+    return;
+  }
+  const changes = (session.shutdownChanges ??= new Map());
+  for (const key of Object.keys(ranAgainst)) {
+    if (!Object.hasOwn(doc, key)) changes.set(key, REMOVED_OUTPUT_KEY);
+  }
+  for (const [key, value] of Object.entries(doc)) {
+    if (!Object.hasOwn(ranAgainst, key) || !isDeepStrictEqual(ranAgainst[key], value)) {
+      changes.set(key, value);
+    }
+  }
+}
+
+/** How many steps `block` of a flow holds. */
+export function recordedCount(flow: FlowFile, block: RecordedBlock): number {
+  return block === "shutdown" ? (flow.shutdown?.length ?? 0) : flow.steps.length;
 }

@@ -37,6 +37,12 @@ Obey these lifecycle rules:
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
 6. Set script defaults with `e2e-start-recording.env` or call `e2e-set-env` directly before recording the script. Use `e2e-add-script.env` for values specific to one step. The tool runs the script immediately. If a secret is missing, check the project’s secret sources before retrying.
 
+## Record cleanup after the main steps
+
+Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run immediately. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
+
+Read the result of any call recorded as `run:`. If the fragment already ran cleanup and later steps need that state, record its main steps individually and its cleanup with `shutdown: true`. Replace those steps with the fragment call after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
+
 ## Start in the correct order
 
 ### iOS, Android, and Vega standalone tests

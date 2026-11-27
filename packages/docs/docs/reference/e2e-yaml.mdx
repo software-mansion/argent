@@ -123,6 +123,16 @@ Each load queues cleanup, and all loads share the same output object. If a fragm
 
 Shutdown steps appear after the main steps in the report and count toward the totals. Each has `shutdown: true`. A failed cleanup fails the run and sets `shutdownFailed: true`. The CLI prints `shutdown did not finish:` and identifies the failed step. If a main step also failed, the report keeps it as the first failure.
 
+#### Record shutdown steps
+
+Pass `shutdown: true` to `e2e-add-step`, `e2e-add-script`, or `e2e-add-echo`. Record the main steps first. Actions and scripts still run immediately, so cleanup can change the device or remove test data during recording.
+
+A shutdown script receives output from the main steps and earlier shutdown steps. It passes its changes only to later shutdown steps.
+
+A fragment recorded in the main list runs its shutdown inside the recording call. Argent reports when this happens. On replay, the fragment's shutdown runs at the end of the test. During recording, the fragment's cleanup output is unavailable to later steps. A fragment recorded in the shutdown list can pass its cleanup output to later shutdown steps.
+
+If later steps need state the fragment cleans up, record its main steps individually and put its cleanup in the shutdown list. After you finish recording, replace those steps with the `run:` call.
+
 ### Requirements
 
 The `requires` block names the targets that an e2e test supports. An e2e test without the block runs on all targets.

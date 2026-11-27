@@ -2024,6 +2024,11 @@ Without a link, every step kind runs.`,
         } catch (error) {
           thrown = { error };
         }
+        // A caller that shares its document (a recorder taking this test as a
+        // `run:` step) keeps it as the steps left it: a replay runs this
+        // shutdown at the end of the caller's test, after its later steps.
+        const caller = ctx?.flowOutput;
+        if (caller) state.output = { doc: caller.doc };
         // Before the teardown below: shutdown steps act on the device and the
         // app the run left, so a chromium instance the run owns must still be up.
         try {
@@ -2031,6 +2036,7 @@ Without a link, every step kind runs.`,
         } catch (error) {
           thrown ??= { error };
         }
+        if (caller) caller.shutdownDoc = state.output.doc;
         if (thrown) throw thrown.error;
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
