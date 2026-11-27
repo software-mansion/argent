@@ -9,6 +9,8 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
+  envRecordSchema,
+  flowEnvProblem,
   parseRequires,
   RUNTIME_KINDS,
   serializeFlow,
@@ -16,7 +18,8 @@ import {
   type FlowFile,
   type FlowSavedTo,
 } from "./flow-utils";
-import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { resolveScriptEnv } from "./flow-script-step";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 
 const MACOS_PLATFORM_FLAG = { [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } };
@@ -70,6 +73,11 @@ const zodSchema = z.object({
         "(`ios` also covers a remote simulator); `runtimeKind` is `tv` or `mobile`. Omit it for a test that runs " +
         "on any target."
     ),
+  env: envRecordSchema(z.string())
+    .optional()
+    .describe(
+      "Default script environment values saved in the test's top-level env. Use {{secret:NAME}} for credentials."
+    ),
 });
 
 export const flowStartRecordingTool: ToolDefinition<
@@ -102,7 +110,7 @@ recorded run-sequence gets no such warning, so read its \`toolResult\`. For a
 standalone e2e test, record a restart-app of the app under test as the FIRST step
 (captured as the e2e test's \`launch\` step); for a reusable fragment, skip that and
 pass executionPrerequisite instead. Starting over an existing e2e test replaces the
-whole file, including its \`requires:\` block; pass \`requires\` to keep it.
+whole file, including its \`requires:\` and \`env:\` blocks; pass \`requires\` and \`env\` to keep them.
 Use e2e-add-echo to add labels, and
 e2e-add-script to run a local .mjs, .mts, .js or .ts file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
@@ -136,9 +144,14 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
     // The type emerges from the steps: a first `restart-app` becomes a leading
     // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
     // documents a fragment.
+    if (params.env) {
+      const problem = flowEnvProblem(params.env);
+      if (problem) throw new InvalidToolInputError(`env ${problem}`);
+    }
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
       ...(params.requires ? { requires: parseRequires(params.requires) } : {}),
+      ...(params.env && Object.keys(params.env).length > 0 ? { env: params.env } : {}),
       steps: [],
     };
     validateFlow(flow);
@@ -158,6 +171,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       persist === "client" && ctx?.legacyE2eDir
         ? getLegacyFlowPath(params.project_root, params.name)
         : getFlowPath(params.project_root, params.name);
+    // After the path checks, which refuse a project_root the secret lookup
+    // must not search from; before the existing file is replaced.
+    if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
 
     // Truncate-and-register is one critical section: under the flow-file lock a
     // step from the take being discarded can neither slip in between the reset

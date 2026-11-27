@@ -899,8 +899,6 @@ function redactClamped(text: string, redact: Redact): string {
  * Iterative rather than recursive: the document came from a child that ran
  * arbitrary code, and a megabyte of `[[[[…` is legal JSON that would overflow
  * the stack inside `execute`, which owes its caller a verdict, not a throw.
- *
- * String values only; keys stay as written.
  */
 function redactDocument(root: Record<string, unknown>, redact: Redact): void {
   const pending: unknown[] = [root];
@@ -912,6 +910,14 @@ function redactDocument(root: Record<string, unknown>, redact: Redact): void {
       const value = record[key];
       if (typeof value === "string") record[key] = redact(value);
       else if (value !== null && typeof value === "object") pending.push(value);
+      // A property name is returned as written, so a script that keys a
+      // lookup by a credential would expose it. An array's indices are not.
+      if (Array.isArray(record)) continue;
+      const redactedKey = redact(key);
+      if (redactedKey !== key) {
+        record[redactedKey] = record[key];
+        delete record[key];
+      }
     }
   }
 }

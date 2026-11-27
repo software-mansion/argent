@@ -256,7 +256,7 @@ Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 `path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
-Add `env` to the YAML after recording. Use top-level `env` for script defaults, step `env` for one script, and `--env NAME=value` or `e2e-execute.env` for run overrides. The last layer to set a name wins. A `run:` fragment fills missing defaults. Pass overrides explicitly to a separate `tool: e2e-execute` run.
+Use top-level `env` for script defaults, step `env` for one script, and `--env NAME=value` or `e2e-execute.env` for run overrides. The last layer to set a name wins. A `run:` fragment fills missing defaults. Pass overrides explicitly to a separate `tool: e2e-execute` run.
 
 Quote non-string YAML scalars, such as `PORT: "8080"`. Use `{{secret:NAME}}` for credentials and keep credentials out of logs. If a secret is missing, check the secret sources for the run's project root. See [Environment values](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#environment-values) for the value rules and redaction limits.
 

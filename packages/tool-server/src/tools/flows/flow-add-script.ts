@@ -8,21 +8,27 @@ import {
   wrapFailure,
   type ToolDefinition,
 } from "@argent/registry";
+import * as fs from "node:fs/promises";
 import {
   appendStepToFlow,
   countStepsOnDisk,
+  envRecordSchema,
+  flowEnvProblem,
+  parseFlow,
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
   PROJECT_ROOT_INPUT,
   requireRecordingSession,
+  type FlowEnv,
   type FlowSavedTo,
   type FlowStep,
   type RecordingSession,
 } from "./flow-utils";
 import { runFlowScriptStep, type ScriptRan } from "./flow-script-step";
-import { utf8SafeCut } from "./script/flow-script-executor";
+import { InvalidToolInputError } from "../../utils/capability";
+import { mergeScriptEnv, utf8SafeCut } from "./script/flow-script-executor";
 import { summarizeStep } from "./flow-step-definitions";
 
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
@@ -73,6 +79,30 @@ async function recordedStepCount(
 }
 
 /**
+ * Read off the file, where a hand edit made mid-recording is what the next
+ * append keeps. A file that does not read or parse could not take the step, so
+ * the call stops before the script runs; an edit made while the script runs is
+ * still reported by the append, with the framing its failure path gives.
+ */
+async function recordedFileEnv(session: RecordingSession): Promise<FlowEnv | undefined> {
+  try {
+    return parseFlow(await fs.readFile(session.filePath, "utf8")).env;
+  } catch (err) {
+    throw wrapFailure(
+      err,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_add_script_read",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      },
+      `${session.filePath} did not read, so it cannot take a step. Nothing ran and no step was ` +
+        `recorded. Fix the file and retry. ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
  * How a failed call opens, and what it asks the author to do next. The two are
  * written as one entry because the lead may claim no more than the move below
  * it: an agent reads the first clause and stops, so a headline saying the
@@ -120,6 +150,11 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
+  env: envRecordSchema(z.string())
+    .optional()
+    .describe(
+      "Environment overrides for this script. Argent uses them immediately and saves them on the step. Values can include {{secret:NAME}}."
+    ),
 });
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
@@ -174,14 +209,18 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       script: {
         path: params.path,
         ...(params.timeout !== undefined ? { timeout: params.timeout } : {}),
+        ...(params.env !== undefined ? { env: params.env } : {}),
       },
     };
+    const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
+    if (envProblem) throw new InvalidToolInputError(`env ${envProblem}`);
     const step: Extract<FlowStep, { kind: "script" }> = {
       kind: "script",
       path: parseScriptPath(entry, params.path),
       ...(params.timeout !== undefined
         ? { timeout: parseScriptTimeout(entry, params.timeout) }
         : {}),
+      ...(params.env && Object.keys(params.env).length > 0 ? { env: params.env } : {}),
     };
 
     const flowDir = nodePath.dirname(await canonicalFlowPath(session.filePath));
@@ -192,10 +231,16 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     //
     // No `logBudget`: the run-scoped allowance would silently truncate a late
     // script's logs during authoring. The per-step limit still applies.
+    //
+    // The test's env: as it stands, under the step's own: what a replay
+    // without run values gives the step.
+    const env: FlowEnv = mergeScriptEnv(await recordedFileEnv(session), step.env);
     const { outcome, result, ran } = await runFlowScriptStep({
       flowDir,
       step,
       projectRoot: params.project_root,
+      env,
+      ...(ctx?.clientSecrets ? { clientSecrets: ctx.clientSecrets } : {}),
       ...(ctx?.signal ? { signal: ctx.signal } : {}),
     });
 

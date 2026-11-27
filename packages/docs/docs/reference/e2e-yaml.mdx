@@ -609,7 +609,13 @@ A fragment called with `run:` inherits the caller's defaults. Its own `env` fill
 
 Use names that match `[A-Za-z_][A-Za-z0-9_]*`, except `__proto__`. Quote YAML values such as `"8080"` or `"true"` to keep them as strings. Values cannot contain NUL characters. The script runner rejects reserved names such as `NODE_OPTIONS` and lists them in the error.
 
-Add `env` to the YAML after recording. Starting a recording with the same name replaces the file and its defaults.
+#### Set values while recording
+
+- Pass `env` to `e2e-start-recording` to set the file's defaults. Starting again under the same name replaces the file and its defaults.
+- Call `e2e-set-env` to update the defaults in an active recording. Use `null` to remove a name. If you remove the last name, Argent removes the top-level `env` key.
+- Pass `env` to `e2e-add-script` to override defaults for that step. Argent uses the values when it runs the script during recording and saves the overrides on the step.
+
+Invalid input or an unresolved secret stops the call before it writes the environment values. If the recording file is invalid, fix it before retrying `e2e-add-script`. Argent checks the file before it runs the script.
 
 #### Secrets in environment values
 

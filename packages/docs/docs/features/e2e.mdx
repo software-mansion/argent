@@ -108,4 +108,6 @@ The e2e tests in a directory without a `suite.config.yaml` file are independent.
 - Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different e2e test when that e2e test fails. In both cases, Argent records no step.
 - An argent client that is older than the tool-server can write the e2e test file on the computer of the tool-server. It can also record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
 
+Ask the agent to set the script environment values before it records a script. See [Set values while recording](/docs/reference/e2e-yaml#set-values-while-recording).
+
 Argent does this with the `e2e-start-recording`, `e2e-add-step`, `e2e-add-echo`, `e2e-add-script`, `e2e-finish-recording` and `e2e-execute` tools, and with the `argent e2e` command. The [tools reference](/docs/reference/tools) contains all tools. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the file format and the command options.

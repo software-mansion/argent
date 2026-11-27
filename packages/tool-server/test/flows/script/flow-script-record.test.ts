@@ -340,13 +340,15 @@ describe("recording a script step", () => {
     // The append re-parses the whole file, so an output reference a mid-recording
     // hand edit put in an EARLIER step refuses this write. The script itself ran
     // and passed; wording it as "recording it failed" would send the author back
-    // over the one call that did nothing wrong.
-    await write("scripts/seed.mjs", `output.ok = true;`);
+    // over the one call that did nothing wrong. The edit lands while the script
+    // runs: one made before the call stops it before the script runs.
     await start("handedited");
-    await fs.writeFile(
-      flowPath("handedited"),
-      `steps:\n  - echo: "created {{output:user.id}}"\n`,
-      "utf8"
+    await write(
+      "scripts/seed.mjs",
+      `import * as fs from "node:fs";\n` +
+        `fs.writeFileSync(${JSON.stringify(flowPath("handedited"))}, ` +
+        `${JSON.stringify(`steps:\n  - echo: "created {{output:user.id}}"\n`)});\n` +
+        `output.ok = true;`
     );
 
     const err = (await addScript("handedited", "../../scripts/seed.mjs").catch(
@@ -448,6 +450,7 @@ describe("recording a script step", () => {
 
   it("needs no device of any kind", async () => {
     expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
+      "env",
       "name",
       "path",
       "project_root",
@@ -600,16 +603,23 @@ describe("a script that did not pass records nothing", () => {
   // With the file unreadable the only count left is the session's, which is the
   // steps as of the last append - a third number again. An author comparing it
   // with what the next append renumbers to has to know which one they are
-  // holding, so it is qualified here as the sibling recorder qualifies it.
+  // holding, so it is qualified here as the sibling recorder qualifies it. The
+  // script breaks the file itself: one already broken runs nothing, since its
+  // env: is unknown.
   it("says when the step count could not come off the file", async () => {
     await start("counted");
     await flowInsertEchoTool.execute(
       {},
       { name: "counted", project_root: root, message: "recorded" }
     );
-    await fs.appendFile(flowPath("counted"), "  - echo: hand-added\n  - bogus: [\n", "utf8");
+    await write(
+      "scripts/break.mjs",
+      `import * as fs from "node:fs";\n` +
+        `fs.appendFileSync(${JSON.stringify(flowPath("counted"))}, "  - echo: hand-added\\n  - bogus: [\\n");\n` +
+        `throw new Error("broke it");`
+    );
 
-    const failed = await addScript("counted", "../../scripts/gone.mjs");
+    const failed = await addScript("counted", "../../scripts/break.mjs");
 
     expect(failed.status).toBe("fail");
     // The in-memory snapshot, while the file itself holds two steps.
