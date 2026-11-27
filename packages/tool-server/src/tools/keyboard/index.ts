@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
@@ -65,7 +65,15 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text` or `clear`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
+    ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      "Clear the focused text field before typing `text` (or alone when `text` is omitted). " +
+        "Cannot be combined with `key`. Fails if nothing editable has focus. " +
+        "Not supported on TV, Vega<flag:harmonyos>, or HarmonyOS</flag:harmonyos>."
     ),
   delayMs: z
     .number()
@@ -128,11 +136,19 @@ React Native: after typing, the next tap outside the field may only close the ke
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
+        if (params.clear && params.key === undefined) {
+          return params.text !== undefined ? "Clearing field and entering text" : "Clearing field";
+        }
         if (params.text === undefined) return "Pressing a key";
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params }) => {
+        if (params.clear) {
+          return params.text !== undefined ? "Cleared field and entered text" : "Cleared field";
+        }
+        return params.text === undefined ? "Pressed a key" : "Entered text";
+      },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
@@ -207,19 +223,46 @@ React Native: after typing, the next tap outside the field may only close the ke
           }
         );
       }
+      if (params.clear && params.key !== undefined) {
+        throw new InvalidToolInputError(
+          "keyboard `clear: true` cannot be combined with `key` — nothing was changed. " +
+            "Pass `clear: true` alone to empty the field, or with `text` to replace its contents.",
+          {
+            failure_stage: "keyboard_clear_and_key_combined",
+          }
+        );
+      }
+      const runDispatch = async (callParams: KeyboardParams) => {
+        try {
+          return await dispatch(services, callParams, options);
+        } catch (err) {
+          // `clear: true` reuses the hidden `fill` clearing primitives; avoid telling an
+          // MCP agent to retry a tool name (`fill`) that is not in its catalog.
+          if (
+            callParams.clear &&
+            err instanceof Error &&
+            getFailureSignal(err)?.error_code?.startsWith("FILL_")
+          ) {
+            err.message = err.message
+              .replace(/\bthe fill\b/g, "clearing the field")
+              .replace(/\bfill\b/g, "keyboard");
+          }
+          throw err;
+        }
+      };
       // Resolve inside `execute`: after every logging boundary (agent
       // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
       // see only the placeholder) and before the dispatch, so run-sequence and
       // flow `type` steps are covered for free.
-      if (params.text === undefined) return dispatch(services, params, options);
+      if (params.text === undefined) return runDispatch(params);
       const { text, secrets } = resolveSecretPlaceholders(params.text, {
         clientSecrets: options?.clientSecrets,
       });
-      if (secrets.length === 0) return dispatch(services, params, options);
+      if (secrets.length === 0) return runDispatch(params);
       // Before the keys go out: a failure partway leaves part of a value typed.
       noteTypedSecrets(params.udid, secrets);
       try {
-        const result = await dispatch(services, { ...params, text }, options);
+        const result = await runDispatch({ ...params, text });
         // Echo the placeholder form, never the resolved value.
         return { ...result, typed: params.text };
       } catch (err) {

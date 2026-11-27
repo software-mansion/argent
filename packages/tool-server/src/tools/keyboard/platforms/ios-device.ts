@@ -11,6 +11,7 @@ import {
   typeText,
   type MutationReply,
 } from "../../../utils/ios-device/runner-commands";
+import { fillByDeviceKeys } from "../../fill/keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
 /**
@@ -63,11 +64,18 @@ export function makeIosDeviceImpl(
       }
 
       // Empty request is a documented no-op. Return before resolving the runner.
-      if (!params.text && !key) {
+      if (!params.text && !key && !params.clear) {
         return {
           typed: "",
           keys: 0,
         };
+      }
+
+      if (params.clear) {
+        await fillByDeviceKeys(registry, device, "");
+        if (!params.text) {
+          return { typed: "", keys: 0, cleared: true };
+        }
       }
 
       const bundleId = requireCurrentIosDeviceApp(device.id);
@@ -100,6 +108,7 @@ export function makeIosDeviceImpl(
       return {
         typed: params.text ?? params.key ?? "",
         keys,
+        ...(params.clear ? { cleared: true as const } : {}),
         ...(reactivated ? { reactivated: true as const } : {}),
       };
     },

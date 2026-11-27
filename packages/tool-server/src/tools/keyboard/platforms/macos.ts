@@ -14,16 +14,20 @@ export function makeMacosImpl(
   return {
     handler: async (_services, params, device) => {
       const app = await resolveMacosApp(registry, device, "keyboard");
+      if (params.clear) {
+        await macosPressKey(app, "command+a");
+        await macosPressKey(app, "backspace");
+      }
       // ../index.ts rejects a request carrying both, so at most one runs.
       if (params.text) {
         const keys = await macosTypeText(app, params.text, { delayMs: params.delayMs });
-        return { typed: params.text, keys };
+        return { typed: params.text, keys, ...(params.clear ? { cleared: true as const } : {}) };
       }
       if (params.key) {
         await macosPressKey(app, params.key);
         return { typed: params.key, keys: 1 };
       }
-      return { typed: "", keys: 0 };
+      return { typed: "", keys: 0, ...(params.clear ? { cleared: true as const } : {}) };
     },
   };
 }
