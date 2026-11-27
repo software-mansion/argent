@@ -132,12 +132,12 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target Chromium device id from `list-devices` (chromium-cdp-<port>)<flag:macos-apps>, or a Mac app id</flag:macos-apps>."
+      "Chromium device id (`chromium-cdp-<port>`)<flag:macos-apps> or Mac app id</flag:macos-apps> from `list-devices`."
     ),
-  fromX: z.number().min(0).max(1).describe("Press x."),
-  fromY: z.number().min(0).max(1).describe("Press y."),
-  toX: z.number().min(0).max(1).describe("Release x."),
-  toY: z.number().min(0).max(1).describe("Release y."),
+  fromX: z.number().min(0).max(1).describe("Start x."),
+  fromY: z.number().min(0).max(1).describe("Start y."),
+  toX: z.number().min(0).max(1).describe("End x."),
+  toY: z.number().min(0).max(1).describe("End y."),
   durationMs: z
     .number()
     .max(MAX_DURATION_MS, {
@@ -145,14 +145,12 @@ const zodSchema = z.object({
     })
     .optional()
     .describe(
-      "Total drag duration in milliseconds (default 300<flag:macos-apps>, 800 for a long press on a Mac app</flag:macos-apps>); the button stays down this long."
+      "Drag duration in ms (default 300<flag:macos-apps>; 800 for a Mac app long press</flag:macos-apps>)."
     ),
   momentum: z
     .boolean()
     .optional()
-    .describe(
-      "Whether the drag releases with momentum; default true (a constant-speed drag). false decelerates into the release point, so an app that derives a fling from the release velocity (carousels, drag libraries) applies little to no momentum: use it when the drag must stop where it was aimed. Under ~100ms durationMs some fling survives; keep the default 300 when the fling must be fully suppressed."
-    ),
+    .describe("Default true (constant speed). false decelerates into release to avoid fling."),
   // `momentum`'s earlier spelling, with the opposite polarity. Declared so this
   // non-strict object refuses it instead of stripping it and running the default.
   settle: z
@@ -170,9 +168,9 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
-  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app<flag:macos-apps> or a Mac app</flag:macos-apps>, with mouse moves interpolated at ~60fps. All positions are fractions of the window width/height (not pixels), the same space as gesture-tap and describe, except that <flag:macos-apps>on Chromium </flag:macos-apps>exactly 1.0 lands one pixel inside the window edge.
-Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium<flag:macos-apps> and Mac apps</flag:macos-apps> only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.<flag:macos-apps> On a Mac app the same start and end point is a long press, and a drop lands only inside the app's own windows.</flag:macos-apps>
-Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
+  description: `Perform a left-button mouse drag between normalized [0,1] window points in Chromium<flag:macos-apps> or a Mac app</flag:macos-apps>.
+Use when dragging sliders, drag-and-drop items, or selecting text (use \`gesture-scroll\` to scroll desktop lists; use \`gesture-swipe\` on iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>).<flag:macos-apps> Mac app: same start/end point = long press; drops stay inside the app's windows.</flag:macos-apps>
+Returns \`{ dragged: true, timestampMs }\`. Fails if the CDP session is unreachable.`,
   zodSchema,
   searchHint:
     "drag drop slider mouse press move release chromium<flag:macos-apps> mac</flag:macos-apps> select",

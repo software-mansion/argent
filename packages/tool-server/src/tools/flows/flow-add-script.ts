@@ -148,28 +148,14 @@ function renderOutput(output: Record<string, unknown>): {
 }
 
 const zodSchema = z.object({
-  name: z.string().describe("E2E test name passed to e2e-start-recording."),
-  project_root: z.string().describe("Absolute project root passed to e2e-start-recording."),
-  path: z
-    .string()
-    .describe(
-      'Path to the script file (.mjs, .mts, .js or .ts), relative to the e2e test YAML. For example: "../../scripts/seed-order.mjs".'
-    ),
-  timeout: z
-    .number()
-    .optional()
-    .describe("Time limit in milliseconds. The default is 30000 and the minimum is 100."),
+  name: z.string().describe("E2E test name from `e2e-start-recording`."),
+  project_root: z.string().describe("Project root from `e2e-start-recording`."),
+  path: z.string().describe("Script path (.mjs/.mts/.js/.ts) relative to the test YAML."),
+  timeout: z.number().optional().describe("Timeout in ms (default 30000, min 100)."),
   env: envRecordSchema(z.string())
     .optional()
-    .describe(
-      "Environment overrides for this script. Argent uses them immediately and saves them on the step. Values can include {{secret:NAME}} or {{output:PATH}}."
-    ),
-  shutdown: z
-    .boolean()
-    .optional()
-    .describe(
-      "Save the script in the shutdown list. Pending fragment cleanup runs before the script. The script's output reaches only later shutdown steps. stepCount counts shutdown entries."
-    ),
+    .describe("Env overrides (supports `{{secret:NAME}}` and `{{output:PATH}}`)."),
+  shutdown: z.boolean().optional().describe("Record into `shutdown:` instead of `steps:`."),
 });
 
 export const flowAddScriptTool: ToolDefinition<
@@ -177,7 +163,9 @@ export const flowAddScriptTool: ToolDefinition<
   FlowAddScriptResult
 > = deferredShutdownFirst({
   id: "e2e-add-script",
-  description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a script step. Use when the user requests a local script in an active recording. Call it where the script must run. A successful script updates the shared output and returns it as \`outputJson\`. Later steps can read it with \`{{output:PATH}}\`. Use \`shutdown: true\` for cleanup scripts. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before retrying. Record without a link (argent link or ARGENT_TOOLS_URL).`,
+  description: `Run a local JS/TS script and record it as a \`script:\` step (requires no \`argent link\` / \`ARGENT_TOOLS_URL\`).
+Use when adding a setup/seed/cleanup script during an open recording (output is available to later steps via \`{{output:PATH}}\`).
+Returns \`{ status, reason?, outputJson?, stepCount, recorded? }\`. Fails (recording nothing) if the script errors or recording is over a link.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],

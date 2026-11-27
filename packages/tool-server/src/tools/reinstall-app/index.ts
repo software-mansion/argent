@@ -24,18 +24,18 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      "Device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier, used to uninstall the previous installation. iOS: bundle id. Android: package name. Vega: interactive component app id (e.g. com.example.app.main).<flag:harmonyos> HarmonyOS: bundle name (`app.bundleName` in the `.hap`).</flag:harmonyos>"
+      "Bundle id (iOS), package name (Android), component id (Vega)<flag:harmonyos>, or bundleName (HarmonyOS)</flag:harmonyos>."
     ),
   appPath: z
     .string()
     .describe(
-      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file.<flag:harmonyos> HarmonyOS: `.hap` file.</flag:harmonyos> Relative paths are resolved from the current working directory."
+      "Path to `.app` (iOS), `.apk` (Android), `.vpkg` (Vega)<flag:harmonyos>, or `.hap` (HarmonyOS)</flag:harmonyos>."
     ),
 });
 
@@ -45,9 +45,9 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
   // An uninstall plus install can take minutes, past the 30s MCP fetch timeout.
   longRunning: true,
-  description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
-Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled. On Android it also fails, without installing, when bundleId is still on the device after the uninstall or that check fails (the app may then be gone), and on a local iOS simulator when the uninstall does not finish within 30s.`,
+  description: `Uninstall any existing build and install a fresh app package (clears app data and permissions).
+Use when installing a new build or resetting to clean state.
+Returns \`{ reinstalled, bundleId }\`. Fails if \`appPath\` is invalid or mismatched with \`bundleId\` (checked before uninstall) or install/uninstall fails.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,

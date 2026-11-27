@@ -11,47 +11,28 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      "View fields to include. Use EXACT names. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
-        "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
+      "Exact view fields to return (defaults: pointer, className, tag, frame, windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, userInteractionEnabled, depth, identifier, label, layerName, nativeID; extra: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder)."
     ),
   skipClasses: z
     .array(z.string())
     .optional()
-    .describe(
-      "Exact UIView class names whose entire subtree should be pruned " +
-        '(e.g. ["UIImageView"] to drop image leaf nodes)'
-    ),
+    .describe('Exact UIView classes to prune (e.g. ["UIImageView"]).'),
   skipClassPrefixes: z
     .array(z.string())
     .optional()
-    .describe(
-      "Class name prefixes to prune entire subtrees. " +
-        'For SwiftUI apps use ["_TtGC7SwiftUI"] to drop mangled SwiftUI ' +
-        "generic type subtrees while keeping _UIHostingView and UIKit bridges. " +
-        'Avoid broad prefixes like "_UI": they prune useful system views.'
-    ),
-  maxDepth: z
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe("Maximum recursion depth (default 8). Raise it to reach deeper views."),
+    .describe('Class prefixes to prune (e.g. ["_TtGC7SwiftUI"] for SwiftUI; avoid broad "_UI").'),
+  maxDepth: z.number().int().positive().optional().describe("Max recursion depth (default 8)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
-  description: `Get the complete UIKit view tree for the running app.
-WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
-Reduce the output with skipClasses / skipClassPrefixes, fields and maxDepth.
-Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
-Returns { status: "ok", windows, screen } with the full view hierarchy. screen gives the screen size in points, and the interfaceOrientation of the UI (portrait, portraitUpsideDown, landscapeLeft, landscapeRight). The size and each screenFrame use the axes of the UI as the user sees it, also when the UI is landscape: the space of screenshots and describe frames. Each windowFrame uses the axes of its window, which turn with the UI too.
-<flag:macos-apps>On a Mac app it returns the AppKit view tree of the app's windows, each screenFrame in points from the top-left of the area describe reports. The statuses below are iOS only.
-</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
-An Apple system app is rejected outright (terminal: never retry it).`,
+  description: `Get the complete UIKit view tree for the running app (can be 100KB+; prefer \`native-find-views\` for targeted lookups, or constrain with \`skipClasses\`, \`fields\`, \`maxDepth\`).
+Use when debugging layout or inspecting views absent from the accessibility tree.
+Returns \`{ status: "ok", windows, screen }\` (\`screen\` gives upright point size and orientation; \`screenFrame\` uses upright UI axes).
+<flag:macos-apps>Mac app: returns AppKit window view tree with \`screenFrame\` in points from the \`describe\` area top-left. Statuses below are iOS only.
+</flag:macos-apps>If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. Fails if an Apple system app is targeted (An Apple system app is rejected outright — terminal, never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {

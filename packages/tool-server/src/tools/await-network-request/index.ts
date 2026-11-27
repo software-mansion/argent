@@ -37,62 +37,51 @@ const DEFAULT_POLL_INTERVAL_MS = 400;
 const MIN_JS_READ_MS = 1_000;
 const zodSchema = z
   .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe(
-        "Device ID passed as udid to network-capture-start. The wait reuses its Metro target."
-      ),
+    udid: z.string().min(1).describe("Device ID used in `network-capture-start`."),
     bundleId: z
       .string()
       .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
       .describe(
-        "The bundleId used for network-capture-start. On Chromium, use a valid placeholder such as argent.capture."
+        "`bundleId` used in `network-capture-start` (Chromium: placeholder like `argent.capture`)."
       ),
     url: z
       .string()
       .min(1)
       .describe(
-        "URL text or a pattern. Match a part with no secrets. The result includes the full URL and secret placeholders are rejected."
+        "URL text/regex to match (no `{{secret:...}}` placeholders; full URL is returned)."
       ),
     urlMatch: z
       .enum(["contains", "equals", "matches"])
       .optional()
       .describe(
-        "contains (default) and equals ignore case. matches uses a case-sensitive JavaScript regular expression with no implicit anchors."
+        "`contains` (default) / `equals` (case-insensitive) or `matches` (case-sensitive JS regex)."
       ),
-    method: z.string().min(1).optional().describe("HTTP method, matched without regard to case."),
+    method: z.string().min(1).optional().describe("HTTP method (case-insensitive)."),
     status: z
       .union([
         z.enum(STATUS_CLASSES as [string, ...string[]]),
         z.coerce.number().int().min(100).max(599),
       ])
       .optional()
-      .describe(
-        'Exact HTTP status or a class such as "2xx". Failed requests can match if they received response headers.'
-      ),
+      .describe('Exact HTTP status or class (e.g. "2xx").'),
     outcome: z
       .enum(["complete", "failed", "any"])
       .optional()
-      .describe(
-        "complete (default) accepts a finished response, including HTTP errors. failed accepts a request error. any accepts either."
-      ),
+      .describe("`complete` (default, incl. HTTP errors), `failed` (network error), or `any`."),
     timeoutMs: z
       .number()
       .int()
       .positive()
       .max(120_000)
       .optional()
-      .describe(`Wait limit in milliseconds. Default ${DEFAULT_TIMEOUT_MS}.`),
+      .describe(`Timeout in ms (default ${DEFAULT_TIMEOUT_MS}).`),
     pollIntervalMs: z
       .number()
       .int()
       .min(50)
       .max(5000)
       .optional()
-      .describe(
-        `Interval between capture reads in milliseconds. Default ${DEFAULT_POLL_INTERVAL_MS}.`
-      ),
+      .describe(`Poll interval in ms (default ${DEFAULT_POLL_INTERVAL_MS}).`),
   })
   .strict()
   .superRefine((params, ctx) => {
@@ -183,9 +172,9 @@ export function createAwaitNetworkRequestTool(
   return {
     // A literal, so scripts/extract-tools.mjs finds the description it scores.
     id: "await-network-request",
-    description: `Check whether a request finished in the latest capture window. Call network-capture-start before the action. Call this tool after triggering the request, then stop capture when you are done. On Chromium, match the final URL and method after redirects. Other layers use the URL the app requested. Physical iPhones and Vega are unsupported.
-Returns the match or diagnostic details. Use match.id with view-network-request-details. A miss only means no captured request matched. Check cause and nearMisses. If capture is unreadable, follow the layer notes before repeating the action. An active JS window can restore recording after a disconnect. Requests sent before it reconnects can be missing.
-Fails with NETWORK_CAPTURE_NOT_STARTED if there is no usable capture window. Start capture and repeat the action. A result with success false fails an e2e step and stops a run-sequence.`,
+    description: `Wait for a matching HTTP request in the latest \`network-capture-start\` window (unsupported on physical iPhones and Vega; Chromium matches post-redirect URL/method).
+Use when asserting or synchronizing on an API call after triggering a UI action.
+Returns \`{ success, elapsed, match?, cause?, nearMisses?, layers? }\` (pass \`match.id\` to \`view-network-request-details\`). Fails with \`NETWORK_CAPTURE_NOT_STARTED\` if capture was not started; \`success: false\` fails e2e steps and stops \`run-sequence\`.`,
     zodSchema,
     searchHint:
       "wait await network request http api call fetch xhr response status url match after capture start e2e assert",

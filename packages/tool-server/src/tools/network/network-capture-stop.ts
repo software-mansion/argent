@@ -60,8 +60,9 @@ export function createNetworkCaptureStopTool(
 ): ToolDefinition<CaptureParams, CaptureResult<StoppedLayer>> {
   return {
     id: "network-capture-stop",
-    description: `Stop capture and keep the recorded requests. Call this after collecting the requests you need or before profiling. Read any Android native bodies you need before stopping. On Chromium, this closes the window for await-network-request. The tab log keeps recording while Argent is attached.
-Returns a result for each layer. Check armed and reason. The reason can explain an unconfirmed stop or say that capture never started. If Argent fails to reach the JS runtime, retry after it reconnects to Metro.`,
+    description: `Stop HTTP capture while keeping recorded requests (closes the \`await-network-request\` window on Chromium; read Android native bodies before stopping).
+Use when done collecting traffic or before profiling.
+Returns \`{ status: "ok", layers }\` with \`armed\` and any \`reason\`. Fails on invalid targets.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
     interaction: {

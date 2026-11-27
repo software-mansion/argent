@@ -1633,55 +1633,45 @@ const zodSchema = z
     name: z
       .string()
       .optional()
-      .describe(
-        'Name of a saved e2e test to run from `<project_root>/.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore").'
-      ),
+      .describe("Saved e2e test name in `<project_root>/.argent/e2e/` (or `.argent/flows/`)."),
     project_root: z
       .string()
-      .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in, also with e2e_test_path, where the e2e test, its run: siblings, its script: paths and baselines resolve beside the YAML instead. A script still RUNS in this root."
-      ),
+      .describe("Absolute path to the project root (script cwd; also resolves `name`)."),
     e2e_test_file: z
       .string()
       .optional()
-      .describe(
-        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
-      ),
+      .describe("Internal; leave unset (derived from `project_root` and `name`)."),
     e2e_test_path: z
       .string()
       .optional()
-      .describe("Absolute path to an e2e test .yaml on the client."),
+      .describe("Absolute path to an e2e test `.yaml` on the client."),
     device: z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Target device id from `list-devices` (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>). Auto-detected only when one booted device matches; pass explicitly if multiple are booted."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
+        "Filter auto-detection (`ios` = local simulator, `ios-remote` = remote). With `chromium` and no `device`, boots Electron from `launch: { chromium: <app path> }` and tears it down after.<flag:macos-apps> With `macos` and no `device`, runs on the Mac app named in `launch` (auto-detection never picks Mac apps otherwise).</flag:macos-apps>"
       )
       .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
     updateBaselines: z
       .boolean()
       .optional()
-      .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
-      ),
+      .describe("Refresh screenshot baselines for `snapshot` steps instead of diffing."),
     prerequisiteAcknowledged: z
       .boolean()
       .optional()
       .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite: without it, the call runs no step and returns the prerequisite text. Not a dry run: an e2e test with no prerequisite runs in full. To read a prerequisite without running, read executionPrerequisite in the YAML file."
+        "Set true to confirm a fragment's `executionPrerequisite` is met; otherwise returns the prerequisite text without running."
       ),
     env: z
       .record(z.string(), z.string())
       .optional()
-      .describe(
-        "Script environment overrides for this run, including run: fragments. Names match [A-Za-z_][A-Za-z0-9_]*, except __proto__. Values can include {{secret:NAME}}. A missing secret rejects the run before any step."
-      ),
+      .describe("Script env overrides (also for `run:` fragments). Supports `{{secret:NAME}}`."),
   })
   .superRefine((params, ctx) => {
     const envProblem = params.env === undefined ? undefined : flowEnvProblem(params.env);
@@ -1710,20 +1700,9 @@ export function createRunFlowTool(
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "e2e-execute",
-    description: `Run a saved YAML e2e test end to end. Use when
-asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
-one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
-exactly one e2e test source: name (under project_root) or e2e_test_path.
-Returns a per-step report. A failure in the main steps skips the rest of that list. Shutdown entries
-then run independently, unless the run is cancelled. If a shutdown entry fails, the run fails and the
-report sets \`shutdownFailed\`. Shutdown steps report \`shutdown: true\`.
-Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
-snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
-the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,
-a nested e2e-execute not called by name with an absolute project_root, a directory, app or output-directory
-argument, a file path built from several arguments, a relative path): it stops before the first step and the
-error lists each such step. An absolute .png/.yaml argument from anywhere else fails only when its step runs.
-Without a link, every step kind runs.`,
+    description: `Run a saved YAML e2e test end to end. Use when replaying a recorded path or QA regression (use gesture tools for one-off actions, \`e2e-start-recording\` to author tests). Pass exactly one source: \`name\` or \`e2e_test_path\`.
+Returns a per-step report. A main-step failure skips remaining main steps, then runs \`shutdown:\` steps (marked \`shutdown: true\`; failure sets \`shutdownFailed\`).
+Over a link (\`argent link\` / \`ARGENT_TOOLS_URL\`), the client uploads the test, \`run:\` fragments, baselines, and absolute \`.png\`/\`.yaml\` args; steps needing other client files (e.g. \`script:\`, recording tools, directories) fail before step 1. Fails if the YAML is invalid, no unique matching device is booted, or a step fails.`,
     zodSchema,
     aliases: ["flow-execute"],
     interaction: {

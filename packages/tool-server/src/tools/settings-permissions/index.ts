@@ -27,34 +27,26 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS simulator UDID or Android serial)."),
+    .describe("Device id from `list-devices` (iOS simulator UDID or Android serial)."),
   action: z
     .enum(PERMISSION_ACTIONS)
-    .describe(
-      "`grant` pre-authorizes the permission, `deny` refuses it, `reset` returns it to the not-yet-asked state so the app prompts on next use."
-    ),
+    .describe("`grant` (pre-authorize), `deny`, or `reset` (re-prompt on next use)."),
   permission: z
     .enum(PERMISSION_NAMES)
-    .describe(
-      "The permission to change. `notifications` is Android-only; `reminders` is iOS-only; `camera` works on Android, and on iOS only when the simulator's runtime models the service."
-    ),
+    .describe("Permission name (`notifications` = Android-only; `reminders` = iOS-only)."),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
-    .describe(
-      "App to change the permission for; every action, `reset` included, applies to this app only. iOS: bundle id (e.g. com.example.app). Android: package name."
-    ),
+    .describe("Target app bundle id (iOS) or package name (Android)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const settingsPermissionsTool: ToolDefinition<Params, SettingsPermissionsResult> = {
   id: "settings-permissions",
-  description: `Grant or deny an app's runtime permission, or reset it, without navigating the system Settings UI. Use when setting up a test, before the app asks for the permission.
-iOS simulator: \`grant location\`/\`location-always\` needs the app already installed (location authorization is not applied to a bundle id until the app exists). Local simulators enforce this; a remote simulator can't be checked, so install the app there first. Other services can be granted before install.
-Android: changes the mapped \`android.permission.*\` runtime permissions (reset also best-effort clears the user-set permission flags). The app must be installed and declare them in its manifest.
-Some permission changes terminate the app if it is running (system behavior on both platforms), so set permissions before launching, or relaunch after.
-Returns { action, permission, bundleId, applied, skipped? }: \`applied\` lists the platform-level services/permissions actually changed; \`skipped\` (Android) lists mapped permissions the package manager rejected, e.g. ones the manifest doesn't declare. Fails if nothing could be applied.`,
+  description: `Grant, deny, or reset an app's runtime permission without opening Settings. Use when setting up permissions before launching or triggering a prompt (changing permissions may terminate a running app).
+iOS sim: \`grant location\`/\`location-always\` requires the app installed first. Android: app must be installed and declare the mapped permissions in its manifest.
+Returns \`{ action, permission, bundleId, applied, skipped? }\`. Fails if nothing could be applied.`,
   zodSchema,
   searchHint: "grant deny reset revoke app permissions privacy camera microphone location settings",
   interaction: {
