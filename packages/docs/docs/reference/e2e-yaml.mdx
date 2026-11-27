@@ -512,7 +512,10 @@ The guard accepts one `exists`, `visible`, `hidden` or `text` condition, an [`ou
 
 ```yaml
 - run: ../shared/login.yaml
+- run: { path: ../shared/admin.yaml, metroPort: 8096 }
 ```
+
+A `run:` step takes a path, or a map with a `path` and an optional `metroPort`. The steps of the fragment and its `shutdown:` steps use that Metro port. See [The Metro port](#the-metro-port).
 
 A `run:` path resolves against the directory of the e2e test file that contains the step. When nothing is there, the e2e test file is in `.argent/e2e/` or `.argent/flows/`, and the path has no `/`, Argent looks in the other of these directories. The `.yaml` suffix is optional. When you record a nested `e2e-execute` of an e2e test that is only in the other directory, the recorder writes its path from the recording, for example `run: ../flows/login.yaml`.
 
@@ -876,17 +879,18 @@ When you give `-r` without `<dir>`, Argent writes `e2e list --recursive requires
 
 When Argent finds no e2e test and no invalid `suite.config.yaml` file in `<dir>`, Argent writes `No e2e tests found in <dir>` on stderr, prints nothing on stdout and gives exit code 0. Without `-r`, Argent writes `Pass -r/--recursive to include subdirectories.` on the next line. With `--json`, Argent prints `{ "e2eTests": [] }`.
 
-| Option               | Description                                                                                                                                                                                     |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                                     |
-| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either                      |
-| `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines`                   |
-| `--env NAME=value`   | Override a script environment value for this run. The value starts after the first `=`. Repeat for more names. For one name, the last value wins. See [Environment values](#environment-values) |
-| `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                                             |
-| `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                                               |
-| `--json`             | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                                   |
-| `--json-stream`      | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                                                 |
-| `--`                 | End of options, for an e2e test name that starts with `-`                                                                                                                                       |
+| Option                | Description                                                                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--device <id>`       | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                                     |
+| `--platform <p>`      | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either                      |
+| `--update-baselines`  | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines`                   |
+| `--env NAME=value`    | Override a script environment value for this run. The value starts after the first `=`. Repeat for more names. For one name, the last value wins. See [Environment values](#environment-values) |
+| `--metro-port <port>` | The Metro port of the run. Argent uses it for each step whose tool takes a Metro port, also when the e2e test file gives a port for the step. See [The Metro port](#the-metro-port)             |
+| `--output <dir>`      | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                                             |
+| `-r, --recursive`     | With a directory, also run the e2e tests in subdirectories. Argent skips `__baselines__`, `node_modules` and dot-directories other than `.argent`                                               |
+| `--json`              | Print the JSON report of the e2e test, or the JSON aggregate of the directory                                                                                                                   |
+| `--json-stream`       | Print one JSON record per line: each step, then the result. One e2e test, and not with `--json`                                                                                                 |
+| `--`                  | End of options, for an e2e test name that starts with `-`                                                                                                                                       |
 
 ```bash
 argent e2e run checkout --platform ios
@@ -894,6 +898,7 @@ argent e2e run .argent/e2e/checkout.yaml --output e2e-artifacts --json
 argent e2e run ~/shared-e2e/checkout.yaml --device <UDID> --update-baselines
 argent e2e run .argent/e2e --recursive
 argent e2e run checkout --env API_URL=https://staging.example.com
+argent e2e run checkout --metro-port 8096
 ```
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
@@ -932,7 +937,7 @@ The `Failed e2e tests` section has one entry for each e2e test that failed. Each
 - The e2e test path.
 - The first step that failed or errored, with its number. An e2e test without a report gives its outcome line instead.
 - The reason of that step, or the error message of an e2e test without a report. Then each baseline that the CLI could not write, with the path and the reason.
-- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform`, `--update-baselines` and `--env` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
+- A `re-run:` command that runs only that e2e test. The command uses the same `--device`, `--platform`, `--update-baselines`, `--env` and `--metro-port` options as the directory run. If the directory run has `--output`, the command writes the images of that e2e test to the same directory as the directory run.
 
 The section does not include the e2e tests that Argent skipped.
 
@@ -971,6 +976,21 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
 Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
+
+### The Metro port
+
+A recorded step keeps the Metro `port` that the agent gave to the tool, for example to `debugger-evaluate`. A step without `port` uses the default port of the tool. Argent selects the Metro port of a step in this order:
+
+1. The `metroPort` of the `run:` step that loads the fragment, or of the `tool: e2e-execute` step that runs the e2e test.
+2. The `--metro-port` option, or the `metroPort` argument of `e2e-execute`.
+3. The `port` that the e2e test file gives for the step.
+4. The default port of the tool. For most tools, this is the port of the device: 8081, unless a device provider publishes a different port. `stop-metro` always uses 8081.
+
+`--metro-port` applies only to a tool whose `port` is a Metro port. Thus a `stop-metro` step stops the Metro of the run. The `port` of `boot-device` is the console port of an emulator, so Argent does not change it.
+
+The `run:` fragments of the e2e test use the same port. An e2e test that a `tool: e2e-execute` step runs also uses the same port. When the `run:` step or the `tool: e2e-execute` step sets `metroPort`, Argent uses the value of the step. An e2e test can use a second Metro in this way. When you record a call of `e2e-execute` with `metroPort`, the recorder writes a `run:` step with that `metroPort`.
+
+Argent does not try a different port. When a debugger or profiler step finds no Metro and the run has no `--metro-port`, the reason of the step tells you to give the option. Give `--metro-port` when Metro does not use the default port, for example in CI or on a computer that runs more than one Metro. Over a link, the port is a port on the computer of the tool-server.
 
 ### Suites
 

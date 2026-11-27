@@ -3,6 +3,7 @@ import { FAILURE_CODES, FailureError, type SelectablePlatform } from "@argent/re
 import { getAndroidRuntimeKind } from "../../utils/adb";
 import { MACOS_APPS_FLAG_OFF_REASON, macosAppsUnavailableReason } from "../../utils/capability";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isMetroPortSchema } from "../../utils/debugger/metro-port";
 import { externalNativeId } from "../../utils/external-devices";
 import { getSimulatorRuntimeKind } from "../../utils/ios-devices";
 import { getRemoteSimulatorRuntimeKind } from "../../utils/sim-remote";
@@ -548,4 +549,32 @@ export function bindDeviceArgs(
   }
   if (props) for (const k of DEVICE_BIND_KEYS) if (k in props) out[k] = deviceId;
   return out;
+}
+
+/**
+ * Bind a run's Metro port into a tool step's args: with `metroPort` given, it
+ * replaces the step's `port` on every tool whose `port` is a Metro port
+ * ({@link isMetroPortSchema}), also a `port` the test file wrote. Without one,
+ * the args are returned as they are, and the tool resolves an absent `port`
+ * itself: the device's provider port, else 8081.
+ *
+ * Schema-aware, unlike the device strip, because `port` is not one thing:
+ * `boot-device`'s is the emulator console port, and must never become 8096.
+ * The run's own `metroPort` key reaches a nested `e2e-execute` through
+ * `nestedRunArgs` in flow-run instead, where the step's own value wins.
+ */
+export function bindRunArgs(
+  registry: Registry,
+  toolName: string,
+  args: Record<string, unknown>,
+  metroPort: number | undefined
+): Record<string, unknown> {
+  if (metroPort === undefined) return args;
+  if (!toolTakesMetroPort(registry, toolName)) return args;
+  return { ...args, port: metroPort };
+}
+
+/** Whether a tool's `port` parameter is a Metro port. */
+export function toolTakesMetroPort(registry: Registry, toolName: string): boolean {
+  return isMetroPortSchema(registry.getTool(toolName)?.zodSchema?.shape.port);
 }

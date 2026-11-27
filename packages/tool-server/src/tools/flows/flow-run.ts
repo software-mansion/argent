@@ -92,11 +92,14 @@ import {
   assertDeviceMeetsRequires,
   assertPlatformMeetsRequires,
   bindDeviceArgs,
+  bindRunArgs,
   flowRequiresDevice,
   flowScopesDevice,
   stepRequiresDevice,
+  toolTakesMetroPort,
   type FlowPlatform,
 } from "./flow-device";
+import { metroPortField } from "../../utils/debugger/metro-port";
 import { isNestedOrchestratorTool } from "./flow-nested-outcome";
 import { uprightLegacyPoints } from "./flow-legacy-points";
 import { inCoordinateSpace } from "../../utils/ios-ui-orientation";
@@ -321,19 +324,23 @@ const FLOW_STARTING_TOOLS: ReadonlySet<string> = new Set(["e2e-execute", "e2e-ad
 
 /**
  * The args a nested `flow-execute` is dispatched with: a run that updates its
- * baselines updates those of the flows it runs too, unless the step sets
- * `updateBaselines` itself. Every other tool gets its args as they are.
+ * baselines updates those of the flows it runs too, and a scope with a
+ * `metroPort` passes it on, each unless the step sets that key itself. A
+ * nested `metroPort` is the author's, never the recording host's, so it is how
+ * a test drives a second app on a second Metro. Every other tool gets its args
+ * as they are.
  */
 function nestedRunArgs(
   state: Pick<ExecState, "updateBaselines">,
+  scope: Pick<StepScope, "metroPort">,
   tool: string,
   args: Record<string, unknown>
 ): Record<string, unknown> {
-  return canonicalToolId(tool) === "e2e-execute" &&
-    state.updateBaselines &&
-    args.updateBaselines === undefined
-    ? { ...args, updateBaselines: true }
-    : args;
+  if (canonicalToolId(tool) !== "e2e-execute") return args;
+  const out = { ...args };
+  if (state.updateBaselines && out.updateBaselines === undefined) out.updateBaselines = true;
+  if (scope.metroPort !== undefined && out.metroPort === undefined) out.metroPort = scope.metroPort;
+  return out;
 }
 
 /** A nested run refused by the cycle or depth guard before anything ran. */
@@ -1670,6 +1677,9 @@ const zodSchema = z
       .describe(
         "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself. Over a link, the client writes the new baselines when the run ends."
       ),
+    metroPort: metroPortField.describe(
+      "Metro port for the whole run, also its run: fragments and the e2e tests that tool: e2e-execute steps run, unless that run: or tool: e2e-execute step sets metroPort itself. It replaces the port of every step whose tool takes a Metro port, also a port the test file wrote. Omit it to keep each step's own port, else this device's port, 8081 by default. The runner never tries another port."
+    ),
     prerequisiteAcknowledged: z
       .boolean()
       .optional()
@@ -2014,6 +2024,7 @@ Without a link, every step kind runs.`,
           rootDisplay: rootEntry.display,
           depth: 0,
           legacyPoints: flowFormatVersion(flow) < 2,
+          ...(params.metroPort !== undefined ? { metroPort: params.metroPort } : {}),
         };
         if (flow.shutdown) state.shutdownQueue.push({ steps: flow.shutdown, scope: rootScope });
         // A throw out of the steps (a progress consumer that throws, say) still
@@ -2583,6 +2594,15 @@ interface StepScope {
    * Set per file: a fragment of either version can run from the other.
    */
   legacyPoints: boolean;
+  /**
+   * The Metro port of the steps here: the caller's `metroPort`, or the
+   * `metroPort` of the `run:` step that loaded this fragment, which wins. It
+   * replaces the `port` of every tool step whose tool takes a Metro port, also
+   * one the file wrote (`bindRunArgs`), and reaches a nested `e2e-execute`
+   * unless that step names its own ({@link nestedRunArgs}). Absent, a step's
+   * own `port` stands, and a step without one resolves the device's port.
+   */
+  metroPort?: number;
 }
 
 /** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
@@ -3218,6 +3238,7 @@ async function execRunStep(
     runStack: [...scope.runStack, { canonical, display }],
     fileEnv: mergeScriptEnv(fragment.env, scope.fileEnv),
     legacyPoints: flowFormatVersion(fragment) < 2,
+    ...(step.metroPort !== undefined ? { metroPort: step.metroPort } : {}),
   });
   // Queued once the fragment loads, so it runs even when one of its steps
   // fails. At the run's end, beside the test's own shutdown, not indented
@@ -3479,12 +3500,11 @@ async function execLeafStep(
       // the cleanup-flow case `bindDeviceArgs` guards by keeping whatever the
       // recording scoped — as it does with a device resolved, unless the caller
       // named it.
-      const args = bindDeviceArgs(
+      const args = bindRunArgs(
         registry,
         step.name,
-        device?.id ?? "",
-        step.args,
-        state.deviceIsExplicit
+        bindDeviceArgs(registry, step.name, device?.id ?? "", step.args, state.deviceIsExplicit),
+        scope.metroPort
       );
       const outputHint = registry.getTool(step.name)?.outputHint;
       if (step.delayMs && !(await sleepOrAbort(step.delayMs, signal))) {
@@ -3538,7 +3558,7 @@ async function execLeafStep(
           registry,
           state.project,
           step.name,
-          nestedRunArgs(state, step.name, args)
+          nestedRunArgs(state, scope, step.name, args)
         );
         const result = await invokeSubTool(registry, ctx, step.name, prepared.args, {
           ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
@@ -3552,11 +3572,15 @@ async function execLeafStep(
         // throwing would otherwise count as a passing step (#606).
         const verdict = toolResultVerdict(step.name, result);
         if (verdict) {
+          const notRunning =
+            typeof result === "object" &&
+            result !== null &&
+            (result as { reason?: unknown }).reason === "metro_not_running";
           return {
             ...base,
             status: verdict.status,
             tool: step.name,
-            reason: verdict.reason,
+            reason: verdict.reason + metroPortHint(state, scope, step.name, notRunning),
             result,
             outputHint,
             args,
@@ -3604,7 +3628,10 @@ async function execLeafStep(
           prepared?.args ?? args,
           step.args ?? {}
         );
-        const reason = reframed ?? errMsg(err);
+        const notRunning =
+          getFailureSignal(err)?.error_code === FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING;
+        const reason =
+          (reframed ?? errMsg(err)) + metroPortHint(state, scope, step.name, notRunning);
         return {
           ...base,
           status: "error",
@@ -3632,6 +3659,21 @@ async function execLeafStep(
       return { ...base, status: "error", reason: `unsupported step kind` };
     }
   }
+}
+
+/**
+ * The hint a step that found no Metro gets in a run without `metroPort`: it
+ * used its own port or the device's, and only the caller knows where Metro is.
+ */
+function metroPortHint(
+  state: ExecState,
+  scope: StepScope,
+  toolName: string,
+  notRunning: boolean
+): string {
+  return notRunning && scope.metroPort === undefined && toolTakesMetroPort(state.registry, toolName)
+    ? " If Metro runs on another port, run the e2e test with metroPort (argent e2e run --metro-port <port>)."
+    : "";
 }
 
 function errMsg(err: unknown): string {
