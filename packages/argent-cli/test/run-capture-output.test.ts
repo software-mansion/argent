@@ -72,6 +72,11 @@ describe("argent run after an interaction tool", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
+  const mockExit = () =>
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${code}`);
+    }) as typeof process.exit);
+
   const tapArgs = ["gesture-tap", "--udid", "SIM-1", "--x", "0.5", "--y", "0.5"];
 
   it("prints the result, then the screen after it settled", async () => {
@@ -101,14 +106,18 @@ describe("argent run after an interaction tool", () => {
     expect(logs.at(-1)).toBe(`Wrote: ${out}`);
   });
 
-  it("says when --out was not written because no screen was captured", async () => {
+  it("exits 1 when --out was not written because no screen was captured", async () => {
     const out = path.join(tmp, "after.png");
+    fs.writeFileSync(out, "stale");
+    mockExit();
 
-    await run([...tapArgs, "--out", out, "--args", '{"text":"{{secret:PIN}}"}'], {
-      paths: {} as never,
-    });
+    await expect(
+      run([...tapArgs, "--out", out, "--args", '{"text":"{{secret:PIN}}"}'], {
+        paths: {} as never,
+      })
+    ).rejects.toThrow("process.exit:1");
 
-    expect(fs.existsSync(out)).toBe(false);
+    expect(fs.readFileSync(out, "utf8")).toBe("stale");
     expect(logs).toEqual([JSON.stringify({ tapped: true }, null, 2)]);
     expect(errs[0]).toContain("Auto-screenshot and element tree skipped");
     expect(errs.at(-1)).toBe(`No screen was captured, so ${out} was not written.`);
@@ -117,8 +126,11 @@ describe("argent run after an interaction tool", () => {
   it("names the disable-auto-screenshot flag when --out gets no screen", async () => {
     const out = path.join(tmp, "after.png");
     setFlag("disable-auto-screenshot", true, "global");
+    mockExit();
 
-    await run([...tapArgs, "--out", out], { paths: {} as never });
+    await expect(run([...tapArgs, "--out", out], { paths: {} as never })).rejects.toThrow(
+      "process.exit:1"
+    );
 
     expect(fs.existsSync(out)).toBe(false);
     expect(errs.at(-1)).toBe(`The disable-auto-screenshot flag is on, so ${out} was not written.`);

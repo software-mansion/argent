@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { setFlag, type FlagsPathOptions } from "@argent/configuration-core";
@@ -27,6 +29,7 @@ interface FakeServer {
   idle: unknown;
   describeFails?: boolean;
   noIdleTool?: boolean;
+  screenshot?: unknown;
 }
 
 function fakeClient(server: FakeServer) {
@@ -39,7 +42,7 @@ function fakeClient(server: FakeServer) {
       if (server.noIdleTool) throw new Error('Tool "await-screen-idle" not found');
       return { data: server.idle };
     }
-    if (name === "screenshot") return { data: "shot-handle" };
+    if (name === "screenshot") return { data: server.screenshot ?? "shot-handle" };
     if (name === "describe") {
       if (server.describeFails) throw new Error("describe failed");
       return { data: { description: "button Done (0.1,0.2,0.3,0.1)", hint: "1 omitted." } };
@@ -95,6 +98,32 @@ describe("captureAfterAction", () => {
     ]);
     expect(capture.screenshot).toBe(SHOT);
     expect(capture.note).toBeUndefined();
+  });
+
+  it("reads the { url, path } screenshot of an older tool-server", async () => {
+    const png = Buffer.from("legacy-png");
+    const server = http.createServer((_req, res) => res.end(png));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const { client } = fakeClient({
+      idle: { settled: true },
+      screenshot: { url: `http://127.0.0.1:${port}/shot.png`, path: "/srv/shot.png" },
+    });
+
+    try {
+      const capture = await captureAfterAction({
+        client,
+        toolName: "gesture-tap",
+        payload: tap,
+        profiling: false,
+        flagsPath,
+      });
+
+      expect(capture.lines[0]).toBe("Screen after action: /srv/shot.png");
+      expect(capture.screenshot?.data).toEqual(png);
+    } finally {
+      server.close();
+    }
   });
 
   it("reads the tree only after the screenshot when the screen did not settle", async () => {

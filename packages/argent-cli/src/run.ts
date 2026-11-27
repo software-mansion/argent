@@ -122,6 +122,10 @@ async function fetchImageToFile(
   writeImageFile(outPath, Buffer.from(await res.arrayBuffer()));
 }
 
+function drainStdout(): Promise<void> {
+  return new Promise((resolve) => process.stdout.write("", () => resolve()));
+}
+
 function writeImageFile(outPath: string, data: Buffer): void {
   fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
   fs.writeFileSync(outPath, data);
@@ -210,9 +214,10 @@ these off. --json prints only the result.
 Set ARGENT_UDID to use that device when a tool needs --udid or --device_id
 and the call does not pass one.
 
-Exits 1 when the tool fails. Also exits 1 when the result reports that the
-call did not do its job: an e2e test that does not pass, an await-ui-element
-or await-network-request wait with success=false, a run-sequence that a step
+Exits 1 when the tool fails, or when --out without --json gets no screen
+after an action. Also exits 1 when the result reports that the call did not
+do its job: an e2e test that does not pass, an await-ui-element or
+await-network-request wait with success=false, a run-sequence that a step
 stopped, a debugger tool with no connection or an error, a native-devtools
 precheck that stopped the tool, a native-profiler-analyze with status
 analysis_failed, an e2e recording call that recorded nothing, or a baseline
@@ -446,6 +451,7 @@ settled=false or debugger-status's not_connected.
     console.log(`Wrote: ${outPath}`);
   }
 
+  let outNotWritten = false;
   if (!json) {
     const capture = await captureAfterAction({ client, toolName, payload, profiling });
     if (capture.note) console.error(capture.note);
@@ -460,13 +466,14 @@ settled=false or debugger-status's not_connected.
           ? "No screen was captured"
           : "The disable-auto-screenshot flag is on";
         console.error(`${reason}, so ${outPath} was not written.`);
+        outNotWritten = true;
       }
     }
   }
 
   if (failure) {
     // Drain stdout first, or a merged log splices the reason into a large report.
-    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+    await drainStdout();
     console.error(failure);
     await trackRunFailure(toolName, startedAt, {
       error_code: FAILURE_CODES.CLI_RUN_TOOL_RESULT_FAILED,
@@ -475,6 +482,17 @@ settled=false or debugger-status's not_connected.
       error_kind: "unknown",
     });
     // Not stdout: a write after EPIPE throws.
+    await exitAfterFlush(1, [process.stderr]);
+  }
+
+  if (outNotWritten) {
+    await drainStdout();
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
+      failure_stage: "cli_run_save_image",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
     await exitAfterFlush(1, [process.stderr]);
   }
 }

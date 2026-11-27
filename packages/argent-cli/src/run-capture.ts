@@ -100,10 +100,26 @@ async function takeScreenshot(
       deviceId: udid,
       signal,
     });
-    return images[0];
+    return images[0] ?? (await fetchLegacyScreenshot(data, signal));
   } catch {
     return undefined;
   }
+}
+
+async function fetchLegacyScreenshot(
+  data: unknown,
+  signal: AbortSignal
+): Promise<MaterializedImage | undefined> {
+  if (!data || typeof data !== "object") return undefined;
+  const { url, path } = data as { url?: unknown; path?: unknown };
+  if (typeof url !== "string") return undefined;
+  const res = await fetch(url, { signal });
+  if (!res.ok) return undefined;
+  return {
+    localPath: typeof path === "string" ? path : url,
+    data: Buffer.from(await res.arrayBuffer()),
+    mimeType: "image/png",
+  };
 }
 
 async function readTree(
