@@ -66,6 +66,7 @@ interface SimRemoteListDevicesResult {
 
 export async function simctlListDevices(options?: {
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<SimRemoteListDevicesResult> {
   const { stdout } = await run(["simctl", "list", "devices", "--json"], options);
   try {

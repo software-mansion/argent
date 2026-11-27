@@ -39,10 +39,10 @@ export interface RemoteFoldResult {
 }
 
 /** Whether the runner lists `udid` as a device of a type that is not foldable. */
-async function listedAsNotFoldable(udid: string): Promise<boolean> {
+async function listedAsNotFoldable(udid: string, signal?: AbortSignal): Promise<boolean> {
   try {
     const bare = stripRemotePrefix(udid);
-    const listed = Object.values((await simctlListDevices()).devices)
+    const listed = Object.values((await simctlListDevices({ signal })).devices)
       .flat()
       .find((d) => d.udid === bare);
     const type = listed?.deviceTypeIdentifier;
@@ -57,10 +57,14 @@ async function listedAsNotFoldable(udid: string): Promise<boolean> {
  * that is not foldable it is the caller's mistake, anything else the fold's.
  * The message stays the CLI's own.
  */
-async function foldFailure(err: unknown, udid: string): Promise<FailureError> {
+async function foldFailure(
+  err: unknown,
+  udid: string,
+  signal?: AbortSignal
+): Promise<FailureError> {
   const message = err instanceof Error ? err.message : String(err);
   const cause = err instanceof Error ? { cause: err } : undefined;
-  if (await listedAsNotFoldable(udid)) {
+  if (await listedAsNotFoldable(udid, signal)) {
     return new FailureError(
       message,
       {
@@ -92,7 +96,10 @@ export const iosRemoteImpl: PlatformImpl<unknown, RemoteFoldParams, RemoteFoldRe
     const target = params.posture ?? String(params.angle);
     const folded = await fold(params.udid, target, ctx?.signal).catch(async (err: unknown) => {
       ctx?.signal?.throwIfAborted();
-      throw await foldFailure(err, params.udid);
+      const failure = await foldFailure(err, params.udid, ctx?.signal);
+      // A cancel that came while the refusal was looked into is still a cancel.
+      ctx?.signal?.throwIfAborted();
+      throw failure;
     });
 
     // The runner answers at the hand-over; the guest takes no input for a
@@ -106,12 +113,19 @@ export const iosRemoteImpl: PlatformImpl<unknown, RemoteFoldParams, RemoteFoldRe
     // With the panel unknown the runner keeps sending input to the cover panel.
     const activeScreen = folded.live_screen ?? MAIN_SCREEN_ID;
     const posture = params.posture ?? POSTURES.find((p) => POSTURE_ANGLE[p] === hingeAngle);
+    // The runner may name no panel and give no reason. The agent is still
+    // told that the cover panel is a guess.
+    const warning =
+      folded.warning ??
+      (folded.live_screen === null
+        ? "The runner could not tell which panel the device renders to. argent takes it to be the cover panel; fold to closed or open to be sure."
+        : undefined);
     return {
       activeScreen,
       screen: { id: activeScreen, panel: panelName(activeScreen) },
       ...(posture ? { posture } : {}),
       hingeAngle,
-      ...(folded.warning ? { warning: folded.warning } : {}),
+      ...(warning ? { warning } : {}),
     };
   },
 };

@@ -7,6 +7,8 @@ const calls: Array<{ cmd: string; args: readonly string[] }> = [];
 let reply: { stdout: string } | { error: string } | "hang" = { stdout: "" };
 /** What `sim-remote simctl list devices --json` answers: the device type of every udid. */
 let listed: Record<string, string> = {};
+/** Runs as the device listing is asked for. */
+let onListing: () => void = () => {};
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -20,6 +22,7 @@ vi.mock("node:child_process", async () => {
     ) => {
       const callback = typeof _opts === "function" ? _opts : cb!;
       if (args[0] === "simctl") {
+        onListing();
         const devices = Object.entries(listed).map(([udid, deviceTypeIdentifier]) => ({
           udid,
           name: udid,
@@ -74,6 +77,7 @@ function fold(params: { posture?: "closed" | "half-open" | "open"; angle?: numbe
 
 beforeEach(() => {
   listed = {};
+  onListing = () => {};
   calls.length = 0;
   holds.length = 0;
 });
@@ -198,5 +202,28 @@ describe("fold on a remote simulator", () => {
     expect(await codeOf("fold: timed out")).toBe(FAILURE_CODES.IOS_FOLD_FAILED);
     listed = {};
     expect(await codeOf("unrecognized subcommand 'fold'")).toBe(FAILURE_CODES.IOS_FOLD_FAILED);
+  });
+
+  it("says so when the runner names no panel and gives no reason", async () => {
+    reply = { stdout: '{"hinge_angle":180.0,"live_screen":null}' };
+
+    const result = await fold({ posture: "open" });
+
+    expect(result).toMatchObject({ activeScreen: 1 });
+    expect((result as { warning?: string }).warning).toMatch(/cover panel/);
+  });
+
+  it("reports a cancelled fold as cancelled, not by what sim-remote refused", async () => {
+    reply = { error: "fold: timed out" };
+    const controller = new AbortController();
+    // The cancel lands while the device is looked up to classify the refusal.
+    onListing = () => controller.abort();
+
+    const failure = await foldTool.execute!({}, { udid: REMOTE, posture: "open" }, {
+      signal: controller.signal,
+    } as never).catch((err: unknown) => err);
+
+    expect(getFailureSignal(failure)).toBeNull();
+    expect((failure as Error).name).toBe("AbortError");
   });
 });
