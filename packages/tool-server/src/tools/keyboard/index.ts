@@ -52,6 +52,15 @@ const zodSchema = z.object({
       "Named key. Cannot be combined with `text` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
         "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
     ),
+  repeat: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Press `key` this many times in one call, e.g. `{ key: "backspace", repeat: 12 }`. Only valid with `key`.'
+    ),
   delayMs: z
     .number()
     .optional()
@@ -110,11 +119,18 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
+        if (params.text === undefined) {
+          return (params.repeat ?? 1) > 1
+            ? `Pressing a key ${params.repeat} times`
+            : "Pressing a key";
+        }
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params }) => {
+        if (params.text !== undefined) return "Entered text";
+        return (params.repeat ?? 1) > 1 ? `Pressed a key ${params.repeat} times` : "Pressed a key";
+      },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
@@ -186,6 +202,15 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
             error_code: FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED,
             failure_stage: "keyboard_named_key_empty",
             error_kind: "unsupported",
+          }
+        );
+      }
+      if (params.repeat !== undefined && params.key === undefined) {
+        throw new InvalidToolInputError(
+          "`repeat` only applies to `key`, not `text` or an empty request — nothing was typed. " +
+            'Pass a named `key` (e.g. { key: "backspace", repeat: 5 }), or omit `repeat`.',
+          {
+            failure_stage: "keyboard_repeat_without_key",
           }
         );
       }

@@ -23,7 +23,7 @@ import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
 
 // Renders the adapter-internal `tree` to text and drops it, so the caller (LLM)
-// never pays for the JSON tree. Pruning stays in the per-platform adapters.
+// never pays for the JSON tree. Most pruning stays in the per-platform adapters.
 function withDescription(data: DescribeTreeData): DescribeResult {
   const out: DescribeResult = {
     description: formatDescribeTree(data.tree, { source: data.source }),

@@ -178,7 +178,7 @@ Allowed tools (coords are [0,1] screen fractions; ? = optional):
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX+radiusY), durationMs?
   button: button ("home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton")<flag:harmonyos>  [harmony: home/back/power]</flag:harmonyos>
-  keyboard: text? or key? (one per step), delayMs?
+  keyboard: text? or key? (one per step), repeat?, delayMs?
   paste: text (real paste flows only)
   rotate: orientation ("Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown")
   shake: count?

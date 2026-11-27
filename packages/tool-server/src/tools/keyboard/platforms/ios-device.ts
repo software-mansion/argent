@@ -85,16 +85,22 @@ export function makeIosDeviceImpl(
         keys += params.text.length;
       }
 
+      const count = params.repeat ?? 1;
+
       if (key === "enter") {
-        const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
-        reactivated ||= pressed.reactivated;
-        keys += 1;
+        for (let i = 0; i < count; i++) {
+          const pressed = await mapNotFocused(pressKeyboardReturn(api, bundleId));
+          reactivated ||= pressed.reactivated;
+          keys += 1;
+        }
       }
 
       if (key === "backspace") {
-        const pressed = await mapNotFocused(pressKeyboardDelete(api, bundleId));
-        reactivated ||= pressed.reactivated;
-        keys += 1;
+        for (let i = 0; i < count; i++) {
+          const pressed = await mapNotFocused(pressKeyboardDelete(api, bundleId));
+          reactivated ||= pressed.reactivated;
+          keys += 1;
+        }
       }
 
       return {
