@@ -85,6 +85,12 @@ describe("e2e-check", () => {
     root = await fsp.realpath(await fsp.mkdtemp(path.join(tmpdir(), "argent-e2e-check-")));
     await write("good", `steps:\n  - tool: gesture-swipe\n    args:\n${swipe}`);
     await write("broken", "steps:\n  - bogus: 1\n");
+    await write(
+      "bad-steps",
+      "steps:\n  - bogus: 1\n  - tool: gesture-swpie\n  - tap: { bogus: 2 }\n" +
+        "  - when: { platform: ios }\n    steps:\n      - echo: fine\n      - nope: 3\n"
+    );
+    await write("bad-top", "bogus: 1\nsteps:\n  - nope: 1\n  - nope: 2\n");
     await write("start", "steps:\n  - launch: com.example.app\n");
     await write(
       "prereq",
@@ -98,6 +104,7 @@ describe("e2e-check", () => {
     await write("chain", "steps:\n  - run: mid.yaml\n");
     await write("mid", "steps:\n  - echo: mid\n  - run: bad-frag.yaml\n");
     await write("bad-frag", "steps:\n  - bogus: 1\n");
+    await write("bad-frag-twice", "steps:\n  - run: bad-frag.yaml\n  - run: mid.yaml\n");
     await write(
       "retired-frag",
       `steps:\n  - tool: gesture-swipe\n    args:\n${swipe}      settle: true\n`
@@ -145,9 +152,32 @@ describe("e2e-check", () => {
     expect(await check("good")).toEqual({ problems: [] });
   });
 
-  it("reports the parse error of a file that does not parse, with its code", async () => {
+  it("reports the parse error of a step that does not parse, with its code", async () => {
     expect((await check("broken")).problems).toEqual([
-      { code: "FLOW_ENTRY_UNRECOGNIZED", message: expect.stringContaining('{"bogus":1}') },
+      {
+        at: [{ step: 1 }],
+        code: "FLOW_ENTRY_UNRECOGNIZED",
+        message: 'Unrecognized e2e test entry (unrecognized step kind): {"bogus":1}',
+      },
+    ]);
+  });
+
+  it("reports every step that does not parse, and no other check of that file", async () => {
+    const { problems } = await check("bad-steps");
+
+    expect(problems.map((p) => p.at)).toEqual([
+      [{ step: 1 }],
+      [{ step: 3 }],
+      [{ step: 4, when: true }, { step: 2 }],
+    ]);
+  });
+
+  it("reports a file error once, without the steps under it", async () => {
+    expect((await check("bad-top")).problems).toEqual([
+      expect.objectContaining({
+        message:
+          "Invalid e2e test file: unknown key `bogus` — allowed top-level keys: version, executionPrerequisite, requires, env, steps, shutdown",
+      }),
     ]);
   });
 
@@ -172,13 +202,17 @@ describe("e2e-check", () => {
     );
   });
 
-  it("reports a problem in a run: fragment on the step that reaches it", async () => {
+  it("reports a step of a run: fragment that does not parse through the steps that reach it", async () => {
     expect((await check("chain")).problems).toEqual([
       {
-        at: [{ step: 1, run: "mid.yaml" }, { step: 2 }],
-        message: expect.stringMatching(/^could not load fragment "bad-frag\.yaml": .*bogus/s),
+        at: [{ step: 1, run: "mid.yaml" }, { step: 2, run: "bad-frag.yaml" }, { step: 1 }],
+        message: 'Unrecognized e2e test entry (unrecognized step kind): {"bogus":1}',
       },
     ]);
+  });
+
+  it("reports a fragment step that does not parse once when a deeper step reaches it again", async () => {
+    expect((await check("bad-frag-twice")).problems).toHaveLength(1);
   });
 
   it("reports a fragment that two steps reach once", async () => {

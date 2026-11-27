@@ -25,6 +25,7 @@ import {
   hostFileArgumentStat,
   intoStep,
   parseFlow,
+  parseFlowCollecting,
   precedesLeadingLaunch,
   runTargetName,
   type FlowFile,
@@ -386,6 +387,24 @@ export async function loadRunHop(
   hop: ResolvedFlowFile,
   target: string
 ): Promise<{ refusal: string } | { fragment: FlowFile }> {
+  const read = await readRunHop(hop, target);
+  if ("refusal" in read) return read;
+  try {
+    return { fragment: parseFlow(read.text) };
+  } catch (err) {
+    return { refusal: fragmentParseRefusal(target, err) };
+  }
+}
+
+function fragmentParseRefusal(target: string, err: unknown): string {
+  return `could not load fragment "${escapeInline(target)}": ${errMsg(err)}`;
+}
+
+/** The text of the fragment a {@link guardRunHop} hop names, or the reason it cannot be read. */
+async function readRunHop(
+  hop: ResolvedFlowFile,
+  target: string
+): Promise<{ refusal: string } | { text: string }> {
   const shown = escapeInline(target);
   // There is deliberately NO path fence on the host read. A `run:` target is
   // reachable exactly when the tool-server user can read it, the same reach the
@@ -416,11 +435,7 @@ export async function loadRunHop(
       refusal: `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(hop.canonical)}'`,
     };
   }
-  try {
-    return { fragment: parseFlow(text) };
-  } catch (err) {
-    return { refusal: `could not load fragment "${shown}": ${errMsg(err)}` };
-  }
+  return { text };
 }
 
 /**
@@ -683,6 +698,30 @@ function report(
 }
 
 /**
+ * The flow in `text`, or undefined after reporting each bad step under
+ * `prefix` (unless `quiet`), with its code when `withCode`. A file error
+ * throws.
+ */
+function parseReported(
+  walk: Pick<CheckWalk, "problems">,
+  text: string,
+  {
+    prefix,
+    quiet = false,
+    withCode = false,
+  }: { prefix: StepLevel[]; quiet?: boolean; withCode?: boolean }
+): FlowFile | undefined {
+  const parsed = parseFlowCollecting(text);
+  if ("flow" in parsed) return parsed.flow;
+  if (quiet) return undefined;
+  for (const { at, error } of parsed.stepErrors) {
+    const code = withCode ? getFailureSignal(error)?.error_code : undefined;
+    report(walk, [...prefix, ...at], errMsg(error), code);
+  }
+  return undefined;
+}
+
+/**
  * Whether to walk a file reached this way at stack length `depth`: always the
  * first time, and again when deeper, where its own `run:` chains can pass
  * {@link MAX_RUN_DEPTH}.
@@ -805,21 +844,30 @@ async function followRun(
   const visit = reach(walk, "fragment", hop.canonical, stack.length + 1);
   if (visit === undefined) return;
   const inner = childFloor(floor, visit, stack);
-  const loaded = await loadRunHop(hop, target);
-  if ("refusal" in loaded) {
-    if (inner === undefined) report(walk, at, loaded.refusal);
+  const read = await readRunHop(hop, target);
+  if ("refusal" in read) {
+    if (inner === undefined) report(walk, at, read.refusal);
     return;
   }
+  const prefix = intoStep(at, { run: target });
+  let fragment: FlowFile | undefined;
+  try {
+    fragment = parseReported(walk, read.text, { prefix, quiet: inner !== undefined });
+  } catch (err) {
+    if (inner === undefined) report(walk, at, fragmentParseRefusal(target, err));
+    return;
+  }
+  if (fragment === undefined) return;
   if (inner === undefined) {
-    const refusal = await fragmentLoadRefusal(walk.schemas, loaded.fragment, target);
+    const refusal = await fragmentLoadRefusal(walk.schemas, fragment, target);
     if (refusal !== undefined) report(walk, at, refusal);
   }
   await followReferences(
     walk,
-    loaded.fragment.steps,
+    fragment.steps,
     [...stack, { canonical: hop.canonical, display }],
     rootDisplay,
-    intoStep(at, { run: target }),
+    prefix,
     inner
   );
 }
@@ -847,21 +895,16 @@ async function followNested(
   const visit = reach(walk, "test", nested.canonical, stack.length + 1);
   if (visit === undefined) return;
   const inner = childFloor(floor, visit, stack);
-  let flow: FlowFile;
+  const prefix = intoStep(at, { e2e: target.kind === "name" ? target.name : target.path });
+  let flow: FlowFile | undefined;
   try {
-    flow = parseFlow(nested.text);
+    flow = parseReported(walk, nested.text, { prefix, quiet: inner !== undefined });
   } catch (err) {
     if (inner === undefined) report(walk, at, errMsg(err));
     return;
   }
-  await checkTest(
-    walk,
-    flow,
-    nested.flowName,
-    [...stack, entry],
-    { at, prefix: intoStep(at, { e2e: target.kind === "name" ? target.name : target.path }) },
-    inner
-  );
+  if (flow === undefined) return;
+  await checkTest(walk, flow, nested.flowName, [...stack, entry], { at, prefix }, inner);
 }
 
 /**
@@ -923,12 +966,14 @@ async function readNestedTest(
 }
 
 /**
- * The e2e test in `text`, or the problem that keeps it from parsing, with its code.
+ * The e2e test in `text`, or the problems that keep it from parsing, each
+ * with its code: one for a file error, else one for each step that does not parse.
  */
 export function parseForCheck(text: string): { flow: FlowFile } | { problems: CheckProblem[] } {
   const parsing: { problems: CheckProblem[] } = { problems: [] };
   try {
-    return { flow: parseFlow(text) };
+    const flow = parseReported(parsing, text, { prefix: [], withCode: true });
+    if (flow !== undefined) return { flow };
   } catch (err) {
     report(parsing, undefined, errMsg(err), getFailureSignal(err)?.error_code);
   }

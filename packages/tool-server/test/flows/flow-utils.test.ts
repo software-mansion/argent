@@ -9,6 +9,7 @@ import {
   serializeFlow,
   flowFormatVersion,
   parseFlow,
+  parseFlowCollecting,
   describeSelector,
   assertValidProjectRoot,
   startRecordingSession,
@@ -1402,6 +1403,68 @@ describe("block directives", () => {
   it("returns undefined for a leaf step", () => {
     const step = parseFlow("steps:\n  - tap: Buy\n").steps[0]!;
     expect(blockSteps(step)).toBeUndefined();
+  });
+});
+
+describe("parseFlowCollecting", () => {
+  const TWO_BAD_STEPS =
+    "steps:\n  - bogus: 1\n  - echo: fine\n  - when: { platform: ios }\n" +
+    "    steps:\n      - echo: inside\n      - tap: { bogus: 2 }\n";
+
+  function thrownBy(fn: () => unknown): Error {
+    try {
+      fn();
+    } catch (err) {
+      return err as Error;
+    }
+    throw new Error("nothing was thrown");
+  }
+
+  it("collects each bad step at its position, and parseFlow throws the first one", () => {
+    const first = thrownBy(() => parseFlow(TWO_BAD_STEPS));
+    const parsed = parseFlowCollecting(TWO_BAD_STEPS);
+
+    expect("stepErrors" in parsed && parsed.stepErrors).toEqual([
+      { at: [{ step: 1 }], error: first },
+      { at: [{ step: 3, when: true }, { step: 2 }], error: expect.any(Error) },
+    ]);
+    expect(first.message).toContain('{"bogus":1}');
+  });
+
+  it("stops at a cyclic alias instead of walking every path through it", () => {
+    const yaml =
+      "steps: &s\n  - when: { visible: X }\n    steps: *s\n" +
+      "  - when: { visible: Y }\n    steps: *s\n  - when: { visible: Z }\n    steps: *s\n";
+
+    const parsed = parseFlowCollecting(yaml);
+
+    expect("stepErrors" in parsed && parsed.stepErrors).toEqual([
+      {
+        at: [{ step: 1 }],
+        error: expect.objectContaining({
+          message: expect.stringContaining("blocks nest deeper than 20 levels"),
+        }),
+      },
+    ]);
+  });
+
+  it("keeps the bad steps before a nest that is too deep", () => {
+    let nest = "[{ echo: deepest }]";
+    for (let i = 0; i < 21; i++) nest = `[{ when: { platform: ios }, steps: ${nest} }]`;
+    const yaml = `steps:\n  - bogus: 1\n  - when: { platform: ios }\n    steps: ${nest}\n`;
+
+    const first = thrownBy(() => parseFlow(yaml));
+    const parsed = parseFlowCollecting(yaml);
+
+    expect("stepErrors" in parsed && parsed.stepErrors).toEqual([
+      { at: [{ step: 1 }], error: first },
+      {
+        at: [{ step: 2 }],
+        error: expect.objectContaining({
+          message: expect.stringContaining("blocks nest deeper than 20 levels"),
+        }),
+      },
+    ]);
   });
 });
 

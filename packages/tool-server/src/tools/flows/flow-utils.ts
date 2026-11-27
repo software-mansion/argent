@@ -1936,13 +1936,17 @@ function renderEntry(raw: unknown): string {
   return rendered;
 }
 
-function badEntry(raw: unknown, detail: string): never {
-  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
+function entryError(raw: unknown, detail: string): FailureError {
+  return new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
     error_kind: "validation",
   });
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw entryError(raw, detail);
 }
 
 /**
@@ -3243,11 +3247,50 @@ const MAX_BLOCK_DEPTH = 20;
 function assertBlockDepth(raw: unknown, depth: number): void {
   if (depth >= MAX_BLOCK_DEPTH) {
     const directives = BLOCK_DIRECTIVE_KEYS.map((key) => `\`${key}:\``).join("/");
-    badEntry(
+    const err = entryError(
       raw,
       `${directives} blocks nest deeper than ${MAX_BLOCK_DEPTH} levels — check for a cyclic YAML alias (\`steps: &s … steps: *s\`)`
     );
+    blockDepthErrors.add(err);
+    throw err;
   }
+}
+
+/** Depth cap errors, which stop a collecting parse: a cyclic alias would make it visit every path. */
+const blockDepthErrors = new WeakSet<object>();
+
+/** A step that {@link parseFlowCollecting} refused, at its authored position (see `walkSteps`). */
+interface StepParseError {
+  at: StepLevel[];
+  error: unknown;
+}
+
+/** Where a collecting parse puts the errors of one step list, and the levels above it. */
+interface StepErrorSink {
+  errors: StepParseError[];
+  within: StepLevel[];
+}
+
+/**
+ * Parse a step list at block depth `depth`. Without `sink` the first bad step
+ * throws; with it, each bad step goes into the sink and the rest still parse.
+ * A depth cap error goes up to the top-level step that holds it, and ends the parse.
+ */
+function parseStepList(entries: unknown[], depth: number, sink?: StepErrorSink): FlowStep[] {
+  const steps: FlowStep[] = [];
+  for (const [i, entry] of entries.entries()) {
+    const at = [...(sink?.within ?? []), { step: i + 1 }];
+    try {
+      if (entry === null || typeof entry !== "object") badEntry(entry, "step must be an object");
+      steps.push(fromYamlStep(entry as YamlStep, depth, sink, at));
+    } catch (err) {
+      const tooDeep = blockDepthErrors.has(err as object);
+      if (!sink || (tooDeep && depth > 0)) throw err;
+      sink.errors.push({ at, error: err });
+      if (tooDeep) break;
+    }
+  }
+  return steps;
 }
 
 /**
@@ -3265,14 +3308,12 @@ function assertBlockDepth(raw: unknown, depth: number): void {
 function parseBlockSteps(
   raw: Record<string, unknown>,
   depth: number,
-  emptyDetail: string
+  emptyDetail: string,
+  sink?: StepErrorSink
 ): FlowStep[] {
   assertBlockDepth(raw, depth);
   if (!Array.isArray(raw.steps) || raw.steps.length === 0) badEntry(raw, emptyDetail);
-  return (raw.steps as unknown[]).map((s) => {
-    if (s !== null && typeof s === "object") return fromYamlStep(s as YamlStep, depth + 1);
-    return badEntry(s, "step must be an object");
-  });
+  return parseStepList(raw.steps as unknown[], depth + 1, sink);
 }
 
 /**
@@ -3281,7 +3322,12 @@ function parseBlockSteps(
  * a when block exists to restore determinism (dismiss the interstitial, get back
  * on the known path), so paths may only reconverge, never diverge.
  */
-function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
+function parseWhenStep(
+  raw: Record<string, unknown>,
+  depth: number,
+  sink?: StepErrorSink,
+  at: StepLevel[] = []
+): FlowStep {
   assertBlockDepth(raw, depth);
   if ("else" in raw) {
     badEntry(
@@ -3293,7 +3339,12 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
     badEntry(raw, "a when step takes exactly { when: <condition>, steps: [...] }");
   }
   const condition = parseWhenCondition(raw.when);
-  const steps = parseBlockSteps(raw, depth, "when needs a non-empty steps list to guard");
+  const steps = parseBlockSteps(
+    raw,
+    depth,
+    "when needs a non-empty steps list to guard",
+    sink && { errors: sink.errors, within: intoStep(at, { when: true }) }
+  );
   return { kind: "when", condition, steps };
 }
 
@@ -4086,7 +4137,13 @@ function parseSwipe(body: unknown, entry: unknown): FlowStep {
   return step;
 }
 
-function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
+/** `sink` and `at` are the collecting parse's sink for the list that holds this step, and its position. */
+function fromYamlStep(
+  raw: YamlStep,
+  blockDepth = 0,
+  sink?: StepErrorSink,
+  at: StepLevel[] = []
+): FlowStep {
   const entry = raw as Record<string, unknown>;
   // There is deliberately no per-step `optional:` — a `when:` block already
   // expresses it once for every action directive. Rejected, not ignored:
@@ -4142,7 +4199,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   if ("echo" in raw) return { kind: "echo", message: String(raw.echo) };
   if ("launch" in raw) return { kind: "launch", app: parseLaunch(raw.launch) };
   if ("run" in raw) return { kind: "run", flow: parseRunTarget(raw, raw.run) };
-  if ("when" in raw) return parseWhenStep(entry, blockDepth);
+  if ("when" in raw) return parseWhenStep(entry, blockDepth, sink, at);
 
   if ("tap" in raw) return parseTap((raw as { tap: unknown }).tap, raw);
 
@@ -4419,6 +4476,24 @@ export function validateFlow(flow: FlowFile): void {
 
 /** Parse a YAML flow file into a FlowFile. */
 export function parseFlow(content: string): FlowFile {
+  return parseFlowContent(content)!;
+}
+
+/**
+ * {@link parseFlow}, but each bad step is collected instead of thrown. A file
+ * error still throws. With a bad step it stops before `requires` and
+ * {@link validateFlow}, which need every step.
+ */
+export function parseFlowCollecting(
+  content: string
+): { flow: FlowFile } | { stepErrors: StepParseError[] } {
+  const stepErrors: StepParseError[] = [];
+  const flow = parseFlowContent(content, stepErrors);
+  return flow ? { flow } : { stepErrors };
+}
+
+/** The flow in `content`, or null when `stepErrors` is given and a step went into it. */
+function parseFlowContent(content: string, stepErrors?: StepParseError[]): FlowFile | null {
   const trimmed = content.trim();
   if (trimmed.length === 0) {
     return { executionPrerequisite: "", steps: [] };
@@ -4501,10 +4576,8 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  const steps = parsed.steps.map((raw) => {
-    if (raw !== null && typeof raw === "object") return fromYamlStep(raw as YamlStep);
-    return badEntry(raw, "step must be an object");
-  });
+  const steps = parseStepList(parsed.steps, 0, stepErrors && { errors: stepErrors, within: [] });
+  if (stepErrors?.length) return null;
 
   if (parsed.shutdown !== undefined && !Array.isArray(parsed.shutdown)) {
     throw new FailureError("Invalid e2e test file: shutdown must be a list of steps", {

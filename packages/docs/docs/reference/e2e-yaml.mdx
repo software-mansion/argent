@@ -1141,6 +1141,8 @@ When Argent finds no e2e test and no invalid `suite.config.yaml` file, the array
 - The e2e test sets `executionPrerequisite`, and its leading `run:` chain reaches a `launch` step.
 - The tool-server is remote, and the e2e test is not self-contained. For example, the e2e test has a `script:` step.
 
+When a file has steps that are not valid, the command reports each of these steps, also in `when:` blocks. Then the command does no other check of that file. For example, the command does not check the `requires` block, the other steps or the files that the steps reach. A problem with the full file, for example a YAML syntax error or an unknown top-level key, is one problem.
+
 The command also finds the problems that make a step fail when it runs:
 
 - A `tool:` step names a tool that the tool-server does not have, or a tool behind a feature flag that is off.
@@ -1167,7 +1169,7 @@ The command does not do the checks that depend on the target of a run:
 
 The command checks the tool arguments with the same rules as the tool uses in a run. The command does not check the arguments of the tools that a `run-sequence` step calls.
 
-Argent writes each problem on stderr as `<path>: <position>: <message>`, or as `<path>: <message>` when the problem has no position. The message is the same message that `argent e2e run` gives. Then Argent prints a summary line on stdout.
+Argent writes each problem on stderr as `<path>: <position>: <message>`, or as `<path>: <message>` when the problem has no position. The message is the same message that `argent e2e run` gives. One exception: for a step that is not valid in a `run:` fragment, the position names that step, and the message has no `could not load fragment` prefix. Then Argent prints a summary line on stdout.
 
 The position names the steps from the e2e test to the problem, for example `step 7 > run: login.yaml: step 2` or `step 4 > when: step 2`. Argent counts the steps as the file gives them, `echo` steps included.
 
@@ -1179,12 +1181,12 @@ The position names the steps from the e2e test to the problem, for example `step
 
 `argent e2e check --json` writes one document on stdout. The document holds `ok` and an `e2eTests` array with one entry. The entry holds `path`, `ok` and a `problems` array. Each problem holds these fields:
 
-| Field     | Description                                                                                                                                                                                                                                                                                                      |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `file`    | The path of the e2e test                                                                                                                                                                                                                                                                                         |
-| `at`      | The position of the problem, as a list with one entry for each level from the e2e test to the problem. See the next table. Not for a problem that keeps the e2e test from parsing. Not for the retired argument, TypeScript and leading launch problems of the e2e test itself: their message gives the location |
-| `code`    | The error code that `argent e2e run` gives. Only for a problem that has no position, and only when such a code exists                                                                                                                                                                                            |
-| `message` | The problem                                                                                                                                                                                                                                                                                                      |
+| Field     | Description                                                                                                                                                                                                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `file`    | The path of the e2e test                                                                                                                                                                                                                                                                     |
+| `at`      | The position of the problem, as a list with one entry for each level from the e2e test to the problem. See the next table. Not for a problem of the full file. Not for the retired argument, TypeScript and leading launch problems of the e2e test itself: their message gives the location |
+| `code`    | The error code that `argent e2e run` gives when it rejects the e2e test before the first step. Only for a problem of the e2e test itself. Not for a problem that makes one step fail, or for a problem in a file that the e2e test reaches                                                   |
+| `message` | The problem                                                                                                                                                                                                                                                                                  |
 
 Each entry of `at` holds these fields:
 
@@ -1205,6 +1207,7 @@ Each entry of `at` holds these fields:
       "problems": [
         {
           "file": ".argent/e2e/checkout.yaml",
+          "at": [{ "step": 3 }],
           "code": "FLOW_ENTRY_UNRECOGNIZED",
           "message": "Unrecognized e2e test entry (unrecognized step kind (did you mean `tap`?)): {\"tapp\":\"Pay\"}"
         }
