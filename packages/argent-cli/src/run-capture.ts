@@ -1,8 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   AUTO_DESCRIBE_HEADER,
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
   SECRET_CAPTURE_SKIPPED_NOTE,
+  artifactDir,
   autoDescribeEnabled,
   autoScreenshotEnabled,
   awaitScreenSettled,
@@ -40,6 +43,7 @@ interface CapturedPart {
 
 const NO_CAPTURE: AfterActionCapture = { lines: [] };
 const NEVER_ABORTED = new AbortController().signal;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export async function captureAfterAction(
   options: AfterActionCaptureOptions
@@ -100,7 +104,7 @@ async function takeScreenshot(
       deviceId: udid,
       signal,
     });
-    return images[0] ?? (await fetchLegacyScreenshot(data, signal));
+    return images[0] ?? (await fetchLegacyScreenshot(data, udid, signal));
   } catch {
     return undefined;
   }
@@ -108,18 +112,21 @@ async function takeScreenshot(
 
 async function fetchLegacyScreenshot(
   data: unknown,
+  udid: string,
   signal: AbortSignal
 ): Promise<MaterializedImage | undefined> {
   if (!data || typeof data !== "object") return undefined;
-  const { url, path } = data as { url?: unknown; path?: unknown };
+  const { url } = data as { url?: unknown };
   if (typeof url !== "string") return undefined;
   const res = await fetch(url, { signal });
   if (!res.ok) return undefined;
-  return {
-    localPath: typeof path === "string" ? path : url,
-    data: Buffer.from(await res.arrayBuffer()),
-    mimeType: "image/png",
-  };
+  const png = Buffer.from(await res.arrayBuffer());
+  if (!png.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return undefined;
+  const dir = artifactDir(udid);
+  await mkdir(dir, { recursive: true });
+  const localPath = join(dir, `screenshot-${Date.now()}.png`);
+  await writeFile(localPath, png);
+  return { localPath, data: png, mimeType: "image/png" };
 }
 
 async function readTree(

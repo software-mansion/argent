@@ -68,6 +68,7 @@ describe("captureAfterAction", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(flagsPath.homeDir!, { recursive: true, force: true });
     fs.rmSync(flagsPath.cwd!, { recursive: true, force: true });
   });
@@ -100,30 +101,48 @@ describe("captureAfterAction", () => {
     expect(capture.note).toBeUndefined();
   });
 
-  it("reads the { url, path } screenshot of an older tool-server", async () => {
-    const png = Buffer.from("legacy-png");
-    const server = http.createServer((_req, res) => res.end(png));
+  async function captureLegacyScreenshot(body: Buffer) {
+    vi.stubEnv("ARGENT_ARTIFACTS_DIR", path.join(flagsPath.homeDir!, "artifacts"));
+    const server = http.createServer((_req, res) => res.end(body));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
     const { client } = fakeClient({
       idle: { settled: true },
       screenshot: { url: `http://127.0.0.1:${port}/shot.png`, path: "/srv/shot.png" },
     });
-
     try {
-      const capture = await captureAfterAction({
+      return await captureAfterAction({
         client,
         toolName: "gesture-tap",
         payload: tap,
         profiling: false,
         flagsPath,
       });
-
-      expect(capture.lines[0]).toBe("Screen after action: /srv/shot.png");
-      expect(capture.screenshot?.data).toEqual(png);
     } finally {
       server.close();
     }
+  }
+
+  it("saves the { url, path } screenshot of an older tool-server on this host", async () => {
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from("rest"),
+    ]);
+
+    const capture = await captureLegacyScreenshot(png);
+
+    const printed = capture.lines[0]!.replace("Screen after action: ", "");
+    expect(printed.startsWith(path.join(flagsPath.homeDir!, "artifacts"))).toBe(true);
+    expect(fs.readFileSync(printed)).toEqual(png);
+    expect(capture.screenshot?.data).toEqual(png);
+  });
+
+  it("drops an older tool-server's screenshot that is not a PNG", async () => {
+    const capture = await captureLegacyScreenshot(Buffer.from("<html>502 Bad Gateway</html>"));
+
+    expect(capture.screenshot).toBeUndefined();
+    expect(capture.lines[0]).toBe(AUTO_DESCRIBE_HEADER);
+    expect(fs.existsSync(path.join(flagsPath.homeDir!, "artifacts"))).toBe(false);
   });
 
   it("reads the tree only after the screenshot when the screen did not settle", async () => {

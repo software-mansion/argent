@@ -62,6 +62,7 @@ export {
   isArtifactHandle,
   getDeviceIdFromArgs,
   artifactsRoot,
+  artifactDir,
   ARTIFACT_MARKER,
   type ArtifactHandle,
   type ArtifactKind,

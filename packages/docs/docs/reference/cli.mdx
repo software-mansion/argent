@@ -51,7 +51,7 @@ After an interaction tool, `argent run` waits until the screen stops changing, a
 
 After `describe`, `argent run` prints only the screenshot path, since the result already holds the tree.
 
-The `disable-auto-screenshot` and `disable-auto-describe` flags stop these parts (see [Feature flags](/docs/reference/configuration#feature-flags)). With `--json`, `argent run` prints only the result of the tool and does not wait. With `--json`, `argent run` does not save the screen after the action to the `--out` file. When Argent captures no screenshot, `argent run` leaves the `--out` file unchanged and exits with code `1`.
+The `disable-auto-screenshot` and `disable-auto-describe` flags stop these parts (see [Feature flags](/docs/reference/configuration#feature-flags)). With `--json`, `argent run` prints only the result of the tool, does not wait and does not save the screen after the action to the `--out` file. When Argent captures no screenshot, `argent run` leaves the `--out` file unchanged and exits with code `1`.
 
 When you pass `--commit_index` or `--hang_index` to `argent run`, supply an integer.
 The CLI rejects empty or whitespace-only values.
