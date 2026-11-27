@@ -68,7 +68,7 @@ import { CHROMIUM_CDP_NAMESPACE } from "../src/blueprints/chromium-cdp";
 import { createNetworkManager, type NetworkManager } from "../src/chromium-server/network";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import { localIosHost, remoteIosHost } from "../src/utils/ios-host";
-import { proxyStart } from "../src/utils/sim-remote";
+import { reverseStart } from "../src/utils/sim-remote";
 
 // The device's process table, which a stop reads when it cannot reach the app's JS runtime.
 vi.mock("../src/blueprints/android-network-inspector-device", async (importOriginal) => ({
@@ -120,7 +120,7 @@ vi.mock("../src/utils/command-on-path", async (importOriginal) => {
 // The sim-remote tunnel from a remote simulator to this host's Metro.
 vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
-  proxyStart: vi.fn(async () => {}),
+  reverseStart: vi.fn(async () => {}),
 }));
 
 // Whether Xcode's component install is pending. The suite-wide setup answers no.
@@ -3335,18 +3335,18 @@ describe("a Metro that several devices share", () => {
     const rt = new FakeRuntime(APP);
     serve(PORT, REMOTE_UDID, FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH);
     serve(PORT, SHARED_ID, rt);
-    vi.mocked(proxyStart).mockClear();
+    vi.mocked(reverseStart).mockClear();
 
     const result = await start(REMOTE_UDID, APP, undefined, undefined, SHARED_ID);
     expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
-    expect(vi.mocked(proxyStart).mock.calls).toEqual([[REMOTE_UDID, PORT]]);
+    expect(vi.mocked(reverseStart).mock.calls).toEqual([[REMOTE_UDID, PORT]]);
 
     expect(
       layer(await stop(REMOTE_UDID, APP, undefined, undefined, SHARED_ID), "js")
     ).toMatchObject({
       armed: false,
     });
-    expect(vi.mocked(proxyStart).mock.calls).toEqual([
+    expect(vi.mocked(reverseStart).mock.calls).toEqual([
       [REMOTE_UDID, PORT],
       [REMOTE_UDID, PORT],
     ]);

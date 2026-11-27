@@ -513,7 +513,7 @@ describe("ax-service blueprint: a start that fails before the daemon runs", () =
 
   it("says how the sim was booted when the tunnel fails to start", async () => {
     hostRequiresTcp = true;
-    startProxyError = new Error("sim-remote proxy start failed");
+    startProxyError = new Error("sim-remote reverse start failed");
 
     const err = await failure(axServiceBlueprint.factory({}, device, { device }));
 

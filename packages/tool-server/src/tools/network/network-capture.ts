@@ -12,7 +12,7 @@ import { withKeyedLock } from "../../utils/keyed-lock";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { settleWithin } from "../../utils/timing";
 import { classifyDevice } from "../../utils/device-info";
-import { proxyStart } from "../../utils/sim-remote";
+import { reverseStart } from "../../utils/sim-remote";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { resolveDebuggerService } from "../debugger/not-connected";
@@ -304,7 +304,7 @@ export async function resolveJsRuntime(
   port: number
 ): Promise<JsRuntimeDebuggerApi> {
   if (logicalDeviceId !== undefined && classifyDevice(udid) === "ios-remote") {
-    await proxyStart(udid, port);
+    await reverseStart(udid, port);
   }
   return resolveDebuggerService(
     registry,
