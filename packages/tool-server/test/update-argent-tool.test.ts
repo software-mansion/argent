@@ -1,19 +1,32 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 // Mock child_process and update-checker before importing the module under test.
-vi.mock("node:child_process", () => ({
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: vi.fn(),
+}));
+
+vi.mock("../src/utils/release-build", () => ({
+  isReleaseBuild: vi.fn(() => true),
 }));
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(),
+  isUpdateNoteSuppressed: vi.fn(() => false),
 }));
 
 import { spawn } from "node:child_process";
-import { getUpdateState } from "../src/utils/update-checker";
+import { getUpdateState, isUpdateNoteSuppressed } from "../src/utils/update-checker";
+import { isReleaseBuild } from "../src/utils/release-build";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
@@ -21,7 +34,9 @@ const mockGetUpdateState = vi.mocked(getUpdateState);
 function makeChild() {
   // `on` is required: the tool attaches 'error' and 'exit' listeners (spawn
   // ENOENT must not crash the tool-server; a no-op updater exit unblocks later calls).
-  return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
+  return Object.assign(new EventEmitter(), { unref: vi.fn() }) as unknown as ReturnType<
+    typeof spawn
+  >;
 }
 
 function stateWithUpdate(latestVersion = "99.0.0") {
@@ -34,6 +49,12 @@ function stateWithUpdate(latestVersion = "99.0.0") {
     latestPublishedAt: null,
     minReleaseAgeMs: 0,
   };
+}
+
+const TEN_MINUTES_MS = 10 * 60_000;
+
+function idleServer() {
+  return { lastActivityAt: () => Date.now() - TEN_MINUTES_MS, toolCallsInFlight: () => 0 };
 }
 
 function stateHeldByPolicy(latestVersion = "99.0.0") {
@@ -63,6 +84,7 @@ function stateUpToDate() {
 describe("update-argent tool", () => {
   // Re-import per test so the module-level `updateScheduled` flag resets.
   let updateArgentTool: typeof import("../src/tools/system/update-argent").updateArgentTool;
+  let scheduleAutomaticUpdate: typeof import("../src/tools/system/update-argent").scheduleAutomaticUpdate;
   let savedInstallKind: string | undefined;
   let savedProjectRoot: string | undefined;
   let originalCwd: string;
@@ -85,6 +107,8 @@ describe("update-argent tool", () => {
     vi.resetModules();
     mockSpawn.mockReturnValue(makeChild());
     mockGetUpdateState.mockReturnValue(stateWithUpdate());
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(false);
+    vi.mocked(isReleaseBuild).mockReturnValue(true);
     // Pin the running-install classification: the fallback cwd-walk would
     // otherwise pick up whatever repository the test process runs in.
     savedInstallKind = process.env.ARGENT_INSTALL_KIND;
@@ -98,6 +122,7 @@ describe("update-argent tool", () => {
     process.chdir(tmpDir);
     const mod = await import("../src/tools/system/update-argent");
     updateArgentTool = mod.updateArgentTool;
+    scheduleAutomaticUpdate = mod.scheduleAutomaticUpdate;
   });
 
   afterEach(() => {
@@ -108,6 +133,7 @@ describe("update-argent tool", () => {
     if (savedProjectRoot === undefined) delete process.env.ARGENT_PROJECT_ROOT;
     else process.env.ARGENT_PROJECT_ROOT = savedProjectRoot;
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.clearAllMocks();
   });
 
@@ -134,6 +160,136 @@ describe("update-argent tool", () => {
         env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
       }
     );
+  });
+
+  it("runs the bundled global updater and restores the reminder after a failed attempt", async () => {
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    expect(isUpdatingAutomatically("99.0.0")).toBe(true);
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledWith(
+      process.execPath,
+      [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
+      expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
+    );
+    const child = mockSpawn.mock.results[0]!.value!;
+    child.emit("exit", 1, null);
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
+  });
+
+  it("waits for the server to be idle before installing automatically", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    let lastActivityAt = Date.now();
+    let toolCallsInFlight = 0;
+    scheduleAutomaticUpdate("99.0.0", {
+      lastActivityAt: () => lastActivityAt,
+      toolCallsInFlight: () => toolCallsInFlight,
+    });
+
+    vi.advanceTimersByTime(TEN_MINUTES_MS / 2);
+    lastActivityAt = Date.now();
+    vi.advanceTimersByTime(TEN_MINUTES_MS / 2 + 2000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    toolCallsInFlight = 1;
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    toolCallsInFlight = 0;
+    vi.advanceTimersByTime(2 * TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn).toHaveBeenCalledWith(
+      process.execPath,
+      [expect.stringMatching(/cli\.js$/), "update", "--yes", "--global", "--version", "99.0.0"],
+      expect.objectContaining({ env: expect.objectContaining({ ARGENT_AUTOMATIC_UPDATE: "1" }) })
+    );
+  });
+
+  it("keeps a quiet server's e2e recording and uncollected video until both are finished", async () => {
+    const flows = await import("../src/tools/flows/flow-utils");
+    const screen = await import("../src/utils/screen-recording-reminder");
+    await flows.startRecordingSession({
+      name: "checkout",
+      projectRoot: tmpDir,
+      filePath: path.join(tmpDir, "checkout.yaml"),
+      persist: "client",
+      flow: { executionPrerequisite: "", steps: [] },
+    });
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+    vi.advanceTimersByTime(TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    screen.registerActiveScreenRecording("device", Date.now(), 60);
+    flows.clearRecordingSession(await flows.requireRecordingSession(tmpDir, "checkout"));
+    screen.markScreenRecordingFinalized("device", "time limit reached");
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    screen.clearActiveScreenRecording("device");
+    vi.advanceTimersByTime(TEN_MINUTES_MS);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a server started with `argent server start` on the consent path", async () => {
+    vi.stubEnv("ARGENT_SERVER_MANAGED", "cli");
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
+  });
+
+  it("never replaces a build that was not published to npm", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    vi.mocked(isReleaseBuild).mockReturnValue(false);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("holds an automatic update while the user has postponed the update", () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(true);
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    vi.mocked(isUpdateNoteSuppressed).mockReturnValue(false);
+    vi.advanceTimersByTime(TEN_MINUTES_MS + 2000);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it("drops a pending automatic update when the user updates manually", async () => {
+    vi.mocked(fs.existsSync).mockReturnValueOnce(true);
+    scheduleAutomaticUpdate("99.0.0", {
+      lastActivityAt: () => Date.now(),
+      toolCallsInFlight: () => 0,
+    });
+
+    await updateArgentTool.execute({}, { target: "global" }, undefined);
+    vi.advanceTimersByTime(3 * TEN_MINUTES_MS);
+
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockSpawn.mock.calls[0]![2]!.env).not.toHaveProperty("ARGENT_AUTOMATIC_UPDATE");
+  });
+
+  it.each(["local", undefined])("keeps a %s installation on the consent path", async (kind) => {
+    if (kind) process.env.ARGENT_INSTALL_KIND = kind;
+    else delete process.env.ARGENT_INSTALL_KIND;
+    process.env.ARGENT_PROJECT_ROOT = stageDeclaringProject();
+    scheduleAutomaticUpdate("99.0.0", idleServer());
+    vi.advanceTimersByTime(2000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const { isUpdatingAutomatically } = await import("../src/tools/system/update-argent");
+    expect(isUpdatingAutomatically("99.0.0")).toBe(false);
   });
 
   it("a global-serving server refuses a local target instead of guessing the project", async () => {

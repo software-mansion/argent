@@ -4,6 +4,13 @@
  * entry for a release in its version bump PR.
  */
 export const RELEASE_HIGHLIGHTS: Readonly<Record<string, readonly string[]>> = {
+  "0.35.0": [
+    "UI sessions use less agent context: Argent skips unchanged automatic screenshots and sends just the changed lines for small element tree updates.",
+    "Capture native network requests from iOS and Mac apps and inspect their headers and bodies.",
+    "Run a directory of E2E tests as a suite with `suite.config.yaml`.",
+    "Record the screen of a Mac app or a cabled iPhone.",
+    "`argent doctor` checks your local Argent setup.",
+  ],
   "0.34.0": [
     "Profile Mac apps with the native profiler, and react-native-macos apps with the React profiler.",
     "e2e script steps run TypeScript (.mts, .ts) and .js files.",

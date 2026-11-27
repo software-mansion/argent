@@ -266,6 +266,7 @@ describe("tool interaction messages", () => {
         savedTo: "project",
       },
       "e2e-add-echo": { message: "", stepCount: 1, savedTo: "project" },
+      "e2e-set-env": { message: "", env: {}, savedTo: "project" },
       "e2e-add-script": {
         message: "",
         status: "pass",
@@ -288,6 +289,7 @@ describe("tool interaction messages", () => {
       "e2e-start-recording",
       "e2e-add-step",
       "e2e-add-echo",
+      "e2e-set-env",
       "e2e-add-script",
       "e2e-finish-recording",
     ]) {

@@ -177,6 +177,33 @@ describe("recording a keyboard step", () => {
     ]);
   });
 
+  it("says a step recorded into shutdown: fails the run, and repeats it under its shutdown line", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "rec-shutdown", project_root: PROJECT_ROOT, executionPrerequisite: "" }
+    );
+    const registry = makeRegistry(async () => ({ typed: "display", keys: 7, verified: false }));
+    const { message } = await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "rec-shutdown",
+        project_root: PROJECT_ROOT,
+        command: "keyboard",
+        args: JSON.stringify({ udid: "emulator-5554", text: "display" }),
+        shutdown: true,
+      }
+    );
+    expect(message).toContain("this step FAILS the run, so re-record it");
+    expect(message).not.toContain("stops the run");
+
+    const finished = await finish("rec-shutdown");
+    expect(finished.message).toContain("1 step recorded text that did not land");
+    expect(finished.summary).toEqual([
+      'shutdown 1. tool: keyboard {"text":"display"}',
+      `   warning: ${message.slice(message.indexOf("recorded, but"))}`,
+    ]);
+  });
+
   it.each([
     ["verified", { typed: "display", keys: 7, verified: true }],
     ["unchecked", { typed: "display", keys: 7 }],

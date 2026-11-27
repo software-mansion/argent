@@ -25,6 +25,14 @@ describe("whats-new seen version", () => {
     expect(getWhatsNewSeenVersion({ homeDir })).toBe("0.34.0");
   });
 
+  it("lets only the first session claim an update from the same seen version", () => {
+    setWhatsNewSeenVersion("0.33.0", { homeDir });
+    const snapshot = { homeDir, ifSeen: "0.33.0" };
+    expect(setWhatsNewSeenVersion("0.35.0", snapshot)).toBe(true);
+    expect(setWhatsNewSeenVersion("0.34.0", snapshot)).toBe(false);
+    expect(getWhatsNewSeenVersion({ homeDir })).toBe("0.35.0");
+  });
+
   it("keeps the other notices", () => {
     updateConfig((config) => (config.notices = { first_run_shown: true }), "global", { homeDir });
     setWhatsNewSeenVersion("0.34.0", { homeDir });
