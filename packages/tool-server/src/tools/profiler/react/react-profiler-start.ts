@@ -17,6 +17,7 @@ import {
 import { liveAndroidNetworkCaptureSerials } from "../../../blueprints/android-network-inspector";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
+  FIBER_ROOT_TRACKER_SCRIPT,
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
   BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT,
@@ -306,7 +307,10 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       const cdp = api.cdp;
 
-      // Idempotent — safe to re-inject on every start.
+      // Idempotent — safe to re-inject on every start. The session installs the
+      // tracker too, but that does nothing if the bundle had not put the hook in
+      // place yet, and a retried start reuses the session.
+      await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(ignore);
       await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
       // Decides whether to start, take over, or refuse.
