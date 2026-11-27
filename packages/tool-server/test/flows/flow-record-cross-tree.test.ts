@@ -798,11 +798,12 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).not.toContain("retarget the DIRECTIVE");
   });
 
-  // Android: an RN `Pressable testID` wrapping a `Text testID`. The TRIM makes
-  // the clickable row BORROW its descendant's text and drops the TextView. The
-  // FLOW parse keeps both, and the inner resource-id shields its text.
+  // Android: an RN `Pressable testID` wrapping a pressable `Text testID`. The
+  // TRIM makes the clickable row BORROW its descendant's text. The FLOW parse
+  // keeps both: the row borrows nothing from a clickable inside it, and the
+  // inner resource-id shields its text.
   const ANDROID_ROW = `<node index="0" class="android.widget.LinearLayout" resource-id="com.acme.app:id/continue-row" clickable="true" package="com.acme.app" bounds="[40,400][1040,480]">
-           <node index="0" class="android.widget.TextView" resource-id="com.acme.app:id/continue-label" text="Continue" package="com.acme.app" bounds="[60,410][600,470]" />
+           <node index="0" class="android.widget.TextView" resource-id="com.acme.app:id/continue-label" text="Continue" clickable="true" package="com.acme.app" bounds="[60,410][600,470]" />
          </node>`;
 
   it("Android: warns when the trim's collapse gave the runner's node no text", async () => {

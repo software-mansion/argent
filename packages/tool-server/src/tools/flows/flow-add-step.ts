@@ -372,10 +372,12 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
     return (
       "Both read the same `getHierarchy` dump from the android-devtools helper; this host then " +
       "parses it two ways. `describe`'s interactables trim collapses a `testID`-only container " +
-      "into a passthrough and drops the node carrying the id, while borrowing a descendant's " +
-      "text into an unlabelled clickable's own label — where the runner adapter keeps every view " +
-      "with a `resource-id` or a label, and asks for 12000 nodes against the helper's 5000 " +
-      "default. So each holds elements the other drops." +
+      "into a passthrough and drops the node carrying the id, where the runner adapter keeps " +
+      "every view with a `resource-id`, a label or a tap, and asks for 12000 nodes against the " +
+      "helper's 5000 default. Both give an unlabelled clickable the text of the views inside it " +
+      "as its label, but the runner leaves out off-screen text and the text of a clickable " +
+      "inside it, and gives none to a view that holds a text field or a list or covers most of " +
+      "the screen. So each holds elements the other drops." +
       KEYBOARD_CLAUSE +
       SCREEN_MAY_HAVE_MOVED
     );

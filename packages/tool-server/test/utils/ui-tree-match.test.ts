@@ -10,6 +10,7 @@ import {
   keyboardDrawsAt,
   matchNode,
   selectorToNode,
+  textCheckTarget,
   textMatches,
   treeFingerprint,
   uiTreeMatchInternals,
@@ -1848,5 +1849,138 @@ describe("on-screen keyboard", () => {
     expect(underKeyboard(gesture, list)).toBe(true);
     // The navigation bar covers the app below the keys.
     expect(keyboardDrawsAt(gesture, { x: 0.5, y: 0.97 })).toBe(true);
+  });
+});
+
+// An Android row that took its children's text (`borrowedLabel`), as the e2e
+// runner's Android tree emits it: the row, then the title and summary inside it.
+describe("a leaf with a borrowed label", () => {
+  const row = (y: number, title: string, summary: string, borrowed = true): DescribeNode[] => [
+    node({
+      role: "LinearLayout",
+      label: `${title} / ${summary}`,
+      ...(borrowed ? { borrowedLabel: true } : {}),
+      clickable: true,
+      frame: { x: 0, y, width: 1, height: 0.1 },
+    }),
+    node({
+      role: "StaticText",
+      label: title,
+      frame: { x: 0.2, y: y + 0.02, width: 0.4, height: 0.03 },
+    }),
+    node({
+      role: "StaticText",
+      label: summary,
+      frame: { x: 0.2, y: y + 0.05, width: 0.4, height: 0.03 },
+    }),
+  ];
+  const screen = (...children: DescribeNode[]) =>
+    node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+  const rows = (borrowed = true) =>
+    screen(
+      ...row(0.2, "Network & internet", "Mobile, Wi-Fi, hotspot", borrowed),
+      ...row(0.3, "Connected devices", "Bluetooth, pairing", borrowed),
+      node({ role: "Switch", frame: { x: 0.85, y: 0.32, width: 0.1, height: 0.05 } })
+    );
+
+  it("gives way to the title inside it in a text check", () => {
+    const matches = findAll(rows(), { text: "Network & internet" });
+    expect(matches).toHaveLength(2);
+    expect(textCheckTarget(matches, false)?.role).toBe("StaticText");
+    expect(evaluateCondition("text", "Network & internet", matches, "equals")).toBe(true);
+    // A row whose label is its own is read first: it starts above its title.
+    const own = findAll(rows(false), { text: "Network & internet" });
+    expect(textCheckTarget(own, false)?.role).toBe("LinearLayout");
+    expect(evaluateCondition("text", "Network & internet", own, "equals")).toBe(false);
+  });
+
+  it("is read when no match with a label of its own lies inside it", () => {
+    const tree = screen(
+      node({
+        role: "StaticText",
+        label: "Network & internet",
+        frame: { x: 0.2, y: 0.9, width: 0.4, height: 0.03 },
+      }),
+      ...row(0.2, "Network & internet", "Mobile, Wi-Fi, hotspot").slice(0, 1)
+    );
+    const matches = findAll(tree, { text: "Network & internet" });
+    expect(textCheckTarget(matches, false)?.role).toBe("LinearLayout");
+    expect(evaluateCondition("text", "hotspot", matches)).toBe(true);
+  });
+
+  it("counts `next` from the title inside it, not from the row", () => {
+    expect(
+      findAll(rows(), { role: "StaticText", next: { text: "Network & internet" } }).map(
+        (n) => n.label
+      )
+    ).toEqual(["Mobile, Wi-Fi, hotspot"]);
+  });
+
+  it("counts `after` from the title inside it, not from the tile", () => {
+    // Two tiles side by side: the left tile's title sits at its bottom, the
+    // right tile's at its top. The right title is in the left TILE's band but
+    // above the left TITLE.
+    const tree = screen(
+      node({
+        role: "LinearLayout",
+        label: "Photos",
+        borrowedLabel: true,
+        clickable: true,
+        frame: { x: 0, y: 0.2, width: 0.5, height: 0.2 },
+      }),
+      node({
+        role: "StaticText",
+        label: "Photos",
+        frame: { x: 0.05, y: 0.35, width: 0.4, height: 0.03 },
+      }),
+      node({
+        role: "LinearLayout",
+        label: "Videos",
+        borrowedLabel: true,
+        clickable: true,
+        frame: { x: 0.5, y: 0.2, width: 0.5, height: 0.2 },
+      }),
+      node({
+        role: "StaticText",
+        label: "Videos",
+        frame: { x: 0.55, y: 0.21, width: 0.4, height: 0.03 },
+      })
+    );
+    expect(findAll(tree, { role: "StaticText", after: { text: "Photos" } })).toEqual([]);
+  });
+
+  it("gives way to a match inside it in a field-less pick only when kept for its tap", () => {
+    const wrapped = (mark: Partial<DescribeNode>) =>
+      screen(
+        node({ role: "ViewGroup", identifier: "form", frame: { x: 0, y: 0, width: 1, height: 1 } }),
+        node({
+          role: "ViewGroup",
+          clickable: true,
+          ...mark,
+          frame: { x: 0, y: 0.1, width: 1, height: 0.5 },
+        }),
+        node({
+          role: "StaticText",
+          label: "Hi",
+          frame: { x: 0.1, y: 0.3, width: 0.3, height: 0.03 },
+        })
+      );
+    const anyInForm: Selector = { within: { identifier: "form" } };
+    expect(selectorToNode(wrapped({ tapOnly: true }), anyInForm)?.label).toBe("Hi");
+    // The text check reads the text, not the wrapper.
+    const matches = findAll(wrapped({ tapOnly: true }), anyInForm);
+    expect(textCheckTarget(matches, false)?.label).toBe("Hi");
+    // A view with a mark of its own stays first in reading order.
+    expect(selectorToNode(wrapped({ identifier: "card" }), anyInForm)?.identifier).toBe("card");
+    // A borrowed label alone does not change the field-less pick.
+    expect(selectorToNode(wrapped({ label: "Hi", borrowedLabel: true }), anyInForm)?.role).toBe(
+      "ViewGroup"
+    );
+  });
+
+  it("stays a `within` scope", () => {
+    expect(findAll(rows(), { role: "Switch", within: { text: "Connected devices" } })).toHaveLength(
+      1
+    );
   });
 });

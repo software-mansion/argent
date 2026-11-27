@@ -37,6 +37,18 @@ export interface DescribeNode {
   // text, except a `type` step's `into`. Set by the iOS simulator flow adapter
   // only; the describe tool leaves it unset.
   typedValue?: boolean;
+  // `label` is not the element's own: a clickable view with no label took the
+  // text of the views inside it, as `describe` does. A `text` check, a
+  // `next` pick and a `next`/`after` anchor take a match inside it over it, and
+  // the recorder never names a scope by it. Set by the Android flow adapter
+  // only; the describe tool leaves it unset.
+  borrowedLabel?: boolean;
+  // An element only because it takes a tap: the view has no id, label of its
+  // own, role a selector names or focus (an Android row, a wrapper that closes
+  // the keyboard). Like `borrowedLabel`, and also in the pick of a selector
+  // with no field of its own (`any: true`), it gives way to a match inside it.
+  // Set by the Android flow adapter only; the describe tool leaves it unset.
+  tapOnly?: boolean;
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
@@ -83,6 +95,8 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       value: z.string().optional(),
       subtreeText: z.string().optional(),
       typedValue: z.boolean().optional(),
+      borrowedLabel: z.boolean().optional(),
+      tapOnly: z.boolean().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),

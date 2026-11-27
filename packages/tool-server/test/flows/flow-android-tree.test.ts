@@ -3,10 +3,13 @@ import { adaptFullAndroidHierarchyToDescribeResult } from "../../src/tools/flows
 import { parseUiAutomatorDump } from "../../src/tools/describe/platforms/android/uiautomator-parser";
 import {
   assertText,
+  deriveUniqueSelector,
   evaluateCondition,
   findAll,
   selectorToFrame,
   matchNode,
+  selectorToNode,
+  type Selector,
 } from "../../src/utils/ui-tree-match";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 
@@ -484,3 +487,536 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(adapt(bare).children.map((c) => c.keyboard)).toEqual([undefined, undefined]);
   });
 });
+
+// Parts of real API 36 dumps (1080x2400), cut to the attributes the adapter
+// reads. Each row is a clickable view with no id or label of its own.
+const DUMP_W = 1080;
+const DUMP_H = 2400;
+
+function dump(body: string): string {
+  return `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,2400]">
+${body}
+  </node>
+</hierarchy>`;
+}
+
+// Settings, main screen.
+const SETTINGS_MAIN = dump(`
+<node class="androidx.recyclerview.widget.RecyclerView" resource-id="com.android.settings:id/recycler_view" scrollable="true" bounds="[0,380][1080,2337]">
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,628][1080,834]">
+    <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/icon_frame" bounds="[42,678][189,783]">
+      <node class="android.widget.ImageView" resource-id="android:id/icon" bounds="[84,678][189,783]" />
+    </node>
+    <node class="android.widget.RelativeLayout" resource-id="com.android.settings:id/text_frame" bounds="[168,628][1038,834]">
+      <node class="android.widget.TextView" resource-id="android:id/title" text="Network &amp; internet" bounds="[210,670][646,741]" />
+      <node class="android.widget.TextView" resource-id="android:id/summary" text="Mobile, Wi‑Fi, hotspot" bounds="[210,741][561,792]" />
+    </node>
+  </node>
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,834][1080,1082]">
+    <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/icon_frame" bounds="[42,884][189,989]">
+      <node class="android.widget.ImageView" resource-id="android:id/icon" bounds="[84,884][189,989]" />
+    </node>
+    <node class="android.widget.RelativeLayout" resource-id="com.android.settings:id/text_frame" bounds="[168,834][1038,1040]">
+      <node class="android.widget.TextView" resource-id="android:id/title" text="Connected devices" bounds="[210,876][657,947]" />
+      <node class="android.widget.TextView" resource-id="android:id/summary" text="Bluetooth, pairing" bounds="[210,947][497,998]" />
+    </node>
+  </node>
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1082][1080,1288]">
+    <node class="android.widget.RelativeLayout" resource-id="com.android.settings:id/text_frame" bounds="[168,1082][1038,1288]">
+      <node class="android.widget.TextView" resource-id="android:id/title" text="Apps" bounds="[210,1124][332,1195]" />
+      <node class="android.widget.TextView" resource-id="android:id/summary" text="Assistant, recent apps, default apps" bounds="[210,1195][795,1246]" />
+    </node>
+  </node>
+</node>`);
+
+// Settings, Network & internet > Internet: a row with a gear button, a row with
+// a switch, and a status line that cannot be tapped.
+const SETTINGS_INTERNET = dump(`
+<node class="androidx.recyclerview.widget.RecyclerView" resource-id="com.android.settings:id/recycler_view" scrollable="true" bounds="[0,606][1080,2081]">
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,606][1080,812]">
+    <node class="android.widget.RelativeLayout" bounds="[189,606][804,812]">
+      <node class="android.widget.TextView" resource-id="android:id/title" text="T-Mobile" bounds="[189,648][390,719]" />
+      <node class="android.widget.TextView" resource-id="android:id/summary" text="5G" bounds="[189,719][235,770]" />
+    </node>
+    <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[849,606][1038,812]">
+      <node class="android.widget.ImageView" resource-id="com.android.settings:id/settings_button" content-desc="Settings" clickable="true" bounds="[849,606][1038,812]" />
+    </node>
+  </node>
+  <node class="android.widget.LinearLayout" clickable="true" bounds="[0,812][1080,967]">
+    <node class="android.widget.RelativeLayout" bounds="[63,812][859,967]">
+      <node class="android.widget.TextView" resource-id="android:id/title" text="Wi-Fi" bounds="[63,854][180,925]" />
+    </node>
+    <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[859,812][1038,967]">
+      <node class="android.widget.Switch" resource-id="com.android.settings:id/switchWidget" checkable="true" checked="true" bounds="[901,826][1038,952]" />
+    </node>
+  </node>
+  <node class="android.widget.LinearLayout" bounds="[0,1173][1080,1308]">
+    <node class="android.widget.RelativeLayout" bounds="[63,1173][1038,1308]">
+      <node class="android.widget.TextView" resource-id="android:id/summary" text="Searching for networks…" bounds="[63,1215][469,1266]" />
+    </node>
+  </node>
+</node>`);
+
+// Contacts > Organize: Compose rows, with no id on any view.
+const CONTACTS_ORGANIZE = dump(`
+<node class="android.widget.ScrollView" bounds="[0,296][1080,2126]">
+  <node class="android.widget.TextView" text="This device" bounds="[42,338][267,401]" />
+  <node class="android.view.View" clickable="true" bounds="[0,443][1080,623]">
+    <node class="android.widget.TextView" text="Contact ringtones" bounds="[147,475][493,538]" />
+    <node class="android.widget.TextView" text="Set ringtones for specific contacts" bounds="[147,538][710,591]" />
+  </node>
+  <node class="android.view.View" clickable="true" bounds="[0,930][1080,1110]">
+    <node class="android.widget.TextView" text="Blocked numbers" bounds="[147,962][481,1025]" />
+    <node class="android.widget.TextView" text="Numbers you won’t receive calls or texts from" bounds="[147,1025][892,1078]" />
+  </node>
+</node>`);
+
+// The runtime permission dialog: the dialog itself is clickable.
+const GRANT_DIALOG = dump(`
+<node class="android.widget.LinearLayout" resource-id="com.android.permissioncontroller:id/grant_dialog" clickable="true" bounds="[28,817][1052,1648]">
+  <node class="android.widget.LinearLayout" resource-id="com.android.permissioncontroller:id/content_container" bounds="[70,859][1010,1234]">
+    <node class="android.widget.TextView" resource-id="com.android.permissioncontroller:id/permission_message" text="Allow YouTube to send you notifications?" bounds="[133,1038][947,1171]" />
+  </node>
+  <node class="android.widget.LinearLayout" bounds="[70,1234][1010,1606]">
+    <node class="android.widget.Button" resource-id="com.android.permissioncontroller:id/permission_allow_button" text="Allow" clickable="true" bounds="[133,1239][947,1386]" />
+    <node class="android.widget.Button" resource-id="com.android.permissioncontroller:id/permission_deny_button" text="Don’t allow" clickable="true" bounds="[133,1396][947,1543]" />
+  </node>
+</node>`);
+
+// Chrome's toolbar while a URL is typed: a long-clickable view around the field.
+const CHROME_TOOLBAR = dump(`
+<node class="android.widget.FrameLayout" resource-id="com.android.chrome:id/toolbar" long-clickable="true" bounds="[0,128][1080,275]">
+  <node class="android.widget.FrameLayout" resource-id="com.android.chrome:id/location_bar" bounds="[21,128][1059,275]">
+    <node class="android.widget.LinearLayout" resource-id="com.android.chrome:id/location_bar_status" clickable="true" long-clickable="true" bounds="[53,128][137,275]">
+      <node class="android.widget.ImageView" resource-id="com.android.chrome:id/location_bar_status_icon" content-desc="Connection is secure" bounds="[63,170][126,233]" />
+    </node>
+    <node class="android.widget.EditText" resource-id="com.android.chrome:id/url_bar" text="argentzq typed words" clickable="true" long-clickable="true" editable="true" bounds="[169,136][901,267]" />
+    <node class="android.widget.TextView" text="Search or type URL" bounds="[169,136][901,267]" />
+  </node>
+</node>`);
+
+// Files, grid view: a card around a file with a long name.
+const LONG_NAME = "argent-row-long-name-" + "abcdefghij".repeat(12) + ".txt";
+const FILES_CARD = dump(`
+<node class="androidx.cardview.widget.CardView" resource-id="com.google.android.documentsui:id/item_root" clickable="true" bounds="[64,1298][529,1899]">
+  <node class="android.widget.RelativeLayout" bounds="[196,1763][529,1899]">
+    <node class="android.widget.TextView" resource-id="android:id/title" text="${LONG_NAME}" bounds="[196,1784][497,1835]" />
+    <node class="android.widget.TextView" resource-id="com.google.android.documentsui:id/details" text="5 B" bounds="[196,1835][242,1878]" />
+  </node>
+</node>`);
+
+// Settings > Network & internet on API 34, icon frames left out. The two "Off"
+// summaries make the recorder look past the rows for an anchor.
+const SETTINGS_NETWORK_API34 = dump(`
+<node class="android.widget.ScrollView" resource-id="com.android.settings:id/content_parent" scrollable="true" bounds="[0,0][1080,2337]">
+  <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/app_bar" bounds="[0,0][1080,606]">
+    <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/collapsing_toolbar" content-desc="Network &amp; internet" bounds="[0,0][1080,606]">
+      <node class="android.view.ViewGroup" resource-id="com.android.settings:id/action_bar" bounds="[0,136][1080,283]">
+        <node class="android.widget.ImageButton" content-desc="Navigate up" clickable="true" bounds="[0,136][147,283]" />
+        <node class="android.view.View" bounds="[189,136][1080,283]" />
+      </node>
+    </node>
+  </node>
+  <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/content_frame" bounds="[0,606][1080,2337]">
+    <node class="android.widget.LinearLayout" bounds="[0,606][1080,2337]">
+      <node class="android.widget.FrameLayout" resource-id="com.android.settings:id/main_content" bounds="[0,606][1080,2337]">
+        <node class="android.widget.LinearLayout" resource-id="com.android.settings:id/container_material" bounds="[0,606][1080,2337]">
+          <node class="android.widget.FrameLayout" resource-id="android:id/list_container" bounds="[0,606][1080,2337]">
+            <node class="androidx.recyclerview.widget.RecyclerView" resource-id="com.android.settings:id/recycler_view" bounds="[0,606][1080,2337]">
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,606][1080,812]">
+                <node class="android.widget.RelativeLayout" bounds="[189,606][1038,812]">
+                  <node class="android.widget.TextView" text="Internet" resource-id="android:id/title" bounds="[189,648][369,719]" />
+                  <node class="android.widget.TextView" text="AndroidWifi" resource-id="android:id/summary" bounds="[189,719][381,770]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,812][1080,1018]">
+                <node class="android.widget.RelativeLayout" bounds="[189,812][1038,1018]">
+                  <node class="android.widget.TextView" text="Calls &amp; SMS" resource-id="android:id/title" bounds="[189,854][473,925]" />
+                  <node class="android.widget.TextView" text="T-Mobile" resource-id="android:id/summary" bounds="[189,925][329,976]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1018][1080,1224]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1018][1038,1224]">
+                  <node class="android.widget.TextView" text="SIMs" resource-id="android:id/title" bounds="[189,1060][307,1131]" />
+                  <node class="android.widget.TextView" text="T-Mobile" resource-id="android:id/summary" bounds="[189,1131][329,1182]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1224][1080,1379]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1224][850,1379]">
+                  <node class="android.widget.TextView" text="Airplane mode" resource-id="android:id/title" bounds="[189,1266][531,1337]" />
+                </node>
+                <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[850,1224][1038,1379]">
+                  <node class="android.widget.Switch" resource-id="android:id/switch_widget" bounds="[892,1238][1038,1364]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1379][1080,1585]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1379][1038,1585]">
+                  <node class="android.widget.TextView" text="Hotspot &amp; tethering" resource-id="android:id/title" bounds="[189,1421][646,1492]" />
+                  <node class="android.widget.TextView" text="Off" resource-id="android:id/summary" bounds="[189,1492][240,1543]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1585][1080,1791]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1585][1038,1791]">
+                  <node class="android.widget.TextView" text="Data Saver" resource-id="android:id/title" bounds="[189,1627][444,1698]" />
+                  <node class="android.widget.TextView" text="Off" resource-id="android:id/summary" bounds="[189,1698][240,1749]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1791][1080,1997]">
+                <node class="android.widget.RelativeLayout" bounds="[189,1791][849,1997]">
+                  <node class="android.widget.TextView" text="VPN" resource-id="android:id/title" bounds="[189,1833][294,1904]" />
+                  <node class="android.widget.TextView" text="None" resource-id="android:id/summary" bounds="[189,1904][276,1955]" />
+                </node>
+                <node class="android.widget.LinearLayout" resource-id="android:id/widget_frame" bounds="[849,1791][1038,1997]" />
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,1997][1080,2152]">
+                <node class="android.widget.RelativeLayout" bounds="[63,1997][1038,2152]">
+                  <node class="android.widget.TextView" text="Mobile plan" resource-id="android:id/title" bounds="[63,2039][337,2110]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,2152][1080,2337]">
+                <node class="android.widget.RelativeLayout" bounds="[63,2152][1038,2337]">
+                  <node class="android.widget.TextView" text="Private DNS" resource-id="android:id/title" bounds="[63,2194][344,2265]" />
+                  <node class="android.widget.TextView" text="On" resource-id="android:id/summary" bounds="[63,2265][108,2316]" />
+                </node>
+              </node>
+              <node class="android.widget.LinearLayout" clickable="true" bounds="[0,2358][1080,2337]">
+                <node class="android.widget.RelativeLayout" bounds="[63,2358][1038,2337]" />
+              </node>
+            </node>
+          </node>
+        </node>
+      </node>
+    </node>
+  </node>
+</node>`);
+
+function leaves(tree: DescribeNode): DescribeNode[] {
+  const out: DescribeNode[] = [];
+  const walk = (n: DescribeNode) => {
+    out.push(n);
+    n.children.forEach(walk);
+  };
+  tree.children.forEach(walk);
+  return out;
+}
+
+const runnerTree = (xml: string) => adaptFullAndroidHierarchyToDescribeResult(xml, DUMP_W, DUMP_H);
+const describeTree = (xml: string) => parseUiAutomatorDump(xml, DUMP_W, DUMP_H);
+
+// The runner tree as it was before rows were elements: no leaf kept only for
+// its tap.
+function withoutBorrowed(tree: DescribeNode): DescribeNode {
+  return { ...tree, children: tree.children.filter((n) => n.tapOnly !== true) };
+}
+
+describe("a view that can be tapped in the runner tree", () => {
+  it("is a leaf labelled with its children's text, as describe labels it", () => {
+    const tree = runnerTree(SETTINGS_MAIN);
+    const rows = findAll(tree, { role: "LinearLayout", text: "Network & internet" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      label: "Network & internet / Mobile, Wi‑Fi, hotspot",
+      borrowedLabel: true,
+      clickable: true,
+    });
+    const described = findAll(describeTree(SETTINGS_MAIN), { text: "Network & internet" });
+    expect(described.map((n) => n.label)).toEqual(["Network & internet / Mobile, Wi‑Fi, hotspot"]);
+    // A label of its own is not borrowed.
+    expect(findAll(tree, { role: "StaticText" }).some((n) => n.borrowedLabel)).toBe(false);
+  });
+
+  it("leaves the hoisted text of the container above it as it was", () => {
+    const tree = runnerTree(CONTACTS_ORGANIZE);
+    expect(
+      leaves(tree)
+        .filter((n) => n.role === "View")
+        .map((n) => [n.label, n.borrowedLabel, n.subtreeText])
+    ).toEqual([
+      [
+        "Contact ringtones / Set ringtones for specific contacts",
+        true,
+        "Contact ringtones Set ringtones for specific contacts",
+      ],
+      [
+        "Blocked numbers / Numbers you won’t receive calls or texts from",
+        true,
+        "Blocked numbers Numbers you won’t receive calls or texts from",
+      ],
+    ]);
+    const list = findAll(tree, { role: "ScrollView" });
+    expect(list).toHaveLength(1);
+    expect(list[0]!.subtreeText).toBe(
+      "This device Contact ringtones Set ringtones for specific contacts Blocked numbers " +
+        "Numbers you won’t receive calls or texts from"
+    );
+  });
+
+  it("borrows nothing when it holds a text field, so typed text is never a label", () => {
+    const tree = runnerTree(CHROME_TOOLBAR);
+    const toolbar = findAll(tree, { identifier: "com.android.chrome:id/toolbar" });
+    expect(toolbar).toHaveLength(1);
+    expect(toolbar[0]!.label).toBeUndefined();
+    expect(toolbar[0]!.borrowedLabel).toBeUndefined();
+    // The field still reads as itself; nothing else carries the typed text.
+    expect(findAll(tree, { text: "argentzq" }).map((n) => n.identifier)).toEqual([
+      "com.android.chrome:id/url_bar",
+    ]);
+    // A tappable view next to the field still borrows its own icon's name.
+    expect(findAll(tree, { identifier: "location_bar_status" })[0]!.label).toBe(
+      "Connection is secure"
+    );
+  });
+
+  it("leaves a password field out of a borrowed label", () => {
+    const tree = runnerTree(
+      dump(`
+<node class="android.view.ViewGroup" clickable="true" bounds="[0,400][1080,600]">
+  <node class="android.widget.TextView" text="PIN" bounds="[40,420][300,480]" />
+  <node class="android.view.View" password="true" text="4711" bounds="[40,500][600,580]" />
+</node>`)
+    );
+    const row = findAll(tree, { role: "ViewGroup" });
+    expect(row.map((n) => n.label)).toEqual(["PIN"]);
+    expect(leaves(tree).some((n) => (n.label ?? "").includes("4711"))).toBe(false);
+  });
+
+  it("leaves text with no on-screen frame out of a borrowed label", () => {
+    // A row at the bottom edge: its summary is drawn below the screen.
+    const tree = runnerTree(
+      dump(`
+<node class="android.widget.LinearLayout" clickable="true" bounds="[0,2250][1080,2456]">
+  <node class="android.widget.TextView" text="System" bounds="[210,2292][400,2363]" />
+  <node class="android.widget.TextView" text="Languages, gestures, time, backup" bounds="[210,2405][800,2456]" />
+  <node class="android.widget.TextView" text="Collapsed" bounds="[210,2300][210,2300]" />
+</node>`)
+    );
+    expect(findAll(tree, { role: "LinearLayout" }).map((n) => n.label)).toEqual(["System"]);
+  });
+
+  it("leaves text scrolled out of the list around it out of a borrowed label", () => {
+    // The row is partly in the list's window; its title is under the header.
+    const tree = runnerTree(
+      dump(`
+<node class="android.widget.TextView" text="Header" bounds="[0,0][1080,400]" />
+<node class="android.widget.ScrollView" bounds="[0,400][1080,2000]">
+  <node class="android.view.ViewGroup" clickable="true" bounds="[0,300][1080,500]">
+    <node class="android.widget.TextView" text="Hidden title" bounds="[40,310][400,380]" />
+    <node class="android.widget.TextView" text="Shown summary" bounds="[40,420][400,480]" />
+  </node>
+</node>`)
+    );
+    expect(findAll(tree, { role: "ViewGroup" }).map((n) => n.label)).toEqual(["Shown summary"]);
+    const hidden = findAll(tree, { text: "Hidden title" });
+    expect(hidden).toEqual([]);
+    expect(evaluateCondition("visible", undefined, hidden)).toBe(false);
+  });
+
+  it("borrows nothing when it holds a scroller", () => {
+    // A React Native wrapper that closes the keyboard, around a list.
+    const tree = runnerTree(
+      dump(`
+<node class="android.view.ViewGroup" clickable="true" bounds="[0,300][1080,1000]">
+  <node class="android.widget.TextView" text="Recent" bounds="[40,320][400,380]" />
+  <node class="android.widget.ScrollView" bounds="[0,400][1080,1000]">
+    <node class="android.widget.TextView" text="Item 1" bounds="[40,420][400,480]" />
+  </node>
+</node>`)
+    );
+    const wrapper = findAll(tree, { role: "ViewGroup" });
+    expect(wrapper).toHaveLength(1);
+    expect(wrapper[0]!.label).toBeUndefined();
+  });
+
+  it("borrows nothing when it scrolls, covers more than half the screen or hosts a WebView", () => {
+    const unlabelled = (cls: string, bounds: string, extra = "") =>
+      findAll(
+        runnerTree(
+          dump(`
+<node class="${cls}" clickable="true"${extra} bounds="${bounds}">
+  <node class="android.widget.TextView" text="Inside" bounds="[40,420][400,480]" />
+</node>`)
+        ),
+        { role: deriveRoleOf(cls) }
+      ).map((n) => n.label);
+    expect(unlabelled("android.view.ViewGroup", "[0,400][1080,900]", ' scrollable="true"')).toEqual(
+      [undefined]
+    );
+    // 1080x1300 of 1080x2400: more than half.
+    expect(unlabelled("android.view.ViewGroup", "[0,0][1080,1300]")).toEqual([undefined]);
+    expect(unlabelled("android.webkit.WebView", "[0,400][1080,900]")).toEqual([undefined]);
+    // Half the screen or less borrows.
+    expect(unlabelled("android.view.ViewGroup", "[0,0][1080,1200]")).toEqual(["Inside"]);
+  });
+
+  it("borrows no text from a view inside it that can be tapped itself", () => {
+    const dialog = findAll(runnerTree(GRANT_DIALOG), { identifier: "grant_dialog" });
+    expect(dialog.map((n) => n.label)).toEqual(["Allow YouTube to send you notifications?"]);
+    // describe also takes the buttons' text.
+    expect(findAll(describeTree(GRANT_DIALOG), { identifier: "grant_dialog" })[0]!.label).toBe(
+      "Allow YouTube to send you notifications? / Allow / Don’t allow"
+    );
+
+    const tree = runnerTree(SETTINGS_INTERNET);
+    expect(findAll(tree, { role: "LinearLayout", text: "T-Mobile" }).map((n) => n.label)).toEqual([
+      "T-Mobile / 5G",
+    ]);
+    expect(findAll(tree, { identifier: "settings_button" }).map((n) => n.label)).toEqual([
+      "Settings",
+    ]);
+  });
+
+  it("borrows nothing for a view that cannot be tapped", () => {
+    const tree = runnerTree(SETTINGS_INTERNET);
+    expect(findAll(tree, { role: "LinearLayout", text: "Searching" })).toEqual([]);
+    expect(findAll(tree, { text: "Searching" }).map((n) => n.role)).toEqual(["StaticText"]);
+  });
+
+  it("cuts a long borrowed label at 120 characters, as describe does", () => {
+    const card = findAll(runnerTree(FILES_CARD), { identifier: "item_root" });
+    expect(card).toHaveLength(1);
+    expect(card[0]!.label).toBe(`${LONG_NAME} / 5 B`.slice(0, 120) + "…");
+    expect(findAll(describeTree(FILES_CARD), { identifier: "item_root" })[0]!.label).toBe(
+      card[0]!.label
+    );
+  });
+
+  it("gives way to the element inside it in the pick of a selector with no field", () => {
+    // A wrapper that closes the keyboard, around the whole screen: base tapped the text.
+    const form = runnerTree(
+      dump(`
+<node class="android.view.ViewGroup" resource-id="form" bounds="[0,0][1080,2400]">
+  <node class="android.view.ViewGroup" clickable="true" bounds="[0,0][1080,2400]">
+    <node class="android.widget.TextView" text="Hi" bounds="[40,300][400,380]" />
+  </node>
+</node>`)
+    );
+    const wrapper = findAll(form, { role: "ViewGroup", within: { identifier: "form" } });
+    expect(wrapper.map((n) => n.tapOnly)).toEqual([true]);
+    expect(selectorToNode(form, { within: { identifier: "form" } })?.label).toBe("Hi");
+    expect(
+      evaluateCondition("text", "Hi", findAll(form, { within: { identifier: "form" } }), "equals")
+    ).toBe(true);
+
+    // A list of rows: the title of the first row, as before.
+    const tree = runnerTree(SETTINGS_MAIN);
+    const inList: Selector = { within: { identifier: "recycler_view" } };
+    expect(selectorToNode(tree, inList)?.label).toBe(
+      selectorToNode(withoutBorrowed(tree), inList)?.label
+    );
+    // A card with an id was an element before; it stays the pick.
+    const card = runnerTree(
+      dump(`
+<node class="android.widget.FrameLayout" resource-id="grid" bounds="[0,1200][1080,2000]">
+  <node class="androidx.cardview.widget.CardView" resource-id="com.google.android.documentsui:id/item_root" clickable="true" bounds="[64,1298][529,1899]">
+    <node class="android.widget.TextView" text="argent-row-a.txt" bounds="[196,1784][497,1835]" />
+  </node>
+</node>`)
+    );
+    expect(selectorToNode(card, { within: { identifier: "grid" } })?.identifier).toBe(
+      "com.google.android.documentsui:id/item_root"
+    );
+  });
+
+  it("never puts the borrowed-label mark in the describe tree", () => {
+    for (const xml of [
+      SETTINGS_MAIN,
+      SETTINGS_INTERNET,
+      CONTACTS_ORGANIZE,
+      GRANT_DIALOG,
+      CHROME_TOOLBAR,
+      FILES_CARD,
+    ]) {
+      expect(JSON.stringify(describeTree(xml))).not.toContain("borrowedLabel");
+      expect(JSON.stringify(describeTree(xml))).not.toContain("tapOnly");
+    }
+  });
+
+  it("gives way to the title inside it in a text check", () => {
+    const tree = runnerTree(SETTINGS_MAIN);
+    const matches = findAll(tree, { text: "Network & internet" });
+    expect(matches.map((n) => n.role).sort()).toEqual(["LinearLayout", "StaticText"]);
+    expect(evaluateCondition("text", "Network & internet", matches, "equals")).toBe(true);
+    expect(evaluateCondition("text", "^Network & internet$", matches, "matches")).toBe(true);
+    expect(evaluateCondition("text", "hotspot", matches, "contains")).toBe(false);
+    // A selector only the row matches reads the row.
+    const row = findAll(tree, { role: "LinearLayout", text: "Network & internet" });
+    expect(evaluateCondition("text", "hotspot", row, "contains")).toBe(true);
+  });
+
+  it("counts `next` and `after` from the title inside it, as before", () => {
+    const tree = runnerTree(SETTINGS_MAIN);
+    for (const selector of [
+      { role: "StaticText", next: { text: "Connected devices" } },
+      { next: { text: "Network & internet" } },
+      { text: "Connected devices", next: { text: "Network & internet" } },
+      { role: "StaticText", after: { text: "Connected devices" } },
+      { text: "Network & internet", after: { text: "Connected devices" } },
+    ] as Selector[]) {
+      expect(findAll(tree, selector).map((n) => n.label)).toEqual(
+        findAll(withoutBorrowed(tree), selector).map((n) => n.label)
+      );
+    }
+    expect(
+      findAll(tree, { role: "StaticText", next: { text: "Connected devices" } }).map((n) => n.label)
+    ).toEqual(["Bluetooth, pairing"]);
+    // `next` picks the title, not the row starting just above it.
+    const picked = findAll(tree, {
+      text: "Connected devices",
+      next: { text: "Network & internet" },
+    });
+    expect(evaluateCondition("text", "Connected devices", picked, "equals")).toBe(true);
+  });
+
+  it("leaves the recorder's `next` anchor on the title inside it", () => {
+    // Compose rows: a clickable view around the title, its switch beside it or
+    // inside it. The anchor is the title, never the row named by its title.
+    const pair = (title: string, y: number, inside: boolean): string => {
+      const text = `<node class="android.widget.TextView" text="${title}" bounds="[40,${y + 40}][400,${y + 110}]" />`;
+      const toggle = `<node class="android.widget.Switch" clickable="true" checkable="true" bounds="[900,${y + 30}][1040,${y + 120}]" />`;
+      const right = inside ? 1080 : 860;
+      const view = `<node class="android.view.View" clickable="true" bounds="[0,${y}][${right},${y + 150}]">${text}${inside ? toggle : ""}</node>`;
+      return inside ? view : view + toggle;
+    };
+    for (const inside of [false, true]) {
+      const tree = runnerTree(
+        dump(`<node class="android.widget.ScrollView" scrollable="true" bounds="[0,300][1080,2300]">
+${pair("Wi-Fi", 400, inside)}${pair("Bluetooth", 550, inside)}
+</node>`)
+      );
+      const toggle = leaves(tree).find((n) => n.role === "Switch")!;
+      const f = toggle.frame;
+      const point = { x: f.x + f.width / 2, y: f.y + f.height / 2 };
+      expect(deriveUniqueSelector(tree, toggle, point)).toEqual({
+        role: "Switch",
+        next: { text: "Wi-Fi" },
+      });
+    }
+  });
+
+  it("keeps the recorder's anchors to the views that were elements before", () => {
+    // Twelve anchors are tried, nearest first. The rows around the summary have
+    // no name of their own, and must not take the slots of the toolbar.
+    const tree = runnerTree(SETTINGS_NETWORK_API34);
+    const off = leaves(tree).find((n) => n.label === "Off")!;
+    const f = off.frame;
+    const point = { x: f.x + f.width / 2, y: f.y + f.height / 2 };
+    expect(deriveUniqueSelector(tree, off, point)).toEqual({
+      text: "Off",
+      next: { identifier: "com.android.settings:id/collapsing_toolbar" },
+    });
+  });
+
+  it("is a `within` scope that holds its switch", () => {
+    const tree = runnerTree(SETTINGS_INTERNET);
+    expect(findAll(tree, { role: "Switch", within: { text: "Wi-Fi" } })).toHaveLength(1);
+    expect(findAll(withoutBorrowed(tree), { role: "Switch", within: { text: "Wi-Fi" } })).toEqual(
+      []
+    );
+  });
+});
+
+function deriveRoleOf(cls: string): string {
+  return cls.split(".").pop()!;
+}
