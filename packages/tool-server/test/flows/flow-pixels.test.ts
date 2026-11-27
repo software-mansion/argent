@@ -12,6 +12,8 @@ import {
   PIXEL_CAPTURE_TIMEOUT_MS,
   comparePixels,
   pixelCaptureTimeoutMs,
+  settleOnPixels,
+  settlesOnPixels,
   statusBarMaskFraction,
   type PixelFrame,
 } from "../../src/tools/flows/flow-pixels";
@@ -891,5 +893,195 @@ describe("capturePixelsWithin", () => {
     expect(
       pixelCaptureTimeoutMs({ platform: "android", kind: "emulator", id: "emulator-5554" }, false)
     ).toBe(PIXEL_CAPTURE_TIMEOUT_MS);
+  });
+});
+
+describe("comparePixels bottom mask", () => {
+  it("ignores a change confined to the masked bottom rows", () => {
+    const changed = solid(50, 200, [0, 0, 0]);
+    for (let o = 196 * 50 * 4; o < changed.data.length; o += 4) changed.data[o] = 255;
+
+    expect(comparePixels(solid(50, 200, [0, 0, 0]), changed)).toBe("moving");
+    expect(comparePixels(solid(50, 200, [0, 0, 0]), changed, 0, 0.02)).toBe("still");
+  });
+});
+
+describe("settlesOnPixels", () => {
+  it.each<[string, DeviceInfo, boolean]>([
+    ["an iOS simulator", { platform: "ios", kind: "simulator", id: "sim" }, true],
+    ["an Android emulator", { platform: "android", kind: "emulator", id: "emulator-5554" }, true],
+    ["a physical Android phone", { platform: "android", kind: "device", id: "R5GL53FKDZR" }, false],
+    ["a physical iPhone", { platform: "ios", kind: "device", id: "phone" }, false],
+    ["a remote iOS simulator", { platform: "ios-remote", id: "remote:sim" }, false],
+    ["a Chromium app", { platform: "chromium", id: "chromium-9222" }, false],
+  ] as [string, DeviceInfo, boolean][])("answers %s with %s", async (_name, device, expected) => {
+    await expect(settlesOnPixels(device)).resolves.toBe(expected);
+  });
+
+  it("leaves a tvOS simulator on the tree settle", async () => {
+    vi.mocked(isTvOsSimulator).mockResolvedValue(true);
+    await expect(
+      settlesOnPixels({ platform: "ios", kind: "simulator", id: "tv" } as DeviceInfo)
+    ).resolves.toBe(false);
+  });
+});
+
+describe("settleOnPixels", () => {
+  const device: DeviceInfo = { platform: "ios", kind: "simulator", id: "ios-udid" };
+
+  function frame(
+    rgb: [number, number, number],
+    { width = 20, height = 20, changedRows = [] as number[], changedPixels = 0 } = {}
+  ): PNG {
+    const png = new PNG({ width, height });
+    for (let i = 0; i < width * height; i++) png.data.set([...rgb, 255], i * 4);
+    for (const row of changedRows) {
+      for (let x = 0; x < width; x++) png.data.set([255, 0, 0], (row * width + x) * 4);
+    }
+    const middle = Math.floor(height / 2) * width;
+    for (let i = 0; i < changedPixels; i++) png.data.set([255, 0, 0], (middle + i) * 4);
+    return png;
+  }
+
+  /** An env whose captures replay `frames` in order, repeating the last one. */
+  function replaying(frames: PNG[], options: { lastActionAt?: number; device?: DeviceInfo } = {}) {
+    let index = 0;
+    const screenshot = vi.fn(async () => {
+      const file = path.join(tmpDir, `frame-${index}.png`);
+      await fs.writeFile(file, PNG.sync.write(frames[Math.min(index++, frames.length - 1)]));
+      return { path: file, url: `file://${file}` };
+    });
+    const env = {
+      ...envFor(
+        options.device ?? device,
+        vi.fn(async () => ({ transport: { screenshot } }))
+      ),
+      lastActionAt: options.lastActionAt,
+    } as ActionEnv;
+    return { env, screenshot };
+  }
+
+  it("settles once two captures in a row match", async () => {
+    const { env, screenshot } = replaying([frame([10, 10, 10])]);
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps capturing while the screen moves", async () => {
+    const { env, screenshot } = replaying([
+      frame([0, 0, 0]),
+      frame([120, 120, 120]),
+      frame([255, 255, 255]),
+    ]);
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores the status bar and the home indicator on a phone", async () => {
+    const big = { width: 50, height: 200 };
+    const { env, screenshot } = replaying([
+      frame([10, 10, 10], big),
+      frame([10, 10, 10], { ...big, changedRows: [0, 1, 2, 3, 196, 197, 198, 199] }),
+    ]);
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits out a small change until it has lasted a few polls", async () => {
+    const big = { width: 50, height: 200 };
+    const { env, screenshot } = replaying([
+      frame([10, 10, 10], big),
+      frame([10, 10, 10], { ...big, changedPixels: 30 }),
+      frame([10, 10, 10], big),
+      frame([10, 10, 10], { ...big, changedPixels: 30 }),
+      frame([10, 10, 10], big),
+      frame([10, 10, 10], { ...big, changedPixels: 30 }),
+    ]);
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(4);
+  });
+
+  it("waits out a fade that starts slower than one poll can see", async () => {
+    const easeIn = [10, 17, 24, 31].map((gray) => frame([gray, gray, gray]));
+    const { env, screenshot } = replaying(easeIn, { lastActionAt: Date.now() - 400 });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot.mock.calls.length).toBeGreaterThan(easeIn.length);
+  });
+
+  it("settles an identical screen in two captures soon after an action", async () => {
+    const clockTick = frame([10, 10, 10], { changedRows: [0] });
+    const { env, screenshot } = replaying([frame([10, 10, 10]), clockTick], {
+      lastActionAt: Date.now() - 500,
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a caret blink through the slow-change check right after an action", async () => {
+    const big = { width: 50, height: 200 };
+    const caret = [frame([10, 10, 10], big), frame([10, 10, 10], { ...big, changedPixels: 30 })];
+    const { env, screenshot } = replaying([...caret, ...caret, ...caret, ...caret], {
+      lastActionAt: Date.now(),
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+
+  it("settles slightly different captures in two long after the last action", async () => {
+    const { env, screenshot } = replaying([frame([10, 10, 10]), frame([14, 14, 14])], {
+      lastActionAt: Date.now() - 5_000,
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(screenshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not settle a still screen until the quiet window after the last action", async () => {
+    const startedAt = Date.now();
+    const { env, screenshot } = replaying([frame([10, 10, 10])], { lastActionAt: startedAt });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
+    expect(Date.now() - startedAt).toBeLessThan(600);
+    expect(screenshot.mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it("gives an Android emulator a longer quiet window", async () => {
+    const startedAt = Date.now();
+    const { env } = replaying([frame([10, 10, 10])], {
+      lastActionAt: startedAt,
+      device: { platform: "android", kind: "emulator", id: "emulator-5554" },
+    });
+
+    await expect(settleOnPixels(env)).resolves.toBe("still");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(400);
+    expect(Date.now() - startedAt).toBeLessThan(700);
+  });
+
+  it("reports blind when no capture could be compared", async () => {
+    const screenshot = vi.fn(async () => {
+      throw new Error("no simulator-server");
+    });
+    const env = envFor(
+      device,
+      vi.fn(async () => ({ transport: { screenshot } }))
+    );
+
+    await expect(settleOnPixels(env)).resolves.toBe("blind");
+  });
+
+  it("stops at once when the run is aborted", async () => {
+    const { env } = replaying([frame([10, 10, 10])]);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(settleOnPixels({ ...env, signal: controller.signal })).resolves.toBe("aborted");
   });
 });

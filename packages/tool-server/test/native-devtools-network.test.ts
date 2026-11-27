@@ -84,6 +84,7 @@ import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
+import { resolveNativeTargetApp } from "../src/utils/native-target-app";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { resolveDevice } from "../src/utils/device-info";
 import {
@@ -296,6 +297,27 @@ afterEach(async () => {
   await instance?.dispose();
   instance = null;
   appGone();
+});
+
+it("auto-targets the active app without querying a silent Apple app", async () => {
+  const api = await startService();
+  const app = await connectApp(api.socketPath);
+  await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+  const calendar = await connectApp(api.socketPath, { bundleId: "com.apple.mobilecal" });
+  await calendar.closed;
+
+  const target = resolveNativeTargetApp(api);
+  const request = await vi.waitFor(() => {
+    const frame = app.received.find((f) => f.payload.method === "Application.getState");
+    expect(frame).toBeDefined();
+    return frame!;
+  });
+  app.send({
+    type: "ViewInspector",
+    payload: { id: request.payload.id, result: { applicationState: "active" } },
+  });
+  await expect(target).resolves.toMatchObject({ bundleId: BUNDLE });
+  expect(calendar.received).toHaveLength(0);
 });
 
 describe("native-devtools network capture", () => {

@@ -3,7 +3,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getUpdateState } from "../../utils/update-checker";
+import { getUpdateState, isUpdateNoteSuppressed } from "../../utils/update-checker";
+import { isReleaseBuild } from "../../utils/release-build";
+import { getActiveScreenRecordings } from "../../utils/screen-recording-reminder";
+import { listActiveRecordings } from "../flows/flow-utils";
 
 // dist/cli.js next to this bundle. Spawning it, rather than a bare `argent` on
 // PATH, updates the SAME install serving this session and works in local
@@ -113,6 +116,111 @@ const zodSchema = z.object({
     ),
 });
 
+// A running server can outlive its package on disk. Keep its old-version
+// reminder quiet until the next launch, or re-offer if the updater fails.
+let automaticVersion: string | null = null;
+
+export function isUpdatingAutomatically(version: string | null): boolean {
+  return version !== null && automaticVersion === version;
+}
+
+const AUTOMATIC_UPDATE_IDLE_MS = 10 * 60_000;
+
+export interface ServerActivity {
+  lastActivityAt: () => number;
+  toolCallsInFlight: () => number;
+}
+
+let pendingAutomaticUpdate: ReturnType<typeof setTimeout> | null = null;
+
+function cancelPendingAutomaticUpdate(): void {
+  if (pendingAutomaticUpdate) clearTimeout(pendingAutomaticUpdate);
+  pendingAutomaticUpdate = null;
+}
+
+function msUntilInstall(activity: ServerActivity): number {
+  const postponedByUser = isUpdateNoteSuppressed();
+  const busy = activity.toolCallsInFlight() > 0;
+  // Both recording kinds keep state between calls. Even a finalized screen
+  // capture still needs its original server until the client retrieves it.
+  if (
+    postponedByUser ||
+    busy ||
+    getActiveScreenRecordings().length ||
+    listActiveRecordings().length
+  )
+    return AUTOMATIC_UPDATE_IDLE_MS;
+  return Math.max(0, activity.lastActivityAt() + AUTOMATIC_UPDATE_IDLE_MS - Date.now());
+}
+
+function scheduleUpdater(updateArgs: string[], cliEntry: string | null, automatic = false): void {
+  if (!automatic) {
+    cancelPendingAutomaticUpdate();
+    automaticVersion = null;
+  }
+  updateScheduled = true;
+  // Let a manual update's MCP response reach the client before its server stops.
+  const launch = () => {
+    const child = spawn(
+      cliEntry ? process.execPath : "argent",
+      cliEntry ? [cliEntry, ...updateArgs] : updateArgs,
+      {
+        detached: true,
+        stdio: "ignore",
+        env: {
+          ...process.env,
+          ARGENT_UPDATE_TRIGGER: "mcp_update",
+          ...(automatic && { ARGENT_AUTOMATIC_UPDATE: "1" }),
+        },
+      }
+    );
+    child.on("error", (err) => {
+      console.error(`[update-argent] failed to spawn updater: ${err}`);
+      if (automatic) automaticVersion = null;
+      updateScheduled = false;
+    });
+    child.on("exit", (code) => {
+      if (automatic && code !== 0) automaticVersion = null;
+      updateScheduled = false;
+    });
+    child.unref();
+  };
+  if (automatic) launch();
+  else setTimeout(launch, 2000);
+}
+
+function installWhenReady(version: string, cliEntry: string, activity: ServerActivity): void {
+  pendingAutomaticUpdate = null;
+  const waitMs = msUntilInstall(activity);
+  if (waitMs > 0) {
+    pendingAutomaticUpdate = setTimeout(
+      () => installWhenReady(version, cliEntry, activity),
+      waitMs
+    );
+    pendingAutomaticUpdate.unref();
+    return;
+  }
+  scheduleUpdater(["update", "--yes", "--global", "--version", version], cliEntry, true);
+}
+
+export function scheduleAutomaticUpdate(version: string, activity: ServerActivity): void {
+  if (
+    process.env.ARGENT_INSTALL_KIND !== "global" ||
+    process.env.ARGENT_SERVER_MANAGED === "cli" ||
+    !isReleaseBuild() ||
+    updateScheduled ||
+    isUpdatingAutomatically(version)
+  )
+    return;
+  // Only invoke our own bundled CLI. It verifies the global destination again
+  // before writing, including for a launcher that guessed "global" from cwd.
+  const cliEntry = resolveCliEntry();
+  if (!cliEntry) return;
+  cancelPendingAutomaticUpdate();
+  automaticVersion = version;
+  installWhenReady(version, cliEntry, activity);
+}
+
 export const updateArgentTool: ToolDefinition<{
   target?: "auto" | "global" | "local" | "both";
 }> = {
@@ -196,53 +304,25 @@ export const updateArgentTool: ToolDefinition<{
 
     if (updateScheduled) {
       return {
-        message:
-          "An Argent update is already in progress. Please wait for the tool server to restart.",
+        message: "An Argent update is already in progress.",
       };
     }
 
     const targetFlags = targetFlagsFor(effectiveTarget);
-
-    updateScheduled = true;
-
-    // Delay the spawn so this response reaches the MCP server before the
-    // updater SIGTERMs this tool-server.
-    setTimeout(() => {
-      const cliEntry = resolveCliEntry();
-      // Pin --version only when the target IS the running install — it came
-      // from ITS update state; cross-install targets resolve their own.
-      const updateArgs = ["update", "--yes", ...targetFlags];
-      if (targetsOnlyRunningInstall && installableVersion) {
-        updateArgs.push("--version", installableVersion);
-      }
-      // Pin WHERE via a flag, not the child's cwd: the installer's
-      // resolveProjectRoot walks editor/.git markers and can pick a DIFFERENT
-      // ancestor in monorepos — and a vanished cwd would fail the spawn.
-      const spawnRoot =
-        projectRoot ??
-        (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
-      if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
-      const cmd = cliEntry ? process.execPath : "argent";
-      const args = cliEntry ? [cliEntry, ...updateArgs] : updateArgs;
-      const child = spawn(cmd, args, {
-        detached: true,
-        stdio: "ignore",
-        env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
-      });
-      // Without an error listener a spawn failure (ENOENT when `argent` isn't
-      // on PATH — the norm in local mode) crashes the tool-server. The next
-      // update notification re-offers.
-      child.on("error", (err) => {
-        console.error(`[update-argent] failed to spawn updater: ${err}`);
-        updateScheduled = false;
-      });
-      // Updater exited without killing this server (declined or no-op'd) —
-      // unblock future calls; a successful update restarts this server anyway.
-      child.on("exit", () => {
-        updateScheduled = false;
-      });
-      child.unref();
-    }, 2000);
+    // Pin --version only when the target IS the running install — it came
+    // from ITS update state; cross-install targets resolve their own.
+    const updateArgs = ["update", "--yes", ...targetFlags];
+    if (targetsOnlyRunningInstall && installableVersion) {
+      updateArgs.push("--version", installableVersion);
+    }
+    // Pin WHERE via a flag, not the child's cwd: the installer's
+    // resolveProjectRoot walks editor/.git markers and can pick a DIFFERENT
+    // ancestor in monorepos — and a vanished cwd would fail the spawn.
+    const spawnRoot =
+      projectRoot ??
+      (running.projectRoot && fs.existsSync(running.projectRoot) ? running.projectRoot : null);
+    if (spawnRoot) updateArgs.push("--project-root", spawnRoot);
+    scheduleUpdater(updateArgs, resolveCliEntry());
 
     const targetLabel =
       effectiveTarget === "both"
