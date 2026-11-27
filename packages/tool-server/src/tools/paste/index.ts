@@ -68,7 +68,7 @@ export function createPasteTool(registry: Registry): ToolDefinition<PasteParams,
   return {
     id: "paste",
     description: `Set the device clipboard to \`text\` and paste into the focused field (iOS simulator, Android emulator).<flag:macos-apps> Mac app: types \`text\` directly without touching the pasteboard.</flag:macos-apps>
-Use when pasting something a real user would paste (OTP/2FA code, long token/URL, or testing paste handling) — use \`keyboard\` for normal typing. Tap the field first to focus it.
+Use when pasting something a real user would paste (OTP/2FA code, long token/URL, or testing paste handling). Use \`keyboard\` for normal typing. Tap the field first to focus it.
 Returns \`{ pasted: true, via? }\`. Fails on TV targets, if clipboard/typing fails<flag:macos-apps>, or if the Mac app focus accepts no text</flag:macos-apps>.`,
     zodSchema: pasteZodSchema,
     searchHint: "paste clipboard pasteboard otp 2fa code fill field",

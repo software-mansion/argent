@@ -319,7 +319,7 @@ type Params = z.infer<typeof zodSchema>;
 export const foldTool: ToolDefinition<Params, Result> = {
   id: "fold",
   description: `Move a foldable iOS simulator or Android emulator hinge to a \`posture\` or \`angle\` (pass exactly one) and wait until input is ready.
-Use when testing an app across folded/unfolded postures (\`list-devices\` marks \`foldable: true\`; use \`rotate\` for orientation). Coordinates change with the active panel — read the returned tree or call \`describe\` before tapping.
+Use when testing an app across folded/unfolded postures (\`list-devices\` marks \`foldable: true\`; use \`rotate\` for orientation). Coordinates change with the active panel, so read the returned tree or call \`describe\` before tapping.
 iOS: fold to \`closed\`/\`open\` to guarantee a panel switch; returns \`{ activeScreen, screen, posture?, hingeAngle, warning? }\`. Android: returns \`{ posture?, deviceState, hingeAngle?, warning? }\` (use Pixel Fold AVD for accurate cover-panel coords).
 Fails if the device is not foldable, is a remote simulator, or is a physical Android device.`,
   zodSchema,

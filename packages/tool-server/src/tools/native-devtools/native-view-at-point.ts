@@ -67,11 +67,11 @@ export function queryViewAtPoint(
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
-  description: `Inspect the deepest UIView at raw point (x, y) — drawn view by default, or touch-receiving view with \`hitTest: true\`.
+  description: `Inspect the deepest drawn UIView at raw point (x, y) by default, or the touch-receiving UIView with \`hitTest: true\`.
 Use when debugging unlabeled/custom views not in \`describe\` or checking which view swallows a tap (use \`hitTest: true\`).
 Convert normalized \`describe\` coords by multiplying by \`screen\` points from \`native-full-hierarchy\` (\`maxDepth: 1\`)<flag:macos-apps>; on a Mac app, multiply by the area \`describe\` reports</flag:macos-apps>.
 Returns \`{ status: "ok", view }\` (null if none).
-Status handling: If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. Fails if an Apple system app is targeted (An Apple system app is rejected outright — terminal, never retry it).`,
+Status handling: If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {

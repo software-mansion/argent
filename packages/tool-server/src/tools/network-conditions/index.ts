@@ -28,7 +28,7 @@ const capability: ToolCapability = {
 
 export const networkConditionsTool: ToolDefinition<NetworkConditionsParams, Result> = {
   id: "network-conditions",
-  description: `Add latency, throttle bandwidth, or simulate offline mode on iOS simulators (per-app via native devtools, Metro/WS exempt), Android emulators (system proxy — restart app if existing connections bypass shaping; Ethernet can prevent offline mode; reset if a crash leaves the emulator unable to connect), or Chromium (active page). Omit all condition fields to reset.
+  description: `Add latency, throttle bandwidth, or simulate offline mode on iOS simulators (per-app via native devtools, Metro/WS exempt), Android emulators (system proxy), or Chromium (active page). On Android, restart the app if existing connections bypass shaping, note that Ethernet can prevent offline mode, and reset if a crash leaves the emulator unable to connect. Omit all condition fields to reset.
 Use when testing loading states, retries, or timeouts (each call replaces previous conditions).
 Returns the scope and applied conditions (or null on reset), or on iOS a \`{ status, message }\` precheck block (follow \`message\` if \`status\` is present). Fails on physical devices, remote iOS simulators, or if Android has an unmanaged proxy.`,
   zodSchema: networkConditionsZodSchema,

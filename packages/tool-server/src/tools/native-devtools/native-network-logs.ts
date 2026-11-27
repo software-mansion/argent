@@ -128,7 +128,7 @@ export function createNativeNetworkLogsTool(
     },
     description: `List native HTTP requests (URLSession/NSURLConnection on iOS<flag:macos-apps>/Mac apps</flag:macos-apps>; OkHttp on debuggable Android). Call \`network-capture-start\` first.
 Use when inspecting native SDK/module traffic (pass an ID to \`view-network-request-details\` for bodies/headers).
-Returns recent requests oldest-first with capture status in \`header\` (or a precheck status + remedy message on iOS).<flag:macos-apps> If a Mac log stays stopped, check the start result.</flag:macos-apps> Fails on \`NATIVE_DEVTOOLS_NOT_CONNECTED\` or Apple system apps (An Apple system app is rejected outright — terminal, never retry it).`,
+Returns recent requests oldest-first with capture status in \`header\` (or a precheck status + remedy message on iOS).<flag:macos-apps> If a Mac log stays stopped, check the start result.</flag:macos-apps> Fails on \`NATIVE_DEVTOOLS_NOT_CONNECTED\`. An Apple system app is rejected outright (terminal: never retry it).`,
     zodSchema,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

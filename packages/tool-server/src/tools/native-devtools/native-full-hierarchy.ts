@@ -32,7 +32,7 @@ export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
 Use when debugging layout or inspecting views absent from the accessibility tree.
 Returns \`{ status: "ok", windows, screen }\` (\`screen\` gives upright point size and orientation; \`screenFrame\` uses upright UI axes).
 <flag:macos-apps>Mac app: returns AppKit window view tree with \`screenFrame\` in points from the \`describe\` area top-left. Statuses below are iOS only.
-</flag:macos-apps>If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. Fails if an Apple system app is targeted (An Apple system app is rejected outright — terminal, never retry it).`,
+</flag:macos-apps>If status is restart_required: follow message (usually restart-app) and retry. If status is service_stale: restart tool-server (\`argent server stop && argent server start --detach\`) and retry; if the same status comes back, stop restarting. If status is connect_pending: Do not restart it, wait a few seconds and retry. If status is init_failed: reboot simulator. An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
   interaction: {
