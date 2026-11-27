@@ -1,6 +1,6 @@
 ---
 name: argent-ios-device-setup
-description: Set up a physical iPhone over USB or a connected CoreDevice tunnel for argent. Use when a physical iPhone is involved (a list-devices iOS entry with kind "device") and ONLY then; never for a simulator.
+description: Set up a physical iPhone over USB or CoreDevice tunnel for Argent. Use ONLY for a physical iPhone (kind "device"), never a simulator.
 ---
 
 # Physical iPhone setup

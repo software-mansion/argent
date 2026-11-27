@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-app-workflow
-description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
+description: Develop and debug React Native apps on iOS simulator or Android emulator (startup, Metro, build fixes, runtime errors, tests).
 ---
 
 Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator. Exception: measure and profile app launch on the iPhone with `native-profiler-launch-analysis` (`argent-native-profiler` §4).

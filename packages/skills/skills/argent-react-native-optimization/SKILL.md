@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-optimization
-description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup / TTI (including iOS launch time). Delegates to argent-react-native-profiler for measurement.
+description: Entry-point for React Native performance optimization (slowness, re-renders, jank, startup/TTI). Profiles first via `argent-react-native-profiler`, then fixes bottlenecks.
 ---
 
 ## Rules

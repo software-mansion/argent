@@ -1,6 +1,6 @@
 ---
 name: argent-screen-recording
-description: Record a screen video with Argent on an iOS simulator, cabled iPhone, Android emulator or device, or Mac app. Use when the user asks for a screen recording or a video of a flow, interaction, animation, or other app behavior.
+description: Record a screen video with Argent on iOS, Android, or Mac apps when the user asks to capture a video clip of a flow or interaction.
 ---
 
 `screen-recording-start` and `screen-recording-stop` carry the options (`timeLimitSeconds`, `trimStatic`, `showTouches`) and the result fields. One recording per device at a time; different devices can record concurrently.

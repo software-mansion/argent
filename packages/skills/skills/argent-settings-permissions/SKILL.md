@@ -1,6 +1,6 @@
 ---
 name: argent-settings-permissions
-description: Grant, deny, or reset an app's runtime permissions (camera, microphone, photos, contacts, notifications, calendar, location, location-always, media-library, motion, reminders) on an iOS simulator or Android device using the argent `settings-permissions` tool - without navigating the system Settings UI. Use when the permission cannot be changed through the app itself - and only then, pre-authorize before the app asks, deny up front, re-enable a permission the user already denied, or reset so the prompt reappears. If the app can flip it - via an in-app toggle or the system permission dialog the app triggers - interact with the app instead.
+description: Grant, deny, or reset app runtime permissions out-of-band on an iOS simulator or Android device via `settings-permissions`. Use only when the app's own dialog or toggle cannot change the permission.
 ---
 
 `settings-permissions` edits the platform's permission store directly (the iOS simulator's TCC database, Android's runtime permissions over adb). It is a **test-setup / out-of-band** tool, not a general permissions toggle: the default way to change a permission is still through the app. The tool's description covers the supported permissions per platform, the parameters, the result (`applied` / `skipped`) and the per-platform requirements.
