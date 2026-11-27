@@ -2029,14 +2029,18 @@ Without a link, every step kind runs.`,
         // shutdown at the end of the caller's test, after its later steps.
         const caller = ctx?.flowOutput;
         if (caller) state.output = { doc: caller.doc };
-        // Before the teardown below: shutdown steps act on the device and the
-        // app the run left, so a chromium instance the run owns must still be up.
-        try {
-          await execShutdown(state);
-        } catch (error) {
-          thrown ??= { error };
+        if (caller?.deferShutdown && !thrown && canDeferShutdown(state, viaUpload)) {
+          caller.deferredShutdown = deferShutdown(state);
+        } else {
+          // Before the teardown below: shutdown steps act on the device and the
+          // app the run left, so a chromium instance the run owns must still be up.
+          try {
+            await execShutdown(state);
+          } catch (error) {
+            thrown ??= { error };
+          }
+          if (caller) caller.shutdownDoc = state.output.doc;
         }
-        if (caller) caller.shutdownDoc = state.output.doc;
         if (thrown) throw thrown.error;
       } finally {
         // Sample the cancel flag before teardown: a client disconnect during
@@ -2815,6 +2819,61 @@ async function execShutdown(state: ExecState): Promise<void> {
   await drainShutdown(state, 0, thrown);
   // Every entry had its turn; the first throw fails the run.
   if (thrown.length > 0) throw thrown[0];
+}
+
+/**
+ * Whether a run can hand its queued `shutdown:` to a recorder that asked for
+ * it ({@link deferShutdown}). Not when it has nothing queued, when it was
+ * cancelled (a replay skips shutdown then), when it read its files from an
+ * upload (they are gone after the call), or when it booted a chromium
+ * instance, which goes down at the end of the call.
+ */
+function canDeferShutdown(state: ExecState, viaUpload: boolean): boolean {
+  return (
+    state.shutdownQueue.length > 0 &&
+    !state.signal?.aborted &&
+    !viaUpload &&
+    state.owned.length === 0
+  );
+}
+
+/**
+ * The run's queued `shutdown:` blocks, as a function that runs them later: in
+ * the call it is given, so that call's cancel skips them, against the output
+ * document it is given, as {@link execShutdown} would have at the run's end. A
+ * recorder that records this run as a `run:` step calls it where a replay
+ * reaches the blocks: before the test's own shutdown steps. The reports go to
+ * `reports`, numbered on from those already there.
+ */
+function deferShutdown(
+  state: ExecState
+): (ctx: ToolContext | undefined, output: { doc: FlowOutput }, reports: object[]) => Promise<void> {
+  const queue = state.shutdownQueue;
+  return async (ctx, output, reports) => {
+    const { onStepReport: _, ...rest } = state;
+    const later: ExecState = {
+      ...rest,
+      ctx,
+      signal: ctx?.signal,
+      reports: reports as StepReport[],
+      stopped: false,
+      pinned: false,
+      owned: [],
+      output,
+      scriptLogBudget: createScriptLogBudget(),
+      ...(ctx?.emitProgress ? { onStepReport: ctx.emitProgress } : {}),
+      shutdownQueue: [...queue],
+      inShutdown: false,
+    };
+    try {
+      await execShutdown(later);
+    } finally {
+      // A launch in shutdown may boot an instance of its own.
+      for (let i = later.owned.length - 1; i >= 0; i--) {
+        await teardownBootedChromium(state.registry, later.owned[i]!);
+      }
+    }
+  };
 }
 
 /**

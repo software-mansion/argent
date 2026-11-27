@@ -125,13 +125,15 @@ Shutdown steps appear after the main steps in the report and count toward the to
 
 #### Record shutdown steps
 
-Pass `shutdown: true` to `e2e-add-step`, `e2e-add-script`, or `e2e-add-echo`. Record the main steps first. Actions and scripts still run immediately, so cleanup can change the device or remove test data during recording.
+Pass `shutdown: true` to `e2e-add-step`, `e2e-add-script`, or `e2e-add-echo`. Record the main steps first. Cleanup actions and scripts run during recording. They can change the device or remove test data.
 
 A shutdown script receives output from the main steps and earlier shutdown steps. It passes its changes only to later shutdown steps.
 
-A fragment recorded in the main list runs its shutdown inside the recording call. Argent reports when this happens. On replay, the fragment's shutdown runs at the end of the test. During recording, the fragment's cleanup output is unavailable to later steps. A fragment recorded in the shutdown list can pass its cleanup output to later shutdown steps.
+A fragment recorded as a `run:` in the main list normally defers its cleanup. Later main steps can use the state the fragment created. Deferred cleanup runs in reverse order before the first `e2e-add-step` or `e2e-add-script` call with `shutdown: true`. If neither call occurs, `e2e-finish-recording` runs the cleanup. Restarting the recording also runs deferred cleanup from the recording it replaces.
 
-If later steps need state the fragment cleans up, record its main steps individually and put its cleanup in the shutdown list. After you finish recording, replace those steps with the `run:` call.
+A fragment cleans up within its own call when you record it in the shutdown list, upload it over a link, or start a Chromium app that closes at the end of the call. Check the tool message for whether cleanup already ran.
+
+If cancellation interrupts deferred cleanup, the affected fragments stay queued for another shutdown call or for finish. If finish is cancelled while cleanup remains queued, the recording stays open. Check the tool result before retrying. Cleanup can run even if the tool then refuses the new step.
 
 ### Requirements
 

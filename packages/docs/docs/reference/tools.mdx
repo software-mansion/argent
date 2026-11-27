@@ -1102,6 +1102,8 @@ The old `flow-*` names, for example `flow-execute`, still call these tools. See 
 
 When recording with `shutdown: true`, `stepCount` counts entries in the shutdown list. In `e2e-add-step` and `e2e-add-script`, `recorded` starts with `shutdown`. `e2e-finish-recording` reports the count as `shutdownSteps` when the list has entries. See [Record shutdown steps](/docs/reference/e2e-yaml#record-shutdown-steps).
 
+When a recording call runs deferred fragment cleanup, `fragmentShutdown` contains the step reports and an `ok` indicator. If the call returns an error after running cleanup, the error can report that cleanup already ran.
+
 ## Design variants
 
 Staged through [Argent Lens](/docs/features/lens) so you can compare proposals against the running app. These tools require the `argent-lens` flag and macOS. The flag is off by default, so `argent tools` omits them until you enable it.

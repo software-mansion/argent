@@ -134,7 +134,7 @@ describe("recording into shutdown:", () => {
     expect(out.stepCount).toBe(1);
   });
 
-  it("says when a fragment recorded as run: already ran its shutdown", async () => {
+  it("says when a fragment recorded as run: could not keep its shutdown for later", async () => {
     await fs.mkdir(e2e(""), { recursive: true });
     await fs.writeFile(
       e2e("frag.yaml"),
@@ -162,8 +162,33 @@ describe("recording into shutdown:", () => {
 
     expect((await onDisk()).steps).toEqual([{ kind: "run", flow: "frag.yaml" }]);
     expect(out.message).toMatch(
-      /frag\.yaml ran its shutdown: steps at the end of this call; a replay runs them at the end/
+      /frag\.yaml ran its shutdown: steps at the end of this call \(its files came with the call, or it started its own chromium app\); a replay runs them at the end/
     );
+  });
+
+  it("does not say a cancelled fragment ran its shutdown", async () => {
+    await fs.mkdir(e2e(""), { recursive: true });
+    await fs.writeFile(e2e("frag.yaml"), "steps:\n  - echo: frag\nshutdown:\n  - echo: down\n");
+    const { registry } = mockRegistry({
+      ok: false,
+      steps: [
+        { kind: "echo", status: "skip", reason: "run aborted" },
+        { kind: "echo", status: "skip", reason: "run aborted", shutdown: true },
+      ],
+    });
+    await flowStartRecordingTool.execute({}, { name: "t", project_root: root });
+
+    const out = (await createFlowAddStepTool(registry).execute(
+      {},
+      {
+        name: "t",
+        project_root: root,
+        command: "e2e-execute",
+        args: JSON.stringify({ name: "frag", project_root: root }),
+      }
+    )) as { message: string };
+
+    expect(out.message).not.toContain("ran its shutdown");
   });
 
   it("keeps what a shutdown script returns out of the later steps, as a replay does", async () => {

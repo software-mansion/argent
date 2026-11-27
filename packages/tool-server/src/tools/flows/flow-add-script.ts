@@ -18,6 +18,8 @@ import {
   isLinkedRecorderCall,
   parseScriptPath,
   parseScriptTimeout,
+  deferredShutdownFirst,
+  type FragmentShutdownReport,
   keepRecordingOutput,
   recordedCount,
   recordingOutput,
@@ -57,6 +59,8 @@ interface FlowAddScriptResult {
   stepCount: number;
   recorded?: string;
   savedTo?: FlowSavedTo;
+  /** A shutdown call: the deferred shutdown of the recorded `run:` fragments, run before it. */
+  fragmentShutdown?: FragmentShutdownReport;
 }
 
 /**
@@ -164,11 +168,14 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Save the script in the shutdown list. It still runs immediately. Its output reaches only later shutdown steps. stepCount counts shutdown entries."
+      "Save the script in the shutdown list. Pending fragment cleanup runs before the script. The script's output reaches only later shutdown steps. stepCount counts shutdown entries."
     ),
 });
 
-export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
+export const flowAddScriptTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  FlowAddScriptResult
+> = deferredShutdownFirst({
   id: "e2e-add-script",
   description: `Run a local JavaScript (.mjs, .js) or TypeScript (.mts, .ts) file and record it as a script step. Use when the user requests a local script in an active recording. Call it where the script must run. A successful script updates the shared output and returns it as \`outputJson\`. Later steps can read it with \`{{output:PATH}}\`. Use \`shutdown: true\` for cleanup scripts. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before retrying. Record without a link (argent link or ARGENT_TOOLS_URL).`,
   zodSchema,
@@ -345,4 +352,4 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
       savedTo,
     };
   },
-};
+});

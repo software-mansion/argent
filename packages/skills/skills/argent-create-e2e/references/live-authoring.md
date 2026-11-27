@@ -39,9 +39,11 @@ Obey these lifecycle rules:
 
 ## Record cleanup after the main steps
 
-Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run immediately. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
+Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run during the call. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
 
-Read the result of any call recorded as `run:`. If the fragment already ran cleanup and later steps need that state, record its main steps individually and its cleanup with `shutdown: true`. Replace those steps with the fragment call after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
+A fragment recorded as `run:` in the main list usually defers cleanup until the first shutdown action or script, or until `e2e-finish-recording`. Read `fragmentShutdown` and the call message before assuming cleanup passed. If the call was cancelled, finish the recording or retry the shutdown call to run queued cleanup.
+
+For an uploaded fragment or one that starts its own Chromium app, read the message for cleanup that ran immediately. If later steps need the state it removed, record the fragment's main steps individually and its cleanup with `shutdown: true`. Replace those steps after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
 
 ## Start in the correct order
 

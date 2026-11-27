@@ -17,6 +17,9 @@ import {
   validateFlow,
   type FlowFile,
   type FlowSavedTo,
+  fragmentShutdownNote,
+  runDeferredShutdown,
+  type FragmentShutdownReport,
 } from "./flow-utils";
 import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
 import { resolveScriptEnv } from "./flow-script-step";
@@ -86,6 +89,8 @@ export const flowStartRecordingTool: ToolDefinition<
     message: string;
     restarted?: true;
     discardedSteps?: number;
+    /** A restart: the kept shutdown of the discarded take's `run:` fragments, which it ran. */
+    fragmentShutdown?: FragmentShutdownReport;
     e2eTestFile: string;
     /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
     flowFile: string;
@@ -93,7 +98,7 @@ export const flowStartRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-start-recording",
-  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
+  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one. A restart runs pending fragment cleanup from the discarded recording and reports it in \`fragmentShutdown\`.
 Use when you want to capture a reusable sequence of device interactions for later replay. Load the argent-create-e2e skill first: it holds the polish, audit and replay steps. Not for Apple TV or Android TV.
 Returns { message, e2eTestFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
 Without a link, it creates that file and fails if the .argent/e2e/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
@@ -139,6 +144,8 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
   fileInputs,
+  // A restart may run the discarded take's fragment shutdown, on the device.
+  longRunning: true,
   services: () => ({}),
   async execute(_services, params, ctx) {
     // The type emerges from the steps: a first `restart-app` becomes a leading
@@ -224,6 +231,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
     // Recordings are keyed per flow file, so only a same-key restart replaces
     // anything; starting a *different* flow abandons nothing to report.
     if (replaced) {
+      // The discarded take's recorded fragments ran, so their kept shutdown
+      // runs now, as it would have at its finish.
+      const fragmentShutdown = await runDeferredShutdown(replaced, ctx);
       // Only claim the file was reset when this process reset it: in client mode
       // truncation waits on the client applying the directive, and a rejected
       // path or a failed write there comes back as `savedTo: null`.
@@ -239,8 +249,12 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           ? "the previous take"
           : `the previous take (${discardedSteps} step${discardedSteps === 1 ? "" : "s"})`;
       return {
-        message: `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset,
+        message:
+          `Restarted recording "${params.name}" — ${lost} was discarded and ` +
+          reset +
+          (fragmentShutdown ? ` ${fragmentShutdownNote(fragmentShutdown)}` : ""),
         restarted: true,
+        ...(fragmentShutdown ? { fragmentShutdown } : {}),
         ...(discardedSteps === undefined ? {} : { discardedSteps }),
         e2eTestFile: flowFile,
         flowFile,

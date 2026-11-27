@@ -12,6 +12,9 @@ import {
   type FlowStep,
   type FlowSavedTo,
   type RecordedStepWarning,
+  fragmentShutdownNote,
+  runDeferredShutdown,
+  type FragmentShutdownReport,
 } from "./flow-utils";
 import { stepAnchor, summarizeShutdownStep, summarizeSteps } from "./flow-step-definitions";
 
@@ -142,6 +145,8 @@ export const flowFinishRecordingTool: ToolDefinition<
     steps: number;
     /** Steps in the `shutdown:` list, when it has any. */
     shutdownSteps?: number;
+    /** The deferred shutdown of the recorded `run:` fragments, which the finish ran. */
+    fragmentShutdown?: FragmentShutdownReport;
     summary: string[];
     e2eTestFile: string;
     /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
@@ -150,12 +155,14 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-finish-recording",
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns the final YAML and a step summary, including \`shutdownSteps\` when shutdown has entries. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
+  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns the final YAML and a step summary, including \`shutdownSteps\` when shutdown has entries. Runs any pending fragment cleanup first and reports it in \`fragmentShutdown\`. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
 A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-finish-recording"],
+  // It may run the fragments' shutdown, on the device.
+  longRunning: true,
   interaction: {
     // Name the flow: other recordings stay live, so an unqualified message would
     // not identify which one.
@@ -168,7 +175,12 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       `Failed to finish recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
   services: () => ({}),
-  async execute(_services, params) {
+  async execute(_services, params, ctx) {
+    // A replay runs the shutdown of the fragments recorded as `run:` steps at
+    // the end of the test, so the finish runs what no shutdown call ran. In
+    // the lock, so a `run:` step cannot land after it and be dropped with the
+    // session. A finish that then fails says it ran.
+    let fragmentShutdown: FragmentShutdownReport | undefined;
     // Resolve, read and clear as ONE critical section: host mode's
     // `await fs.readFile` is a yield, and an append landing in it would be on
     // disk while the summary and step count — taken from the pre-append read —
@@ -178,6 +190,17 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       params.name,
       async () => {
         const session = await requireRecordingSession(params.project_root, params.name);
+        fragmentShutdown = await runDeferredShutdown(session, ctx);
+        // Kept for a later call after a cancel: the session must stay open to
+        // run them. A block a `run:` step queued meanwhile runs when its
+        // append fails on the closed session.
+        if (ctx?.signal?.aborted && session.deferredShutdown?.length) {
+          throw new Error(
+            `The finish was cancelled before the kept shutdown: of the fragments recorded as ` +
+              `run: steps ran, so the recording "${params.name}" is still open. Call ` +
+              `e2e-finish-recording again.`
+          );
+        }
 
         // Host mode re-reads so manual edits made during the recording reach the
         // summary; in client mode this host never has the file, so the in-memory
@@ -234,7 +257,14 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         clearRecordingSession(session);
         return { filePath, flowFile, savedTo, flow, summary, headline };
       }
-    );
+    ).catch((err: unknown) => {
+      if (fragmentShutdown && err instanceof Error) {
+        err.message = `${err.message} ${fragmentShutdownNote(fragmentShutdown)}`;
+      }
+      throw err;
+    });
+    // Assigned in the lock callback, which TypeScript does not follow.
+    const ran = fragmentShutdown as FragmentShutdownReport | undefined;
 
     return {
       // Name the counts in `message` as well. A caller that reads only
@@ -243,11 +273,13 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
         `Finished recording "${params.name}" e2e test (${flow.steps.length} steps` +
         (flow.shutdown ? `, ${flow.shutdown.length} shutdown steps` : "") +
         `)` +
-        headline,
+        headline +
+        (ran ? `. ${fragmentShutdownNote(ran)}` : ""),
       path: filePath,
       executionPrerequisite: flow.executionPrerequisite,
       steps: flow.steps.length,
       ...(flow.shutdown ? { shutdownSteps: flow.shutdown.length } : {}),
+      ...(ran ? { fragmentShutdown: ran } : {}),
       summary,
       e2eTestFile: flowFile,
       flowFile,
