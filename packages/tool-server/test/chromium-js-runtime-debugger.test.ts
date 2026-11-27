@@ -391,4 +391,154 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
       await instance.dispose();
     }
   });
+
+  async function captureLogs() {
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    const received: Array<{ level: string; message: string }> = [];
+    instance.api.consoleEvents.on("log", (entry) =>
+      received.push({ level: entry.level, message: entry.message })
+    );
+    return { fake, instance, received };
+  }
+
+  it("records a browser Log.entryAdded message with the resource URL", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      fake.events.emit("event", "Log.entryAdded", {
+        entry: {
+          source: "network",
+          level: "error",
+          text: "Failed to load resource: the server responded with a status of 404 (Not Found)",
+          url: "http://127.0.0.1/missing.png",
+          timestamp: 1710000000000.5,
+        },
+      });
+      expect(received).toEqual([
+        {
+          level: "error",
+          message:
+            "Failed to load resource: the server responded with a status of 404 (Not Found) http://127.0.0.1/missing.png",
+        },
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("records uncaught errors and unhandled rejections from Runtime.exceptionThrown", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      fake.events.emit("event", "Runtime.exceptionThrown", {
+        timestamp: 1710000000000.25,
+        exceptionDetails: {
+          text: "Uncaught",
+          exception: { type: "object", description: "Error: boom\n    at http://x/app.js:1:1" },
+        },
+      });
+      fake.events.emit("event", "Runtime.exceptionThrown", {
+        timestamp: 1710000000001.25,
+        exceptionDetails: {
+          text: "Uncaught (in promise)",
+          exception: { type: "string", value: "plain reason" },
+        },
+      });
+      expect(received).toEqual([
+        { level: "error", message: "Uncaught Error: boom" },
+        { level: "error", message: "Uncaught (in promise) plain reason" },
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("drops a message the tab replays on reselect, but keeps a repeat with its own timestamp", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const log = (timestamp: number) =>
+        fake.events.emit("consoleAPICalled", {
+          type: "log",
+          args: [{ type: "string", value: "same" }],
+          timestamp,
+        });
+      log(1710000000000.125);
+      log(1710000000000.25);
+      log(1710000000000.125);
+      expect(received.map((r) => r.message)).toEqual(["same", "same"]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("keys replays on a short prefix, so long messages sharing it stay apart", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const prefix = "x".repeat(20_000);
+      const log = (message: string, timestamp: number) =>
+        fake.events.emit("consoleAPICalled", {
+          type: "log",
+          args: [{ type: "string", value: message }],
+          timestamp,
+        });
+      log(`${prefix}a`, 1710000000000.125);
+      log(`${prefix}b`, 1710000000000.25);
+      log(`${prefix}bc`, 1710000000000.25);
+      log(`${prefix}a`, 1710000000000.125);
+      expect(received.map((r) => r.message.slice(prefix.length))).toEqual(["a", "b", "bc"]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("drops replayed Log.entryAdded and Runtime.exceptionThrown messages", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const replayBoth = () => {
+        fake.events.emit("event", "Log.entryAdded", {
+          entry: { level: "error", text: "Failed to load resource", timestamp: 1710000000000.5 },
+        });
+        fake.events.emit("event", "Runtime.exceptionThrown", {
+          timestamp: 1710000000000.75,
+          exceptionDetails: { text: "Uncaught", exception: { description: "Error: boom" } },
+        });
+      };
+      replayBoth();
+      replayBoth();
+      expect(received.map((r) => r.message)).toEqual([
+        "Failed to load resource",
+        "Uncaught Error: boom",
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("records every message that has no timestamp", async () => {
+    const { fake, instance, received } = await captureLogs();
+    try {
+      const entry = { entry: { level: "warning", text: "no time" } };
+      fake.events.emit("event", "Log.entryAdded", entry);
+      fake.events.emit("event", "Log.entryAdded", entry);
+      expect(received).toEqual([
+        { level: "warning", message: "no time" },
+        { level: "warning", message: "no time" },
+      ]);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("dispose stops recording browser messages", async () => {
+    const { fake, instance, received } = await captureLogs();
+    await instance.dispose();
+    fake.events.emit("event", "Runtime.exceptionThrown", {
+      timestamp: 1710000000000,
+      exceptionDetails: { text: "Uncaught" },
+    });
+    expect(received).toHaveLength(0);
+  });
 });

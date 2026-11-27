@@ -217,7 +217,7 @@ export async function connectCdp(port: number): Promise<{
  * real blur or hidden state.
  */
 export async function primePageSession(cdp: CDPClient): Promise<void> {
-  for (const domain of ["Page", "DOM", "Runtime", "Accessibility"]) {
+  for (const domain of ["Page", "DOM", "Runtime", "Accessibility", "Log"]) {
     try {
       await cdp.send(`${domain}.enable`);
     } catch {

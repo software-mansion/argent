@@ -10,7 +10,7 @@ import { CHROMIUM_CDP_NAMESPACE, type ChromiumCdpApi } from "./chromium-cdp";
 import type { ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
-import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { LogFileWriter, detachedCopy } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import {
@@ -52,6 +52,59 @@ function formatConsoleArgs(params: ConsoleAPICalledParams): string {
       return `[${arg.type}]`;
     })
     .join(" ");
+}
+
+type StackTrace = ConsoleLogEntry["stackTrace"];
+
+/** Matches the entry cap of LogFileWriter. */
+const MAX_REPLAY_KEYS = 50_000;
+const REPLAY_KEY_PREFIX_CHARS = 64;
+
+type RecordedFields = Omit<ConsoleLogEntry, "id">;
+
+function replayKey({ timestamp, level, message }: RecordedFields): string {
+  const prefix = detachedCopy(message.slice(0, REPLAY_KEY_PREFIX_CHARS));
+  return `${timestamp}|${level}|${message.length}|${prefix}`;
+}
+
+/** A `Log.entryAdded` message the browser wrote itself, such as a failed resource load. */
+function browserLogMessage(params: Record<string, unknown>): RecordedFields {
+  const entry = (params.entry ?? {}) as {
+    level?: string;
+    text?: string;
+    url?: string;
+    timestamp?: number;
+    stackTrace?: StackTrace;
+  };
+  const text = entry.text ?? "";
+  return {
+    args: [],
+    level: entry.level === "verbose" ? "debug" : (entry.level ?? "info"),
+    message: entry.url && !text.includes(entry.url) ? `${text} ${entry.url}` : text,
+    timestamp: entry.timestamp ?? NaN,
+    stackTrace: entry.stackTrace,
+  };
+}
+
+/** A `Runtime.exceptionThrown` message: an uncaught error or an unhandled rejection. */
+function uncaughtExceptionMessage(params: Record<string, unknown>): RecordedFields {
+  const details = (params.exceptionDetails ?? {}) as {
+    text?: string;
+    exception?: { description?: string; value?: unknown };
+    stackTrace?: StackTrace;
+  };
+  const exception = details.exception;
+  const thrown =
+    exception?.description?.split("\n")[0] ??
+    (exception && "value" in exception ? stringifyConsoleValue(exception.value) : undefined);
+  const text = details.text ?? "Uncaught";
+  return {
+    args: [],
+    level: "error",
+    message: thrown ? `${text} ${thrown}` : text,
+    timestamp: (params.timestamp as number | undefined) ?? NaN,
+    stackTrace: details.stackTrace,
+  };
 }
 
 function createConsoleLogServer(
@@ -162,23 +215,24 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
-    const onConsoleAPI = (params: ConsoleAPICalledParams) => {
-      // consoleAPICalled.timestamp is ms-since-epoch on Chrome as on Hermes (see
-      // consoleTimestampToIso); keep it finite so streamed entries carry a usable
-      // number.
-      const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
-      const entry: ConsoleLogEntry = {
-        id: nextLogId++,
-        level: params.type,
-        args: params.args.map((a) => ({
-          type: a.type,
-          value: a.value,
-          description: a.description,
-        })),
-        message: formatConsoleArgs(params),
-        timestamp: ts,
-        stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
-      };
+    // Selecting a tab again replays its earlier messages with their original
+    // timestamps, which Chrome gives to the microsecond.
+    const recorded = new Set<string>();
+    const isReplay = (fields: RecordedFields): boolean => {
+      if (!Number.isFinite(fields.timestamp)) return false;
+      const key = replayKey(fields);
+      if (recorded.has(key)) return true;
+      if (recorded.size < MAX_REPLAY_KEYS) recorded.add(key);
+      return false;
+    };
+
+    const record = (fields: RecordedFields) => {
+      if (isReplay(fields)) return;
+      // Timestamps are ms-since-epoch on Chrome as on Hermes (see
+      // consoleTimestampToIso); keep them finite so streamed entries carry a
+      // usable number.
+      const ts = Number.isFinite(fields.timestamp) ? fields.timestamp : Date.now();
+      const entry: ConsoleLogEntry = { ...fields, id: nextLogId++, timestamp: ts };
       logWriter.write({
         id: entry.id,
         timestamp: consoleTimestampToIso(ts),
@@ -188,7 +242,30 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       });
       consoleEvents.emit("log", entry);
     };
+
+    const onConsoleAPI = (params: ConsoleAPICalledParams) => {
+      record({
+        level: params.type,
+        args: params.args.map((a) => ({
+          type: a.type,
+          value: a.value,
+          description: a.description,
+        })),
+        message: formatConsoleArgs(params),
+        timestamp: params.timestamp,
+        stackTrace: params.stackTrace as StackTrace,
+      });
+    };
     cdp.events.on("consoleAPICalled", onConsoleAPI);
+
+    const onBrowserEvent = (method: string, params: Record<string, unknown>) => {
+      if (method === "Log.entryAdded") {
+        record(browserLogMessage(params));
+      } else if (method === "Runtime.exceptionThrown") {
+        record(uncaughtExceptionMessage(params));
+      }
+    };
+    cdp.events.on("event", onBrowserEvent);
 
     const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
@@ -227,6 +304,7 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       api,
       dispose: async () => {
         cdp.events.off("consoleAPICalled", onConsoleAPI);
+        cdp.events.off("event", onBrowserEvent);
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
         // `logWriter.close()` below unlinks the log file unless the socket
