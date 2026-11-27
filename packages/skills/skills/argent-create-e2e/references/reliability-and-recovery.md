@@ -47,7 +47,7 @@ While the required source is down, selector failures and raw-point capture are v
 | Chromium      | No reachable CDP session                        | Boot again with `electronAppPath` and remote debugging                           |
 | Vega          | Toolkit returns no page source                  | Relaunch an app built with automation support                                    |
 
-On an iOS simulator, the runner tree is the `describe` tree. When a tree read fails, the step reason ends with the fix. The fix is to update argent, boot the simulator again, wait for the app or relaunch it, or add a `tool: launch-app` step when another app is in front. Do that, then rerun. System apps (`com.apple.*`) record and replay like any other app.
+On an iOS simulator, the runner tree is the `describe` tree. When a tree read fails, the step reason ends with the fix. The fix is to update argent, boot the simulator again, wait for the app or relaunch it, or add a `tool: launch-app` step when another app is in front. Do that fix, then rerun. System apps (`com.apple.*`) record and replay like any other app.
 
 On Android, healthy `describe` output does not prove the runner tree is available. It can fall back to legacy `uiautomator`, while the runner refuses that trimmed fallback.
 

@@ -173,6 +173,55 @@ describe("text matches: execution", () => {
     expect(result.ok).toBe(true);
   });
 
+  describe("on a password field, whose text a tree never holds", () => {
+    const passwordField = (value?: string) =>
+      screen([
+        n({
+          identifier: "pw",
+          role: "AXTextField",
+          password: true,
+          ...(value ? { value } : {}),
+          frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+        }),
+      ]);
+
+    async function reasonFor(expectedText: string, textMatch: "matches" | "contains") {
+      await writeFlow("pw", {
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "assert",
+            condition: "text",
+            selector: { identifier: "pw" },
+            expectedText,
+            textMatch,
+          },
+        ],
+      });
+      const result = await run("pw");
+      expect(result.ok).toBe(false);
+      return result.steps[0]?.reason;
+    }
+
+    it.each([
+      ["^$", "matches", "match /^$/"],
+      ["x", "contains", 'contain "x"'],
+    ] as const)('does not report %s as a mismatch of the text ""', async (text, mode, wanted) => {
+      currentTree = () => passwordField();
+      expect(await reasonFor(text, mode)).toBe(
+        'element matched id="pw", but it is a password field. An e2e test does not read the ' +
+          `text of a password field (wanted to ${wanted}).`
+      );
+    });
+
+    it("quotes the placeholder that an empty field reads as", async () => {
+      currentTree = () => passwordField("Password");
+      expect(await reasonFor("^$", "matches")).toBe(
+        'element matched id="pw" but its text was "Password" (wanted to match /^$/)'
+      );
+    });
+  });
+
   it("passes unanchored on a partial match (the contains analog)", async () => {
     currentTree = () => screen([label("Total: $4.99 (incl. tax)", { identifier: "total" })]);
     await writeFlow("price", {

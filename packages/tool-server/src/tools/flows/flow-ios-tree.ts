@@ -1,10 +1,21 @@
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
-import { axDaemonCrashSignal, axServiceRef, type AXServiceApi } from "../../blueprints/ax-service";
+import {
+  axDaemonCrashSignal,
+  axServiceRef,
+  axStartFailureDegraded,
+  type AXServiceApi,
+} from "../../blueprints/ax-service";
+import {
+  externalClaimForNativeId,
+  externalSupportHint,
+  isExternalId,
+} from "../../utils/external-devices";
 import { nodeText } from "../../utils/ui-tree-match";
 import { redactTypedSecrets, secretTypedOn, WITHHELD_INPUT_TEXT } from "../../utils/typed-secrets";
 import { noteUiOrientation } from "../../utils/ios-ui-orientation";
 import { describeIosDevice } from "../describe/platforms/ios-device";
+import { tcpArtifactHint } from "../describe/platforms/ios";
 import { adaptAxTree } from "../ui-tree/ios";
 import type { UiTree, UiTreeNode } from "../ui-tree";
 import type { FlowTreeTarget } from "./flow-actions";
@@ -245,6 +256,20 @@ const CRASH_REMEDY =
   "crashes again, the crash is in the service on this host: rebooting the simulator or " +
   "restarting the tool-server starts the same binary and does not fix it.";
 
+// A daemon that stopped is torn down by the registry, and the next read starts
+// a new one, so a reboot is not the fix. For the stop to reach a reason, the
+// reads failed until the end of the window, hence the exit.
+const DAEMON_STOPPED_REMEDY =
+  "The accessibility service stopped. Argent starts it again at the next read: run the e2e " +
+  "test again. If it stops again, report the error.";
+
+// A start that failed with the settings verified: `describe` does not
+// prescribe a reboot there either (see `axStartFailureDegraded`).
+const START_FAILED_REMEDY =
+  "The accessibility service did not start, although this simulator's pre-boot accessibility " +
+  "settings are in place, so a reboot does not fix it: run the e2e test again, and if it fails " +
+  "the same way, report the error.";
+
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -259,6 +284,37 @@ function unsupportedTree(message: string): FailureError {
   });
 }
 
+/**
+ * The provider that owns the device, named as `boot-device` names it when it
+ * refuses to boot one; undefined on a simulator argent owns.
+ */
+function providerHint(device: DeviceInfo): string | undefined {
+  if (isExternalId(device.id)) {
+    return externalSupportHint(device.id) ?? "This device is supplied by an external provider.";
+  }
+  const claim = externalClaimForNativeId(device.id);
+  return claim ? `This device is supplied by ${claim.provider.name}.` : undefined;
+}
+
+/** The reboot remedy, which `boot-device` refuses on a provider's device. */
+function rebootRemedy(device: DeviceInfo): string {
+  const provider = providerHint(device);
+  return provider === undefined
+    ? BOOT_REMEDY
+    : `${provider} Argent cannot reboot this device: restart it from that application, then ` +
+        `run the e2e test again.`;
+}
+
+/** The daemon stopped after it started (not a start that failed), so the next read starts it again. */
+function daemonStopped(err: unknown, code: string | undefined): boolean {
+  return (
+    code === FAILURE_CODES.AX_DAEMON_PROCESS_ERROR ||
+    code === FAILURE_CODES.REGISTRY_SERVICE_TERMINATING ||
+    // Its code, AX_QUERY_FAILED, is also the daemon's own RPC error.
+    errMsg(err) === "ax-service not connected"
+  );
+}
+
 /** The reason a tree read failed, followed by what to do about it. */
 function treeUnavailable(device: DeviceInfo, err: unknown): Error {
   const code = getFailureSignal(err)?.error_code;
@@ -267,16 +323,49 @@ function treeUnavailable(device: DeviceInfo, err: unknown): Error {
       `the accessibility tree of ${device.id} cannot be read: ${errMsg(err)}. ${UPDATE_REMEDY}`
     );
   }
+  // Some errors end with a period of their own.
+  const unreadable = `the accessibility tree of ${device.id} could not be read: ${errMsg(err).replace(/\.$/, "")}.`;
+  // Errors that already name their cause and remedy: the provider did not
+  // grant ax-service or withdrew the device, or a TCP artifact is not built.
+  if (
+    code === FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED ||
+    code === FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE ||
+    tcpArtifactHint(err) !== undefined
+  ) {
+    return new Error(unreadable);
+  }
+  // Defined only for a start that failed, which can carry a process error too.
+  const startDegraded = axStartFailureDegraded(err);
+  // A crash also stops the daemon, so it goes first.
   const remedy =
     axDaemonCrashSignal(err) !== undefined
       ? CRASH_REMEDY
-      : code === FAILURE_CODES.AX_QUERY_TIMEOUT
-        ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
-          "web page out of view, then run the e2e test again."
-        : BOOT_REMEDY;
-  return new Error(
-    `the accessibility tree of ${device.id} could not be read: ${errMsg(err)}. ${remedy}`
-  );
+      : startDegraded === undefined && daemonStopped(err, code)
+        ? DAEMON_STOPPED_REMEDY
+        : startDegraded === false
+          ? START_FAILED_REMEDY
+          : code === FAILURE_CODES.AX_QUERY_TIMEOUT
+            ? "The screen took too long to read: wait for the app to settle, or scroll a long list or " +
+              "web page out of view, then run the e2e test again."
+            : rebootRemedy(device);
+  return new Error(`${unreadable} ${remedy}`);
+}
+
+/**
+ * Added where a read that is `degraded` names no foreground app: without the
+ * pre-boot accessibility settings, a system dialog can hide the app from the
+ * tree (iOS 26.5 and later). The sentence says "can": the dialog does not hide
+ * it on every boot, and the read cannot tell.
+ */
+export function degradedNoAppHint(device: DeviceInfo): string {
+  const provider = providerHint(device);
+  return provider === undefined
+    ? "Argent could not verify this simulator's pre-boot accessibility settings, so a system " +
+        "dialog on the screen can hide the app from the tree. If a dialog is on the screen, boot " +
+        "the simulator with `boot-device` (`force: true`), then run the e2e test again."
+    : `${provider} Argent could not verify its pre-boot accessibility settings, so a system ` +
+        "dialog on the screen can hide the app from the tree. Argent cannot reboot this device: " +
+        "restart it from that application.";
 }
 
 /**
@@ -328,11 +417,13 @@ export async function queryIosSimulatorFlowTree(
 ): Promise<DescribeTreeData> {
   const tree = await readIosSimulatorUiTree(registry, device);
   if (target?.pinned && tree.foregroundApp !== target.bundleId) {
+    const hidden =
+      tree.degraded && tree.foregroundApp === undefined ? ` ${degradedNoAppHint(device)}` : "";
     throw new Error(
       `${target.bundleId} is not the foreground app on ${device.id} ` +
         `(${tree.foregroundApp ? `${tree.foregroundApp} is` : "no app is"}). ` +
         `It may have crashed or opened another app. If the e2e test meant to leave it, switch apps ` +
-        `with a \`tool: launch-app\` step first (a \`launch:\` step restarts the app).`
+        `with a \`tool: launch-app\` step first (a \`launch:\` step restarts the app).${hidden}`
     );
   }
   if (tree.roots.every((root) => root.children.length === 0)) {
@@ -340,7 +431,7 @@ export async function queryIosSimulatorFlowTree(
       tree.degraded
         ? `the accessibility tree of ${device.id} is empty: argent could not verify the ` +
             `simulator's pre-boot accessibility settings, and without them its accessibility ` +
-            `service cannot see the app. ${BOOT_REMEDY}`
+            `service cannot see the app. ${rebootRemedy(device)}`
         : `the accessibility tree of ${device.id} is empty: the foreground app ` +
             `(${tree.foregroundApp ?? "unknown"}) exposes no accessible elements. Wait for it to ` +
             `draw, or relaunch it with \`restart-app\`, then run the e2e test again.`

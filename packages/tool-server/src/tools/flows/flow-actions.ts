@@ -1023,7 +1023,7 @@ async function scrollToVisible(
     }
     const stale = await staleSelectorReason(env, target, reason, {
       ignoresKeys: true,
-      scrollTo: { within: within !== undefined },
+      scrollTo: { within: within !== undefined, end },
     });
     if (stale === "aborted") return { aborted: true };
     const cut = end ? `${reason}${CUT_SCROLL_END}` : cutMissReason(reason);
@@ -1055,7 +1055,7 @@ async function scrollToVisible(
       const missedWithin = `scroll container ${describeSelector(within)} is not visible`;
       // On a cut tree, a cover the read found still explains the miss.
       if (!cutRead) return { reason: missedWithin };
-      const cover = coverReason(env, within, missedWithin, undefined);
+      const cover = coverReason(env, within, missedWithin, {});
       return { reason: cover ?? cutMissReason(missedWithin) };
     }
     // Not a key: one that matches would end the scroll before the target shows.
@@ -1228,7 +1228,13 @@ function switchRoleReason(sel: FlowSelector, missed: string): string | undefined
   return `${missed}, and a switch has the role "AXSwitch" on an iOS simulator, not "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
 }
 
-/** On an iOS simulator, why a selector naming a role no element has can never match. */
+const IOS_ROLES = `${NATIVE_DESCRIBE_ROLES.slice(0, -1).join(", ")} and ${NATIVE_DESCRIBE_ROLES.at(-1)}`;
+
+/**
+ * On an iOS simulator, why a selector naming a role no element has can never
+ * match. It does not name one cause: a role written by hand can be a guess or a
+ * typo, so the reason lists the roles there are.
+ */
 function unknownRoleReason(
   env: ActionEnv,
   sel: FlowSelector,
@@ -1236,10 +1242,18 @@ function unknownRoleReason(
 ): string | undefined {
   const role = isIosSimulatorEnv(env) ? unknownIosRole(sel) : undefined;
   if (role === undefined) return undefined;
-  return `${missed}, and no element on an iOS simulator has the role "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
+  return (
+    `${missed}, and no element on an iOS simulator has the role "${role}". Its roles are ` +
+    `${IOS_ROLES}. A role from another tree (the view hierarchy that an older Argent recorded ` +
+    `on, a physical iPhone, or another platform) never matches here; ${RE_RECORD}`
+  );
 }
 
 const COVERED_REMEDY = "Dismiss it first, or add an await step for it to close.";
+
+// An `await` already waited for the cover to close.
+const COVERED_WAITED_REMEDY =
+  "Dismiss it first, or raise this step's `timeout:` if it closes by itself.";
 
 const PERMISSION_REMEDY =
   "or grant the permission before the e2e test with the `settings-permissions` tool.";
@@ -1257,8 +1271,14 @@ const PERMISSION_PACKAGES = new Set([
 interface MissContext {
   /** The miss is a verdict that does not see the on-screen keyboard (a condition, `scroll-to`'s target). */
   ignoresKeys?: boolean;
-  /** The miss ends a `scroll-to` step; `within` says whether the step names its scroll container. */
-  scrollTo?: { within: boolean };
+  /**
+   * The miss ends a `scroll-to` step; `within` says whether the step names its
+   * scroll container, `end` whether the scroll stopped moving (else it ran out
+   * of attempts).
+   */
+  scrollTo?: { within: boolean; end: boolean };
+  /** The miss ends an `await` step, which already waited for the screen to change. */
+  waited?: boolean;
 }
 
 function systemAlertReason(missed: string): string {
@@ -1295,8 +1315,9 @@ function coverReason(
   env: ActionEnv,
   sel: FlowSelector,
   missed: string,
-  scrollTo: MissContext["scrollTo"]
+  { scrollTo, waited }: MissContext
 ): string | undefined {
+  const remedy = waited ? COVERED_WAITED_REMEDY : COVERED_REMEDY;
   const tree = env.lastRead?.tree;
   const cover = env.lastRead?.cover;
   if (!tree || !cover) return undefined;
@@ -1307,21 +1328,51 @@ function coverReason(
       const tap = `${missed}: a system dialog or sheet of ${cover.package} ${below}. Add a step before this one that taps a button of it`;
       return PERMISSION_PACKAGES.has(cover.package) ? `${tap}, ${PERMISSION_REMEDY}` : `${tap}.`;
     }
-    if (!cover.scrolls || scrollTo?.within)
-      return `${missed}: a dialog ${below}. ${COVERED_REMEDY}`;
+    if (!cover.scrolls || scrollTo?.within) return `${missed}: a dialog ${below}. ${remedy}`;
     const scroll = scrollTo
       ? "add within: with the dialog's scroll container to this step"
       : "add a scroll-to step before this one";
-    return (
-      `${missed}: a dialog ${below}. If the element is in the dialog, ${scroll}. Else dismiss ` +
-      `the dialog first, or add an await step for it to close.`
-    );
+    const dismiss = waited
+      ? "dismiss the dialog first, or raise this step's `timeout:` if it closes by itself."
+      : "dismiss the dialog first, or add an await step for it to close.";
+    return `${missed}: a dialog ${below}. If the element is in the dialog, ${scroll}. Else ${dismiss}`;
   }
   const covered = { ...tree, children: cover.leaves };
   if (!flowFindAll(covered, sel).some(isVisible)) return undefined;
   return cover.systemAlert
     ? systemAlertReason(missed)
-    : `${missed}: it is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
+    : `${missed}: it is covered by an alert, sheet or popover. ${remedy}`;
+}
+
+/**
+ * The causes of an id that is in no tree, with a remedy that the step has not
+ * done already: an `await` waited, and a `scroll-to` scrolled.
+ */
+function notThereRemedy({ scrollTo, waited }: MissContext): string {
+  if (scrollTo?.end) {
+    return (
+      "(the list had not loaded its rows, or the element is in the other direction): add an " +
+      "await step before this one for an element of the loaded list, or change `direction:`"
+    );
+  }
+  if (scrollTo) {
+    return (
+      `(the list had not loaded its rows, the element is in the other direction, or it is more ` +
+      `than ${MAX_SCROLL_ITERATIONS} swipes away): add an await step before this one for an ` +
+      "element of the loaded list, change `direction:`, or add a scroll-to step for an element " +
+      "on the way"
+    );
+  }
+  if (waited) {
+    return (
+      "(a banner or sheet that already closed, a list row further down): for a list row, add a " +
+      "scroll-to step before this one; for a slow load, raise this step's `timeout:`"
+    );
+  }
+  return (
+    "(a banner or sheet that already closed, a list row not loaded yet): add an await or " +
+    "scroll-to step before this one"
+  );
 }
 
 /**
@@ -1345,14 +1396,18 @@ async function staleSelectorReason(
   env: ActionEnv,
   sel: FlowSelector,
   missed = `no visible element matched selector ${describeSelector(sel)}`,
-  { ignoresKeys = false, scrollTo }: MissContext = {}
+  context: MissContext = {}
 ): Promise<string | "aborted" | undefined> {
-  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, missed, scrollTo);
+  const { ignoresKeys = false, scrollTo, waited } = context;
+  // A `scroll-to` whose target is covered did not reach the end of a scroll:
+  // its swipe met the cover. Its cover texts lead with what failed instead.
+  const coveredMissed = scrollTo ? `could not scroll to ${describeSelector(sel)}` : missed;
+  if (!isIosSimulatorEnv(env)) return coverReason(env, sel, coveredMissed, context);
   const role = unknownRoleReason(env, sel, missed);
   if (role !== undefined) return role;
   const field = fieldTextReason(env, sel, missed);
   if (field !== undefined) return field;
-  const covered = coverReason(env, sel, missed, scrollTo);
+  const covered = coverReason(env, sel, coveredMissed, context);
   if (covered !== undefined) return covered;
   // Every alternative must be an id: a bare string also tries its text, which
   // the read below does not look for.
@@ -1394,15 +1449,17 @@ async function staleSelectorReason(
   if (carriers.length === 0) {
     return (
       `${missed}, and no element with this id is in the accessibility tree right now, on ` +
-      `screen or off. Either the element is not there at this moment (a banner or sheet that ` +
-      `already closed, a list row not loaded yet): add an await or scroll-to step before this ` +
-      `one. Or ${OLDER_FLOW}; ${RE_RECORD}`
+      `screen or off. Either the element is not there at this moment ${notThereRemedy(context)}. ` +
+      `Or ${OLDER_FLOW}; ${RE_RECORD}`
     );
   }
   // The flow tree drops what an alert, sheet or popover covers.
   if (!uncovered) {
-    if (read.value.alertVisible === true) return systemAlertReason(missed);
-    return `${missed}: the element with this id is covered by an alert, sheet or popover. ${COVERED_REMEDY}`;
+    if (read.value.alertVisible === true) return systemAlertReason(coveredMissed);
+    return (
+      `${coveredMissed}: the element with this id is covered by an alert, sheet or popover. ` +
+      (waited ? COVERED_WAITED_REMEDY : COVERED_REMEDY)
+    );
   }
   const wanted = sel.role?.toLowerCase();
   if (wanted !== undefined && carriers.every((n) => !n.role?.toLowerCase().includes(wanted))) {
@@ -1573,9 +1630,11 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "type":
       return runType(env, step);
     case "await":
-      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS, true);
+      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS, {
+        waited: true,
+      });
     case "assert":
-      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, true);
+      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, {});
     case "idle":
       return waitForIdle(env, step);
     case "scroll-to": {
@@ -2334,8 +2393,9 @@ async function waitForCondition(
   timeoutMs: number,
   // Word a stale selector's miss (an extra read): `await` and `assert` only,
   // never a `when:` guard, whose unmet condition is a clean skip.
-  explainMiss = false
+  explain?: MissContext
 ): Promise<DirectiveOutcome> {
+  const explainMiss = explain !== undefined;
   const deadline = Date.now() + timeoutMs;
 
   // The last TRUSTED read's matches.
@@ -2471,7 +2531,10 @@ async function waitForCondition(
       : "";
   // Nothing matched: say so when the selector looks stale.
   if (explainMiss && lastMatches.length === 0 && step.condition !== "hidden") {
-    const stale = await staleSelectorReason(env, step.selector, undefined, { ignoresKeys: true });
+    const stale = await staleSelectorReason(env, step.selector, undefined, {
+      ...explain,
+      ignoresKeys: true,
+    });
     if (stale === "aborted") return ABORTED_OUTCOME;
     if (stale) return { ok: false, reason: stale + blipNote };
   }
@@ -3107,6 +3170,14 @@ function assertReason(
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
       const shown = quoted(first, (node) => macFieldText(node, macos) ?? assertText(node));
+      // An empty text is no reading of a password field: a typed secret is
+      // dropped from the tree (see evaluateCondition).
+      if (first.password === true && shown === "") {
+        return (
+          `element matched ${sel}, but it is a password field. An e2e test does not read the ` +
+          `text of a password field (wanted to ${wanted}).`
+        );
+      }
       const own = quoted(first, (node) => macFieldText(node, macos) ?? nodeText(node));
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;

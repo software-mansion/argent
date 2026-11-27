@@ -1,11 +1,47 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DeviceInfo, Registry } from "@argent/registry";
-import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { DeviceInfo, FailureCode } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  Registry,
+  ServiceInitializationError,
+} from "@argent/registry";
+
+// What the ax-service factory measures before it spawns the daemon, for the
+// tests that run the real factory into a start that fails.
+let prefsEnabled = true;
+
+vi.mock("../../src/utils/ios-host", async () => {
+  const actual = await vi.importActual<typeof import("../../src/utils/ios-host")>(
+    "../../src/utils/ios-host"
+  );
+  return {
+    ...actual,
+    pickIosHost: () => ({
+      kind: "local",
+      requiresTcp: false,
+      bootstrapAx: async () => ({ accessibilityPrefsEnabled: prefsEnabled }),
+      spawnAxDaemon: () => {
+        throw new Error("ax-service binary not found: /nowhere/bin/darwin/ax-service");
+      },
+    }),
+  };
+});
+
 import {
   axDaemonExitError,
+  axServiceBlueprint,
   type AXTreeNode,
   type AXTreeResponse,
 } from "../../src/blueprints/ax-service";
+import {
+  __resetExternalDeviceCacheForTesting,
+  makeExternalId,
+} from "../../src/utils/external-devices";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import { adaptAxTree } from "../../src/tools/ui-tree/ios";
 import {
@@ -62,6 +98,15 @@ function registryWith(response: AXTreeResponse | Error, degraded = false): Regis
     })),
   } as unknown as Registry;
 }
+
+/** The error `promise` rejects with; fails the test when it resolves. */
+const failed = (promise: Promise<unknown>): Promise<Error> =>
+  promise.then(
+    () => {
+      throw new Error("expected the read to fail");
+    },
+    (e: unknown) => e as Error
+  );
 
 const leaves = (tree: DescribeNode) => tree.children.map((c) => c.label ?? c.identifier ?? c.role);
 
@@ -791,6 +836,252 @@ describe("queryIosSimulatorFlowTree", () => {
     await expect(queryIosSimulatorFlowTree(registryWith(empty), device)).rejects.toThrow(
       /is empty: the foreground app \(com\.example\.app\) exposes no accessible elements.*restart-app/
     );
+  });
+
+  const pinned = { bundleId: "com.example.app", pinned: true };
+  const DIALOG_HINT =
+    "Argent could not verify this simulator's pre-boot accessibility settings, so a system " +
+    "dialog on the screen can hide the app from the tree. If a dialog is on the screen, boot " +
+    "the simulator with `boot-device` (`force: true`), then run the e2e test again.";
+
+  it("names a hiding dialog only on a degraded read that names no foreground app", async () => {
+    const message = (tree: AXTreeResponse, degraded: boolean) =>
+      queryIosSimulatorFlowTree(registryWith(tree, degraded), device, pinned).then(
+        () => "",
+        (e: unknown) => (e as Error).message
+      );
+    const blind = await message(screen({ foregroundApp: undefined }), true);
+    expect(blind).toMatch(/\(no app is\)\. .*restarts the app\)\. Argent could not verify/);
+    expect(blind.endsWith(DIALOG_HINT)).toBe(true);
+    // Another app in front is named, so no dialog hides the pinned one.
+    const springboard = await message(screen({ foregroundApp: "com.apple.springboard" }), true);
+    expect(springboard).toMatch(/com\.apple\.springboard is/);
+    expect(springboard).not.toMatch(/pre-boot|boot-device/);
+    // With the settings in place, no dialog hides the app.
+    const verified = await message(screen({ foregroundApp: undefined }), false);
+    expect(verified).toMatch(/\(no app is\)/);
+    expect(verified).not.toMatch(/pre-boot|boot-device/);
+  });
+
+  it.each([
+    ["the daemon disconnected", () => daemonError("ax-service daemon disconnected")],
+    [
+      "the daemon was killed",
+      () => axDaemonExitError({ code: null, signal: "SIGKILL" }, "connected"),
+    ],
+    [
+      "the daemon is not connected",
+      () => daemonError("ax-service not connected", FAILURE_CODES.AX_QUERY_FAILED),
+    ],
+    // As the registry rejects a resolve while the service tears down.
+    [
+      "the service is terminating",
+      () =>
+        new ServiceInitializationError(`AXService:${UDID}`, "Service is currently terminating", {
+          cause: new FailureError("Service is currently terminating", {
+            error_code: FAILURE_CODES.REGISTRY_SERVICE_TERMINATING,
+            failure_stage: "registry_service_terminating",
+            failure_area: "registry",
+            error_kind: "unknown",
+          }),
+        }),
+    ],
+  ])("tells a test to run again, not to reboot, when %s", async (_label, make) => {
+    const err = make();
+    await expect(queryIosSimulatorFlowTree(registryWith(err), device)).rejects.toThrow(
+      `the accessibility tree of ${UDID} could not be read: ${err.message}. ${STOPPED_REMEDY}`
+    );
+  });
+
+  it("names boot-device for an RPC error of the daemon's own, which shares the not-connected code", async () => {
+    const err = await failed(
+      queryIosSimulatorFlowTree(
+        registryWith(daemonError("no such element", FAILURE_CODES.AX_QUERY_FAILED)),
+        device
+      )
+    );
+    expect(err.message).toMatch(/could not be read: no such element\. .*`boot-device`/);
+    expect(err.message).not.toContain("stopped");
+  });
+
+  it.each([
+    [
+      "the provider withheld ax-service",
+      () =>
+        new FailureError(
+          "ax-service is not available on 'iPhone 16 Pro': Acme IDE did not grant the 'ax-service' capability for this device.",
+          {
+            error_code: FAILURE_CODES.EXTERNAL_DEVICE_CAPABILITY_DENIED,
+            error_kind: "unsupported",
+            failure_area: "tool_server",
+            failure_stage: "external_device_capability_gate",
+          }
+        ),
+    ],
+    [
+      "the provider withdrew the device",
+      () =>
+        new FailureError("Acme IDE no longer offers this device", {
+          error_code: FAILURE_CODES.EXTERNAL_DEVICE_UNAVAILABLE,
+          error_kind: "not_found",
+          failure_area: "tool_server",
+          failure_stage: "external_device_lookup",
+        }),
+    ],
+    [
+      "the TCP binary is not built",
+      () => new Error("TCP-transport binary not found: /x/bin/tcp/ax-service. Set it."),
+    ],
+    [
+      "the TCP dylib is not built",
+      () => new Error("TCP-transport dylib not found: /x/dylibs/tcp/ax.dylib. Set it."),
+    ],
+  ])("adds no remedy to an error that names its own when %s", async (_label, make) => {
+    const err = make();
+    const thrown = await failed(queryIosSimulatorFlowTree(registryWith(err), device));
+    // One period, also after an error that ends with its own.
+    expect(thrown.message).toBe(
+      `the accessibility tree of ${UDID} could not be read: ${err.message.replace(/\.$/, "")}.`
+    );
+    expect(thrown.message).not.toContain("..");
+  });
+
+  describe("a start that failed in the real ax-service factory", () => {
+    // Its own udid prefix: the factory binds /tmp/ax-<first 8 chars>.sock.
+    const START_UDID = "5EED0000-2000-4000-8000-000000002000";
+    const startDevice = { platform: "ios", id: START_UDID, kind: "simulator" } as DeviceInfo;
+
+    afterEach(() => {
+      prefsEnabled = true;
+    });
+
+    it.each([
+      [
+        true,
+        /did not start, although this simulator's pre-boot accessibility settings are in place/,
+      ],
+      [false, /Boot the simulator with `boot-device`/],
+    ])("with the pre-boot settings in place: %s", async (enabled, remedy) => {
+      prefsEnabled = enabled;
+      const registry = new Registry();
+      registry.registerBlueprint(axServiceBlueprint);
+      try {
+        const err = await failed(queryIosSimulatorFlowTree(registry, startDevice));
+        expect(err.message).toContain(
+          `the accessibility tree of ${START_UDID} could not be read: ` +
+            `[AXService:${START_UDID}] ax-service binary not found`
+        );
+        expect(err.message).toMatch(remedy);
+        if (enabled) expect(err.message).not.toMatch(/boot-device/);
+      } finally {
+        await registry.dispose();
+      }
+    });
+  });
+});
+
+const STOPPED_REMEDY =
+  "The accessibility service stopped. Argent starts it again at the next read: run the e2e " +
+  "test again. If it stops again, report the error.";
+
+function daemonError(
+  message: string,
+  error_code: FailureCode = FAILURE_CODES.AX_DAEMON_PROCESS_ERROR
+): FailureError {
+  return new FailureError(message, {
+    error_code,
+    failure_stage: "ax_service_query",
+    failure_area: "tool_server",
+    error_kind: "subprocess",
+  });
+}
+
+describe("the remedy on a device a provider supplies", () => {
+  const PROVIDER_ID = "acme-3f2a9c";
+  const extDevice = {
+    platform: "ios",
+    id: makeExternalId(PROVIDER_ID, UDID),
+    kind: "simulator",
+  } as DeviceInfo;
+  const noReboot =
+    "Argent cannot reboot this device: restart it from that application, then run the e2e test again.";
+  let directory: string;
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-flow-ios-tree-"));
+    const descriptor = path.join(directory, "acme.json");
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["simctl", "ax-service"],
+            kind: "simulator",
+            name: "iPhone 16 Pro",
+            nativeId: UDID,
+            platform: "ios",
+            state: "Booted",
+          },
+        ],
+        id: PROVIDER_ID,
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    __resetExternalDeviceCacheForTesting();
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptor;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+  });
+
+  afterEach(() => {
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    fs.rmSync(directory, { force: true, recursive: true });
+  });
+
+  it.each([
+    ["its ext: id", extDevice, "This device is provided by Acme IDE."],
+    ["the raw udid it claims", device, "This device is supplied by Acme IDE."],
+  ])("names the provider, not boot-device, through %s", async (_label, target, provider) => {
+    const unknown = await failed(
+      queryIosSimulatorFlowTree(registryWith(new Error("simulator not booted")), target)
+    );
+    expect(unknown.message).toBe(
+      `the accessibility tree of ${target.id} could not be read: simulator not booted. ` +
+        `${provider} ${noReboot}`
+    );
+
+    const empty = reply([{ index: 0, label: "App", bundleId: "com.example.app" }]);
+    const blind = await failed(queryIosSimulatorFlowTree(registryWith(empty, true), target));
+    expect(blind.message).toMatch(/is empty: argent could not verify/);
+    expect(blind.message.endsWith(`${provider} ${noReboot}`)).toBe(true);
+
+    const hidden = await failed(
+      queryIosSimulatorFlowTree(
+        registryWith(reply([], { foregroundApp: undefined }), true),
+        target,
+        { bundleId: "com.example.app", pinned: true }
+      )
+    );
+    expect(hidden.message).toMatch(/\(no app is\)/);
+    expect(
+      hidden.message.endsWith(
+        `${provider} Argent could not verify its pre-boot accessibility settings, so a system ` +
+          "dialog on the screen can hide the app from the tree. Argent cannot reboot this " +
+          "device: restart it from that application."
+      )
+    ).toBe(true);
+
+    for (const message of [unknown.message, blind.message, hidden.message]) {
+      expect(message).not.toMatch(/boot-device/);
+    }
+  });
+
+  it("still names the crash remedy, which does not depend on who owns the device", async () => {
+    const crash = axDaemonExitError({ code: null, signal: "SIGSEGV" }, "connected");
+    const err = await failed(queryIosSimulatorFlowTree(registryWith(crash), extDevice));
+    expect(err.message).toContain("rebooting the simulator or restarting the tool-server");
+    expect(err.message).not.toContain("Argent cannot reboot");
   });
 });
 

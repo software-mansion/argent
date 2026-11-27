@@ -112,13 +112,13 @@ function axTree(foregroundApp: string) {
 }
 
 /** A registry whose accessibility service answers every tree read with `tree`. */
-function axRegistry(tree: () => Promise<unknown>): Registry {
+function axRegistry(tree: () => Promise<unknown>, degraded = false): Registry {
   return {
     invokeTool: vi.fn(async (id: string) =>
       id === "list-devices" ? { devices: [] } : { ok: true }
     ),
     getTool: vi.fn(() => undefined),
-    resolveService: vi.fn(async () => ({ degraded: false, tree })),
+    resolveService: vi.fn(async () => ({ degraded, tree })),
   } as unknown as Registry;
 }
 
@@ -2960,10 +2960,9 @@ describe("flow composition (run:)", () => {
       }
     );
 
-    it("fails the launch when another app stays in the foreground", async () => {
+    /** Run `launchThenEcho` behind `registry`, with the gate's wait in fake time. */
+    async function runLaunchGate(registry: Registry): Promise<FlowRunResult> {
       await writeFlow("main", launchThenEcho);
-      const registry = axRegistry(async () => axTree("com.apple.springboard"));
-
       // Leave setImmediate real: the run reads the flow off disk between sleeps,
       // and that I/O needs actual event-loop turns. Pumping one between advances
       // elapses the 1.5 s settle and the whole gate wait in fake time.
@@ -2979,19 +2978,49 @@ describe("flow composition (run:)", () => {
           await new Promise((resolve) => setImmediate(resolve));
           await vi.advanceTimersByTimeAsync(250);
         }
-        const result = asRun(await pending);
-
-        expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
-          "launch:error",
-          "echo:skip",
-        ]);
-        expect(result.steps[0].reason).toContain(
-          `com.acme.app did not become the foreground app within ${NATIVE_READY_TIMEOUT_MS} ms`
-        );
-        expect(result.steps[0].reason).toContain("com.apple.springboard is in the foreground");
+        return asRun(await pending);
       } finally {
         vi.useRealTimers();
       }
+    }
+
+    it("fails the launch when another app stays in the foreground", async () => {
+      const result = await runLaunchGate(axRegistry(async () => axTree("com.apple.springboard")));
+
+      expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual([
+        "launch:error",
+        "echo:skip",
+      ]);
+      expect(result.steps[0].reason).toMatch(
+        /^com\.acme\.app was not the foreground app after a wait of \d+ ms: com\.apple\.springboard is in the foreground\. Launch it by hand/
+      );
+      // Another app is in front: no dialog hid the app, so no reboot remedy.
+      expect(result.steps[0].reason).not.toContain("boot-device");
+    });
+
+    it("names the time the wait took, not its limit, when the reads are slow", async () => {
+      // Each read takes 4 s: the deadline is checked after a read, so the wait
+      // ends past NATIVE_READY_TIMEOUT_MS.
+      const slow = () =>
+        new Promise((resolve) => setTimeout(() => resolve(axTree("com.apple.springboard")), 4_000));
+      const result = await runLaunchGate(axRegistry(slow));
+
+      const waited = Number(/after a wait of (\d+) ms/.exec(result.steps[0].reason ?? "")?.[1]);
+      expect(waited).toBeGreaterThan(NATIVE_READY_TIMEOUT_MS);
+      expect(result.steps[0].reason).not.toContain(`${NATIVE_READY_TIMEOUT_MS} ms`);
+    });
+
+    it("tells a degraded simulator that a system dialog can hide the app", async () => {
+      const noApp = async () => ({ ...axTree("com.acme.app"), foregroundApp: undefined });
+      const result = await runLaunchGate(axRegistry(noApp, true));
+
+      expect(result.steps[0].reason).toMatch(
+        /no app is in the foreground\. Launch it by hand .* Argent could not verify this simulator's pre-boot accessibility settings, so a system dialog on the screen can hide the app from the tree\. If a dialog is on the screen, boot the simulator with `boot-device` \(`force: true`\), then run the e2e test again\.$/
+      );
+      // Not degraded: the same read gets no such sentence.
+      const plain = await runLaunchGate(axRegistry(noApp));
+      expect(plain.steps[0].reason).toContain("no app is in the foreground");
+      expect(plain.steps[0].reason).not.toContain("pre-boot accessibility settings");
     });
 
     it("fails the launch at once when the accessibility service is too old for flows", async () => {
@@ -3049,7 +3078,7 @@ describe("flow composition (run:)", () => {
         const reason = result.steps[0].reason ?? "";
         expect(reason).toContain("the launch of com.acme.app could not be checked");
         expect(reason).toContain("ax-service daemon disconnected");
-        expect(reason).not.toContain("did not become the foreground app");
+        expect(reason).not.toContain("was not the foreground app after a wait");
         expect(reason).not.toContain("..");
       } finally {
         vi.useRealTimers();
@@ -3271,7 +3300,7 @@ describe("flow composition (run:)", () => {
 
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "tool:skip"]);
     expect(result.steps[0].reason).toContain("dylib not found");
-    expect(result.steps[0].reason).not.toContain("did not become the foreground app");
+    expect(result.steps[0].reason).not.toContain("was not the foreground app after a wait");
   });
 });
 

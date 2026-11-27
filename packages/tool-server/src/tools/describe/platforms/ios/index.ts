@@ -207,7 +207,7 @@ export function withBootCaveatOncePerDevice(
 // and can be absent in a local build. That failure says nothing about the
 // simulator's boot state, so surface the resolver's own actionable message
 // instead of the boot caveat, which points at boot-device — a dead end here.
-function tcpArtifactHint(err: unknown): string | undefined {
+export function tcpArtifactHint(err: unknown): string | undefined {
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   return /TCP-transport (?:binary|dylib) not found/.test(message) ? message : undefined;
 }
