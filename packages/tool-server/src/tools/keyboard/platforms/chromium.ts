@@ -7,6 +7,8 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const isOutsideAscii = (char: string) => char.codePointAt(0)! >= 0x80;
+
 async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise<KeyboardResult> {
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
@@ -17,13 +19,17 @@ async function runChromium(api: ChromiumCdpApi, params: KeyboardParams): Promise
     for (const char of params.text) {
       const desc = charToChromiumKey(char);
       if (!desc) {
-        // Caller input error → 400, in the cross-backend
-        // KEYBOARD_CHARACTER_UNSUPPORTED telemetry bucket (#420).
-        throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
-          error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
-          failure_stage: "keyboard_char_chromium",
-          error_kind: "unsupported",
-        });
+        if (!isOutsideAscii(char)) {
+          throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
+            error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+            failure_stage: "keyboard_char_chromium",
+            error_kind: "unsupported",
+          });
+        }
+        await api.cdp.send("Input.insertText", { text: char });
+        keysPressed++;
+        await sleep(delay);
+        continue;
       }
       await api.dispatchKeyEvent({
         type: "keyDown",

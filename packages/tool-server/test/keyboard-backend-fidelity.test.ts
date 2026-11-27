@@ -53,6 +53,11 @@ function cdpRecorder() {
       dispatchKeyEvent: async (e: Record<string, unknown>) => {
         events.push(e);
       },
+      cdp: {
+        send: async (method: string, params: Record<string, unknown>) => {
+          events.push({ method, ...params });
+        },
+      },
     },
   };
 }
@@ -239,25 +244,26 @@ describe("keyboard backends — emit exactly the action they were given", () => 
       ]);
     });
 
-    it("leaves the characters before an un-typeable one on the device", async () => {
-      // The mirror of the simulator-server case above: chromium also validates
-      // per character inside the loop, so the whole triple for "h" is already
-      // dispatched when "é" throws.
+    it("inserts a character with no key descriptor as text, in order", async () => {
       const { events, api } = cdpRecorder();
 
-      await expect(
-        makeChromiumImpl(registryWith(api)).handler(
-          {},
-          { udid: CHROMIUM.id, text: "hé", delayMs: 0 },
-          CHROMIUM
-        )
-      ).rejects.toThrow(/No CDP key descriptor for character "é"/);
+      const result = await makeChromiumImpl(registryWith(api)).handler(
+        {},
+        { udid: CHROMIUM.id, text: "hŻi😀", delayMs: 0 },
+        CHROMIUM
+      );
 
       expect(events).toEqual([
         { type: "keyDown", ...CDP_H },
         { type: "char", text: "h" },
         { type: "keyUp", ...CDP_H },
+        { method: "Input.insertText", text: "Ż" },
+        { type: "keyDown", ...CDP_I },
+        { type: "char", text: "i" },
+        { type: "keyUp", ...CDP_I },
+        { method: "Input.insertText", text: "😀" },
       ]);
+      expect(result).toEqual({ typed: "hŻi😀", keys: 4 });
     });
 
     // Two keys, for the same reason as the simulator-server pair above: pinning

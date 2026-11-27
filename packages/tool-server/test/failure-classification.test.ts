@@ -174,7 +174,7 @@ describe("flow tool project_root classifications", () => {
 
 describe("keyboard classifications", () => {
   // The chromium typing path lives in makeChromiumImpl's handler, which resolves
-  // the CDP service then validates the key/char before touching it. A stub
+  // the CDP service then validates the key before touching it. A stub
   // registry (service resolves to a bare object) reaches the classified throw
   // without a live browser.
   const registry = { resolveService: async () => ({}) } as unknown as Registry;
@@ -189,13 +189,6 @@ describe("keyboard classifications", () => {
     expectCode(
       await captureError(handler({}, { udid: device.id, key: "not-a-key" }, device)),
       FAILURE_CODES.KEYBOARD_KEY_UNSUPPORTED
-    );
-  });
-
-  it("classifies an unmappable character as KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
-    expectCode(
-      await captureError(handler({}, { udid: device.id, text: "\u{1F600}" }, device)),
-      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
     );
   });
 });

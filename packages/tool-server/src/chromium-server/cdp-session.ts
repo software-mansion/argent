@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { CDPClient } from "../utils/debugger/cdp-client";
 
 export interface CdpTarget {
@@ -194,13 +194,44 @@ export async function connectCdp(port: number): Promise<{
   cdp: CDPClient;
   wsUrl: string;
   target: CdpTarget;
+  openedBlank: boolean;
 }> {
   await ensureCdpReachable(port);
-  const target = await discoverPrimaryPage(port);
+  const { target, openedBlank } = await discoverOrOpenPage(port);
   const wsUrl = target.webSocketDebuggerUrl!;
   const cdp = new CDPClient(wsUrl, { sendOrigin: false });
   await cdp.connect();
-  return { cdp, wsUrl, target };
+  return { cdp, wsUrl, target, openedBlank };
+}
+
+/** A browser with every tab closed gets a blank one; Electron cannot create one, so it still fails. */
+async function discoverOrOpenPage(
+  port: number
+): Promise<{ target: CdpTarget; openedBlank: boolean }> {
+  try {
+    return { target: await discoverPrimaryPage(port), openedBlank: false };
+  } catch (err) {
+    if (getFailureSignal(err)?.failure_stage !== "chromium_cdp_discover_page_none") throw err;
+    const targetId = await openBlankPage(port);
+    const target = targetId && (await listPageTargets(port)).find((t) => t.id === targetId);
+    if (!target) throw err;
+    return { target, openedBlank: true };
+  }
+}
+
+async function openBlankPage(port: number): Promise<string | null> {
+  const browser = new CDPClient(await browserWebSocketUrl(port), { sendOrigin: false });
+  await browser.connect();
+  try {
+    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as {
+      targetId: string;
+    };
+    return targetId;
+  } catch {
+    return null;
+  } finally {
+    await browser.disconnect().catch(() => {});
+  }
 }
 
 /**

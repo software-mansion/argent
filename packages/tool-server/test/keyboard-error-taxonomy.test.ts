@@ -111,12 +111,14 @@ describe("keyboard backends — input rejection is a 400 with a uniform telemetr
     );
   });
 
-  it("chromium: un-typeable character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
+  it("chromium: control character → 400 + KEYBOARD_CHARACTER_UNSUPPORTED", async () => {
     const impl = makeChromiumImpl(chromiumRegistry());
-    await expectInvalidInput(
-      impl.handler({}, { udid: chromiumDevice.id, text: "😀" }, chromiumDevice),
-      FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
-    );
+    for (const text of ["a\x1bb", "\x00", "\x7f"]) {
+      await expectInvalidInput(
+        impl.handler({}, { udid: chromiumDevice.id, text }, chromiumDevice),
+        FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED
+      );
+    }
   });
 
   it("vega: unknown key → 400 + KEYBOARD_KEY_UNSUPPORTED", async () => {
