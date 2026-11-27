@@ -35,12 +35,14 @@ function clampFinite(n: number): number {
 }
 
 function fmtCoord(n: number): string {
-  return clampFinite(n).toFixed(3);
+  const rounded = clampFinite(n).toFixed(3);
+  // Strip trailing fractional zeros while keeping the leading zero (`.5` is
+  // invalid JSON if copied into a tool call) and normalizing `-0` to `0`.
+  const trimmed = rounded.includes(".") ? rounded.replace(/\.?0+$/, "") : rounded;
+  return trimmed === "-0" ? "0" : trimmed;
 }
 
 // A tree prints this on every row, so the numbers are not separated by spaces.
-// The leading zeros are needed: `.5` is not a valid JSON number, and a model
-// copying the value into a tool call would have the call rejected.
 function fmtFrame(f: DescribeFrame): string {
   return `(${fmtCoord(f.x)},${fmtCoord(f.y)},${fmtCoord(f.width)},${fmtCoord(f.height)})`;
 }
@@ -126,7 +128,142 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   const flagPart = formatFlags(n, source);
   const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
-  return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
+  return `${pad}${n.role}${annotated} ${fmtFrame(n.frame)}`;
+}
+
+// Small normalized tolerance (~2pt on a phone) for iOS cells whose inner
+// text/button bounds touch or sit slightly inside the outer row bounds.
+const CONTAIN_EPS = 0.005;
+
+function frameContains(outer: DescribeFrame, inner: DescribeFrame): boolean {
+  return (
+    inner.x >= outer.x - CONTAIN_EPS &&
+    inner.y >= outer.y - CONTAIN_EPS &&
+    inner.x + inner.width <= outer.x + outer.width + CONTAIN_EPS &&
+    inner.y + inner.height <= outer.y + outer.height + CONTAIN_EPS
+  );
+}
+
+function normalizeLabel(s: string | undefined): string {
+  return (s ?? "")
+    .replace(/[\s,]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+const DECORATIVE_CHEVRON_RE = /^(chevron(\.(right|left|forward|backward))?|disclosure)$/i;
+
+/**
+ * Drops redundant flat iOS elements whose content and tap target are already
+ * represented by an enclosing control:
+ * - Inner exact duplicates (same role/label/id/value/hint/flags inside another).
+ * - Outer `AXGroup` cells shadowed by an inner `AXButton`/`AXLink` with the same
+ *   identifier and normalized label (keeps the interactive button).
+ * - Disabled decorative disclosure chevrons inside an `AXButton`.
+ * - Non-interactive `AXStaticText`/`AXImage` nodes whose text is already
+ *   contained in an enclosing `AXButton`/`AXGroup`/`AXLink` label (unless they
+ *   carry a distinct identifier, value, hint, or state flag).
+ */
+function pruneFlatDuplicates(nodes: DescribeNode[]): DescribeNode[] {
+  const drop = new Set<number>();
+
+  for (let i = 0; i < nodes.length; i++) {
+    if (drop.has(i)) continue;
+    const a = nodes[i]!;
+    for (let j = 0; j < nodes.length; j++) {
+      if (i === j || drop.has(j) || drop.has(i)) continue;
+      const b = nodes[j]!;
+      if (!frameContains(a.frame, b.frame)) continue;
+
+      // Exact contained duplicate (only when named/identified so unlabeled icons survive).
+      if (
+        (a.label || a.identifier) &&
+        a.role === b.role &&
+        (a.label ?? "") === (b.label ?? "") &&
+        (a.identifier ?? "") === (b.identifier ?? "") &&
+        (a.value ?? "") === (b.value ?? "") &&
+        (a.hint ?? "") === (b.hint ?? "") &&
+        Boolean(a.disabled) === Boolean(b.disabled) &&
+        Boolean(a.selected) === Boolean(b.selected) &&
+        Boolean(a.focused) === Boolean(b.focused) &&
+        Boolean(a.checked) === Boolean(b.checked)
+      ) {
+        // When frames are equal (mutual containment), keep the earlier element.
+        if (!frameContains(b.frame, a.frame) || i < j) {
+          drop.add(j);
+        }
+        continue;
+      }
+
+      // Outer AXGroup cell shadowing an identical interactive button/link.
+      if (
+        a.role === "AXGroup" &&
+        (b.role === "AXButton" || b.role === "AXLink") &&
+        !a.value &&
+        !a.hint &&
+        !a.disabled &&
+        !a.selected &&
+        a.identifier &&
+        a.identifier === b.identifier &&
+        a.label &&
+        b.label &&
+        normalizeLabel(a.label) === normalizeLabel(b.label)
+      ) {
+        drop.add(i);
+        break;
+      }
+
+      // Decorative disabled disclosure chevron inside a button row.
+      if (
+        a.role === "AXButton" &&
+        b.disabled &&
+        !b.value &&
+        !b.identifier &&
+        b.label &&
+        DECORATIVE_CHEVRON_RE.test(b.label.trim())
+      ) {
+        drop.add(j);
+      }
+    }
+  }
+
+  const stage1 = nodes.filter((_, idx) => !drop.has(idx));
+  const drop2 = new Set<number>();
+
+  for (let i = 0; i < stage1.length; i++) {
+    const a = stage1[i]!;
+    if ((a.role !== "AXButton" && a.role !== "AXGroup" && a.role !== "AXLink") || !a.label) {
+      continue;
+    }
+    const aNorm = normalizeLabel(a.label);
+    if (!aNorm) continue;
+    for (let j = 0; j < stage1.length; j++) {
+      if (i === j || drop2.has(j)) continue;
+      const b = stage1[j]!;
+      if (
+        (b.role === "AXStaticText" || b.role === "AXImage") &&
+        b.label &&
+        !b.value &&
+        !b.hint &&
+        !b.disabled &&
+        !b.selected &&
+        !b.focused &&
+        (!b.identifier || b.identifier === a.identifier) &&
+        frameContains(a.frame, b.frame)
+      ) {
+        const bNorm = normalizeLabel(b.label);
+        const covered =
+          a.role === "AXGroup"
+            ? bNorm === aNorm || a.label.split(", ").map(normalizeLabel).includes(bNorm)
+            : ` ${aNorm} `.includes(` ${bNorm} `);
+        if (bNorm && covered) {
+          drop2.add(j);
+        }
+      }
+    }
+  }
+
+  return stage1.filter((_, idx) => !drop2.has(idx));
 }
 
 // UIKit exposes every UIScrollView's scroll indicators as adjustable elements
@@ -154,35 +291,71 @@ function isIosScrollBar(n: DescribeNode): boolean {
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  raw: boolean
 ): string[] {
-  return root.children
-    .filter((n) => !isIosScrollBar(n) && (shouldEmit(n, contentRoles) || hasIosState(n)))
+  const sorted = root.children
+    .filter((n) => (raw || !isIosScrollBar(n)) && (shouldEmit(n, contentRoles) || hasIosState(n)))
     .slice()
-    .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
-    .map((n) => formatLine(n, 1, source));
+    .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
+  const kept = raw ? sorted : pruneFlatDuplicates(sorted);
+  return kept.map((n) => formatLine(n, 1, source));
 }
+
+function isRedundantChildImage(parent: DescribeNode, child: DescribeNode): boolean {
+  if (child.children.length > 0) return false;
+  if (child.role !== "Image" && child.role !== "AXImage" && child.role !== "img") return false;
+  if (child.clickable || child.longClickable || child.identifier || child.value) return false;
+  if (!parent.clickable || !parent.label || !child.label) return false;
+  return normalizeLabel(child.label) === normalizeLabel(parent.label);
+}
+
+// Modal/dialog/window containers separate foreground controls from the page or
+// window behind them even without a label; collapsing them would merge modal
+// buttons with background siblings.
+const STRUCTURAL_CONTAINER_ROLES = new Set([
+  "dialog",
+  "alertdialog",
+  "AlertDialog",
+  "Dialog",
+  "AXSheet",
+  "AXWindow",
+  "AXPopover",
+]);
 
 function renderNested(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  raw: boolean
 ): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
-  // Start at depth 1: the header already prints the root as its ROOT line.
-  type Frame = { node: DescribeNode; depth: number };
+  // Start at depth 1 so body lines keep their leading two-space indent.
+  type Frame = { node: DescribeNode; depth: number; parent?: DescribeNode };
   const stack: Frame[] = [];
   for (let i = root.children.length - 1; i >= 0; i--) {
     stack.push({ node: root.children[i]!, depth: 1 });
   }
   while (stack.length > 0) {
-    const { node, depth } = stack.pop()!;
-    if (shouldEmit(node, contentRoles) || node.children.length > 0) {
+    const { node, depth, parent } = stack.pop()!;
+    if (!raw && parent && isRedundantChildImage(parent, node)) {
+      continue;
+    }
+    const meaningful =
+      shouldEmit(node, contentRoles) ||
+      Boolean(node.focused || node.password) ||
+      (node.children.length > 0 &&
+        (STRUCTURAL_CONTAINER_ROLES.has(node.role) ||
+          Boolean(node.selected || node.disabled || node.hint)));
+    const emit = raw ? shouldEmit(node, contentRoles) || node.children.length > 0 : meaningful;
+    if (emit) {
       lines.push(formatLine(node, depth, source));
     }
+    const childDepth = emit ? depth + 1 : depth;
+    const nextParent = emit ? node : parent;
     for (let i = node.children.length - 1; i >= 0; i--) {
-      stack.push({ node: node.children[i]!, depth: depth + 1 });
+      stack.push({ node: node.children[i]!, depth: childDepth, parent: nextParent });
     }
   }
   return lines;
@@ -190,9 +363,25 @@ function renderNested(
 
 interface FormatDescribeOptions {
   source: DescribeSource;
+  /** Keep bare structural wrappers and contained duplicate child nodes. */
+  raw?: boolean;
+}
+
+function isDefaultRoot(root: DescribeNode): boolean {
+  return (
+    !root.label &&
+    !root.value &&
+    !root.identifier &&
+    !root.hint &&
+    root.frame.x === 0 &&
+    root.frame.y === 0 &&
+    root.frame.width === 1 &&
+    root.frame.height === 1
+  );
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  const raw = opts.raw === true;
   const isMacos = opts.source === "macos-devtools" || opts.source === "macos-fallback";
   // The iOS providers emit a flat list of leaves under a synthetic root; the
   // sources below return a real parent/child tree, whose descendants beyond
@@ -213,36 +402,27 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
       : "flat";
   const isVega = opts.source === "vega-automation";
   const header: string[] = [];
-  header.push(`Source: ${opts.source} | Mode: ${mode}`);
   if (isVega) {
+    header.push(`Source: ${opts.source} | Mode: ${mode} | Frame: (x,y,w,h) [0,1]`);
     header.push(
-      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels. " +
-        "Vega is remote-driven (no tap): use frames to plan D-pad moves via `tv-remote` from " +
-        "`[focused]` (or `[selected]` when none reports `[focused]`), counting rows/columns " +
-        '(e.g. ["down","right","right","select"]).'
+      "Vega is remote-driven (no tap): plan `tv-remote` D-pad moves from `[focused]`/`[selected]`."
     );
   } else if (isMacos) {
     // A Mac app has no touch gestures at all.
-    header.push(
-      "Coordinates: normalized [0,1] app window (title bar + overhanging sheets/alerts/menus; x,y,w,h), not pixels. " +
-        "Mouse input only: pass to gesture-tap / gesture-drag / gesture-scroll; tap centre = (x+w/2, y+h/2). " +
-        "Menu bar not in tree: use menu-bar."
-    );
+    header.push(`Source: ${opts.source} | Mode: ${mode} | Frame: (x,y,w,h) [0,1] app window`);
+    header.push("Mouse only (gesture-tap / gesture-drag / gesture-scroll); menu bar via menu-bar.");
   } else {
-    header.push(
-      "Coordinates: normalized [0,1] screen (x,y,w,h), not pixels; " +
-        "pass to gesture-tap / gesture-swipe / gesture-pinch; tap centre = (x+w/2, y+h/2)."
-    );
+    header.push(`Source: ${opts.source} | Mode: ${mode} | Frame: (x,y,w,h) [0,1]`);
   }
-  header.push("");
-  header.push(`ROOT  ${root.role} ${fmtFrame(root.frame)}`);
-  header.push("");
+  if (raw || !isDefaultRoot(root)) {
+    header.push(`ROOT ${root.role} ${fmtFrame(root.frame)}`);
+  }
 
   // Vega's lowercase toolkit roles count as content only for its own source.
   const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
   const body =
     mode === "flat"
-      ? renderFlat(root, contentRoles, opts.source)
-      : renderNested(root, contentRoles, opts.source);
+      ? renderFlat(root, contentRoles, opts.source, raw)
+      : renderNested(root, contentRoles, opts.source, raw);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }
