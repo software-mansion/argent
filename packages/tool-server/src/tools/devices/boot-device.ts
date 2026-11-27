@@ -137,8 +137,12 @@ type AndroidBootResult = {
   note?: string;
 };
 
-type BootDeviceResult =
+type IosBootResult =
   | { platform: "ios"; udid: string; booted: true; note?: string }
+  | { platform: "ios"; udid: string; booted: false; prepared: true };
+
+type BootDeviceResult =
+  | IosBootResult
   | { platform: "ios-remote"; udid: string; booted: true }
   | AndroidBootResult
   | VegaBootResult
@@ -356,11 +360,12 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  * drawn.
  *
  * Polls rather than probing once, because a restore can read blank for a while
- * before the composite hydrates. On `budgetMs` expiry the emulator is killed so
- * the caller falls through to a cold boot.
+ * before the composite hydrates. Only stop an unusable emulator if the caller
+ * can replace it.
  */
 async function assertScreencapAlive(
   serial: string,
+  onFailure: "replace" | "preserve",
   budgetMs: number = STAGE_BUDGET.firstRealFrameHot
 ): Promise<void> {
   const deadline = Date.now() + budgetMs;
@@ -378,10 +383,13 @@ async function assertScreencapAlive(
     if (Date.now() >= deadline) break;
     await new Promise((r) => setTimeout(r, 1_500));
   }
-  await killEmulatorQuietly(serial);
+  if (onFailure === "replace") await killEmulatorQuietly(serial);
   throw new FailureError(
     `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
-      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`,
+      `${JSON.stringify(lastReading ?? "no probe response")}. ` +
+      (onFailure === "replace"
+        ? "Falling back to cold boot so screenshots are usable."
+        : `Left ${serial} running. Pass \`force: true\` to replace it.`),
     {
       error_code: FAILURE_CODES.BOOT_ANDROID_HOT_BOOT_FRAME_UNUSABLE,
       failure_stage: "boot_android_hot_boot_frame",
@@ -646,10 +654,9 @@ async function bootIos(
   udid: string,
   registry: Registry,
   force?: boolean,
-  headless?: boolean
-): Promise<
-  { platform: "ios"; udid: string; booted: true; note?: string } | NativeDevtoolsInitFailedResult
-> {
+  headless?: boolean,
+  prepareOnly?: boolean
+): Promise<IosBootResult | NativeDevtoolsInitFailedResult> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
@@ -683,6 +690,15 @@ async function bootIos(
   }
   const simState = simMatch?.state;
   const isTvOs = simMatch?.runtimeKind === "tv";
+  if (prepareOnly) {
+    if (simState !== "Shutdown") {
+      throw new InvalidToolInputError(
+        `prepareOnly requires a Shutdown simulator. State of ${udid}: ${simState ?? "unknown"}.`
+      );
+    }
+    await setAccessibilityPrefsPreBoot(udid, { isTvOs });
+    return { platform: "ios", udid, booted: false, prepared: true };
+  }
   // The scan above already learned which device set owns this UDID,
   // so this resolves from cache; every simctl below targets that set.
   const deviceSet = await deviceSetForUdid(udid);
@@ -1270,6 +1286,7 @@ function inFlightBootKey(params: AndroidBootParams): string {
 
 /** What argent knows about the running instances of one AVD. */
 type AvdInstances = {
+  processes: EmulatorProcess[] | null;
   /** Serials of the read-only instances. */
   readOnly: Set<string>;
   /**
@@ -1320,7 +1337,7 @@ async function avdInstances(avdName: string, listed?: Set<string>): Promise<AvdI
     readOnly.add(serial);
     if (boot.pinned) pinned.add(serial);
   }
-  return { readOnly, pinned };
+  return { processes, readOnly, pinned };
 }
 
 /**
@@ -1651,17 +1668,21 @@ async function bootAndroidImpl(
   let alreadyRunning = params.readOnly
     ? candidates.find((d) => instances.readOnly.has(d.serial))
     : (candidates.find((d) => !instances.readOnly.has(d.serial)) ?? candidates[0]);
-  if (params.readOnly && portSerial !== null && !alreadyRunning && candidates[0]) {
-    // This AVD runs on the requested port, launched in a way argent does not
-    // recognise as read-only (without `-port`, by someone else). With no
-    // writable instance of the AVD in the process table it is read-only. With
-    // no process of the AVD found at all, the table does not show how it was
-    // launched, so it cannot tell.
-    const processes = await readEmulatorProcessesForAvd(params.avdName);
+  let preserveOnProbeFailure = false;
+  if (params.readOnly && !alreadyRunning && candidates[0]) {
+    // A running instance of this AVD that argent does not recognise as
+    // read-only: launched without `-port` by someone else, on the requested
+    // port or, for a boot without one, anywhere unpinned. With no writable
+    // instance of the AVD in the process table it is read-only. With no
+    // process of the AVD found at all, the table does not show how it was
+    // launched, so it cannot tell. A boot without `port` then goes on below:
+    // refused next to a writable instance, else starting its own.
+    const { processes } = instances;
     const known = processes !== null && processes.length > 0;
     if (known && processes.every((p) => p.readOnly)) {
       alreadyRunning = candidates[0];
-    } else if (!params.force) {
+      preserveOnProbeFailure = portSerial === null;
+    } else if (portSerial !== null && !params.force) {
       throw portInUseError(
         known
           ? `${portSerial} already runs AVD "${params.avdName}" writable. Pass \`force: true\` to ` +
@@ -1670,7 +1691,7 @@ async function bootAndroidImpl(
               `runs read-only: ${processes === null ? "the process list of this host is not available" : "its process is not in the process list"}. ` +
               `Use that emulator as it is, or pick another \`port\`.`
       );
-    } else {
+    } else if (portSerial !== null) {
       alreadyRunning = candidates[0];
     }
   }
@@ -1688,11 +1709,13 @@ async function bootAndroidImpl(
     } else {
       // A long-running emulator can drift into the same sticky-blank
       // SurfaceFlinger state `assertScreencapAlive` guards against on hot boot:
-      // readiness probes pass but every screenshot is black, and the fast path
-      // would keep handing back that wedged serial. On failure the helper kills
-      // the emulator and we fall through to the boot pipeline below.
+      // readiness probes pass but every screenshot is black. Reusing an
+      // external unpinned emulator does not authorize replacing it.
       try {
-        await assertScreencapAlive(alreadyRunning.serial);
+        await assertScreencapAlive(
+          alreadyRunning.serial,
+          preserveOnProbeFailure ? "preserve" : "replace"
+        );
         const note = await runningGuestVulkanNote(alreadyRunning.serial, params.guestVulkan);
         return {
           platform: "android",
@@ -1701,7 +1724,8 @@ async function bootAndroidImpl(
           booted: true,
           ...(note ? { note } : {}),
         };
-      } catch (_err) {
+      } catch (err) {
+        if (preserveOnProbeFailure) throw err;
         // assertScreencapAlive already killed the emulator.
         await dropKilledEmulator(alreadyRunning.serial);
       }
@@ -1831,7 +1855,7 @@ async function bootAndroidImpl(
           expectedSerial,
           pinnedElsewhere,
         });
-        await assertScreencapAlive(result.serial);
+        await assertScreencapAlive(result.serial, "replace");
         rememberReadOnly(result.serial, result.pid);
         return {
           platform: "android",
@@ -2854,6 +2878,12 @@ const zodSchema = z.object({
     .describe(
       "Android only: the emulator's console port, an even number from 5554 to 5584 (`emulator -port`), the range adb finds emulators in; its serial is `emulator-<port>`. Without it the emulator takes the first free port from 5554 up, as Android Studio does. The gRPC server Argent needs for screenshots and gestures goes on the port plus 3000, which must be free too. Given a port, the tool reuses only the emulator on that port and fails if another emulator holds it, or if this AVD runs there writable on a read-only boot and `force` is not set. A read-only emulator started with `-port` belongs to the calls that give that port: a call without `port` never reuses or shuts it down. Where the process list cannot be read (Windows, or a failed `ps`), Argent knows only the pinned emulators it booted itself, so a writable call without `port` can reuse, or with `force` shut down, one that someone else pinned. A writable one is still reused, or with `force` shut down, by a writable call without `port`, since the AVD runs one writable emulator at a time. `force` shuts nothing down when another emulator of the AVD would still block the boot. Ignored on other platforms."
     ),
+  prepareOnly: z
+    .boolean()
+    .optional()
+    .describe(
+      "Local iOS simulator only: apply accessibility preferences and leave the simulator shut down for a pool manager to boot. Requires Shutdown state. Cannot be combined with force: true."
+    ),
   headless: z
     .boolean()
     .optional()
@@ -2918,10 +2948,12 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
     searchHint:
       "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
     interaction: {
-      startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
-      completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
+      startedMsg: ({ params }) =>
+        `${params.prepareOnly ? "Preparing" : "Starting"} ${bootTarget(params)}`,
+      completedMsg: ({ params }) =>
+        `${params.prepareOnly ? "Prepared" : "Started"} ${bootTarget(params)}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
+        `Failed to ${params.prepareOnly ? "prepare" : "start"} ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
     capability,
     services: () => ({}),
@@ -2945,6 +2977,14 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
           }
+        );
+      }
+      if (
+        params.prepareOnly &&
+        (!params.udid || classifyDevice(params.udid) !== "ios" || params.force)
+      ) {
+        throw new InvalidToolInputError(
+          "prepareOnly requires a local iOS simulator UDID and cannot be combined with force: true."
         );
       }
       if (hasMacos || (hasUdid && classifyDevice(params.udid!) === "macos")) {
@@ -3021,7 +3061,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             }
           );
         }
-        return bootIos(params.udid!, registry, params.force, params.headless);
+        return bootIos(params.udid!, registry, params.force, params.headless, params.prepareOnly);
       }
       if (hasAvd) {
         if (params.port !== undefined) {

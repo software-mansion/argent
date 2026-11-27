@@ -147,6 +147,19 @@ describe("tvFocusTree — the focus view as a describe tree", () => {
     expect(findAll(tree, { text: "Orphan", role: "focused" })).toHaveLength(1);
   });
 
+  it("does not count a cursor missing from the list as landed", () => {
+    // The tvOS keyboard closing: `done` keeps focus for about 550 ms after the
+    // keyboard's focusable elements are gone.
+    const closing = tvFocusTree({
+      focused: { label: "done", traits: ["button"], isFocused: true },
+      focusable: [],
+    });
+
+    expect(findAll(closing.tree, { text: "done", role: "focused" })).toHaveLength(1);
+    expect(hasTvCursor(closing)).toBe(false);
+    expect(hasTvCursor(tvFocusTree(SETTINGS))).toBe(true);
+  });
+
   it("marks a cursor missing from the list even when the read did not", () => {
     const { tree } = tvFocusTree({
       focused: { label: "Orphan", traits: ["button"] },
@@ -217,13 +230,114 @@ describe("tvFocusTree — the rest of the screen", () => {
   });
 
   it("leaves the cursor to the focus view", () => {
-    const { tree } = tvFocusTree(
+    const read = tvFocusTree(
       { focused: null, focusable: [] },
       hierarchy([{ label: "Stale", isFocused: true } as TvHierarchyNode])
     );
 
-    expect(hasTvCursor(tree)).toBe(false);
-    expect(findAll(tree, { role: "focused" })).toHaveLength(0);
+    expect(hasTvCursor(read)).toBe(false);
+    expect(findAll(read.tree, { role: "focused" })).toHaveLength(0);
+  });
+
+  // Frames and trait bits below were read on an Apple TV 4K simulator, tvOS 27.
+  const pt = (x: number, y: number, width: number, height: number) => ({
+    x: x / screenFrame.width,
+    y: y / screenFrame.height,
+    width: width / screenFrame.width,
+    height: height / screenFrame.height,
+  });
+
+  it("counts a cursor inside an element read as one item as landed", () => {
+    // A card that accessibility treats as one element, with two buttons in it:
+    // the focused button is never listed, and the card is on screen around it.
+    const card = tvFocusTree(
+      {
+        focused: {
+          label: "Play",
+          traits: ["button", "_focusGuide"],
+          _traitsHex: "0x200000001",
+          isFocused: true,
+          frame: pt(636, 488.6, 288, 102.9),
+        },
+        focusable: [],
+      },
+      hierarchy([{ label: "Card", frame: { x: 560, y: 340, width: 800, height: 400 } }])
+    );
+
+    expect(hasTvCursor(card)).toBe(true);
+  });
+
+  it("does not count the keyboard's cursor as landed while it opens or closes", () => {
+    const field: TvHierarchyNode = {
+      value: "Name",
+      frame: { x: 556, y: 299.6, width: 808, height: 80.8 },
+      children: [],
+    };
+    // Closing: `done` keeps focus after the keyboard has left the hierarchy.
+    const closing = tvFocusTree(
+      {
+        focused: {
+          label: "done",
+          traits: ["button", "_focusGuide"],
+          _traitsHex: "0x200000001",
+          isFocused: true,
+          frame: pt(893, 798, 133, 63),
+        },
+        focusable: [],
+      },
+      // tvOS 27.2: the form's Profile label covers the keyboard button's old
+      // position. The enclosing layout view does too. Neither owns the button.
+      hierarchy([
+        {
+          frame: { x: 50, y: 50, width: 1820, height: 980 },
+          children: [
+            {
+              label: "Profile",
+              traits: ["staticText"],
+              frame: { x: 80, y: 80, width: 1760, height: 920 },
+            },
+            field,
+          ],
+        },
+      ])
+    );
+    // Opening: the text field keeps focus while only the keyboard is listed,
+    // and a wrapper around the field is larger than it.
+    const opening = tvFocusTree(
+      {
+        focused: {
+          value: "Name",
+          traits: ["_focusGuide"],
+          _traitsHex: "0x2200240000",
+          isFocused: true,
+          frame: pt(556, 299.6, 808, 80.8),
+        },
+        focusable: [
+          { label: "Keyboard", traits: ["_focusGuide"], frame: pt(0, 462, 1920, 226) },
+          { label: "done", traits: ["button", "_focusGuide"], frame: pt(893, 798, 133, 63) },
+        ],
+      },
+      hierarchy([{ frame: { x: 540, y: 290, width: 840, height: 100 }, children: [field] }])
+    );
+
+    expect(hasTvCursor(closing)).toBe(false);
+    expect(hasTvCursor(opening)).toBe(false);
+  });
+
+  it("waits for focus on a returning form even if a card covers the old key", () => {
+    const closing = tvFocusTree(
+      { focused: { label: "done", frame: pt(893, 798, 133, 63) }, focusable: [] },
+      hierarchy([
+        { label: "Profile card", frame: { x: 80, y: 80, width: 1760, height: 920 } },
+        {
+          label: "Name",
+          _traitsHex: "0x2200040000",
+          frame: { x: 496, y: 310, width: 808, height: 91 },
+        },
+      ])
+    );
+
+    expect(hasTvCursor(closing)).toBe(false);
   });
 
   it("keeps `role` to what the remote can reach", () => {
