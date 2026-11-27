@@ -35,6 +35,15 @@ Obey these lifecycle rules:
 3. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
 4. Read `recorded` after each call. The recorder does not always store the tool call you made, and that line is where a rewrite shows up. The recorder still appends `await-ui-element` and `await-network-request` steps that return `success: false`. Check the warning before continuing. To see the whole file mid-recording, read it at `savedTo`. A `null` `savedTo` means only the write on your side failed: the step is still in the recording, the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 5. Edit or reorder the YAML only after `e2e-finish-recording`.
+6. Set script defaults with `e2e-start-recording.env` or call `e2e-set-env` directly before recording the script. Use `e2e-add-script.env` for values specific to one step. The tool runs the script immediately. If a secret is missing, check the project’s secret sources before retrying.
+
+## Record cleanup after the main steps
+
+Pass `shutdown: true` to `e2e-add-step` or `e2e-add-script` for cleanup. Use the same flag on `e2e-add-echo` to label it. Actions and scripts run during the call. Check the `recorded` line for the `shutdown` prefix and read any wait warning before continuing.
+
+A fragment recorded as `run:` in the main list usually defers cleanup until the first shutdown action or script, or until `e2e-finish-recording`. Read `fragmentShutdown` and the call message before assuming cleanup passed. If the call was cancelled, finish the recording or retry the shutdown call to run queued cleanup.
+
+For an uploaded fragment or one that starts its own Chromium app, read the message for cleanup that ran immediately. If later steps need the state it removed, record the fragment's main steps individually and its cleanup with `shutdown: true`. Replace those steps after `e2e-finish-recording`. See [Shutdown](e2e-yaml.md#shutdown) for replay order.
 
 ## Start in the correct order
 

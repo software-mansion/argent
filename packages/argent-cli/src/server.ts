@@ -1,7 +1,7 @@
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { constants, homedir, networkInterfaces } from "node:os";
+import * as readline from "node:readline";
+import { constants, networkInterfaces } from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   killToolServer,
@@ -19,12 +19,14 @@ import {
   stateFileForBundle,
   formatToolsServerUrl,
   formatLinkUrl,
+  healthCheckHost,
   generateAuthToken,
+  parseListeningPort,
+  STATE_PATHS,
   type ToolsServerPaths,
 } from "@argent/tools-client";
 
-const STATE_DIR = path.join(homedir(), ".argent");
-const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
+const { LOG_FILE } = STATE_PATHS;
 
 // State records are per argent install (per tool-server bundle), so status/stop
 // target THIS install's server, never another's.
@@ -147,6 +149,7 @@ interface StartFlags {
   force: boolean;
   /** No token minted; the server accepts unauthenticated requests. */
   noAuth: boolean;
+  json: boolean;
   help: boolean;
 }
 
@@ -157,6 +160,7 @@ const START_OPTIONS = {
   "detach": { kind: "boolean", alias: "d" },
   "force": { kind: "boolean" },
   "no-auth": { kind: "boolean" },
+  "json": { kind: "boolean" },
   "port": { kind: "value", alias: "p" },
   "host": { kind: "value" },
   "idle-timeout": { kind: "value" },
@@ -187,6 +191,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
     detach: options.detach === true,
     force: options.force === true,
     noAuth: options["no-auth"] === true,
+    json: options.json === true,
     help: options.help === true,
   };
 }
@@ -224,6 +229,8 @@ Flags:
   --force                 If a tool-server is already running, kill it first.
   --no-auth               Disable authentication (no token). Anyone who can
                           reach the port can drive the server. Dev/trusted only.
+  --json                  Once the server is listening, print one JSON line
+                          with its url, port, pid and token.
   --help, -h              Show this help.
 
 Auth:
@@ -237,6 +244,7 @@ Examples:
   argent server start --port 4000
   argent server start --host 0.0.0.0 --port 4000
   argent server start --detach
+  argent server start --port 0 --detach --json
   argent server start --host 0.0.0.0 --no-auth
 `);
 }
@@ -264,6 +272,11 @@ function primaryLanIPv4(): string | null {
 function resolveConnectHost(bindHost: string): string {
   if (isWildcard(bindHost)) return primaryLanIPv4() ?? "127.0.0.1";
   return bindHost;
+}
+
+function printReadyJson(bindHost: string, port: number, pid: number, token?: string): void {
+  const url = formatToolsServerUrl(healthCheckHost(bindHost), port);
+  console.log(JSON.stringify({ url, port, pid, ...(token ? { token } : {}) }));
 }
 
 /** Pairing block: the `argent://` connection string plus an explicit-flags fallback. */
@@ -311,6 +324,13 @@ async function resolvePort(requested: number | null): Promise<number> {
   if (requested === null) return 3001;
   if (requested === 0) return findFreePort();
   return requested;
+}
+
+interface RunOptions {
+  port: number;
+  host: string;
+  idleTimeoutMinutes: number;
+  token?: string;
 }
 
 async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Promise<void> {
@@ -367,20 +387,19 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
     }
   }
 
+  const run = { port, host: flags.host, idleTimeoutMinutes: flags.idleTimeoutMinutes, token };
   if (flags.detach) {
-    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+    await runDetached(paths, run, flags.json);
     return;
   }
 
-  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, token);
+  await runForeground(paths, run, flags.json);
 }
 
 async function runDetached(
   paths: ToolsServerPaths,
-  port: number,
-  host: string,
-  idleTimeoutMinutes: number,
-  token?: string
+  { port, host, idleTimeoutMinutes, token }: RunOptions,
+  json: boolean
 ): Promise<void> {
   const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
     host,
@@ -399,6 +418,10 @@ async function runDetached(
     managed: "cli",
     ...(token ? { token } : {}),
   });
+  if (json) {
+    printReadyJson(host, actualPort, pid, token);
+    return;
+  }
   const url = formatToolsServerUrl(host, actualPort);
   console.log(`tool-server started: ${url} (pid ${pid})`);
   printConnectionInfo(host, actualPort, token);
@@ -410,10 +433,8 @@ async function runDetached(
 
 async function runForeground(
   paths: ToolsServerPaths,
-  port: number,
-  host: string,
-  idleTimeoutMinutes: number,
-  token?: string
+  { port, host, idleTimeoutMinutes, token }: RunOptions,
+  json: boolean
 ): Promise<void> {
   const env = buildToolsServerEnv(paths, port, process.env, {
     host,
@@ -429,8 +450,10 @@ async function runForeground(
   };
   let child: ReturnType<typeof spawn>;
   try {
+    // With --json, stdout carries only the ready line; the server's own output
+    // moves to stderr.
     child = spawn(resolveToolsServerNode(), [paths.bundlePath, "start"], {
-      stdio: "inherit",
+      stdio: json ? ["inherit", "pipe", "inherit"] : "inherit",
       env,
     });
   } catch (err) {
@@ -479,9 +502,20 @@ async function runForeground(
     }
   }
 
-  // Print before the child's inherited stdout starts streaming its own
-  // "Tools server listening on…" banner and log lines.
-  printConnectionInfo(host, port, token);
+  let ready = false;
+  if (json) {
+    readline.createInterface({ input: child.stdout! }).on("line", (line) => {
+      process.stderr.write(`${line}\n`);
+      const listeningPort = parseListeningPort(line);
+      if (ready || listeningPort === null || childPid === undefined) return;
+      ready = true;
+      printReadyJson(host, listeningPort, childPid, token);
+    });
+  } else {
+    // Print before the child's inherited stdout starts streaming its own
+    // "Tools server listening on…" banner and log lines.
+    printConnectionInfo(host, port, token);
+  }
 
   await new Promise<void>(() => {
     const cleanup = () => {
@@ -510,7 +544,11 @@ async function runForeground(
       cleanup();
       // Mirror the child's exit; signal deaths use the conventional 128+signo code.
       const exitCode = code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0);
-      process.exit(exitCode);
+      const neverReady = json && !ready;
+      if (neverReady) {
+        console.error("argent server start: tool-server exited before it was listening.");
+      }
+      process.exit(neverReady ? exitCode || 1 : exitCode);
     });
   });
 }
@@ -554,7 +592,7 @@ function parseSubcommandArgs(
   sub: keyof typeof SUBCOMMAND_HELP,
   argv: string[],
   specs: OptionSpecs
-): Record<string, string | boolean | undefined> | null {
+): ReturnType<typeof parseCommandArgs>["options"] | null {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(SUBCOMMAND_HELP[sub]);
     return null;

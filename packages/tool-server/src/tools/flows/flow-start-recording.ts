@@ -9,14 +9,20 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
+  envRecordSchema,
+  flowEnvProblem,
   parseRequires,
   RUNTIME_KINDS,
   serializeFlow,
   validateFlow,
   type FlowFile,
   type FlowSavedTo,
+  fragmentShutdownNote,
+  runDeferredShutdown,
+  type FragmentShutdownReport,
 } from "./flow-utils";
-import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { resolveScriptEnv } from "./flow-script-step";
 import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
 
 const MACOS_PLATFORM_FLAG = { [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } };
@@ -34,25 +40,13 @@ const fileInputs: FileInputSpec[] = [
 ];
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe(
-      'Name for this e2e test (e.g. "settings-explore"): letters, digits, underscore and hyphen only.'
-    ),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root directory (the directory that contains or should contain `.argent/e2e/`)."
-    ),
+  name: z.string().describe("E2E test name (letters, digits, `_`, `-`)."),
+  project_root: z.string().describe("Absolute path to the project root containing `.argent/e2e/`."),
   executionPrerequisite: z
     .string()
     .optional()
     .describe(
-      'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
-        "Omit it for a standalone e2e test. restart-app has no chromium support, so a chromium " +
-        "e2e test records as a fragment; add the `launch: { chromium: <app path> }` line to the YAML " +
-        "afterward, deleting the executionPrerequisite line if you passed one, since an e2e test that starts " +
-        "with a launch must not declare it."
+      "Fragments only: entry state assumed. Omit for standalone tests (Chromium records as a fragment, then add `launch: { chromium: <app path> }` and remove this)."
     ),
   requires: z
     .object({
@@ -65,11 +59,10 @@ const zodSchema = z.object({
       runtimeKind: z.enum(RUNTIME_KINDS).optional(),
     })
     .optional()
-    .describe(
-      "The e2e test's `requires:` block: the targets it supports, ANDed. `platform` is one platform or a list " +
-        "(`ios` also covers a remote simulator); `runtimeKind` is `tv` or `mobile`. Omit it for a test that runs " +
-        "on any target."
-    ),
+    .describe("Supported target filter (`platform` and/or `runtimeKind`, ANDed). Omit for any."),
+  env: envRecordSchema(z.string())
+    .optional()
+    .describe("Top-level script env defaults. Supports `{{secret:NAME}}`."),
 });
 
 export const flowStartRecordingTool: ToolDefinition<
@@ -78,6 +71,8 @@ export const flowStartRecordingTool: ToolDefinition<
     message: string;
     restarted?: true;
     discardedSteps?: number;
+    /** A restart: the kept shutdown of the discarded take's `run:` fragments, which it ran. */
+    fragmentShutdown?: FragmentShutdownReport;
     e2eTestFile: string;
     /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
     flowFile: string;
@@ -85,31 +80,10 @@ export const flowStartRecordingTool: ToolDefinition<
   }
 > = {
   id: "e2e-start-recording",
-  description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
-Use when you want to capture a reusable sequence of device interactions for later replay. Load the argent-create-e2e skill first: it holds the polish, audit and replay steps. Not for Apple TV or Android TV.
-Returns { message, e2eTestFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
-Without a link, it creates that file and fails if the .argent/e2e/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
-
-Several e2e tests can be recorded at once, each keyed by the \`name\` + \`project_root\`
-that every subsequent recording tool repeats, and one recording's steps never
-land in another's file.
-
-After starting, use e2e-add-step to append tool calls. Each step runs LIVE, so
-give each concurrent recording its own device and pick a name unique to your
-task. Read each step's \`message\`: it warns when a recorded await-ui-element did
-not hold, or may fail once converted to \`await:\`/\`assert:\`. A wait nested in a
-recorded run-sequence gets no such warning, so read its \`toolResult\`. For a
-standalone e2e test, record a restart-app of the app under test as the FIRST step
-(captured as the e2e test's \`launch\` step); for a reusable fragment, skip that and
-pass executionPrerequisite instead. Starting over an existing e2e test replaces the
-whole file, including its \`requires:\` block; pass \`requires\` to keep it.
-Use e2e-add-echo to add labels, and
-e2e-add-script to run a local .mjs, .mts, .js or .ts file and record it as a \`script:\` step.
-Call e2e-finish-recording when done.
-
-To remove or reorder steps, edit the .yaml file after e2e-finish-recording, not
-during the recording: over a link, the next recorded step writes over your edit,
-and without a link, an edit that renumbers the steps drops their warnings.`,
+  description: `Start recording a new e2e test, resetting \`.argent/e2e/<name>.yaml\`. Starting over an existing test replaces the whole file, including its \`requires:\` and \`env:\` blocks (pass \`requires\` and \`env\` to keep them), and runs pending fragment cleanup on restart.
+Use when capturing a reusable sequence of device actions for replay; load the \`argent-create-e2e\` skill first. Not for Apple TV or Android TV.
+Record live steps with \`e2e-add-step\` (start standalone tests with \`restart-app\`; use \`executionPrerequisite\` for fragments), \`e2e-add-echo\`, and \`e2e-add-script\`, then call \`e2e-finish-recording\`. Edit the YAML only after finishing.
+Returns \`{ message, e2eTestFile, savedTo, restarted?, discardedSteps?, fragmentShutdown? }\`. Fails if the target file or directory cannot be written.`,
   zodSchema,
   aliases: ["flow-start-recording"],
   interaction: {
@@ -131,14 +105,21 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       `Failed to start recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
   fileInputs,
+  // A restart may run the discarded take's fragment shutdown, on the device.
+  longRunning: true,
   services: () => ({}),
   async execute(_services, params, ctx) {
     // The type emerges from the steps: a first `restart-app` becomes a leading
     // `launch` (flow-add-step) and makes it e2e; an executionPrerequisite
     // documents a fragment.
+    if (params.env) {
+      const problem = flowEnvProblem(params.env);
+      if (problem) throw new InvalidToolInputError(`env ${problem}`);
+    }
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
       ...(params.requires ? { requires: parseRequires(params.requires) } : {}),
+      ...(params.env && Object.keys(params.env).length > 0 ? { env: params.env } : {}),
       steps: [],
     };
     validateFlow(flow);
@@ -158,6 +139,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
       persist === "client" && ctx?.legacyE2eDir
         ? getLegacyFlowPath(params.project_root, params.name)
         : getFlowPath(params.project_root, params.name);
+    // After the path checks, which refuse a project_root the secret lookup
+    // must not search from; before the existing file is replaced.
+    if (params.env) resolveScriptEnv(params.env, params.project_root, ctx?.clientSecrets);
 
     // Truncate-and-register is one critical section: under the flow-file lock a
     // step from the take being discarded can neither slip in between the reset
@@ -184,8 +168,8 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           replaced === null
             ? undefined
             : replaced.persist === "host"
-              ? await countStepsOnDisk(replaced.filePath)
-              : replaced.flow.steps.length;
+              ? await countStepsOnDisk(replaced.filePath, "both")
+              : replaced.flow.steps.length + (replaced.flow.shutdown?.length ?? 0);
 
         let savedTo: FlowSavedTo;
         if (persist === "host") {
@@ -208,6 +192,9 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
     // Recordings are keyed per flow file, so only a same-key restart replaces
     // anything; starting a *different* flow abandons nothing to report.
     if (replaced) {
+      // The discarded take's recorded fragments ran, so their kept shutdown
+      // runs now, as it would have at its finish.
+      const fragmentShutdown = await runDeferredShutdown(replaced, ctx);
       // Only claim the file was reset when this process reset it: in client mode
       // truncation waits on the client applying the directive, and a rejected
       // path or a failed write there comes back as `savedTo: null`.
@@ -223,8 +210,12 @@ and without a link, an edit that renumbers the steps drops their warnings.`,
           ? "the previous take"
           : `the previous take (${discardedSteps} step${discardedSteps === 1 ? "" : "s"})`;
       return {
-        message: `Restarted recording "${params.name}" — ${lost} was discarded and ` + reset,
+        message:
+          `Restarted recording "${params.name}" — ${lost} was discarded and ` +
+          reset +
+          (fragmentShutdown ? ` ${fragmentShutdownNote(fragmentShutdown)}` : ""),
         restarted: true,
+        ...(fragmentShutdown ? { fragmentShutdown } : {}),
         ...(discardedSteps === undefined ? {} : { discardedSteps }),
         e2eTestFile: flowFile,
         flowFile,

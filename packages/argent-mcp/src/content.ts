@@ -442,6 +442,8 @@ type FlowStepResult = {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   durationMs?: number;
+  /** The step is from a `shutdown:` block, which runs after the test's steps. */
+  shutdown?: boolean;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -453,6 +455,8 @@ export type FlowExecuteResult = {
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
+  /** A `shutdown:` step failed, so the run cleaned up only partly. */
+  shutdownFailed?: boolean;
   passed?: number;
   failed?: number;
   skipped?: number;
@@ -533,8 +537,13 @@ export async function flowRunToMcpContent(
   if (typeof result.warning === "string")
     blocks.push({ type: "text", text: `⚠ ${result.warning}` });
 
+  let inShutdown = false;
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
+    if (step.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      blocks.push({ type: "text", text: "shutdown:" });
+    }
     const num = step.index !== undefined ? step.index + 1 : i + 1;
     // Status-less results (older tool-servers) render without a glyph.
     const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
@@ -574,6 +583,13 @@ export async function flowRunToMcpContent(
     if (typeof path === "string" && typeof error === "string") {
       blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
     }
+  }
+
+  if (result.shutdownFailed === true) {
+    blocks.push({
+      type: "text",
+      text: "⚠ shutdown did not finish: a shutdown step failed, so the run may have left state behind.",
+    });
   }
 
   if (result.ok !== undefined) {

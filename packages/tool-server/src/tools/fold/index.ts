@@ -297,20 +297,18 @@ const zodSchema = z
     udid: z
       .string()
       .describe(
-        "Target device id from `list-devices` (a foldable iOS simulator UDID or Android emulator serial)."
+        "Foldable device id from `list-devices` (iOS simulator UDID or Android emulator serial)."
       ),
     posture: z
       .enum(POSTURES)
       .optional()
-      .describe(
-        "Where to move the hinge: `closed` shows the cover panel, `half-open` and `open` show the inner panel."
-      ),
+      .describe("Target posture: `closed` (cover panel), `half-open`, or `open` (inner panel)."),
     angle: z
       .number()
       .min(0)
       .max(180)
       .optional()
-      .describe("The hinge angle in degrees: 0 = closed, 180 = open."),
+      .describe("Hinge angle in degrees (0 = closed, 180 = open)."),
   })
   .refine((p) => (p.posture === undefined) !== (p.angle === undefined), {
     message: "Pass exactly one of `posture` and `angle`.",
@@ -320,14 +318,10 @@ type Params = z.infer<typeof zodSchema>;
 
 export const foldTool: ToolDefinition<Params, Result> = {
   id: "fold",
-  description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) or Android emulator (a Pixel Fold or generic foldable AVD) to a \`posture\` or to an \`angle\`; pass exactly one of the two. The tool returns when the device accepts input again, so the next tap lands.
-Use when you must see or test an app in a different posture. \`list-devices\` marks foldable devices with \`foldable: true\`. To turn a device without a fold, use \`rotate\`.
-All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. The coordinates and the screenshot size change with the panel. Before you tap, read the element tree in this result or run \`describe\` again.
-iOS: unfolded, the UI is landscape, as on a rotated iPhone. A fold between two angles that are not closed or open can keep the current panel. To change panels, fold to closed or open.
-To move a full-screen app onto either half of the open iPhone Duo, use \`gesture-custom\` with \`edge: "bottom"\`. Drag up, pause at center, then drag sideways and release in one contact.
-iOS returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }. screen names the active panel and gives its size in pixels. posture is set only at 0°, 120° and 180°. warning is set when argent cannot find the active panel, or when the device did not change to the expected panel.
-Android returns { posture?, deviceState, hingeAngle?, warning? }. deviceState is the state Android committed (CLOSED, HALF_OPENED, OPENED), and posture is the matching preset. A lock screen the fold raises is dismissed; warning is set when it cannot be, or when a lock screen is showing or the screen is off after the fold. On a generic foldable AVD, closed shows only the left part of the display and describe frames do not match tap coordinates; use a Pixel Fold AVD to test the cover panel.
-Fails if the device is not foldable, is a remote simulator or a physical Android device.`,
+  description: `Move a foldable iOS simulator or Android emulator hinge to a \`posture\` or \`angle\` (pass exactly one) and wait until input is ready.
+Use when testing an app across folded/unfolded postures (\`list-devices\` marks \`foldable: true\`; use \`rotate\` for orientation). Coordinates change with the active panel, so read the returned tree or call \`describe\` before tapping.
+iOS: fold to \`closed\`/\`open\` to guarantee a panel switch; returns \`{ activeScreen, screen, posture?, hingeAngle, warning? }\`. Android: returns \`{ posture?, deviceState, hingeAngle?, warning? }\` (use Pixel Fold AVD for accurate cover-panel coords).
+Fails if the device is not foldable, is a remote simulator, or is a physical Android device.`,
   zodSchema,
   searchHint:
     "fold unfold hinge foldable duo posture open closed half-open panel screen split view",
