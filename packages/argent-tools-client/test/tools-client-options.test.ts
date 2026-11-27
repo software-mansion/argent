@@ -299,6 +299,23 @@ describe("createToolsClient options", () => {
     }
   });
 
+  it("declares fetch's own 300 s on a buffered and a streamed call", async () => {
+    const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      fetchImpl,
+    });
+
+    await callTool("slow", {});
+    await callTool("slow", {}, { onProgress: () => {} });
+
+    const sent = fetchImpl.mock.calls
+      .filter(([u]) => u.endsWith("/tools/slow"))
+      .map(([, init]) => init.headers as Record<string, string>);
+    expect(sent.map((headers) => headers.Accept)).toEqual([undefined, "application/x-ndjson"]);
+    for (const headers of sent) expect(headers["x-argent-deadline-ms"]).toBe("300000");
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);

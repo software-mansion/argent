@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
+import { readLogFile } from "../helpers/read-log-file";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-log-writer-home-");
@@ -201,52 +202,6 @@ describe("LogFileWriter", () => {
     expect(clusters[0].sourceLine).toBe(42);
   });
 
-  it("readAll() returns all written entries", () => {
-    writer.write(makeEntry(0));
-    writer.write(makeEntry(1));
-    writer.write(makeEntry(2));
-
-    const entries = writer.readAll();
-    expect(entries).toHaveLength(3);
-    expect(entries[0].id).toBe(0);
-    expect(entries[2].id).toBe(2);
-  });
-
-  it("readFiltered() filters by level", () => {
-    writer.write(makeEntry(0, { level: "log" }));
-    writer.write(makeEntry(1, { level: "error" }));
-    writer.write(makeEntry(2, { level: "log" }));
-    writer.write(makeEntry(3, { level: "error" }));
-
-    const { entries, total } = writer.readFiltered({ level: "error" });
-    expect(total).toBe(2);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
-  });
-
-  it("readFiltered() limits results to last N", () => {
-    for (let i = 0; i < 10; i++) {
-      writer.write(makeEntry(i));
-    }
-
-    const { entries, total } = writer.readFiltered({ limit: 3 });
-    expect(total).toBe(10);
-    expect(entries).toHaveLength(3);
-    expect(entries[0].id).toBe(7);
-    expect(entries[2].id).toBe(9);
-  });
-
-  it("readFiltered() combines level and limit", () => {
-    for (let i = 0; i < 10; i++) {
-      writer.write(makeEntry(i, { level: i % 2 === 0 ? "error" : "log" }));
-    }
-
-    const { entries, total } = writer.readFiltered({ level: "error", limit: 2 });
-    expect(total).toBe(5);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
-  });
-
   it("close() deletes the file", () => {
     const filePath = writer.getFilePath();
     expect(fs.existsSync(filePath)).toBe(true);
@@ -330,13 +285,7 @@ describe("LogFileWriter", () => {
     expect(() => writer.write(makeEntry(0))).toThrow("LogFileWriter is closed");
   });
 
-  it("readAll() returns empty after close", () => {
-    writer.write(makeEntry(0));
-    writer.close();
-    expect(writer.readAll()).toEqual([]);
-  });
-
-  it("stackTrace is NOT persisted to flat file but sourceFile IS in cluster", () => {
+  it("writes only the top frame's file:line to the flat file, and keeps the source in clusters", () => {
     const stackTrace = {
       callFrames: [
         {
@@ -350,11 +299,10 @@ describe("LogFileWriter", () => {
     };
     writer.write(makeEntry(0, { stackTrace }));
 
-    // readAll() reconstructs from flat file — no stackTrace
-    const entries = writer.readAll();
-    expect(entries[0].stackTrace).toBeUndefined();
+    const lines = readLogFile(writer);
+    expect(lines.map((l) => l.source)).toEqual(["src/App.tsx:10"]);
+    expect(fs.readFileSync(writer.getFilePath(), "utf-8")).not.toContain("render");
 
-    // But source attribution is still available via in-memory clusters
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/App.tsx");
     expect(clusters[0].sourceLine).toBe(10);
@@ -437,7 +385,6 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
     unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
 
     expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
-    expect(unwritableWriter.readAll()).toEqual([]);
 
     const retainedLines = Object.values(unwritableWriter as unknown as Record<string, unknown>)
       .filter((value): value is unknown[] => Array.isArray(value))
@@ -475,7 +422,6 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter under an unwritable ~/.arge
     expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
     expect(w.getStats().totalEntries).toBe(1);
     expect(w.getStats().fileSizeBytes).toBe(0);
-    expect(w.readAll()).toEqual([]);
     w.close();
   });
 });

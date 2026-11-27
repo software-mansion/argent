@@ -10,7 +10,7 @@
  * verbatim (`JsRuntimeDebugger:<port>:<device_id>`), and Metro never sees the
  * UDID, so there is nothing to join the two on synchronously. Without an alias,
  * a caller that forwards the returned logicalDeviceId mints a second URN, and so
- * a second CDPClient, console-log server and log file for one device.
+ * a second CDPClient and log file for one device.
  *
  * The alias is learned at connect — the one place both ids are known at once —
  * and read synchronously, so the tools' `services()` callbacks stay synchronous.

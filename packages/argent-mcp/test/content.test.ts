@@ -739,6 +739,21 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("indents a multi-line reason's later lines under its step", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "tool", status: "error", tool: "t", reason: "line1\nline2\nline3" },
+        { index: 1, kind: "tap", status: "fail", target: '"A"', reason: "a\nb", depth: 1 },
+      ],
+    });
+
+    expect(blocks.slice(1, 3)).toEqual([
+      { type: "text", text: "[1] ✗ t — line1\n  line2\n  line3" },
+      { type: "text", text: '[2] ✗   tap "A" — a\n    b' },
+    ]);
+  });
+
   it("indents step labels by nesting depth, clamping hostile wire values", async () => {
     const input: FlowExecuteResult = {
       flow: "f",

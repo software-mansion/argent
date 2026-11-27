@@ -64,3 +64,21 @@ describe("no-page-target message", () => {
     expect(message).toMatch(/window/i);
   });
 });
+
+describe("primary page selection", () => {
+  it("skips a page target with no webSocketDebuggerUrl, which connectCdp could not dial", async () => {
+    const target = await discoverPrimaryPage(
+      await serveTargets([
+        { id: "closing", type: "page", title: "Closing", url: "https://a.example" },
+        {
+          id: "live",
+          type: "page",
+          title: "Live",
+          url: "https://b.example",
+          webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/live",
+        },
+      ])
+    );
+    expect(target.id).toBe("live");
+  });
+});

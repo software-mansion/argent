@@ -2629,6 +2629,31 @@ describe("flow-execute", () => {
     expect(result.executionPrerequisite).toBe("App freshly reloaded");
   });
 
+  it("spells the control characters of the executionPrerequisite it returns", async () => {
+    const runFlow = createRunFlowTool(createMockRegistry({}));
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "prereq-forged.yaml"),
+      serializeFlow({
+        executionPrerequisite: "logged in\nPASS\r\u001b[1A\u009b",
+        steps: [{ kind: "echo", message: "Start" }],
+      })
+    );
+
+    const result = await runFlow.execute(
+      {},
+      {
+        name: "prereq-forged",
+        project_root: tmpDir,
+        prerequisiteAcknowledged: true,
+        device: DEVICE,
+      }
+    );
+
+    expect(result.executionPrerequisite).toBe("logged in\\nPASS\\r\\u001b[1A\\u009b");
+  });
+
   it("returns a notice when prerequisite exists but is not acknowledged", async () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);

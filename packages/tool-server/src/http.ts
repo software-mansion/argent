@@ -9,10 +9,12 @@ import { randomUUID, createHash } from "node:crypto";
 import { ARCHIVE_FORMATS } from "@argent/archive";
 import {
   FAILURE_CODES,
+  CALLER_DEADLINE_HEADER,
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   ToolParamAliasError,
+  callerDeadlineReason,
   canonicalToolArgs,
   describeParamIssues,
   getFailureSignal,
@@ -77,6 +79,10 @@ import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
+
+// The caller's deadline clock starts before its request arrives, by the time
+// it takes to connect and send the request head.
+const CALLER_DEADLINE_SLACK_MS = 2_000;
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
@@ -235,6 +241,11 @@ function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | nu
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function parseCallerDeadlineMs(value: string | undefined): number | undefined {
+  const ms = Number(value);
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined;
 }
 
 // The MCP server (a different process) forwards the coarse AI-client identity as
@@ -445,6 +456,12 @@ function takeToolNote(data: unknown): string | undefined {
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
+  // Before the body is read: a caller's deadline clock runs while it sends one.
+  const arrivedAt = new WeakMap<Request, number>();
+  app.use((req, _res, next) => {
+    arrivedAt.set(req, performance.now());
+    next();
+  });
   // 48mb: file-input wrappers may inline base64 file content when the client is
   // remote. Bounds the whole encoded request; the decoded per-file ceiling is
   // enforced in file-inputs.ts.
@@ -1001,8 +1018,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (callerGone) return;
 
       const controller = new AbortController();
+      const deadlineMs = parseCallerDeadlineMs(firstHeader(req.headers[CALLER_DEADLINE_HEADER]));
+      // The declared deadline counts from the last line written, else from the
+      // request's arrival: Node's fetch times out the wait for the head and
+      // each gap in the body alike, and `writeHead` below sends nothing before
+      // the first line.
+      let lastSentAt = arrivedAt.get(req)!;
       res.on("close", () => {
-        if (!res.writableFinished) controller.abort();
+        if (res.writableFinished) return;
+        const atDeadline =
+          deadlineMs !== undefined &&
+          performance.now() - lastSentAt >= deadlineMs - CALLER_DEADLINE_SLACK_MS;
+        controller.abort(atDeadline ? callerDeadlineReason() : undefined);
       });
 
       // A long-running tool (e.g. await_user_selection) can hold the request open
@@ -1043,6 +1070,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const wantsStream = Boolean(req.headers.accept?.includes("application/x-ndjson"));
       const writeLine = (payload: unknown): void => {
         res.write(`${JSON.stringify(payload)}\n`);
+        lastSentAt = performance.now();
       };
       if (wantsStream) {
         // Every line must reach the client as soon as it is written.

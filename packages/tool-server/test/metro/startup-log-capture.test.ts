@@ -214,22 +214,6 @@ describe("JsRuntimeDebugger startup log capture", () => {
     expect(stderr.mock.calls.flat().join("")).not.toContain("LogFileWriter is closed");
   });
 
-  it("fails the connect when the socket drops while the console log server binds", async () => {
-    const listen = http.Server.prototype.listen;
-    const close = vi.spyOn(http.Server.prototype, "close");
-    vi.spyOn(http.Server.prototype, "listen").mockImplementationOnce(function (
-      this: http.Server,
-      ...args: Parameters<http.Server["listen"]>
-    ) {
-      const [ws] = wss.clients;
-      ws!.once("close", () => listen.apply(this, args));
-      ws!.close();
-      return this;
-    });
-    await expect(connect()).rejects.toThrow("CDP disconnected");
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it("names only the newest and the first crashed session across a crash loop", async () => {
     const urn = `JsRuntimeDebugger:${mockPort}:${DEVICE}`;
     const crashed: string[] = [];

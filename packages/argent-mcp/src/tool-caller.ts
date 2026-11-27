@@ -1,8 +1,42 @@
-import { createToolsClient, type ToolMeta, type ToolsServerHandle } from "@argent/tools-client";
+import {
+  CALLER_DEADLINE_HEADER,
+  createToolsClient,
+  type ToolMeta,
+  type ToolsServerHandle,
+} from "@argent/tools-client";
 
 const MAX_RETRIES = 4;
 const EXP_BACKOFF_BASE = 250;
 const FETCH_TIMEOUT_MS = 30_000;
+
+const deadlines = new WeakMap<AbortSignal, number>();
+
+/**
+ * Runs `work` with a signal that aborts at `signal` or after `ms`, a deadline
+ * {@link fetchWithReconnect} declares to the tool-server, so a hang-up at it
+ * counts as a timeout, not a cancel. Node 20 and 22 can collect an
+ * `AbortSignal.timeout()` that only `AbortSignal.any()` references, which then
+ * never fires; the timer here keeps its controller alive.
+ */
+export async function withDeadline<T>(
+  signal: AbortSignal,
+  ms: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () =>
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+    ms
+  );
+  const bounded = AbortSignal.any([signal, deadline.signal]);
+  deadlines.set(bounded, performance.now() + ms);
+  try {
+    return await work(bounded);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function fetchWithReconnect(
   getUrl: () => string,
@@ -35,7 +69,20 @@ export async function fetchWithReconnect(
       const signal = callerSignal
         ? AbortSignal.any([controller.signal, callerSignal])
         : controller.signal;
-      return await fetch(getUrl(), { ...attemptInit, signal });
+      const headers = new Headers(attemptInit?.headers);
+      // The tools client declares fetch's own idle timeout; a nearer limit of
+      // this attempt replaces it.
+      const declared = Number(headers.get(CALLER_DEADLINE_HEADER));
+      const callerDeadline = callerSignal ? deadlines.get(callerSignal) : undefined;
+      const waitMs = Math.min(
+        Number.isSafeInteger(declared) && declared > 0 ? declared : Infinity,
+        fetchTimeoutMs ?? Infinity,
+        callerDeadline === undefined ? Infinity : callerDeadline - performance.now()
+      );
+      if (waitMs !== Infinity) {
+        headers.set(CALLER_DEADLINE_HEADER, String(Math.max(1, Math.ceil(waitMs))));
+      }
+      return await fetch(getUrl(), { ...attemptInit, headers, signal });
     } catch (err) {
       lastError = err;
       // The caller stopped waiting, so a retry would only queue work behind

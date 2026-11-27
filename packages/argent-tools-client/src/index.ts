@@ -38,7 +38,7 @@ export {
 
 export { ToolInvocationError } from "./errors.js";
 
-export { canonicalToolId } from "@argent/registry";
+export { CALLER_DEADLINE_HEADER, canonicalToolId } from "@argent/registry";
 
 export {
   readLinkConfig,

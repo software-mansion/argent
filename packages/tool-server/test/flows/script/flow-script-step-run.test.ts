@@ -161,6 +161,15 @@ describe("a script step in a run", () => {
     expect(result.steps[0]!.scriptLogTruncated).toBeUndefined();
   });
 
+  it("spells the control characters in its log, all but the newlines", async () => {
+    await write("scripts/ansi.mjs", 'process.stdout.write("a\\rb\\x1b[1Ac\\x9b[2K\\nnext\\n");');
+    await flow("ansi", "steps:\n  - script: { path: ../../scripts/ansi.mjs }\n");
+
+    const { result } = await runFlow("ansi");
+
+    expect(result.steps[0]!.scriptLog).toBe("a\\rb\\u001b[1Ac\\u009b[2K\nnext\n");
+  });
+
   it("flags a log a limit cut short, because the text carries no marker", async () => {
     await write(
       "scripts/chatty.mjs",
@@ -371,6 +380,21 @@ describe("a script step that fails", () => {
     expect(result.ok).toBe(false);
     expect(reason.split("\n")).toHaveLength(1);
     expect(reason).toContain("PASS — 3 passed");
+  });
+
+  it("spells the control characters that move a terminal's cursor without a newline", async () => {
+    // ESC [1A is cursor-up, CSI (U+009B) its one-byte spelling: either lets
+    // the script overprint the line above the `✗` one. The trailing `\u001b`
+    // is the script's own text, so it must not read as an escape.
+    await write("scripts/ansi.mjs", 'throw new Error("a\\x1b[1Ab\\x9b[1Ac\\x7f d\\\\u001b");');
+    await flow("ansi", "steps:\n  - script: { path: ../../scripts/ansi.mjs }\n");
+
+    const { result } = await runFlow("ansi");
+
+    const reason = result.steps[0]!.reason!;
+    expect(result.steps[0]).toMatchObject({ kind: "script", status: "fail" });
+    expect(reason).toContain("a\\u001b[1Ab\\u009b[1Ac\\u007f d\\\\u001b");
+    for (const raw of ["\x1b", "\x9b", "\x7f"]) expect(reason).not.toContain(raw);
   });
 
   it("reports a script that stops its own process as a fail", async () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
+import { readLogFile } from "../helpers/read-log-file";
 import { scopeTempHome } from "../helpers/temp-home";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -70,7 +71,7 @@ describe("LogFileWriter past a file-size limit or on a full disk", () => {
     await tearNextWrite((length) => length - 3);
     w.write(entry(1));
     w.write(entry(2));
-    const read = w.readAll();
+    const read = readLogFile(w);
     expect(read.map((e) => e.id)).toEqual([0, 2]);
     expect(read).toHaveLength(w.getFileEntryCount());
     expect(read.map((e) => e.message)).toEqual(["boom", "boom"]);
@@ -102,7 +103,11 @@ describe("LogFileWriter past a file-size limit or on a full disk", () => {
       "[L:4] 2",
       "",
     ]);
-    expect(w.readAll().map((e) => e.id)).toEqual([0, 3, 4]);
+    expect(lines.filter((l) => l.endsWith(" | boom")).map((l) => l.slice(0, 5))).toEqual([
+      "[L:0]",
+      "[L:3]",
+      "[L:4]",
+    ]);
     expect(w.getFileEntryCount()).toBe(3);
     expect(w.getStats().fileSizeBytes).toBe(fs.statSync(w.getFilePath()).size);
   });

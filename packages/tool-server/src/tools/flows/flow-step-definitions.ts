@@ -39,18 +39,19 @@ interface UiCondition {
 // today, so sorting removes a dependency rather than fixes a live bug.
 function yamlSelectorLabel(sel: FlowSelector): string {
   const yaml = selectorToYaml(sel);
-  if (typeof yaml !== "object" || yaml === null) return JSON.stringify(yaml);
+  if (typeof yaml !== "object" || yaml === null) return escapeInline(JSON.stringify(yaml));
   const sorted = Object.fromEntries(
     Object.entries(yaml).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   );
-  return JSON.stringify(sorted);
+  return escapeInline(JSON.stringify(sorted));
 }
 
 // Render a text condition for the summary: the comparator is preserved — regex
 // patterns as `matches /…/`, exact text as `== "…"`, substrings as
-// `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous. A pattern's control characters go
-// through `escapeInline` instead, which leaves its backslashes copyable.
+// `contains "…"` — and literals use JSON quoting plus `escapeInline` so
+// embedded quotes and control characters stay unambiguous. A pattern's
+// control characters go through `escapeInline` alone, which leaves its
+// backslashes copyable.
 function yamlTextConditionLabel(
   sel: FlowSelector,
   expectedText: string | undefined,
@@ -61,8 +62,8 @@ function yamlTextConditionLabel(
   return textMatch === "matches"
     ? `text ${selector} matches /${escapeInline(expected)}/`
     : textMatch === "equals"
-      ? `text ${selector} == ${JSON.stringify(expected)}`
-      : `text ${selector} contains ${JSON.stringify(expected)}`;
+      ? `text ${selector} == ${escapeInline(JSON.stringify(expected))}`
+      : `text ${selector} contains ${escapeInline(JSON.stringify(expected))}`;
 }
 
 /** `open`, `120°`. */
@@ -86,11 +87,11 @@ function selectorLabel(sel: FlowSelector): string {
   if (sel.any) parts.push("*");
   // A report target is one line and these values are free text out of the flow
   // file, so `escapeInline` keeps a newline or an escape byte in one from
-  // breaking the line or driving the terminal. `text` takes full JSON quoting
-  // instead — the module's convention for literals (see
-  // `yamlTextConditionLabel`), and alone among the four it carries no `key=` or
-  // `/…/` marker to hold it apart from its neighbours.
-  if (sel.text !== undefined) parts.push(JSON.stringify(sel.text));
+  // breaking the line or driving the terminal. `text` is JSON-quoted first —
+  // the module's convention for literals (see `yamlTextConditionLabel`), and
+  // alone among the four it carries no `key=` or `/…/` marker to hold it apart
+  // from its neighbours.
+  if (sel.text !== undefined) parts.push(escapeInline(JSON.stringify(sel.text)));
   if (sel.textMatches !== undefined) parts.push(`/${escapeInline(sel.textMatches)}/`);
   if (sel.identifier) parts.push(`id=${escapeInline(sel.identifier)}`);
   if (sel.role) parts.push(`role=${escapeInline(sel.role)}`);
@@ -184,7 +185,7 @@ export function describeWhenCondition(cond: WhenCondition): string {
  */
 function renderToolArgs(args: Record<string, unknown>): string {
   try {
-    return JSON.stringify(args);
+    return escapeInline(JSON.stringify(args));
   } catch {
     return "[cyclic args]";
   }
@@ -234,11 +235,11 @@ function typedTextLabel(text: string): string {
   // Cut in CODE POINTS: `text.length` counts UTF-16 units, so a cut at the cap
   // can halve a surrogate pair.
   const chars = Array.from(text);
-  if (chars.length <= MAX_TARGET_TEXT_CHARS) return JSON.stringify(text);
+  if (chars.length <= MAX_TARGET_TEXT_CHARS) return escapeInline(JSON.stringify(text));
   // Elide before quoting, not after: a cut through the rendered form can halve
   // an escape sequence.
   const elided = chars.length - MAX_TARGET_TEXT_CHARS;
-  return `${JSON.stringify(chars.slice(0, MAX_TARGET_TEXT_CHARS).join(""))}…(+${elided} chars)`;
+  return `${escapeInline(JSON.stringify(chars.slice(0, MAX_TARGET_TEXT_CHARS).join("")))}…(+${elided} chars)`;
 }
 
 // ── Step definitions ──
@@ -337,7 +338,7 @@ const FLOW_STEP_DEFINITIONS: {
   },
   "launch": {
     summary: (step) =>
-      typeof step.app === "string" ? escapeInline(step.app) : JSON.stringify(step.app),
+      escapeInline(typeof step.app === "string" ? step.app : JSON.stringify(step.app)),
     // A launch's app id may be per-platform (`appIdForPlatform`), and a step
     // alone does not know the run device.
     target: () => undefined,
@@ -377,7 +378,8 @@ const FLOW_STEP_DEFINITIONS: {
     target: (step) => swipeLabel(step, selectorLabel),
   },
   "type": {
-    summary: (step) => `${yamlSelectorLabel(step.into)} ← ${JSON.stringify(step.text)}`,
+    summary: (step) =>
+      `${yamlSelectorLabel(step.into)} ← ${escapeInline(JSON.stringify(step.text))}`,
     // The typed text rides along, the way an await/assert target carries its
     // expectation: two steps into the same field with different text would
     // otherwise render identical targets.

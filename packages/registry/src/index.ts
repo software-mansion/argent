@@ -1,5 +1,6 @@
 export { TypedEventEmitter } from "./event-emitter";
 export {
+  CALLER_DEADLINE_HEADER,
   CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
@@ -109,6 +110,7 @@ export {
   FAILURE_SIGNAL_NAMES,
   FAILURE_SPAWN_CODES,
   NETWORK_FAILURES,
+  callerDeadlineReason,
   failureSignal,
   subprocessFailureMetadata,
   withFailureSignal,

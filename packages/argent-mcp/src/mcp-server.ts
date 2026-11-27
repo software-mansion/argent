@@ -50,7 +50,7 @@ import { debuggerLogRegistryText } from "./debugger-log-registry-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
-import { createToolCaller } from "./tool-caller.js";
+import { createToolCaller, withDeadline } from "./tool-caller.js";
 import { takeWhatsNewNote, whatsNewEnabled } from "./whats-new.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
@@ -72,29 +72,6 @@ export interface StartMcpServerOptions {
   transport?: Transport;
   /** Cap of the post-action capture. Defaults to CAPTURE_TIMEOUT_MS; a test passes a short one. */
   captureTimeoutMs?: number;
-}
-
-/**
- * Runs `work` with a signal that aborts at `signal` or after `ms`. Node 20 and
- * 22 can collect an `AbortSignal.timeout()` that only `AbortSignal.any()`
- * references, which then never fires; the timer here keeps its controller alive.
- */
-async function withDeadline<T>(
-  signal: AbortSignal,
-  ms: number,
-  work: (signal: AbortSignal) => Promise<T>
-): Promise<T> {
-  const deadline = new AbortController();
-  const timer = setTimeout(
-    () =>
-      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
-    ms
-  );
-  try {
-    return await work(AbortSignal.any([signal, deadline.signal]));
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {

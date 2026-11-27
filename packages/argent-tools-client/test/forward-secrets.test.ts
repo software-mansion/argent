@@ -241,7 +241,7 @@ describe("forward-secrets", () => {
     // This server keeps Node's default limit, so a refused head would come back as a 431.
     expect(new Set(outcomes.values())).toEqual(new Set(["sent", "held"]));
     expect(Math.max(...[...outcomes].filter(([, o]) => o === "sent").map(([size]) => size))).toBe(
-      11_963
+      11_942
     );
   });
 
@@ -354,7 +354,7 @@ describe("forward-secrets", () => {
     expect(sent.map((call) => call.pad)).toEqual([pad["X-Pad"]]);
 
     // The largest secret that fits without the caller's headers.
-    writeFileSync(join(project, ".argent", "secrets.env"), `BIG=${"s".repeat(11_963)}\n`);
+    writeFileSync(join(project, ".argent", "secrets.env"), `BIG=${"s".repeat(11_942)}\n`);
     await client().callTool("keyboard", { text: "{{secret:BIG}}" });
     expect(sent).toHaveLength(2);
 

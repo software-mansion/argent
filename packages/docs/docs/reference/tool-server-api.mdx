@@ -311,6 +311,24 @@ An argent client that is older than the tool-server sends no header and no membe
 
 Keep the client and the tool-server at the same version.
 
+## The `x-argent-deadline-ms` header
+
+The client sends this header with each `POST /tools/<name>` call. The value is the number of milliseconds that the client waits for the next byte of the answer. After that time without a byte, the client closes the connection. The wait for the first byte starts when the client sends the call. The value is the smallest of these limits:
+
+- 300000, which is 5 minutes. Node's `fetch` closes a connection after 5 minutes without a byte of the answer.
+- For the MCP server, the limit of one attempt, 30 seconds. This limit applies to a tool that is not `longRunning`, in a call that sends no upload.
+- For the screenshot and the element tree that the MCP server gets after an interaction tool, the time that is left of the 15 seconds for the capture. See [Interacting](/docs/reference/tools#interacting).
+- For the wait of the MCP server until the screen stops changing, the longest time of that wait plus 15 seconds.
+
+When the connection closes before the result, the tool-server stops the tool. The tool-server then measures the time since the last byte that it sent for the call. Before the first byte, it measures the time since the call arrived. The tool-server compares that time with the value minus 2 seconds:
+
+| Close of the connection                                | Class of the failure that the stop causes                   |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
+| At or after that time                                  | The class that the tool gives, else `error_kind: "timeout"` |
+| Before that time, or for a call without a valid header | `error_kind: "cancelled"`                                   |
+
+The tool-server ignores a value that is not a positive integer. A proxy that closes an idle connection before the time of the header causes `error_kind: "cancelled"`.
+
 ## The `x-argent-client-secrets` header
 
 The client sends this header with a `POST /tools/<name>` call over a link when the `forward-secrets` flag is on and the call contains a `{{secret:NAME}}` placeholder. See [Secrets over a link](/docs/reference/configuration#secrets-over-a-link). The value is base64 text of a JSON object. Each key is a secret name, and each value is the secret value as a string:
