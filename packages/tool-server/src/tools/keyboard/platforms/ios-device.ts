@@ -11,6 +11,7 @@ import {
   typeText,
   type MutationReply,
 } from "../../../utils/ios-device/runner-commands";
+import { fillByDeviceKeys } from "../../fill/keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
 /**
@@ -63,20 +64,33 @@ export function makeIosDeviceImpl(
       }
 
       // Empty request is a documented no-op. Return before resolving the runner.
-      if (!params.text && !key) {
+      if (!params.text && !key && !params.clear) {
         return {
           typed: "",
           keys: 0,
         };
       }
 
-      const bundleId = requireCurrentIosDeviceApp(device.id);
-      const ref = iosDeviceRunnerRef(device);
-      const api = await registry.resolveService<IosDeviceRunnerApi>(ref.urn, ref.options);
-
       // XCTest types whole strings and has no per-keycode HID surface. delayMs is ignored.
       let keys = 0;
       let reactivated = false;
+
+      if (params.clear) {
+        // No `cleared` here: 100 deletes before the caret and nothing reads the field back.
+        const cleared = await fillByDeviceKeys(registry, device, "");
+        reactivated ||= cleared.reactivated;
+        if (!params.text) {
+          return {
+            typed: "",
+            keys: 0,
+            ...(reactivated ? { reactivated: true as const } : {}),
+          };
+        }
+      }
+
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const ref = iosDeviceRunnerRef(device);
+      const api = await registry.resolveService<IosDeviceRunnerApi>(ref.urn, ref.options);
 
       if (params.text) {
         // Secret placeholders are already resolved by the execute wrapper.

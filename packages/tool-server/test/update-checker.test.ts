@@ -8,11 +8,11 @@ import type { RegistryInfo } from "@argent/update-core";
 // (with their own low-level tests there). The checker only orchestrates them,
 // so we mock that boundary and keep the real, pure pickInstallableTarget.
 // vi.hoisted keeps the same fn instances across the vi.resetModules() below.
-const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMs, mockGetConfigValueByKey } = vi.hoisted(
+const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMs, mockIsAutoUpdateEnabled } = vi.hoisted(
   () => ({
     mockFetchRegistryInfo: vi.fn<() => Promise<RegistryInfo | null>>(),
     mockDetectMinReleaseAgeMs: vi.fn<() => Promise<number>>(),
-    mockGetConfigValueByKey: vi.fn<(key: string) => unknown>(),
+    mockIsAutoUpdateEnabled: vi.fn<() => boolean>(),
   })
 );
 vi.mock("@argent/update-core", async (importActual) => {
@@ -23,8 +23,9 @@ vi.mock("@argent/update-core", async (importActual) => {
     detectMinReleaseAgeMs: mockDetectMinReleaseAgeMs,
   };
 });
-vi.mock("@argent/configuration-core", () => ({
-  getConfigValueByKey: mockGetConfigValueByKey,
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+  isAutoUpdateEnabled: mockIsAutoUpdateEnabled,
 }));
 
 let getUpdateState: typeof import("../src/utils/update-checker").getUpdateState;
@@ -53,8 +54,8 @@ describe("update-checker", () => {
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
-    mockGetConfigValueByKey.mockReset();
-    mockGetConfigValueByKey.mockReturnValue(false);
+    mockIsAutoUpdateEnabled.mockReset();
+    mockIsAutoUpdateEnabled.mockReturnValue(false);
 
     // Re-import after module reset so each test gets fresh state.
     const mod = await import("../src/utils/update-checker");
@@ -131,13 +132,12 @@ describe("update-checker", () => {
 
   it("requests the existing updater when autoUpdate.enabled is true", async () => {
     mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
-    mockGetConfigValueByKey.mockReturnValue(true);
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
     const onAutoUpdate = vi.fn();
 
     const handle = startUpdateChecker({ onAutoUpdate });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(mockGetConfigValueByKey).toHaveBeenCalledWith("autoUpdate.enabled");
     expect(onAutoUpdate).toHaveBeenCalledOnce();
     expect(onAutoUpdate).toHaveBeenCalledWith("99.0.0");
     handle.dispose();
@@ -175,7 +175,7 @@ describe("update-checker", () => {
           resolveFetch = resolve;
         })
     );
-    mockGetConfigValueByKey.mockReturnValue(true);
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
     const onAutoUpdate = vi.fn();
 
     const handle = startUpdateChecker({ onAutoUpdate });
@@ -185,7 +185,7 @@ describe("update-checker", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(mockDetectMinReleaseAgeMs).not.toHaveBeenCalled();
-    expect(mockGetConfigValueByKey).not.toHaveBeenCalled();
+    expect(mockIsAutoUpdateEnabled).not.toHaveBeenCalled();
     expect(onAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateState().updateAvailable).toBe(false);
   });
@@ -199,7 +199,7 @@ describe("update-checker", () => {
           resolveReleaseAge = resolve;
         })
     );
-    mockGetConfigValueByKey.mockReturnValue(true);
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
     const onAutoUpdate = vi.fn();
 
     const handle = startUpdateChecker({ onAutoUpdate });
@@ -210,7 +210,7 @@ describe("update-checker", () => {
     resolveReleaseAge(0);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(mockGetConfigValueByKey).not.toHaveBeenCalled();
+    expect(mockIsAutoUpdateEnabled).not.toHaveBeenCalled();
     expect(onAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateState().updateAvailable).toBe(false);
   });
@@ -344,7 +344,7 @@ describe("update-checker", () => {
   it("never queries the registry or updates automatically when ARGENT_DISABLE_UPDATE_CHECK is set", async () => {
     vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", "1");
     mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
-    mockGetConfigValueByKey.mockReturnValue(true);
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
     const onAutoUpdate = vi.fn();
 
     const handle = startUpdateChecker({ onAutoUpdate });

@@ -55,7 +55,7 @@ type TelemetryConsentOutcome =
  *     model and just surface the notice.
  *  3. An env override (DO_NOT_TRACK / ARGENT_TELEMETRY) already owns the
  *     decision and config can't override it.
- *  4. Already decided on a previous install — honor it.
+ *  4. Already decided on a previous install, or a config file opts out.
  *  5. Interactive first run — ask, defaulting the selection to Enabled.
  *
  * A choice from case 5 takes effect for THIS session immediately, but is only
@@ -81,9 +81,11 @@ export async function resolveTelemetryConsent(opts: {
   }
 
   // 3/4. An env override owns the decision, or the user already chose.
-  const source = getConsentState().source.source;
+  const state = getConsentState();
+  const source = state.source.source;
   const envOwnsDecision = source === "env_do_not_track" || source === "env_argent_telemetry";
-  if (envOwnsDecision || hasShownFirstRunNotice()) {
+  const configOptedOut = source === "config_file" && !state.enabled;
+  if (envOwnsDecision || configOptedOut || hasShownFirstRunNotice()) {
     return { kind: "skipped" };
   }
 

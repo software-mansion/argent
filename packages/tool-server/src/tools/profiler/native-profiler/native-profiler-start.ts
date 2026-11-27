@@ -31,27 +31,19 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: the CFBundleExecutable or display name of the app to profile. Android: the app's package name. " +
-        "If omitted, auto-detects the foreground app; set it only if auto-detection picks the wrong app." +
-        "<flag:macos-apps> Do not set it for a Mac app: the tool refuses it, because the device id names the app.</flag:macos-apps>"
+      "iOS executable/name or Android package (auto-detects foreground app if omitted)<flag:macos-apps>; omit for Mac apps</flag:macos-apps>."
     ),
   template_path: z
     .string()
     .optional()
     .describe(
-      'iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Path to an Instruments .tracetemplate file, or the name of a built-in template such as "Time Profiler" (defaults to the bundled Argent template).'
+      'iOS<flag:macos-apps>/Mac app</flag:macos-apps> Instruments `.tracetemplate` path or built-in name (e.g. "Time Profiler"; default: bundled template).'
     ),
   malloc_stack_logging: z
     .boolean()
     .optional()
     .describe(
-      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Enable allocation stacks from app launch. " +
-        "Restarts the app, clears its current state, and adds CPU and memory overhead. Leave it off for CPU and hang timing. " +
-        "On iOS, attach recordings typically lack allocation stacks. The all-processes capture " +
-        "(including ARGENT_IOS_CAPTURE=all-processes) rejects this option and records no leaks." +
-        "<flag:macos-apps> On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches, " +
-        "and logging stays active until restart-app. The bundled template can capture stacks for allocations during recording, " +
-        "so enable this for older allocations.</flag:macos-apps>"
+      "iOS<flag:macos-apps>/Mac apps</flag:macos-apps> only: restart app with allocation stacks from launch (adds overhead; leave off for CPU/hang timing)."
     ),
 });
 
@@ -62,10 +54,9 @@ export const nativeProfilerStartTool: ToolDefinition<
   id: "native-profiler-start",
   // iOS can outlast the 30s MCP fetch timeout, whose replay would start a second xctrace.
   longRunning: true,
-  description: `Start native profiling. Instruments records CPU, hangs, and leaks on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>. Perfetto records CPU, jank, and memory growth on Android.
-Start the target app first for an attach recording. Wait for this call to return before reproducing the scenario, then call native-profiler-stop while the app is still running.
-On iOS and Android, a warning names apps whose timings may be affected by native network capture (started by network-capture-start).<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging. Launch the app through Argent and use a development-signed build. If signing blocks profiling in a background session such as SSH, try the "Time Profiler" template for CPU and hangs without leak checks.
-With malloc stack logging off, Argent blocks the bundled template if it detects a WebKit heap or the check fails. Use "Time Profiler" to keep the app's state, or set malloc_stack_logging to true to restart the app and record leaks with the bundled template. With logging off, other templates that use the Allocations instrument, including "Leaks" and "Allocations", can freeze an affected app.</flag:macos-apps>`,
+  description: `Start native profiling: Instruments (CPU, hangs, leaks) on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, or Perfetto (CPU, jank, memory) on Android.
+Use when profiling native performance. Launch the target app first, wait for this call to return before reproducing the scenario, then call \`native-profiler-stop\` while the app is still running.<flag:macos-apps> Mac apps need a dev-signed build launched via Argent (use "Time Profiler" if signing/WebKit blocks the bundled template, or set \`malloc_stack_logging: true\` for leak stacks).</flag:macos-apps>
+Returns \`{ status: "recording", pid, traceFile, warning? }\` (warns on iOS/Android if native network capture is active). Fails if the app, xctrace, or adb is unavailable.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Starting native profiler",

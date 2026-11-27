@@ -64,3 +64,11 @@ argent run describe --udid <OTHER_UDID>
 
 `argent server start` uses the same Node.js executable as the CLI in both foreground and detached mode.
 If that executable no longer exists, or the CLI runs under Bun, Deno or Electron, Argent uses `node` from `PATH`.
+
+`argent server start --json` prints one JSON line on stdout when the tool-server listens: `url`, `port`, `pid` and `token`. With `--no-auth`, the line has no `token`. For a wildcard host such as `0.0.0.0`, the `url` uses the loopback address. In the foreground, the output of the tool-server goes to stderr. The command exits with a non-zero code when the tool-server stops before it listens. To start a tool-server for a script, run this command:
+
+```bash
+ARGENT_HOME_DIR=/tmp/argent-ci argent server start --port 0 --detach --json
+```
+
+See [`ARGENT_HOME_DIR`](/docs/reference/configuration#argent-home) to keep the state of that tool-server apart from the global install.

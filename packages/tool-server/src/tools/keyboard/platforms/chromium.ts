@@ -2,6 +2,7 @@ import { FAILURE_CODES, type Registry } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
+import { fillChromium } from "../../fill/chromium";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "../chromium-keys";
 import type { KeyboardParams, KeyboardResult } from "../types";
 
@@ -93,9 +94,27 @@ export function makeChromiumImpl(
 ): PlatformImpl<Record<string, unknown>, KeyboardParams, KeyboardResult> {
   return {
     handler: async (_services, params, device) => {
+      if (params.clear) {
+        if (params.text) {
+          for (const char of params.text) {
+            if (!charToChromiumKey(char)) {
+              throw new InvalidToolInputError(`No CDP key descriptor for character "${char}"`, {
+                error_code: FAILURE_CODES.KEYBOARD_CHARACTER_UNSUPPORTED,
+                failure_stage: "keyboard_char_chromium",
+                error_kind: "unsupported",
+              });
+            }
+          }
+        }
+        await fillChromium(registry, device, "");
+        if (!params.text && !params.key) {
+          return { typed: "", keys: 0, cleared: true };
+        }
+      }
       const ref = chromiumCdpRef(device);
       const chromium = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
-      return runChromium(chromium, params);
+      const result = await runChromium(chromium, params);
+      return params.clear ? { ...result, cleared: true } : result;
     },
   };
 }

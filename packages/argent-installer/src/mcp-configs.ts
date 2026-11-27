@@ -159,7 +159,7 @@ export type McpCommandMode =
   | { kind: "local-npx" };
 
 function buildMcpEntry(mode: McpCommandMode = { kind: "global" }): McpServerEntry {
-  // No env vars: the server falls back to `${homedir()}/.argent/mcp-calls.log`
+  // No env vars: the server falls back to `mcp-calls.log` in the Argent home
   // when ARGENT_MCP_LOG is unset, so a committed config stays portable (#238).
   switch (mode.kind) {
     case "local-node":

@@ -1,6 +1,5 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -20,6 +19,7 @@ import {
   markFirstRunNoticeShown,
   shouldShowFirstRunNotice,
 } from "@argent/telemetry";
+import { argentHomeDir } from "@argent/configuration-core";
 import {
   toMcpContent,
   flowRunToMcpContent,
@@ -188,7 +188,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return reconnectPromise;
   }
 
-  const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
+  const LOG_FILE = process.env.ARGENT_MCP_LOG ?? join(argentHomeDir(), "mcp-calls.log");
   let logDirReady = false;
 
   async function spyLog(entry: Record<string, unknown>) {

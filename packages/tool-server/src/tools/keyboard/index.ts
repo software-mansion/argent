@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
@@ -49,8 +49,17 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key. Cannot be combined with `text` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
+      "Named key. Cannot be combined with `text` or `clear` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
         "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
+    ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      "Clear the focused text field before typing `text` (or alone when `text` is omitted). " +
+        "Cannot be combined with `key`. Fails if nothing editable has focus. " +
+        "On physical iOS, deletes up to 100 characters before the caret, unverified, and returns no `cleared`. " +
+        "Not supported on <flag:macos-apps>Mac apps, </flag:macos-apps><flag:harmonyos>HarmonyOS, </flag:harmonyos>Apple TV, Android TV, or Vega."
     ),
   repeat: z
     .number()
@@ -105,7 +114,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     id: "keyboard",
     description: `Type text or press a named key on the focused field (tap or focus the field first; with no focus input is silently dropped).
 Use when entering text or triggering named keys (enter, escape, backspace, arrows).
-Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
+Returns { typed, keys, cleared?, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
@@ -119,6 +128,9 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
+        if (params.clear && params.key === undefined) {
+          return params.text !== undefined ? "Clearing field and entering text" : "Clearing field";
+        }
         if (params.text === undefined) {
           return (params.repeat ?? 1) > 1
             ? `Pressing a key ${params.repeat} times`
@@ -128,6 +140,9 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
         return "Entering text and pressing a key";
       },
       completedMsg: ({ params }) => {
+        if (params.clear) {
+          return params.text !== undefined ? "Cleared field and entered text" : "Cleared field";
+        }
         if (params.text !== undefined) return "Entered text";
         return (params.repeat ?? 1) > 1 ? `Pressed a key ${params.repeat} times` : "Pressed a key";
       },
@@ -205,6 +220,15 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
           }
         );
       }
+      if (params.clear && params.key !== undefined) {
+        throw new InvalidToolInputError(
+          "keyboard `clear: true` cannot be combined with `key`, so nothing was changed. " +
+            "Pass `clear: true` alone to empty the field, or with `text` to replace its contents.",
+          {
+            failure_stage: "keyboard_clear_and_key_combined",
+          }
+        );
+      }
       if (params.repeat !== undefined && params.key === undefined) {
         throw new InvalidToolInputError(
           "`repeat` only applies to `key`, not `text` or an empty request — nothing was typed. " +
@@ -214,19 +238,37 @@ Returns { typed, keys, verified?, warning?, reactivated? }. Fails if an unsuppor
           }
         );
       }
+      const runDispatch = async (callParams: KeyboardParams) => {
+        try {
+          return await dispatch(services, callParams, options);
+        } catch (err) {
+          // `clear: true` reuses the hidden `fill` clearing primitives; avoid telling an
+          // MCP agent to retry a tool name (`fill`) that is not in its catalog.
+          if (
+            callParams.clear &&
+            err instanceof Error &&
+            getFailureSignal(err)?.error_code?.startsWith("FILL_")
+          ) {
+            err.message = err.message
+              .replace(/\bthe fill\b/g, "clearing the field")
+              .replace(/\bfill\b/g, "keyboard");
+          }
+          throw err;
+        }
+      };
       // Resolve inside `execute`: after every logging boundary (agent
       // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
       // see only the placeholder) and before the dispatch, so run-sequence and
       // flow `type` steps are covered for free.
-      if (params.text === undefined) return dispatch(services, params, options);
+      if (params.text === undefined) return runDispatch(params);
       const { text, secrets } = resolveSecretPlaceholders(params.text, {
         clientSecrets: options?.clientSecrets,
       });
-      if (secrets.length === 0) return dispatch(services, params, options);
+      if (secrets.length === 0) return runDispatch(params);
       // Before the keys go out: a failure partway leaves part of a value typed.
       noteTypedSecrets(params.udid, secrets);
       try {
-        const result = await dispatch(services, { ...params, text }, options);
+        const result = await runDispatch({ ...params, text });
         // Echo the placeholder form, never the resolved value.
         return { ...result, typed: params.text };
       } catch (err) {
