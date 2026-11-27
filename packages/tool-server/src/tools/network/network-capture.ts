@@ -22,29 +22,27 @@ export const captureSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Device ID from list-devices<flag:macos-apps>. For Mac builds started outside Argent, use macos-app-<bundle id></flag:macos-apps>."
+      "Device ID from `list-devices`<flag:macos-apps> (external Mac builds: `macos-app-<bundle id>`)</flag:macos-apps>."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps>. On Mac, omit the macos-app- prefix</flag:macos-apps>. On Chromium, use a valid placeholder such as argent.capture."
+      "Bundle ID (iOS) / package (Android)<flag:macos-apps> / Mac bundle ID</flag:macos-apps> / placeholder on Chromium (e.g. `argent.capture`)."
     ),
   port: metroPortField.describe(
-    "The app's Metro port for JS capture and native log filtering. Omit it only when the app uses the device's port (usually 8081); otherwise check the project's Metro start script. Chromium uses the CDP port in udid."
+    "Metro port for JS capture and native filtering (omit for device default, usually 8081; ignored on Chromium)."
   ),
   layer: z
     .enum(["js", "native"])
     .optional()
-    .describe(
-      "Omit to control both layers. Selecting one leaves the other alone. Chromium ignores this setting."
-    ),
+    .describe("Control one layer only (default: both; ignored on Chromium)."),
   logicalDeviceId: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "For iOS simulators and Android on shared Metro, use the logical ID for the intended device if requested. Reuse it for start and stop, and as device_id for JS reads.<flag:macos-apps> For Mac apps, omit logicalDeviceId and keep the Mac app id even on shared Metro.</flag:macos-apps>"
+      "Shared-Metro logical ID for iOS/Android if requested (reuse for start/stop/JS reads)<flag:macos-apps>; omit on Mac apps</flag:macos-apps>."
     ),
 });
 
