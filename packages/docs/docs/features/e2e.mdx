@@ -62,7 +62,7 @@ An e2e test can contain more than taps and text. A step can wait for an element,
 
 An e2e test can [check that an action sends a request](/docs/features/network#wait-for-a-request). Start capture after launch and before the action. Wait for the request, then stop capture. Check start and stop results in the replay report to confirm the layer was ready or stopped. If a failed check skips the stop, ask the agent to stop capture before the next run. See [Network checks in YAML](/docs/reference/e2e-yaml#network-checks).
 
-Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test.
+Use a local script for setup or cleanup that device steps cannot do. The script is a JavaScript or TypeScript file. Ask the agent to add the script at the required point in the e2e test. Use environment values to run the same script against different servers. Use a secret placeholder to pass credentials without storing them in the e2e test file.
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
 

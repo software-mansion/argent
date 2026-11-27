@@ -249,11 +249,16 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
+- script: { path: ../../scripts/seed-order.mjs, env: { API_TOKEN: "{{secret:API_TOKEN}}" } }
 ```
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
 `path` is relative to the test file that contains the step. Use an `.mjs` or `.js` file, or an `.mts` or `.ts` file for TypeScript, and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
+
+Add `env` to the YAML after recording. Use top-level `env` for script defaults, step `env` for one script, and `--env NAME=value` or `e2e-execute.env` for run overrides. The last layer to set a name wins. A `run:` fragment fills missing defaults. Pass overrides explicitly to a separate `tool: e2e-execute` run.
+
+Quote non-string YAML scalars, such as `PORT: "8080"`. Use `{{secret:NAME}}` for credentials and keep credentials out of logs. If a secret is missing, check the secret sources for the run's project root. See [Environment values](https://docs.swmansion.com/argent/docs/reference/e2e-yaml#environment-values) for the value rules and redaction limits.
 
 `.mjs` and `.mts` are always ES modules. `.js` and `.ts` take their module type from the project's `package.json` `type` field; with no `type`, Node reads a file with `import`, `export` or top-level `await` as an ES module, and each other file as CommonJS. So prefer `.mjs` or `.mts` for a new script and use `.js` or `.ts` for a script the project already has. `.cjs` and `.cts` are invalid: under `"type": "module"`, use `import` in the script, not `require`.
 
@@ -269,7 +274,7 @@ Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-s
 
 ## Snapshots and CLI runs
 
-`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
+`argent e2e run <name> [--device <id>] [--platform ios|android|chromium|vega|macos|ios-remote] [--update-baselines] [--env NAME=value] [--output <dir>] [--json]` runs without an LLM and exits non-zero on failure.
 
 A screenshot is human evidence. A `snapshot:` is executable visual verification. A missing baseline or excessive mismatch fails. A `cropOn` size change also fails. Use snapshots for color, layout, size, spacing, typography, clipping, overflow, images, icons, or stable component appearance. Use full screen for global changes and `cropOn` for one component.
 

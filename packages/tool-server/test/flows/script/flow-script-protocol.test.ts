@@ -205,11 +205,9 @@ describe("flow script executor — a runner that misbehaves", () => {
     expect(result.output).toBeUndefined();
   });
 
-  it("adds the secret fragment it drops to the count the omission reports", async () => {
+  it("redacts the prefix of a secret the child's clamp cut short", async () => {
     // The child clamps the message and has no secret list, so a value straddling
-    // its cut leaves behind a prefix no whole-value replacement matches. Dropping
-    // those eight characters without counting them would leave the marker saying
-    // seven where fifteen are gone.
+    // its cut arrives as a prefix only.
     const clamped = "head sk-live-… [7 more characters omitted]";
     const result = await withFakeRunner(
       `process.on("message", () => {
@@ -223,7 +221,7 @@ describe("flow script executor — a runner that misbehaves", () => {
     );
 
     expect(result.failure?.kind).toBe("runtime");
-    expect(result.failure?.message).toBe("head … [15 more characters omitted]");
+    expect(result.failure?.message).toBe("head {{secret:API_KEY}}… [7 more characters omitted]");
   });
 
   it("bounds the unrecognized message it quotes back", async () => {

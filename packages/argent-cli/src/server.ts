@@ -554,7 +554,7 @@ function parseSubcommandArgs(
   sub: keyof typeof SUBCOMMAND_HELP,
   argv: string[],
   specs: OptionSpecs
-): Record<string, string | boolean | undefined> | null {
+): ReturnType<typeof parseCommandArgs>["options"] | null {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(SUBCOMMAND_HELP[sub]);
     return null;

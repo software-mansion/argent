@@ -23,9 +23,10 @@ import {
 import { isElectronHostedEnv } from "../../../utils/electron-env";
 import { formatErrorForAgent } from "../../../utils/format-error";
 import {
-  scrubSecretChunk,
-  scrubSecretValues,
+  redactSecrets,
+  secretRedactor,
   SECRET_PLACEHOLDER_MARKER,
+  type SecretRedactor,
 } from "../../../utils/secrets";
 import { sleep } from "../../../utils/timing";
 import {
@@ -515,11 +516,7 @@ export class FlowScriptExecutor {
     }
 
     const timeoutMs = clampTimeout(request.timeoutMs, bounds.maxTimeoutMs, notes);
-    const capture = new ScriptLogCapture(
-      () => request.secrets ?? [],
-      SCRIPT_STEP_LOG_LIMIT_BYTES,
-      request.logBudget
-    );
+    const capture = new ScriptLogCapture(SCRIPT_STEP_LOG_LIMIT_BYTES, request.logBudget);
 
     // The real path, not just the absolute one: Node resolves an entry module
     // through `realpath` and the runner re-imports that URL, so a different
@@ -577,8 +574,10 @@ export class FlowScriptExecutor {
       };
       child = fork(scriptPath, [], forkOptions);
     } catch (err) {
+      // Node's own refusal can quote an environment value, a secret included.
+      const reason = redactSecrets(errorMessage(err), request.secrets ?? []);
       return emptyResult(
-        { kind: "spawn", message: `Could not start the script process: ${errorMessage(err)}` },
+        { kind: "spawn", message: `Could not start the script process: ${reason}` },
         { notes, durationMs: Date.now() - startedAt }
       );
     }
@@ -690,8 +689,10 @@ export class FlowScriptExecutor {
     lifeline?.destroy?.();
     if (child.connected) child.disconnect();
 
-    const log = capture.text;
-    const verdict = redactSecrets(
+    const secrets = request.secrets ?? [];
+    const redact = secretRedactor(secrets);
+    const { text: log, truncated: logTruncated } = redactedLog(capture, redact);
+    const verdict = redactVerdict(
       classifyOutcome({
         exit,
         spawnProblem,
@@ -704,13 +705,13 @@ export class FlowScriptExecutor {
         heapFatalSeen: capture.heapFatalSeen,
         heapLimitMb: bounds.heapLimitMb,
       }),
-      request.secrets ?? []
+      secrets.length > 0 ? redact : undefined
     );
 
     return {
       ...verdict,
       log,
-      logTruncated: capture.truncated,
+      logTruncated,
       durationMs: Date.now() - startedAt,
       queuedMs: 0,
       notes,
@@ -797,34 +798,101 @@ function classifyOutcome(
   );
 }
 
-function redactSecrets(
+function redactVerdict(
   verdict: Pick<FlowScriptResult, "ok" | "output" | "failure">,
-  secrets: readonly FlowScriptSecret[]
+  redact: Redact | undefined
 ): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
-  if (secrets.length === 0) return verdict;
-  if (verdict.output) {
-    const collision = scrubDocument(verdict.output, secrets);
-    // Refused rather than resolved: the document cannot be both redacted and
-    // whole, and dropping whichever entry lost would take it out of the
-    // document later steps read with nothing to say it had ever been there.
-    if (collision) {
-      return failed(
-        "output",
-        `Two keys in the script's output become "${collision}" once the secret in them is ` +
-          `redacted, so one would silently replace the other. Rename one of them.`
-      );
-    }
-  }
+  if (!redact) return verdict;
+  if (verdict.output) redactDocument(verdict.output, redact);
   const failure = verdict.failure;
   if (!failure) return verdict;
   return {
     ...verdict,
     failure: {
       ...failure,
-      message: redactTruncated(failure.message, secrets),
-      ...(failure.stack ? { stack: redactTruncated(failure.stack, secrets) } : {}),
+      message: redactClamped(failure.message, redact),
+      ...(failure.stack ? { stack: redactClamped(failure.stack, redact) } : {}),
     },
   };
+}
+
+type Redact = SecretRedactor;
+
+/**
+ * Matched on the log as written and on each stream's own text, because the
+ * other stream's writes can land between two halves of a value; a position
+ * either reading claims is redacted. The result is cut again, since a marker is
+ * longer than the fragment it replaces, to the step's limit and to what the
+ * run's budget holds; the budget is then charged for the text returned. A
+ * marker the second cut lands in is kept whole, past the limit by at most its
+ * own length.
+ */
+function redactedLog(
+  capture: ScriptLogCapture,
+  redact: SecretRedactor
+): { text: string; truncated: boolean } {
+  const { parts } = capture;
+  const joined = parts.map((part) => part.text).join("");
+  if (redact.names.size === 0) return { text: joined, truncated: capture.truncated };
+  const result = clampRedacted(capture, redact, joined);
+  capture.settle(Buffer.byteLength(result.text, "utf8"));
+  return result;
+}
+
+function clampRedacted(
+  capture: ScriptLogCapture,
+  redact: SecretRedactor,
+  joined: string
+): { text: string; truncated: boolean } {
+  const { parts } = capture;
+  const owner = redact.claims(joined, { cut: capture.truncated });
+  for (const stream of ["stdout", "stderr"] as const) {
+    const own = parts.filter((part) => part.stream === stream);
+    const claims = redact.claims(own.map((part) => part.text).join(""), {
+      cut: capture.truncated,
+    });
+    let from = 0;
+    let at = 0;
+    for (const part of parts) {
+      if (part.stream === stream) {
+        for (let i = 0; i < part.text.length; i++) {
+          owner[at + i] = Math.min(owner[at + i], claims[from + i]);
+        }
+        from += part.text.length;
+      }
+      at += part.text.length;
+    }
+  }
+  const text = redact.render(joined, owner);
+  const buffer = Buffer.from(text, "utf8");
+  const limit = capture.renderLimit;
+  if (buffer.length <= limit) {
+    return { text, truncated: capture.truncated };
+  }
+  const cut = buffer.subarray(0, utf8SafeCut(buffer, limit)).toString("utf8");
+  // Only a marker the redaction wrote: a script can print `{{secret:` itself.
+  const open = text.lastIndexOf(SECRET_PLACEHOLDER_MARKER, cut.length - 1);
+  const name = open === -1 ? undefined : MARKER_AT_RE.exec(text.slice(open))?.[1];
+  const end =
+    name !== undefined && redact.names.has(name)
+      ? open + SECRET_PLACEHOLDER_MARKER.length + name.length + 2
+      : -1;
+  if (end > cut.length) {
+    // Kept whole up to its end: when that is the end of the log, nothing was cut.
+    return { text: text.slice(0, end), truncated: capture.truncated || end < text.length };
+  }
+  return { text: cut, truncated: true };
+}
+
+const MARKER_AT_RE = /^\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/;
+
+const OMISSION_RE = /… \[\d+ more characters omitted]$/;
+
+/** A clamped failure text ends in a marker, and the text before it is a cut. */
+function redactClamped(text: string, redact: Redact): string {
+  const omission = OMISSION_RE.exec(text);
+  if (!omission) return redact(text);
+  return redact(text.slice(0, omission.index), { cut: true }) + omission[0];
 }
 
 /**
@@ -832,39 +900,20 @@ function redactSecrets(
  * arbitrary code, and a megabyte of `[[[[…` is legal JSON that would overflow
  * the stack inside `execute`, which owes its caller a verdict, not a throw.
  *
- * Returns the redacted spelling two keys of one object share, when a rewrite
- * would land on a sibling that is already spelled that way; the caller refuses
- * the document rather than let one entry replace the other.
+ * String values only; keys stay as written.
  */
-function scrubDocument(
-  root: Record<string, unknown>,
-  secrets: readonly FlowScriptSecret[]
-): string | undefined {
+function redactDocument(root: Record<string, unknown>, redact: Redact): void {
   const pending: unknown[] = [root];
   while (pending.length > 0) {
     const node = pending.pop();
-    if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) {
-        const value = node[i];
-        if (typeof value === "string") node[i] = scrubSecretValues(value, secrets);
-        else if (value !== null && typeof value === "object") pending.push(value);
-      }
-      continue;
-    }
     if (node === null || typeof node !== "object") continue;
     const record = node as Record<string, unknown>;
     for (const key of Object.keys(record)) {
       const value = record[key];
-      if (typeof value === "string") record[key] = scrubSecretValues(value, secrets);
+      if (typeof value === "string") record[key] = redact(value);
       else if (value !== null && typeof value === "object") pending.push(value);
-      const scrubbedKey = scrubSecretValues(key, secrets);
-      if (scrubbedKey === key) continue;
-      if (Object.prototype.hasOwnProperty.call(record, scrubbedKey)) return scrubbedKey;
-      record[scrubbedKey] = record[key];
-      delete record[key];
     }
   }
-  return undefined;
 }
 
 function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output" | "failure"> {
@@ -903,7 +952,7 @@ function commitOutput(outputJson: string): Pick<FlowScriptResult, "ok" | "output
  * own key, and committing one hands whatever merges the document into flow
  * state a prototype to write rather than a property.
  *
- * Iterative for the reason `scrubDocument` is: the document came from a child
+ * Iterative for the reason `redactDocument` is: the document came from a child
  * that ran arbitrary code, and a deep one would overflow the stack inside a
  * call that owes its caller a verdict, not a throw.
  */
@@ -939,25 +988,6 @@ const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 function memberPath(key: string): string {
   return IDENTIFIER_RE.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
 }
-
-/**
- * A failure message is clamped by the child, the only side that can bound what
- * crosses the channel, and the child has no secret list — so a value straddling
- * the cut leaves a prefix that a whole-value replacement never matches. That
- * tail is dropped and counted, and only on text whose marker says it was cut.
- */
-function redactTruncated(text: string, secrets: readonly FlowScriptSecret[]): string {
-  const scrubbed = scrubSecretValues(text, secrets);
-  const omission = OMISSION_RE.exec(scrubbed);
-  if (!omission) return scrubbed;
-  const head = scrubbed.slice(0, omission.index);
-  const partial = partialSecretTail(head, secrets);
-  if (partial === 0) return scrubbed;
-  const omitted = Number(omission[1]) + partial;
-  return `${head.slice(0, head.length - partial)}${omissionMarker(omitted)}`;
-}
-
-const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
 
 function omissionMarker(omitted: number): string {
   return `… [${omitted} more characters omitted]`;
@@ -1160,6 +1190,32 @@ function probeTypeStripping(nodeOptions: readonly string[]): Promise<boolean | u
   });
 }
 
+/**
+ * Layers environment maps, a later one replacing the names an earlier one set.
+ * On Windows a name is case-insensitive, so `api_url` replaces `API_URL`
+ * rather than sitting beside it, where the child would get whichever spelling
+ * Node passes first.
+ */
+export function mergeScriptEnv(
+  ...layers: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const layer of layers) {
+    for (const [name, value] of Object.entries(layer ?? {})) setEnvName(env, name, value);
+  }
+  return env;
+}
+
+function setEnvName(env: NodeJS.ProcessEnv, name: string, value: string): void {
+  if (process.platform === "win32") {
+    const lower = name.toLowerCase();
+    for (const existing of Object.keys(env)) {
+      if (existing !== name && existing.toLowerCase() === lower) delete env[existing];
+    }
+  }
+  env[name] = value;
+}
+
 function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.ProcessEnv {
   // Windows environment names are case-insensitive, so a host may surface any
   // of these under non-canonical casing; POSIX names are exact.
@@ -1205,7 +1261,7 @@ function buildChildEnv(overrides: Record<string, string> | undefined): NodeJS.Pr
           `(reserved names: ${reservedEnvNamesForMessage()}).`
       );
     }
-    env[name] = value;
+    setEnvName(env, name, value);
   }
 
   // Set last, so a caller cannot shadow it. The runner preload activates only
@@ -1361,8 +1417,6 @@ function hasExited(child: ChildProcess): boolean {
 
 interface StreamState {
   decoder: StringDecoder;
-  holdback: string;
-  holdbackAt?: number;
   collapser?: V8FrameCollapser;
   watchForHeapFatal?: boolean;
 }
@@ -1377,14 +1431,13 @@ interface StreamState {
  * for a burst written to *both* streams inside one turn, and nothing else here
  * may add reordering on top of that.
  *
- * Redaction runs on the live stream, ahead of both limits: a value can straddle
- * two pipe chunks and a per-chunk replacement sees neither half, and one
- * straddling the truncation cut would leave a prefix that a whole-value
- * replacement never matches.
+ * Captured raw, and redacted once at the end, one stream's text at a time
+ * (see {@link redactedLog}): a value split across chunks, or with the other
+ * stream's text between its halves, or cut by a limit, is still seen whole.
  */
 class ScriptLogCapture {
-  private readonly parts: string[] = [];
-  private readonly streams = new Map<string, StreamState>();
+  readonly parts: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
+  private readonly streams = new Map<"stdout" | "stderr", StreamState>();
   private stepRemaining: number;
   private truncatedFlag = false;
   private cut = false;
@@ -1392,8 +1445,7 @@ class ScriptLogCapture {
   private heapFatalTail = "";
 
   constructor(
-    private readonly secrets: () => readonly FlowScriptSecret[],
-    stepLimitBytes: number,
+    private readonly stepLimitBytes: number,
     private readonly runBudget?: FlowScriptLogBudget
   ) {
     this.stepRemaining = stepLimitBytes;
@@ -1406,26 +1458,38 @@ class ScriptLogCapture {
    */
   push(stream: "stdout" | "stderr", chunk: Buffer): void {
     const state = this.stateFor(stream);
-    this.consume(state, state.decoder.write(chunk), false);
+    this.consume(stream, state, state.decoder.write(chunk));
   }
 
   end(): void {
-    for (const state of this.streams.values()) {
-      this.consume(state, state.decoder.end(), true);
+    for (const [stream, state] of this.streams) {
+      this.consume(stream, state, state.decoder.end());
       if (state.collapser) {
-        this.append(state.collapser.end());
+        this.append(stream, state.collapser.end());
         if (state.collapser.collapsed) this.truncatedFlag = true;
       }
     }
     this.streams.clear();
   }
 
-  get text(): string {
-    return scrubSecretValues(this.parts.join(""), this.secrets());
-  }
-
   get truncated(): boolean {
     return this.truncatedFlag;
+  }
+
+  /** What the redacted log may take: the step's limit, and what the run budget holds. */
+  get renderLimit(): number {
+    const charged = this.stepLimitBytes - this.stepRemaining;
+    const runRemaining = this.runBudget
+      ? Math.max(0, this.runBudget.remainingBytes)
+      : Number.POSITIVE_INFINITY;
+    return Math.min(this.stepLimitBytes, charged + runRemaining);
+  }
+
+  /** Charges the run budget for the log as returned, in place of the raw bytes captured. */
+  settle(returnedBytes: number): void {
+    if (this.runBudget) {
+      this.runBudget.remainingBytes += this.stepLimitBytes - this.stepRemaining - returnedBytes;
+    }
   }
 
   get heapFatalSeen(): boolean {
@@ -1448,7 +1512,6 @@ class ScriptLogCapture {
     if (!state) {
       state = {
         decoder: new StringDecoder("utf8"),
-        holdback: "",
         ...(stream === "stderr"
           ? { collapser: new V8FrameCollapser(), watchForHeapFatal: true }
           : {}),
@@ -1458,35 +1521,14 @@ class ScriptLogCapture {
     return state;
   }
 
-  private consume(state: StreamState, text: string, final: boolean): void {
-    if (!text && !final) return;
+  private consume(stream: "stdout" | "stderr", state: StreamState, text: string): void {
+    if (!text) return;
     if (state.watchForHeapFatal) this.watchForHeapFatal(text);
-    const secrets = this.secrets();
-    const held = state.holdback;
-    const pending = held + text;
-    const { emit, held: keep } = scrubSecretChunk(pending, secrets, final);
-    const split = pending.length - keep;
-    state.holdback = pending.slice(split);
-    this.release(state, held.slice(0, split), emit);
+    this.append(stream, state.collapser ? state.collapser.write(text) : text);
     if (state.collapser?.collapsed) this.truncatedFlag = true;
-    if (!state.holdback) state.holdbackAt = undefined;
-    else if (split >= held.length) state.holdbackAt = this.parts.push("") - 1;
   }
 
-  private release(state: StreamState, released: string, emit: string): void {
-    const at = state.holdbackAt;
-    if (at === undefined || !emit) {
-      this.append(state.collapser ? state.collapser.write(emit) : emit);
-      return;
-    }
-    const head = scrubSecretValues(released, this.secrets());
-    const headText = emit.startsWith(head) ? head : "";
-    this.append(state.collapser ? state.collapser.write(headText) : headText, at);
-    const tailText = emit.slice(headText.length);
-    this.append(state.collapser ? state.collapser.write(tailText) : tailText);
-  }
-
-  private append(text: string, at?: number): void {
+  private append(stream: "stdout" | "stderr", text: string): void {
     if (!text) return;
     const runRemaining = this.runBudget
       ? Math.max(0, this.runBudget.remainingBytes)
@@ -1494,62 +1536,24 @@ class ScriptLogCapture {
     const allowed = Math.min(this.stepRemaining, runRemaining);
     // Once a cut has happened the log ends there: what follows would read as
     // the text that came next, and the bytes the cut gave back — a partial
-    // character, a partial marker — are room enough to admit some of it.
+    // character — are room enough to admit some of it.
     if (this.cut || allowed <= 0) {
       this.truncatedFlag = true;
       return;
     }
     const buffer = Buffer.from(text, "utf8");
-    let taken = buffer.length <= allowed ? buffer.length : utf8SafeCut(buffer, allowed);
+    const taken = buffer.length <= allowed ? buffer.length : utf8SafeCut(buffer, allowed);
     if (taken < buffer.length) {
       this.truncatedFlag = true;
       this.cut = true;
-      // The cut lands wherever the budget runs out, which may be inside a
-      // marker the scrub wrote. No value escapes either way, but a downstream
-      // reader parsing markers would read a placeholder naming no secret, so
-      // the fragment is given back rather than committed.
-      taken = withoutPartialMarker(buffer, taken);
     }
     if (taken > 0) {
       const kept = taken === buffer.length ? text : buffer.subarray(0, taken).toString("utf8");
-      if (at === undefined) this.parts.push(kept);
-      else this.parts[at] += kept;
+      this.parts.push({ stream, text: kept });
       this.stepRemaining -= taken;
       if (this.runBudget) this.runBudget.remainingBytes -= taken;
     }
   }
-}
-
-/**
- * How much of `buffer` is left once a trailing fragment of a
- * `{{secret:NAME}}` marker is dropped: an opening the cut never closed, or the
- * beginning of one. Marker text is ASCII, so byte offsets are character
- * offsets here.
- */
-function withoutPartialMarker(buffer: Buffer, taken: number): number {
-  const text = buffer.subarray(0, taken).toString("utf8");
-  const open = text.lastIndexOf(SECRET_PLACEHOLDER_MARKER);
-  if (open >= 0 && !text.includes("}}", open + SECRET_PLACEHOLDER_MARKER.length)) {
-    return Buffer.byteLength(text.slice(0, open), "utf8");
-  }
-  for (let n = Math.min(SECRET_PLACEHOLDER_MARKER.length - 1, text.length); n > 0; n--) {
-    if (text.endsWith(SECRET_PLACEHOLDER_MARKER.slice(0, n))) return taken - n;
-  }
-  return taken;
-}
-
-function partialSecretTail(text: string, secrets: readonly FlowScriptSecret[]): number {
-  let keep = 0;
-  for (const { value } of secrets) {
-    const longest = Math.min(value.length - 1, text.length);
-    for (let n = longest; n > keep; n--) {
-      if (text.endsWith(value.slice(0, n))) {
-        keep = n;
-        break;
-      }
-    }
-  }
-  return keep;
 }
 
 export function utf8SafeCut(buffer: Buffer, max: number): number {
