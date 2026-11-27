@@ -15,6 +15,7 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  ToolParamAliasError,
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
@@ -334,6 +335,21 @@ function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   );
 }
 
+/**
+ * `args` with each former param name renamed ({@link canonicalToolArgs}). A
+ * call that sets both names of one param is refused before anything is sent,
+ * with the message and `issues` the tool-server answers it with, so a caller
+ * reads it as a rejected input.
+ */
+function canonicalArgsOrRefuse(name: string, args: unknown): unknown {
+  try {
+    return canonicalToolArgs(name, args);
+  } catch (err) {
+    if (!(err instanceof ToolParamAliasError)) throw err;
+    throw new ToolInvocationError(err.message, { errorKind: "validation", issues: err.issues });
+  }
+}
+
 /** Cap on the numbers one refusal names: an array of them follows the caller's input. */
 const MAX_NON_FINITE_ISSUES = 12;
 
@@ -604,14 +620,14 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     args: unknown,
     opts?: CallToolOptions
   ): Promise<ToolInvocationResult> {
-    // An aborted signal must not start a tool-server.
+    // An aborted signal, or a call refused here, must not start a tool-server.
     opts?.signal?.throwIfAborted();
     assertFiniteNumbers(args);
+    let finalArgs = canonicalArgsOrRefuse(name, args);
     const { url, token, remote } = await route();
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    let finalArgs = canonicalToolArgs(name, args);
     const { tools, uploadFormats } = await fetchToolList({ signal: opts?.signal });
     const meta = findTool(tools, name);
     if (options.refuseRelativeProjectPaths) assertAbsoluteProjectPaths(meta, finalArgs);
