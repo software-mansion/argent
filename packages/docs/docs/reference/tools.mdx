@@ -541,6 +541,8 @@ Start and stop mark the window for `await-network-request`. Start connects if ne
 
 If start cannot connect, check that the app exposes the CDP port from the device ID. If stop reports there was no start, start capture before repeating the action. Ending the debugging session clears the log and window.
 
+On Chromium, `view-network-request-details` returns `initiator` with the type of the initiator and the URL and line (counted from 1) of the script or document that sent the request. It leaves out the call stack.
+
 ## Mac apps
 
 Use these tools for native Mac apps, including [Mac Catalyst](#mac-catalyst-apps). See [Mac apps](/docs/features/mac-apps) for setup and supported workflows.
