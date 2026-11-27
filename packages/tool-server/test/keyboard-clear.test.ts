@@ -211,7 +211,9 @@ describe("keyboard — clear option", () => {
     const tool = createKeyboardTool(registry());
     const err = await tool
       .execute({}, { udid: ANDROID, clear: true, text: "hi" })
-      .catch((e: Error) => e);
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    if (!(err instanceof Error)) throw new Error("expected error");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FILL_NO_FOCUSED_FIELD);
     expect(err.message).toContain("call keyboard again");
     expect(err.message).not.toMatch(/\bfill\b/);
