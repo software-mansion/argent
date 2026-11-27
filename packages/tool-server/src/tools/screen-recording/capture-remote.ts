@@ -1,3 +1,4 @@
+import { argentCloudCommand } from "../../utils/argent-cloud-bin";
 import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -533,7 +534,7 @@ function asStopFailure(
         `not be retrieved from the remote simulator: ${message}.`;
   const recovery =
     `If the recording was stopped there, the remote machine keeps it until the machine is ` +
-    `released. Download it with \`sim-remote screen-record fetch ` +
+    `released. Download it with \`${argentCloudCommand()} screen-record fetch ` +
     `${stripRemotePrefix(ctx.deviceId)} <FILE> --recording ${ctx.recordingId}\`. ` +
     `Do not retry the stop.`;
   return new FailureError(

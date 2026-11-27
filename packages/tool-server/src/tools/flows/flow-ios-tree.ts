@@ -1,3 +1,4 @@
+import { argentCloudCommand } from "../../utils/argent-cloud-bin";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import {
@@ -812,7 +813,7 @@ async function explainTargetingFailure(
  */
 async function terminateCommand(device: DeviceInfo): Promise<string | undefined> {
   if (device.platform === "ios-remote") {
-    return `sim-remote simctl terminate ${stripRemotePrefix(device.id)} <bundleId>`;
+    return `${argentCloudCommand()} simctl terminate ${stripRemotePrefix(device.id)} <bundleId>`;
   }
   try {
     const { prefix } = await simctlTargetForUdid(device.id);

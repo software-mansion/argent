@@ -20,6 +20,12 @@ import {
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices, simRemoteExecError } from "../../utils/sim-remote";
+import {
+  argentCloudCommand,
+  argentCloudVersion,
+  isArgentCloudOutdated,
+  MIN_ARGENT_CLOUD_VERSION,
+} from "../../utils/argent-cloud-bin";
 import { resolveAndroidBinary } from "../../utils/android-binary";
 import {
   withRemotePrefix,
@@ -186,7 +192,7 @@ type ListDevicesResult = {
   notes?: string[];
 };
 
-/** Argent Cloud through the `sim-remote` CLI, as far as list-devices can tell. */
+/** Argent Cloud through its CLI (`argent-cloud` or `sim-remote`), as far as list-devices can tell. */
 type CloudState = "absent" | "logged-out" | "logged-in" | "unknown";
 
 const ARGENT_CLOUD_URL = "https://argent.swmansion.com/cloud/";
@@ -208,14 +214,22 @@ function iosReachNote(
   if (cloud === "logged-out") {
     return (
       `iOS: ${host.localIos ? "" : "this machine cannot run iOS simulators locally; "}` +
-      `sim-remote is installed but not logged in, so Argent Cloud simulators are not listed. ` +
-      `The user runs \`sim-remote login\` in their own terminal.`
+      `${argentCloudCommand()} is installed but not logged in, so Argent Cloud simulators are not listed. ` +
+      `The user runs \`${argentCloudCommand()} login\` in their own terminal.`
     );
   }
   if (cloud !== "absent" || host.localIos) return null;
   return host.darwin
     ? `iOS: no local simulators because \`simctl\` was not found in the active developer directory. Select your Xcode installation, or install Xcode if needed. ${ARGENT_CLOUD_OFFER}`
     : `iOS: this machine cannot run iOS simulators (they need macOS with Xcode). ${ARGENT_CLOUD_OFFER}`;
+}
+
+function outdatedCloudCliNote(version: string | null): string | null {
+  if (!version || !isArgentCloudOutdated(version)) return null;
+  return (
+    `iOS: ${argentCloudCommand()} ${version} is older than ${MIN_ARGENT_CLOUD_VERSION}, the version Argent expects. ` +
+    `Argent Cloud simulators still work. The user can update it with \`argent cloud install\`.`
+  );
 }
 
 const ANDROID_SDK_MISSING_NOTE =
@@ -300,6 +314,7 @@ function readinessRank(d: ListedDevice): number {
 async function listRemoteIosSimulators(): Promise<{
   devices: IosRemoteDevice[];
   cloud: CloudState;
+  version: string | null;
 }> {
   try {
     const result = await simctlListDevices();
@@ -320,13 +335,17 @@ async function listRemoteIosSimulators(): Promise<{
         });
       }
     }
-    return { devices: out, cloud: "logged-in" };
+    return { devices: out, cloud: "logged-in", version: await argentCloudVersion() };
   } catch (err) {
     if ((simRemoteExecError(err) as { code?: unknown }).code === "ENOENT") {
-      return { devices: [], cloud: "absent" };
+      return { devices: [], cloud: "absent", version: null };
     }
     const loggedOut = err instanceof Error && /not logged in/i.test(err.message);
-    return { devices: [], cloud: loggedOut ? "logged-out" : "unknown" };
+    return {
+      devices: [],
+      cloud: loggedOut ? "logged-out" : "unknown",
+      version: await argentCloudVersion(),
+    };
   }
 }
 
@@ -532,7 +551,7 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       ),
       withDeadline(
         listRemoteIosSimulators(),
-        { devices: [], cloud: "unknown" as CloudState },
+        { devices: [], cloud: "unknown" as CloudState, version: null },
         "ios-remote"
       ),
       withDeadline(
@@ -702,9 +721,12 @@ Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-
       iosRemote.cloud
     );
 
+    const cloudCliNote = outdatedCloudCliNote(iosRemote.version);
+
     const adbPrefix = adbCommandPrefix(process.env);
     const notes = [
       ...(iosNote ? [iosNote] : []),
+      ...(cloudCliNote ? [cloudCliNote] : []),
       ...(androidSdk ? [] : [ANDROID_SDK_MISSING_NOTE]),
       ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(ios.timedOut ? [iosListTimedOutHint()] : []),
