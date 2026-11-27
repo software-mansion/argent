@@ -33,6 +33,10 @@ Argent Cloud uses `fundamentals/`, `guides/`, `integrations/` and `reference/`:
 - `integrations/` holds one page per external tool (Argent, Maestro, Appium, GitHub
   Actions) that mixes the concept with the exact options of that tool.
 
+Argent Cloud pages use the terms in `docs/cloud/reference/glossary.mdx` and none of its
+words to avoid. When a change adds a term or changes its meaning, update the glossary in
+the same pull request.
+
 To add a product:
 
 1. Add an entry to `products.js` with an `id`, a `label`, a `dir` under `docs/` and a

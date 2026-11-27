@@ -2,6 +2,7 @@ import React from "react";
 import {
   ArrowLeftRight,
   AudioLines,
+  BookA,
   Bot,
   Bug,
   Download,
@@ -46,6 +47,7 @@ import styles from "./styles.module.css";
 export const ICONS: Record<string, LucideIcon | BrandIcon> = {
   "arrow-left-right": ArrowLeftRight,
   "audio-lines": AudioLines,
+  "book-a": BookA,
   "bot": Bot,
   "bug": Bug,
   "download": Download,
