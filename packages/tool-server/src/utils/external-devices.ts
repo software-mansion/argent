@@ -330,6 +330,13 @@ export function findExternalDevice(id: string): ExternalDevice | undefined {
   return readProviderDevices(record).find((device) => device.nativeId === parsed.nativeId);
 }
 
+const SIMULATOR_UDID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** simctl prints a simulator's UDID in upper case, while a tool or provider may use either. */
+function sameNativeId(a: string, b: string): boolean {
+  return a === b || (SIMULATOR_UDID.test(a) && a.toUpperCase() === b.toUpperCase());
+}
+
 /**
  * The provider claiming `nativeId`, if any; what {@linkcode findExternalDevice}
  * does for an `ext:` id.
@@ -357,7 +364,9 @@ export function externalClaimForNativeId(nativeId: string): ExternalDevice | und
   for (const record of providers) {
     if (record.pid !== undefined && !isProcessAlive(record.pid)) continue;
 
-    const device = readProviderDevices(record).find((device) => device.nativeId === nativeId);
+    const device = readProviderDevices(record).find((device) =>
+      sameNativeId(device.nativeId, nativeId)
+    );
     if (device) return device;
   }
 

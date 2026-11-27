@@ -460,16 +460,38 @@ describe("simulator-watcher against a provider's simulator", () => {
     expect(resolvedUdids(resolveService)).not.toContain(CLAIMED_UDID);
   });
 
-  it("leaves a claimed simulator to its provider when a tool call targets it in lower case", async () => {
-    publishDescriptor({ capabilities: ["simctl"], nativeId: LETTERED_UDID });
-    const { registry, resolveService } = makeRegistry();
+  describe.each([
+    { claimedAs: LETTERED_UDID.toLowerCase(), targetedAs: LETTERED_UDID },
+    { claimedAs: LETTERED_UDID, targetedAs: LETTERED_UDID.toLowerCase() },
+  ])("claimed as $claimedAs and targeted as $targetedAs", ({ claimedAs, targetedAs }) => {
+    beforeEach(() => {
+      execFileMock.mockImplementation((cmd: string) =>
+        cmd === "xcrun" ? bootedListResponse([LETTERED_UDID]) : { stdout: "", stderr: "" }
+      );
+      publishDescriptor({ capabilities: ["simctl"], nativeId: claimedAs });
+    });
 
-    const { ready, stop } = startSimulatorWatcher(registry);
-    await ready;
-    await armSimulator(LETTERED_UDID.toLowerCase());
-    stop();
+    it("leaves the simulator to its provider on a poll", async () => {
+      const { registry, resolveService } = makeRegistry();
 
-    expect(resolveService).not.toHaveBeenCalled();
+      const { ready, stop } = startSimulatorWatcher(registry);
+      targetSimulators(registry, targetedAs);
+      await ready;
+      stop();
+
+      expect(resolveService).not.toHaveBeenCalled();
+    });
+
+    it("leaves the simulator to its provider when a tool call targets it", async () => {
+      const { registry, resolveService } = makeRegistry();
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await armSimulator(targetedAs);
+      stop();
+
+      expect(resolveService).not.toHaveBeenCalled();
+    });
   });
 
   /** The claim is only as live as the process behind it. */

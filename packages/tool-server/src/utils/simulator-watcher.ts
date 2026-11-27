@@ -131,7 +131,7 @@ async function resolveNativeDevtools(
  * shut down has no env; a new one makes its attempt in its factory.
  */
 async function armNow(registry: Registry, udid: string): Promise<void> {
-  if (externalClaimForAnyId(udid) ?? externalClaimForNativeId(udid.toUpperCase())) return;
+  if (externalClaimForAnyId(udid)) return;
   const running = await runningNativeDevtools(registry, udid);
   if (running) {
     await running.ensureEnvReady().catch(() => {});
@@ -343,12 +343,9 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
+  /** The booted simulators a tool has targeted, under the tool's spelling. */
   function onlyTargeted(booted: Set<string>): Set<string> {
-    return new Set([...booted].filter((udid) => targetedUdids.has(udid.toUpperCase())));
-  }
-
-  function toolSpelling(udid: string): string {
-    return targetedUdids.get(udid.toUpperCase()) ?? udid;
+    return new Set([...booted].flatMap((udid) => targetedUdids.get(udid.toUpperCase()) ?? []));
   }
 
   function noteTargeted(urn: string, _from: ServiceState, to: ServiceState): void {
@@ -367,14 +364,9 @@ export function startSimulatorWatcher(registry: Registry): {
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      const split = withoutForeignSimulators(
+      ({ ours: booted, claimed } = withoutForeignSimulators(
         onlyTargeted(await getBootedUdids(stopController.signal))
-      );
-      claimed = new Set([...split.claimed].map(toolSpelling));
-      // A provider's claim matches only simctl's spelling, so a granted one resolves under it.
-      booted = new Set(
-        [...split.ours].map((udid) => (split.claimed.has(udid) ? udid : toolSpelling(udid)))
-      );
+      ));
     } catch (err) {
       if (err instanceof SimctlTimeoutError) {
         consecutiveTimeouts += 1;
