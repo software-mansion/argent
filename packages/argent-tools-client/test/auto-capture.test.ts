@@ -15,6 +15,7 @@ import {
   normalizeToolName,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
+  describedTree,
 } from "../src/auto-capture.js";
 
 // ---------------------------------------------------------------------------
@@ -353,4 +354,27 @@ describe("containsSecretPlaceholder", () => {
     ).toBe(true);
     expect(shouldAutoScreenshot("run-sequence")).toBe(true);
   });
+});
+
+const TREE_A = "button Done (0.1,0.2,0.3,0.1)";
+
+describe("describedTree", () => {
+  it("puts describe's hint before the tree", () => {
+    expect(describedTree({ description: TREE_A, hint: "2 elements omitted." })).toBe(
+      `Hint: 2 elements omitted.\n${TREE_A}`
+    );
+  });
+
+  it("leaves out a hint the tree already contains", () => {
+    const description = `Focusable: (none reported)\n\nNote: Wait and call describe again.`;
+
+    expect(describedTree({ description, hint: "Wait and call describe again." })).toBe(description);
+  });
+
+  it.each([null, undefined, {}, { description: "" }, { description: 3 }])(
+    "has no tree for %j",
+    (result) => {
+      expect(describedTree(result)).toBeUndefined();
+    }
+  );
 });

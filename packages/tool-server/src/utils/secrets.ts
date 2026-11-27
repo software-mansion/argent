@@ -28,7 +28,7 @@ import {
 
 export type { SecretSourceOptions };
 
-/** Copied in packages/argent-mcp/src/auto-capture.ts, which cannot depend on this package. */
+/** Copied in packages/argent-tools-client/src/auto-capture.ts, which cannot depend on this package. */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
 /** Names (never values) of all secrets currently exposed to argent. */

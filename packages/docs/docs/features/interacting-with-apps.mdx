@@ -34,6 +34,8 @@ The agent does not read coordinates from a screenshot. Before a tap, the agent h
 
 After a screen change, the action returns the new screen: a screenshot and the element tree. The element tree also contains the hint of `describe`, for example when the tree is not complete. The next tap needs no extra call. Each full screenshot and each full element tree has an id. When the screenshot pixels or the element tree match the last full one, Argent sends a short note with that id in its place. When only a few elements change, Argent sends only the removed (`-`) and added (`+`) lines against that id. The `disable-auto-screenshot` and `disable-auto-describe` flags stop those captures.
 
+`argent run` also prints the screen after the action, below its result: the path of the screenshot and the full element tree. With `--json`, `argent run` prints only the result.
+
 ## Launching apps
 
 The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data. On an Apple simulator, a physical iPhone or a Mac app, the agent can also give launch arguments to the app, for example to turn on a feature flag.

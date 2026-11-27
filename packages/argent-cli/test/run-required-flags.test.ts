@@ -25,6 +25,10 @@ vi.mock("@argent/tools-client", async (importOriginal) => {
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 
+vi.mock("../src/run-capture.js", () => ({
+  captureAfterAction: vi.fn(async () => ({ lines: [] })),
+}));
+
 const gestureTap = {
   name: "gesture-tap",
   description: "Tap the screen",

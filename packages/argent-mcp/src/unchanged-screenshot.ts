@@ -14,7 +14,7 @@
 
 import { createHash, randomInt } from "node:crypto";
 import { inflateSync } from "node:zlib";
-import { normalizeToolName } from "./auto-capture.js";
+import { normalizeToolName } from "@argent/tools-client";
 
 /** Notes sent in a row for one screenshot before the image is sent again. */
 export const MAX_UNCHANGED_SCREENSHOTS_IN_A_ROW = 3;

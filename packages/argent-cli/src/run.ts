@@ -4,6 +4,8 @@ import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
+  shouldAutoScreenshot,
+  autoScreenshotEnabled,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
@@ -29,6 +31,7 @@ import {
   type ValidationReport,
 } from "./run-validation.js";
 import { exitAfterFlush } from "./e2e.js";
+import { captureAfterAction } from "./run-capture.js";
 import { applyDeviceFromEnv } from "./run-device-env.js";
 
 export interface RunCommandOptions {
@@ -99,8 +102,10 @@ function printToolHelp(meta: ToolMeta): void {
     console.log("  --args -               Read the entire payload as JSON from stdin");
   }
   console.log("  --<field>-json <json>  Pass a single field as JSON (objects/nested arrays)");
-  console.log("  --json                 Print the raw JSON result");
-  console.log("  --out <path>           For image results, save to <path> instead of fetching URL");
+  console.log("  --json                 Print only the raw JSON result");
+  console.log(
+    "  --out <path>           Save the image result, or the screen after an action, to <path>"
+  );
   console.log("  --help, -h             Show this help");
 }
 
@@ -114,9 +119,16 @@ async function fetchImageToFile(
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+  writeImageFile(outPath, Buffer.from(await res.arrayBuffer()));
+}
+
+function drainStdout(): Promise<void> {
+  return new Promise((resolve) => process.stdout.write("", () => resolve()));
+}
+
+function writeImageFile(outPath: string, data: Buffer): void {
   fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-  fs.writeFileSync(outPath, buf);
+  fs.writeFileSync(outPath, data);
 }
 
 function renderResult(
@@ -176,7 +188,8 @@ async function trackRunFailure(
 export async function run(argv: string[], options: RunCommandOptions): Promise<void> {
   telemetryInit("cli");
   const startedAt = performance.now();
-  const { fetchTool, callTool, baseUrl } = createToolsClient({ paths: options.paths });
+  const client = createToolsClient({ paths: options.paths });
+  const { fetchTool, callTool, baseUrl } = client;
   const [toolName, ...rest] = argv;
 
   if (!toolName || toolName === "--help" || toolName === "-h") {
@@ -192,12 +205,19 @@ Examples:
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
 
+After an interaction tool (gestures, key presses, app launches), argent run
+waits for the screen to settle, then prints a screenshot path and the element
+tree; after describe it adds only the screenshot. --out also saves that
+screenshot. The disable-auto-screenshot and disable-auto-describe flags turn
+these off. --json prints only the result.
+
 Set ARGENT_UDID to use that device when a tool needs --udid or --device_id
 and the call does not pass one.
 
-Exits 1 when the tool fails. Also exits 1 when the result reports that the
-call did not do its job: an e2e test that does not pass, an await-ui-element
-or await-network-request wait with success=false, a run-sequence that a step
+Exits 1 when the tool fails, or when --out without --json gets no screen
+after an action. Also exits 1 when the result reports that the call did not
+do its job: an e2e test that does not pass, an await-ui-element or
+await-network-request wait with success=false, a run-sequence that a step
 stopped, a debugger tool with no connection or an error, a native-devtools
 precheck that stopped the tool, a native-profiler-analyze with status
 analysis_failed, an e2e recording call that recorded nothing, or a baseline
@@ -362,6 +382,7 @@ settled=false or debugger-status's not_connected.
   let result: unknown;
   let note: string | undefined;
   let failure: string | undefined;
+  let profiling = false;
   let images: MaterializedImage[] = [];
   try {
     const resp = await callTool(toolName, payload);
@@ -378,6 +399,7 @@ settled=false or debugger-status's not_connected.
     images = materialized.images;
     note = resp.note;
     failure = resp.failure;
+    profiling = resp.profiling === true;
   } catch (err) {
     // The tool rejected the input rather than failing to run it — report it like any other bad
     // invocation.
@@ -395,16 +417,9 @@ settled=false or debugger-status's not_connected.
     process.exit(1);
   }
 
-  // Prefer the bytes the materializer already resolved; fall back to fetching the
-  // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (outPath && meta.outputHint === "image") {
+  const saveImage = async (write: () => Promise<void>): Promise<void> => {
     try {
-      if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-        fs.writeFileSync(outPath, images[0]!.data);
-      } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
-      }
+      await write();
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
       await trackRunFailure(toolName, startedAt, {
@@ -415,6 +430,18 @@ settled=false or debugger-status's not_connected.
       });
       process.exit(1);
     }
+  };
+
+  // Prefer the bytes the materializer already resolved; fall back to fetching the
+  // legacy `{ url }` for older tool-servers that don't emit artifact handles.
+  if (outPath && meta.outputHint === "image") {
+    await saveImage(async () => {
+      if (images.length > 0) {
+        writeImageFile(outPath, images[0]!.data);
+      } else if (result && typeof result === "object") {
+        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+      }
+    });
   }
 
   if (note) console.error(note);
@@ -424,9 +451,29 @@ settled=false or debugger-status's not_connected.
     console.log(`Wrote: ${outPath}`);
   }
 
+  let outNotWritten = false;
+  if (!json) {
+    const capture = await captureAfterAction({ client, toolName, payload, profiling });
+    if (capture.note) console.error(capture.note);
+    for (const line of capture.lines) console.log(line);
+    const { screenshot } = capture;
+    if (outPath && meta.outputHint !== "image") {
+      if (screenshot) {
+        await saveImage(async () => writeImageFile(outPath, screenshot.data));
+        console.log(`Wrote: ${outPath}`);
+      } else if (shouldAutoScreenshot(toolName, payload)) {
+        const reason = autoScreenshotEnabled()
+          ? "No screen was captured"
+          : "The disable-auto-screenshot flag is on";
+        console.error(`${reason}, so ${outPath} was not written.`);
+        outNotWritten = true;
+      }
+    }
+  }
+
   if (failure) {
     // Drain stdout first, or a merged log splices the reason into a large report.
-    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+    await drainStdout();
     console.error(failure);
     await trackRunFailure(toolName, startedAt, {
       error_code: FAILURE_CODES.CLI_RUN_TOOL_RESULT_FAILED,
@@ -435,6 +482,17 @@ settled=false or debugger-status's not_connected.
       error_kind: "unknown",
     });
     // Not stdout: a write after EPIPE throws.
+    await exitAfterFlush(1, [process.stderr]);
+  }
+
+  if (outNotWritten) {
+    await drainStdout();
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
+      failure_stage: "cli_run_save_image",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
     await exitAfterFlush(1, [process.stderr]);
   }
 }

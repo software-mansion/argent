@@ -1,9 +1,10 @@
 /**
- * Tunables and predicates for what the MCP layer appends after a successful
- * interaction tool call: the auto-screenshot and the auto-describe element
- * tree. Each has its own tool list and opt-out flag.
+ * Tunables and predicates for what the MCP server and `argent run` append after
+ * a successful interaction tool call: the auto-screenshot and the auto-describe
+ * element tree. Each has its own tool list and opt-out flag.
  */
 
+import { setTimeout as sleep } from "node:timers/promises";
 import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
 
 export const AUTO_SCREENSHOT_TOOLS = new Set([
@@ -124,6 +125,16 @@ export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
 export const PROFILING_CAPTURE_SKIPPED_NOTE =
   "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
 
+/**
+ * Appended instead of the screenshot and element tree after a call whose args
+ * hold a secret placeholder. Every instruction must be safe to follow AFTER the
+ * typing, since the call already typed the secret: hence it forbids re-sending
+ * the typing step (a rebuilt `run-sequence` would type the secret a second time)
+ * and states that only this call is skipped, the decision being per call's args.
+ */
+export const SECRET_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.";
+
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";
 
@@ -135,7 +146,7 @@ export function shouldAutoDescribe(toolName: string, args?: unknown): boolean {
 /**
  * Marker of a server-side secret placeholder (`{{secret:NAME}}`, resolved by
  * the tool-server before typing). Copy of SECRET_PLACEHOLDER_MARKER in
- * packages/tool-server/src/utils/secrets.ts, which argent-mcp does not depend
+ * packages/tool-server/src/utils/secrets.ts, which tools-client does not depend
  * on.
  */
 const SECRET_PLACEHOLDER_MARKER = "{{secret:";
@@ -199,4 +210,118 @@ export function getAutoScreenshotDelayMs(toolName: string): number {
     if (!Number.isNaN(envMs)) return Math.max(base, envMs);
   }
   return base;
+}
+
+/**
+ * The tree of a `describe` result as the agent reads it after an action: the
+ * hint line, then the tree. Undefined when the result has no tree.
+ */
+export function describedTree(result: unknown): string | undefined {
+  const { description, hint } =
+    (result as { description?: unknown; hint?: unknown } | null | undefined) ?? {};
+  if (typeof description !== "string" || description.length === 0) return undefined;
+  // The agent reads this tree in place of describe, so it needs describe's warnings too
+  // (the TV description already carries its hint).
+  const hintLine =
+    typeof hint === "string" && hint && !description.includes(hint) ? `Hint: ${hint}\n` : "";
+  return `${hintLine}${description}`;
+}
+
+export type CaptureToolCall = (
+  name: string,
+  args: Record<string, unknown>,
+  signal: AbortSignal
+) => Promise<unknown>;
+
+/**
+ * Runs `work` with a signal that aborts at `signal` or after `ms`. Node 20 and
+ * 22 can collect an `AbortSignal.timeout()` that only `AbortSignal.any()`
+ * references, which then never fires; the timer here keeps its controller alive.
+ */
+async function withDeadline<T>(
+  signal: AbortSignal,
+  ms: number,
+  work: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () =>
+      deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")),
+    ms
+  );
+  try {
+    return await work(AbortSignal.any([signal, deadline.signal]));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export interface ScreenSettledResult {
+  settled: boolean;
+  /** The `await-screen-idle` result, when the tool answered. */
+  readiness?: Record<string, unknown>;
+}
+
+/**
+ * Lets the screen settle before capturing, bounded by the per-tool budget:
+ * `await-screen-idle` polls the tree server-side and usually returns well
+ * under the cap. If the call fails (e.g. a tool-server without that tool),
+ * falls back to sleeping out the rest of the budget or until the call is
+ * cancelled.
+ */
+export async function awaitScreenSettled(
+  call: CaptureToolCall,
+  udid: string,
+  toolName: string,
+  signal: AbortSignal,
+  captureTimeoutMs: number
+): Promise<ScreenSettledResult> {
+  const maxWaitMs = getAutoScreenshotDelayMs(toolName);
+  if (maxWaitMs === 0) return { settled: true };
+  const started = Date.now();
+  try {
+    // The tool bounds its poll to maxWaitMs; the rest covers its setup.
+    const idle = await withDeadline(signal, maxWaitMs + captureTimeoutMs, (s) =>
+      call("await-screen-idle", { udid, timeoutMs: maxWaitMs }, s)
+    );
+    return {
+      settled: (idle as { settled?: unknown } | null)?.settled === true,
+      readiness: { maxWaitMs, ...(idle as Record<string, unknown>) },
+    };
+  } catch {
+    await sleep(Math.max(0, maxWaitMs - (Date.now() - started)), undefined, { signal }).catch(
+      () => {}
+    );
+    return { settled: false };
+  }
+}
+
+interface SettledCaptureOptions<T> {
+  call: CaptureToolCall;
+  udid: string;
+  toolName: string;
+  signal: AbortSignal;
+  captureTimeoutMs: number;
+  screenshot?: (signal: AbortSignal) => Promise<T[]>;
+  tree?: (signal: AbortSignal) => Promise<T[]>;
+  onSettled?: (result: ScreenSettledResult) => Promise<void>;
+}
+
+/**
+ * Waits for the screen to settle, then runs the screenshot and tree captures
+ * under one `captureTimeoutMs` deadline. The captures must not reject; their
+ * parts are returned screenshot first.
+ */
+export async function captureSettledScreen<T>(options: SettledCaptureOptions<T>): Promise<T[]> {
+  const { call, udid, toolName, signal, captureTimeoutMs } = options;
+  const settledResult = await awaitScreenSettled(call, udid, toolName, signal, captureTimeoutMs);
+  await options.onSettled?.(settledResult);
+  return withDeadline(signal, captureTimeoutMs, async (captureSignal) => {
+    const screenshot = options.screenshot?.(captureSignal) ?? Promise.resolve([]);
+    // An unsettled screen can leave a tree read in flight, which a
+    // concurrent describe would reuse (physical iPhone).
+    if (!settledResult.settled) await screenshot;
+    const tree = options.tree?.(captureSignal) ?? Promise.resolve([]);
+    return [...(await screenshot), ...(await tree)];
+  });
 }

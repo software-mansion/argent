@@ -44,6 +44,15 @@ After an update, the agent tells you the main changes once, on its first Argent 
 
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
 
+After an interaction tool, `argent run` waits until the screen stops changing, as the MCP server does. Then it prints the screen after the result:
+
+- `Screen after action: <path>`, the path of a screenshot. With `--out <path>`, `argent run` also saves the screenshot to that path.
+- The element tree, after the line `--- Elements after action (describe) ---`.
+
+After `describe`, `argent run` prints only the screenshot path, since the result already holds the tree.
+
+The `disable-auto-screenshot` and `disable-auto-describe` flags stop these parts (see [Feature flags](/docs/reference/configuration#feature-flags)). With `--json`, `argent run` prints only the result of the tool, does not wait and does not save the screen after the action to the `--out` file. When Argent captures no screenshot, `argent run` leaves the `--out` file unchanged and exits with code `1`.
+
 When you pass `--commit_index` or `--hang_index` to `argent run`, supply an integer.
 The CLI rejects empty or whitespace-only values.
 To send JSON `null`, use `--commit_index-json null` or `--hang_index-json null`.
