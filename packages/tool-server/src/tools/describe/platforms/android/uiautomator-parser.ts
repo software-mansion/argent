@@ -203,7 +203,19 @@ export function isUiAutomatorScrollable(attrs: Record<string, string>, inWebView
   return SCROLL_CLASSES.has(attrs.class ?? "") || attrIsTrue(attrs, "scrollable");
 }
 
-const WEBVIEW_CLASSES = new Set(["android.webkit.WebView", "android.webkit.WebViewChromium"]);
+export const WEBVIEW_CLASSES = new Set([
+  "android.webkit.WebView",
+  "android.webkit.WebViewChromium",
+]);
+
+/**
+ * Whether a raw class is a text input: every EditText subclass, Compose fields
+ * too, reports an EditText class. `TextInputLayout`, the Material wrapper, does
+ * not match.
+ */
+export function isUiAutomatorTextInputClass(className: string): boolean {
+  return className.endsWith("EditText") || className.endsWith("AutoCompleteTextView");
+}
 
 function hasGestureFlag(attrs: Record<string, string>): boolean {
   return (
@@ -294,7 +306,7 @@ export function labelOf(attrs: Record<string, string>): string {
   return (attrs.text ?? "").trim();
 }
 
-function isVisibleRect(b: PixelRect | null, sw: number, sh: number): boolean {
+export function isVisibleRect(b: PixelRect | null, sw: number, sh: number): boolean {
   if (!b) return false;
   if (b.w <= 0 || b.h <= 0) return false;
   if (b.x >= sw || b.y >= sh || b.x + b.w <= 0 || b.y + b.h <= 0) return false;
@@ -335,30 +347,39 @@ export function rectFullyOutside(
  */
 function descendantText(parsed: ParsedXmlNode, maxChars = 120): string {
   const parts: string[] = [];
-  const seen = new Set<string>();
   const stack: ParsedXmlNode[] = [parsed];
   while (stack.length > 0) {
     const x = stack.pop()!;
     // A password field's `text` is the secret, and this walk reads the raw XML,
     // bypassing the "[password]" redaction applied to the node's own label.
     if (attrIsTrue(x.attrs, "password")) {
-      if (!seen.has("[password]")) {
-        seen.add("[password]");
-        parts.push("[password]");
-      }
+      parts.push("[password]");
       continue;
     }
-    for (const k of ["text", "content-desc"] as const) {
-      const v = (x.attrs[k] ?? "").trim();
-      if (v && !seen.has(v)) {
-        seen.add(v);
-        parts.push(v);
-      }
-    }
+    parts.push(x.attrs.text ?? "", x.attrs["content-desc"] ?? "");
     // Push in reverse so we pop in original document order.
     for (let i = x.children.length - 1; i >= 0; i--) {
       const c = x.children[i]!;
       if (c.tag === "node") stack.push(c);
+    }
+  }
+  return joinDescendantText(parts, maxChars);
+}
+
+/**
+ * The label a clickable with no label of its own borrows from the texts under
+ * it, in document order: trimmed, empty and repeated ones left out, joined with
+ * " / ", and cut at `maxChars` with "…". Shared with the e2e runner's Android
+ * tree, so a borrowed label reads there as `describe` prints it.
+ */
+export function joinDescendantText(texts: Iterable<string>, maxChars = 120): string {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const t of texts) {
+    const v = t.trim();
+    if (v && !seen.has(v)) {
+      seen.add(v);
+      parts.push(v);
     }
   }
   const s = parts.join(" / ");

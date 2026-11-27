@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { adaptFullHierarchyToDescribeResult } from "../src/tools/flows/flow-ios-tree";
+import { adaptFullHierarchyToDescribeResult } from "../../../src/tools/flows/version-1/flow-ios-tree";
 import {
   assertText,
   evaluateCondition,
   findAll,
   selectorToFrame,
-} from "../src/utils/ui-tree-match";
+} from "../../../src/tools/flows/version-1/ui-tree-match";
 
 // A getFullHierarchy payload shaped like SerializeView output: a window spanning
 // the screen, an `accessible` carousel container carrying a testID, and its

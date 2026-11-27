@@ -96,7 +96,10 @@ export interface AXTreeResponse {
   nodes: AXTreeNode[];
   truncated: boolean;
   foregroundApp?: string;
-  /** 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId. */
+  /**
+   * 2 and up: nodes carry elementType, placeholder, hintShowing and root bundleId.
+   * 3 and up: the response carries interfaceOrientation.
+   */
   treeVersion?: number;
 }
 
@@ -785,7 +788,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           // A daemon that predates `tree` answers an envelope-level error.
           if (!(err instanceof Error) || err.message !== "unknown_command") throw err;
           throw new FailureError("ax-service predates `tree`; update argent", {
-            error_code: FAILURE_CODES.AX_QUERY_FAILED,
+            error_code: FAILURE_CODES.AX_TREE_UNSUPPORTED,
             failure_stage: "ax_service_tree",
             failure_area: "tool_server",
             error_kind: "unknown",

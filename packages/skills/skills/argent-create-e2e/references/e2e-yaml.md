@@ -4,8 +4,9 @@ Read this reference when polishing, composing, or manually reviewing an e2e test
 
 - [E2E YAML](#e2e-yaml)
   - [File shape and test type](#file-shape-and-test-type)
+    - [Old e2e tests](#old-e2e-tests)
   - [Selectors](#selectors)
-    - [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree)
+    - [The runner tree and `describe`](#the-runner-tree-and-describe)
     - [Relational scopes](#relational-scopes)
   - [Directives](#directives)
     - [`swipe`](#swipe)
@@ -39,13 +40,25 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
-The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file: on an iOS simulator with a landscape UI, version 1 coordinates use the portrait axes of the screen and version 2 coordinates the UI as the user sees it, and Argent runs each as it was recorded.
+The recorder also writes `version: 2`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused. Do not change the version of an existing file only to replay it: Argent runs each version as it was recorded (see [Old e2e tests](#old-e2e-tests)).
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
 The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the test never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup test there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup test whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
 
 A top-level `requires:` block limits the targets a test runs on: `platform` (`ios`, `android`, `chromium`, `vega`, or a list; `ios` covers a remote simulator) and `runtimeKind` (`tv` or `mobile`). Add it for a platform-specific or TV-specific scenario. A directory run skips a test whose target does not match; a `run:` fragment that does not match fails its step.
+
+### Old e2e tests
+
+A file without `version`, or with `version: 1`, is an old e2e test. On an iOS simulator, an old e2e test resolves its selectors on the view hierarchy of the app, not on the `describe` tree. A selector that you record or copy from `describe` can miss there. With a landscape or upside-down UI, its `tap`, `long-press`, `swipe` and `tool:` coordinates also use the portrait axes of the screen, not the UI as the user sees it. The other rules that came with `version: 2` do not apply to its steps either, also in the `run:` fragments that it runs, for example the whitespace rule for `id` and `text`, the `AXSwitch` role of a toggle, the text-field rules of `matches` and the on-screen keyboard rules. A `tool:` step runs the tool itself, so `tool: await-ui-element` still reads the `describe` tree. As a `run:` fragment of a `version: 2` e2e test, an old e2e test gets the tree and the rules of that test, but keeps its own coordinates.
+
+To replay an old e2e test, do not change it. To change an old e2e test, edit the YAML manually:
+
+1. Set `version: 2` as the first line. Change the `version: 1` line, or add the line if the file has no `version` key. Two `version` lines make the file invalid.
+2. Replay the e2e test.
+3. Replace each selector that fails with a selector from `describe`. If the test ran in a landscape or upside-down UI, also replace its `tap`, `long-press`, `swipe` and `tool:` coordinates with ones from `describe`. Then replay again.
+
+Do not add recorded steps to an old e2e test that does not have `version: 2`.
 
 ## Selectors
 
@@ -58,7 +71,7 @@ Use values that meet the [stable-selector definition](../SKILL.md#stable-selecto
 { id: settings-row, text: Notifications }
 ```
 
-All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
+All provided fields must match. `id` is exact and case-insensitive. `text` and `role` are case-insensitive substrings. A run of whitespace, including a no-break space, matches one space in `id` and `text`. An unqualified Android id also matches its qualified resource id. `identifier` is accepted as an alias, but `id` is canonical. Never author a bare string. It is loose shorthand that tries id before text.
 
 Use single quotes for anchored, case-sensitive regexes:
 
@@ -66,33 +79,37 @@ Use single quotes for anchored, case-sensitive regexes:
 { text: { matches: '^Order #\d+$' } }
 ```
 
-### The runner tree is not the discovery tree
+### The runner tree and `describe`
 
-YAML selectors and live discovery use different screen projections:
+YAML selectors resolve against the runner tree. On some platforms, live discovery shows a different view of the screen:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
-| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
-| iOS sim  | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
+| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                                                                                                                                                                                                                                                                                                       |
+| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| iOS      | accessibility tree                                        | same tree                       | The runner tree drops elements out of view or under an alert, sheet, popover or system alert (a miss on one says it is covered), and keeps unlabelled scrolling containers and unlabelled containers that carry an id. On a simulator, a selector does not match a text field by the text in the field, except the `into` of a `type` step |
+| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes. Elements under a dialog, sheet or permission window are absent; a miss then says a dialog is on top, and to scroll if the dialog's list scrolls                                                                                                                                       |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)                                                                                                                                                                                                                                                                                      |
+| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                                                                                                                                                                                                                                                                                                             |
 
-On an iOS simulator, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
+On iOS, find selectors with `describe`. An `id`, `text`, or `role` that `describe` shows resolves at replay. On a simulator, the text in a text field is the exception: check it with a `text` condition on the field. An unlabelled container that carries an id also resolves, but `describe` does not print it. Never use `native-full-hierarchy` or `native-find-views` to find or verify a YAML selector.
 
-For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element.
+On Android and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-**On an iOS simulator, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
+For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On iOS and Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element. On iOS and Android it also means the wait matched only a key of the on-screen keyboard, which conditions do not see.
 
-Any raw `tool:` step ends the pin, because its effect on the screen is opaque to the runner, and reads auto-detect the frontmost app again until the next `launch:` re-pins. A tool that cannot change the foreground app leaves the launched id as an unpinned fallback, which takes the read only when auto-detection times out and the launched app vouches for itself with a probe of its own. `launch-app`, `restart-app`, `reinstall-app`, `open-url`, and `button` drop even that; `launch-app` and `restart-app` replace it with the app they just started, still unpinned. Nested `run:` fragments inherit both the pin and its clearing.
+On an iOS simulator, each tree read after a `launch:` expects the launched app in the foreground. If another app is in front, the step fails and names it. When the switch is intended, add a `tool: launch-app` step before that step. Later reads then expect the app that step started. A `launch:` step restarts the app.
 
-So on an iOS simulator, recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
+With the on-screen keyboard up, its keys, prediction bar and other buttons are in the runner tree. On iOS the input accessory toolbar above the keys belongs to the app.
 
-**On an iOS simulator, never copy a `role` from `describe` into a YAML selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+- An action takes an app element over any key, also when only the key matches exactly: `{ text: Done }` taps the app's `Done` button, not the return key `done`, and `{ text: Go }` taps a `Google` link, not the return key `go`.
+- A key is the target only when no app element matches. Select a key by its id. A bare string tries `text` when its `id` finds only keys, so on iOS `tap: Delete` means the app's `Delete`, not the delete key (id `delete`).
+- Conditions (`await`, `assert`, `when:`) do not see the keyboard, and `scroll-to` does not stop on a key: `assert: { hidden: { text: Done } }` passes while the return key shows `done`. To wait for the keyboard itself, use a `tool: await-ui-element` step: it reads the `describe` tree, which has the keys.
+- An action never presses an app element whose centre is under the keyboard (gaps between keys included): `tap`, `long-press`, `type`, `pinch`, `rotate` and a swipe's `from` wait for the keyboard to uncover the element, fail when it still covers it at the end of the wait, and never fall back to another match. Close the keyboard in an earlier step, or `scroll-to` the element; `scroll-to` fails when its swipe point is under the keyboard, or when the scroll ends with the element still under it.
+- To target a key, select it by id: on iOS `Done`, `Go` or the letter keyboard's `delete` (English in every keyboard language), on Android Gboard's `key_pos_ime_action` or `key_pos_del`. A key without an id, such as a number pad's delete key, needs a scope; recording the tap adds one. Enter text with `type`, not with taps on letter keys.
 
 When several nodes match, the directive decides:
 
-- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: exact text/id beats substring, then the smallest frame, then reading order.
-- **Conditions** (`await`, `assert`) do not rank. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
+- **Actions** (`tap`, `long-press`, `type`, `scroll-to`, `pinch`, `rotate`) take the most specific visible match: an app element beats a keyboard key, then exact text/id beats substring, then the smallest frame, then reading order.
+- **Conditions** (`await`, `assert`, `when:`) do not rank, and do not see the keyboard. `exists`/`visible` hold if any match qualifies and `hidden` only if none does; `text` reads the first visible match in reading order.
 
 A container that aggregates a child's text therefore splits them: `tap` hits the leaf while `text.in` reads the container, so `equals` fails against correct UI. Use an `id` or a [relational scope](#relational-scopes) when an action and a check must agree, and a stricter selector when ranking can still choose the wrong element.
 
@@ -112,6 +129,8 @@ YAML selectors support frame-based `within`, `after`, and `next` in every select
 
 Scopes can combine and nest, with at most six scope keys. Use strict selectors for anchors. Scope through a trusted container when a missing control must fail instead of reaching another row.
 
+`any: true` selects any element and needs a scope. It takes no `id`, `text`, or `role`. For example, `{ any: true, within: { id: results-list } }` selects the first element in reading order inside that container, an app element before a keyboard key.
+
 ## Directives
 
 Directives stop the test on failure and skip later steps. The available directives are `launch`, `tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`, `fold`, `await`, `assert`, `wait`, `snapshot`, `run`, `script`, `when`, `echo`, and `tool`.
@@ -123,7 +142,7 @@ Directives stop the test on failure and skip later steps. The available directiv
 - iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions, the reading order and coordinates stay as the user sees the UI, the space of `describe` frames and screenshots.
 - iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
-Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, `macos:`, and `chromium:`. `native:` is one id shared by iOS, Android, Vega, and macOS, and a per-platform key overrides it for that platform. `macos:` takes a Mac app's bundle id. `chromium:` accepts a relative or absolute app path. `ios:` and `macos:` also accept `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, `macos:`, and `chromium:`. `native:` is one id shared by iOS, Android, Vega, and macOS, and a per-platform key overrides it for that platform. `macos:` takes a Mac app's bundle id. `chromium:` accepts a relative or absolute app path. `ios:` and `macos:` also accept `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, `launch:` waits up to 15 s until the app is in the foreground. A permission prompt at launch does not fail it. On timeout, the step fails and names the app that was in front. See [The runner tree and `describe`](#the-runner-tree-and-describe).
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
@@ -163,7 +182,7 @@ On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`,
 
 `type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`; the runner resolves them from the same sources as the `keyboard` tool. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
-A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition: after the first such gesture, later ones skip the settle window until a tree read succeeds again or the app relaunches.
+A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source. The quoted error names the fix. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition: after the first such gesture, later ones skip the settle window until a tree read succeeds again or the app relaunches.
 
 ## Verification conditions
 

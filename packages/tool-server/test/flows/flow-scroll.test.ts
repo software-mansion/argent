@@ -1598,3 +1598,64 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 });
+
+describe("scroll-to with the on-screen keyboard up", () => {
+  // Two keys over the bottom quarter of the screen.
+  const keys = [0, 0.5].map((x) =>
+    n({ keyboard: true, frame: { x, y: 0.75, width: 0.5, height: 0.25 } })
+  );
+  async function runScroll(
+    step: Parameters<typeof serializeFlow>[0]["steps"][number],
+    swipes: SwipeCall[],
+    onSwipe?: () => void
+  ) {
+    await writeFlow("kb", { executionPrerequisite: "", steps: [step] });
+    const tool = createRunFlowTool(mockRegistry(swipes, onSwipe));
+    return asRun(await tool.execute({}, { name: "kb", project_root: tmpDir, device: DEVICE }));
+  }
+
+  it("does not swipe where the keyboard covers the centre of its container", async () => {
+    // The pane's centre (0.5, 0.8) is on the keys.
+    const pane = n({ identifier: "pane", frame: { x: 0, y: 0.6, width: 1, height: 0.4 } });
+    currentTree = () => screen([pane, ...keys]);
+    const swipes: SwipeCall[] = [];
+    const within = { identifier: "pane" };
+    const result = await runScroll(
+      { kind: "scroll-to", target: { text: "Terms" }, direction: "down", within },
+      swipes
+    );
+    expect(result.steps[0].reason).toContain("the on-screen keyboard covers");
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("keeps scrolling while the keyboard covers its target", async () => {
+    let scrolled = false;
+    const row = (y: number) => n({ label: "Order #9", frame: { x: 0, y, width: 1, height: 0.1 } });
+    currentTree = () => screen([row(scrolled ? 0.3 : 0.8), ...keys]);
+    const swipes: SwipeCall[] = [];
+    const step = {
+      kind: "scroll-to" as const,
+      target: { text: "Order #9" },
+      direction: "down" as const,
+    };
+    const result = await runScroll(step, swipes, () => (scrolled = true));
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("fails when the end of the scroll leaves its target under the keyboard", async () => {
+    // The last row: the list cannot scroll it above the keys.
+    const row = n({ label: "Order #9", frame: { x: 0, y: 0.8, width: 1, height: 0.1 } });
+    currentTree = () => screen([row, ...keys]);
+    const swipes: SwipeCall[] = [];
+    const step = {
+      kind: "scroll-to" as const,
+      target: { text: "Order #9" },
+      direction: "down" as const,
+    };
+    const result = await runScroll(step, swipes);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain("did not bring it above the keyboard");
+    expect(swipes).toHaveLength(1);
+  });
+});

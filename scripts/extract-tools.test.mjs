@@ -25,7 +25,12 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { extractToolsFromSource, dedupeToolsById, renderAllFlagsOn } from "./extract-tools.mjs";
+import {
+  extractToolsFromSource,
+  dedupeToolsById,
+  isSkippedToolDir,
+  renderAllFlagsOn,
+} from "./extract-tools.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const toolsRoot = join(repoRoot, "packages", "tool-server", "src", "tools");
@@ -207,7 +212,7 @@ function oracleFromTree() {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) {
-        walk(full);
+        if (!isSkippedToolDir(full)) walk(full);
       } else if (extname(name) === ".ts" && !name.endsWith(".d.ts")) {
         const fromFile = oracleFromSource(readFileSync(full, "utf8"), full);
         tools.push(...fromFile.tools);
@@ -225,6 +230,17 @@ const flagList = (entries) => entries.map((e) => `${e.id} (${e.file})`).join(", 
 const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 // Real-tree ground-truth tests
+
+test("the skipped version 1 e2e runner holds only a copy of a served tool", () => {
+  const dir = join(toolsRoot, "flows", "version-1");
+  assert.ok(isSkippedToolDir(dir));
+  const copied = readdirSync(dir)
+    .filter((name) => extname(name) === ".ts" && !name.endsWith(".d.ts"))
+    .flatMap((name) => oracleFromSource(readFileSync(join(dir, name), "utf8"), name).tools)
+    .map((t) => t.name);
+  assert.deepEqual(copied, ["e2e-execute"]);
+  assert.ok(oracleFromTree().tools.some((t) => t.name === "e2e-execute"));
+});
 
 test("extractor output equals the TypeScript-AST ground truth exactly", () => {
   const { tools } = runExtractor();

@@ -218,6 +218,13 @@ Flat list in emission order; `parentIndex` links reconstruct the tree.
   `degraded`, `reasonCode: "node_cap"`). Depth is also capped: the raw walk
   stops at depth 100 and emission at depth 60; unlike the node cap,
   depth-dropped content does not mark the snapshot `degraded`.
+- `keyboard`: `true` on every node of the window that holds the on-screen
+  keyboard (a window, of the app or of a hosted view service, with an element
+  of type `Keyboard` within the raw depth cap): the keys, the prediction bar,
+  the globe and dictation keys. Absent elsewhere, including the input
+  accessory view above the keys. The window itself has no label and is not
+  emitted, so the mark is the only trace of that boundary. The e2e runner
+  reads it; `describe` drops it.
 - Hosted view services: when `com.apple.SafariViewService` is in the
   foreground (an `ASWebAuthenticationSession` or `SFSafariViewController`
   sheet is up), its tree is added under the root as an `Application` node,

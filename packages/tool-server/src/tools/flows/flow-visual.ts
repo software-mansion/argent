@@ -12,7 +12,7 @@ import {
   settleTree,
   invokeOnDevice,
   waitForFrame,
-  offscreenHint,
+  selectorMissReason,
   type ActionEnv,
 } from "./flow-actions";
 import {
@@ -275,7 +275,9 @@ export async function runSnapshot(
       return { status: "skip", reason: "run aborted while resolving cropOn" };
     }
     if (frame === undefined) {
-      return { status: "fail", reason: offscreenHint(opts.cropOn) };
+      const miss = await selectorMissReason(env, opts.cropOn);
+      if (miss.aborted) return { status: "skip", reason: "run aborted while resolving cropOn" };
+      return { status: "fail", reason: miss.reason };
     }
     cropFrame = frame;
   }

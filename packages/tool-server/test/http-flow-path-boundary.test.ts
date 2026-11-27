@@ -933,7 +933,8 @@ describe("flow-execute over a link, from the real argent client", () => {
     await fs.writeFile(path.join(tmpDir, "capture.png"), PNG.sync.write(capture));
     const root = await write(
       ".argent/flows/root.yaml",
-      "steps:\n  - snapshot: title\n  - snapshot: fresh\n  - snapshot: fresh\n"
+      // Version 2: the settle mocked above is the current runner's.
+      "version: 2\nsteps:\n  - snapshot: title\n  - snapshot: fresh\n  - snapshot: fresh\n"
     );
     const dir = path.join(await fs.realpath(path.dirname(root)), "__baselines__", "root");
     const [title, fresh] = ["title", "fresh"].map((n) => path.join(dir, `${n}__ios-30x60.png`));
@@ -1040,10 +1041,10 @@ describe("flow-execute over a link, from the real argent client", () => {
     // it, whatever platform its step names.
     const root = await write(
       ".argent/flows/root.yaml",
-      `steps:\n${nest("child")}${nest("child", ", updateBaselines: false")}` +
+      `version: 2\nsteps:\n${nest("child")}${nest("child", ", updateBaselines: false")}` +
         nest("peer", ", updateBaselines: false, platform: android")
     );
-    await write(".argent/flows/child.yaml", "steps:\n  - snapshot: snap\n");
+    await write(".argent/flows/child.yaml", "version: 2\nsteps:\n  - snapshot: snap\n");
     await write(".argent/flows/peer.yaml", "steps:\n  - snapshot: snap\n");
     const baselines = path.join(await fs.realpath(path.dirname(root)), "__baselines__");
     const snap = path.join(baselines, "child", "snap__ios-30x60.png");

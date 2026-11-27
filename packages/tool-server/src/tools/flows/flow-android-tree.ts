@@ -1,19 +1,33 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import { androidDevtoolsRef, type AndroidDevtoolsApi } from "../../blueprints/android-devtools";
 import {
+  attrIsTrue,
   clipBoundsToScreen,
   deriveUiAutomatorRole,
   isNoisyUiAutomatorClass,
   isUiAutomatorLayoutContainer,
   isUiAutomatorScrollable,
+  isUiAutomatorTextInputClass,
+  isVisibleRect,
+  joinDescendantText,
   parseUiAutomatorBounds,
   parseUiAutomatorXml,
+  rectFullyOutside,
+  WEBVIEW_CLASSES,
 } from "../describe/platforms/android/uiautomator-parser";
-import { flattenHoisting, type FlatNode } from "./flow-tree-flatten";
+import {
+  endsAtBottom,
+  isSystemDialogWindow,
+  startsAtTop,
+  TYPE_APPLICATION,
+  TYPE_INPUT_METHOD,
+} from "../ui-tree/android";
+import { type ClipRect, flattenHoisting, type FlatNode } from "./flow-tree-flatten";
 import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
+  type FlowCover,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -83,6 +97,66 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
   return node.children.filter((c) => c.tag === "node");
 }
 
+function isTappable(attrs: Record<string, string>): boolean {
+  return attrIsTrue(attrs, "clickable") || attrIsTrue(attrs, "long-clickable");
+}
+
+// As `ui-tree` tells a text input.
+function isTextField(attrs: Record<string, string>): boolean {
+  return isUiAutomatorTextInputClass(attrs.class ?? "") || attrIsTrue(attrs, "editable");
+}
+
+// A tappable view over more of the screen than this is a full-screen wrapper or
+// a scrim, not a row: the text under it is the whole screen's.
+const BORROW_MAX_SCREEN_SHARE = 0.5;
+
+/**
+ * The label a tappable view with no label of its own borrows from the views
+ * under it, joined as `describe` joins them. Only text the screen shows and the
+ * view owns: a view with no on-screen frame and a password field give none, a
+ * view the flatten prunes as scrolled out of `scrollClip` gives none from its
+ * whole subtree, and a view that can be tapped itself gives none from its whole
+ * subtree (that text is the inner button's). "" when the view holds a text
+ * field or a scroller (a wrapper that closes the keyboard around a form or a
+ * list), so typed text and a screenful of rows never become a label. No
+ * scroller lies between the view and the views it borrows from, so the clip
+ * the view gets is the clip of each of them.
+ */
+function borrowedLabel(
+  node: ParsedXmlNode,
+  screenW: number,
+  screenH: number,
+  scrollClip: ClipRect | null
+): string {
+  const texts: string[] = [];
+  // False when the walk met a text field or a scroller.
+  const visit = (n: ParsedXmlNode): boolean => {
+    for (const c of childNodes(n)) {
+      const a = c.attrs;
+      if (isTextField(a) || isUiAutomatorScrollable(a)) return false;
+      if (
+        isTappable(a) ||
+        attrIsTrue(a, "password") ||
+        isSystemChrome(a) ||
+        isNoisyUiAutomatorClass(a.class ?? "")
+      ) {
+        continue;
+      }
+      const rect = parseUiAutomatorBounds(a.bounds ?? "");
+      // As `flattenHoisting` prunes it: a view with area wholly outside the clip.
+      if (scrollClip && rect && rect.w > 0 && rect.h > 0 && rectFullyOutside(rect, scrollClip)) {
+        continue;
+      }
+      if (rect && normalizeRect(rect, screenW, screenH)) {
+        texts.push(a.text ?? "", a["content-desc"] ?? "");
+      }
+      if (!visit(c)) return false;
+    }
+    return true;
+  };
+  return visit(node) ? joinDescendantText(texts) : "";
+}
+
 /**
  * Project a uiautomator XML node for the shared flatten (`flow-tree-flatten`).
  * A password field never contributes its secret: its text is the `[password]`
@@ -91,7 +165,8 @@ function childNodes(node: ParsedXmlNode): ParsedXmlNode[] {
 function projectAndroidNode(
   node: ParsedXmlNode,
   screenW: number,
-  screenH: number
+  screenH: number,
+  scrollClip: ClipRect | null
 ): FlatNode<ParsedXmlNode> {
   const attrs = node.attrs;
   // System chrome yields false matches (a system "Back"); SVG implementation
@@ -102,9 +177,9 @@ function projectAndroidNode(
   const identifier = (attrs["resource-id"] ?? "").trim();
   const isPassword = attrs.password === "true";
   const isFocused = attrs.focused === "true";
-  const label = isPassword ? "[password]" : labelOf(attrs);
+  const ownLabel = isPassword ? "[password]" : labelOf(attrs);
   const rawText = (attrs.text ?? "").trim();
-  const hasValue = !isPassword && Boolean(rawText) && rawText !== label;
+  const hasValue = !isPassword && Boolean(rawText) && rawText !== ownLabel;
   const className = attrs.class ?? "";
   const role = deriveUiAutomatorRole(className);
   // Every non-layout class is a role target, including controls whose role is
@@ -112,24 +187,47 @@ function projectAndroidNode(
   const hasSemanticRole = !isUiAutomatorLayoutContainer(className);
 
   // Mirrors what `nodeText` reads off the leaf (label plus a distinct value) —
-  // never the secret behind a password.
-  const ownText = [label, hasValue ? rawText : ""].filter(Boolean).join(" ");
+  // never the secret behind a password. The view's own label, not a borrowed
+  // one: the text under the view hoists on its own, so no container's text
+  // changes and none is counted twice.
+  const ownText = [ownLabel, hasValue ? rawText : ""].filter(Boolean).join(" ");
 
   // Unclipped, exactly as `pruneSubtree` compares them: the scroll-clip prune
   // needs raw bounds for every node, leaf-eligible or not.
   const rect = parseUiAutomatorBounds(attrs.bounds ?? "");
+  const frame: DescribeFrame | null = rect ? normalizeRect(rect, screenW, screenH) : null;
+
+  // A view that takes a tap is what a tap lands on, so it is a leaf whatever
+  // its class. With no label of its own it borrows the text under it, as
+  // `describe` does (a Settings row around its title and summary), unless it
+  // scrolls, hosts a WebView or covers most of the screen.
+  const tappable = isTappable(attrs);
+  const borrowed =
+    !skip &&
+    tappable &&
+    !ownLabel &&
+    frame !== null &&
+    frame.width * frame.height <= BORROW_MAX_SCREEN_SHARE &&
+    childNodes(node).length > 0 &&
+    !isUiAutomatorScrollable(attrs) &&
+    !WEBVIEW_CLASSES.has(className)
+      ? borrowedLabel(node, screenW, screenH, scrollClip)
+      : "";
+  const label = ownLabel || borrowed;
+  // A leaf only for its tap: no id, label, role or focus of its own.
+  const tapOnly = tappable && !(identifier || ownLabel || hasSemanticRole || isFocused);
 
   let leaf: DescribeNode | null = null;
-  let frame: DescribeFrame | null = null;
-  // Keep any view a selector could address — resource-id (RN testID), label or
-  // concrete role — plus the focused view, which the type directive's focus
-  // wait needs even for an anonymous EditText. Scaffolding is dropped but still
-  // walked, so a testID nested under it survives.
-  if (!skip && (identifier || label || hasSemanticRole || isFocused)) {
-    frame = rect ? normalizeRect(rect, screenW, screenH) : null;
+  // Keep any view a selector could address - resource-id (RN testID), label,
+  // concrete role or a tap - plus the focused view, which the type directive's
+  // focus wait needs even for an anonymous EditText. Scaffolding is dropped but
+  // still walked, so a testID nested under it survives.
+  if (!skip && (identifier || label || hasSemanticRole || isFocused || tappable)) {
     if (frame) {
       leaf = { role, frame, children: [] };
       if (label) leaf.label = label;
+      if (borrowed) leaf.borrowedLabel = true;
+      if (tapOnly) leaf.tapOnly = true;
       if (identifier) leaf.identifier = identifier;
       if (hasValue) leaf.value = rawText;
       if (attrs.clickable === "true") leaf.clickable = true;
@@ -147,8 +245,7 @@ function projectAndroidNode(
     skip,
     children: childNodes(node),
     // Off-screen text must not hoist, or an ancestor text assert would pass on
-    // content the screen doesn't show. Any node with text is leaf-eligible (its
-    // label is non-empty), so `frame` was computed for it.
+    // content the screen doesn't show.
     ownText: frame ? ownText : "",
     leaf,
     // A password field shields even when it carries no id, so nothing from it
@@ -167,19 +264,37 @@ function projectAndroidNode(
  * flat-leaves-under-one-root shape the other describe adapters emit, keeping
  * only on-screen views with a `resource-id`, label or specific semantic role.
  * Layout scaffolding is dropped, its selectable descendants preserved.
+ *
+ * The helper dumps each window under its own root and writes `window-type` on
+ * that root. Every leaf of the input method's window is marked `keyboard`: the
+ * keys, the suggestion strip, the emoji and clipboard panels and the accent
+ * popup the keyboard draws inside it, and its own navigation bar. A dump with
+ * no `window-type` (the `active-window` capture, an older helper) marks none.
  */
 export function adaptFullAndroidHierarchyToDescribeResult(
   xml: string,
   screenW: number,
   screenH: number
 ): DescribeNode {
+  return adaptParsedHierarchy(parseDump(xml, screenW, screenH), screenW, screenH);
+}
+
+/** The parsed dump, or null when there is none or no screen to normalize against. */
+function parseDump(xml: string, screenW: number, screenH: number): ParsedXmlNode | null {
+  return screenW > 0 && screenH > 0 ? parseUiAutomatorXml(xml) : null;
+}
+
+function adaptParsedHierarchy(
+  root: ParsedXmlNode | null,
+  screenW: number,
+  screenH: number
+): DescribeNode {
   const children: DescribeNode[] = [];
-  if (screenW > 0 && screenH > 0) {
-    const root = parseUiAutomatorXml(xml);
-    if (root) {
-      for (const c of childNodes(root)) {
-        flattenHoisting(c, (n) => projectAndroidNode(n, screenW, screenH), children);
-      }
+  for (const c of root ? childNodes(root) : []) {
+    const first = children.length;
+    flattenHoisting(c, (n, clip) => projectAndroidNode(n, screenW, screenH, clip), children);
+    if (Number(c.attrs["window-type"]) === TYPE_INPUT_METHOD) {
+      for (let i = first; i < children.length; i++) children[i]!.keyboard = true;
     }
   }
   return parseDescribeResult({
@@ -187,6 +302,80 @@ export function adaptFullAndroidHierarchyToDescribeResult(
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
+}
+
+// AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER.
+const TYPE_SPLIT_SCREEN_DIVIDER = 5;
+
+/**
+ * The topmost application window of a dump, when it is one Android hides the
+ * app's window below (see `FlowCover`): a system dialog or sheet, or a window
+ * that starts below the top (`startsAtTop`: an app window a cutout or a side
+ * navigation bar insets in landscape is not a dialog) and is narrower than the
+ * screen or reaches its bottom (a sheet). A window as wide as the screen that
+ * ends well above its bottom is a landscape-only app the system letterboxes on
+ * a portrait screen, centred, not a dialog. An app dialog that is as wide as
+ * the screen and centred (a `match_parent` custom dialog) reads the same way,
+ * so a miss under it keeps the plain scroll hint, as before. Undefined when the dump
+ * has no window list (the `active-window` capture, an older helper: no root
+ * has a `window-type`), the topmost application window is the app's screen, or
+ * the screen shows apps side by side: split screen and freeform windows list a
+ * window for each app, and split screen a divider (that alone while a split
+ * starts). A dialog of one app in a split screen is missed this way, and its
+ * step keeps the scroll hint.
+ */
+function topWindowCover(
+  root: ParsedXmlNode | null,
+  screenW: number,
+  screenH: number
+): Extract<FlowCover, { kind: "window" }> | undefined {
+  const roots = root ? childNodes(root) : [];
+  if (roots.some((c) => Number(c.attrs["window-type"]) === TYPE_SPLIT_SCREEN_DIVIDER)) {
+    return undefined;
+  }
+  // Roots are in z-order, topmost first. As `ui-tree`, a root with no package is passed over.
+  const apps = roots.filter(
+    (c) => Number(c.attrs["window-type"]) === TYPE_APPLICATION && Boolean(c.attrs.package)
+  );
+  const top = apps[0];
+  const pkg = top?.attrs.package;
+  if (!top || !pkg || apps.length > 1) return undefined;
+  const rect = parseUiAutomatorBounds(top.attrs.bounds ?? "");
+  // Unclipped, as `ui-tree` frames a window root.
+  const frame = rect
+    ? {
+        x: rect.x / screenW,
+        y: rect.y / screenH,
+        width: rect.w / screenW,
+        height: rect.h / screenH,
+      }
+    : undefined;
+  if (isSystemDialogWindow(pkg, frame)) return { kind: "window", system: true, package: pkg };
+  if (startsAtTop(frame)) return undefined;
+  const fullWidth = !!rect && rect.x <= 0 && rect.x + rect.w >= screenW;
+  if (fullWidth && !endsAtBottom(frame)) return undefined;
+  return {
+    kind: "window",
+    system: false,
+    package: pkg,
+    scrolls: holdsScroller(top, screenW, screenH),
+  };
+}
+
+/**
+ * Whether a view under `node` scrolls and shows on the screen. Only the
+ * `scrollable` flag counts, not the class `isUiAutomatorScrollable` also
+ * reads: the Settings "Device name" dialog holds two `ScrollView`s that do not
+ * scroll. A view hidden from the user (`visible-to-user="false"`) does not show.
+ */
+function holdsScroller(node: ParsedXmlNode, screenW: number, screenH: number): boolean {
+  return childNodes(node).some(
+    (c) =>
+      (c.attrs.scrollable === "true" &&
+        c.attrs["visible-to-user"] !== "false" &&
+        isVisibleRect(parseUiAutomatorBounds(c.attrs.bounds ?? ""), screenW, screenH)) ||
+      holdsScroller(c, screenW, screenH)
+  );
 }
 
 /**
@@ -209,14 +398,19 @@ export async function queryAndroidFullHierarchy(
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`the argent android helper is unavailable: ${msg}`, { cause: err });
   }
-  const [{ xml }, size] = await Promise.all([
+  const [{ xml, captureMode }, size] = await Promise.all([
     // clearCache: await/assert polls must see text changes, not cached reads.
     devtools.getHierarchy({ maxNodes: FLOW_MAX_NODES, clearCache: true, ...options }),
     devtools.getScreenSize(),
   ]);
-  const tree = adaptFullAndroidHierarchyToDescribeResult(xml, size.width, size.height);
+  const root = parseDump(xml, size.width, size.height);
+  const tree = adaptParsedHierarchy(root, size.width, size.height);
+  // No window list in this mode, so no window types (see `ui-tree`).
+  const cover =
+    captureMode === "active-window" ? undefined : topWindowCover(root, size.width, size.height);
   return {
     tree,
+    ...(cover ? { cover } : {}),
     source: "android-devtools",
     ...(size.width > 0 && size.height > 0
       ? { screen: { width: size.width, height: size.height } }

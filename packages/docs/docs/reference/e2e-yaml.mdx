@@ -53,27 +53,48 @@ steps:
 
 The file has six top-level keys:
 
-| Key                     | Required | Description                                                                                          |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                    |
-| `shutdown`              | no       | Steps that run after `steps`, also when a step failed. See [Shutdown](#shutdown)                     |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                              |
-| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                            |
-| `env`                   | no       | Environment values for each `script` step of the file. See [Environment values](#environment-values) |
-| `version`               | no       | The file format version. The value is `2`. Argent writes it. A file without `version` is version 1   |
+| Key                     | Required | Description                                                                                                          |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                                    |
+| `shutdown`              | no       | Steps that run after `steps`, also when a step failed. See [Shutdown](#shutdown)                                     |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                                              |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                                            |
+| `env`                   | no       | Environment values for each `script` step of the file. See [Environment values](#environment-values)                 |
+| `version`               | no       | The file format version. Argent writes `2`. A file without `version` is version 1. See [File version](#file-version) |
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
 Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
 
-The versions differ only on an iOS simulator with a landscape or upside-down UI:
+### File version
 
-| Version | Coordinates in `tap: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
-| ------- | ---------------------------------------------------------------------------------------------- |
-| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                    |
-| `2`     | The UI as the user sees it, like the `describe` frames                                         |
+On an iOS simulator, local or remote, the version sets how Argent runs the e2e test:
 
-Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. A fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
+| Version                  | Run on an iOS simulator                                                                                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `2`                      | Selectors resolve on the accessibility tree of `describe`. See [Runner tree and discovery tree](#runner-tree-and-discovery-tree) |
+| `1`, or no `version` key | Selectors resolve on the native view hierarchy of the app, as in Argent releases from before version 2                           |
+
+- On other platforms and on a physical iPhone, the version has no effect.
+- A `run:` fragment resolves its selectors on the tree of the e2e test that runs it, with the rules of that e2e test. Only its coordinates follow its own version. An e2e test that a `tool: e2e-execute` step runs uses its own version.
+- When you record `e2e-execute` of a version 1 e2e test on an iOS simulator, the recorder writes a `run:` step. That step replays the e2e test on the accessibility tree. The message of `e2e-add-step` warns about this difference.
+- A selector from `describe` can miss in a version 1 e2e test.
+- On an iOS simulator, the steps of a version 1 e2e test do not get the rules that came with version 2. For example, a run of whitespace does not match one space in `id` and `text`, and a toggle does not have the role `AXSwitch`. The rules for the [on-screen keyboard](#on-screen-keyboard) do not apply either. For text fields, see [Conditions](#conditions). A `tool:` step runs the tool itself: for example, `tool: await-ui-element` reads the `describe` tree in a version 1 e2e test too.
+
+To change a version 1 e2e test:
+
+1. Set `version: 2`. Change the `version: 1` line, or add the line if the file has no `version` key.
+2. Replay the e2e test.
+3. Replace each selector that fails. In a landscape or upside-down UI, also replace the coordinates of each `tap`, `long-press`, `swipe` and `tool:` step.
+
+The versions also differ in coordinates on an iOS simulator with a landscape or upside-down UI:
+
+| Version | Coordinates in `tap: { x, y }` and `long-press: { x, y }`, in the `from`, `to` and `by` of `swipe`, and in a `tool:` step |
+| ------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `1`     | The portrait axes of the screen. Earlier Argent releases sent them that way                                               |
+| `2`     | The UI as the user sees it, like the `describe` frames                                                                    |
+
+Argent still runs a version 1 file as it was recorded. It turns the coordinates of a `tap`, a `long-press` and a `swipe` to the UI. It runs a `tool:` step with the portrait axes of the screen. For coordinates, a fragment keeps its own version: a version 2 e2e test can run a version 1 fragment, and the reverse.
 
 A `snapshot` baseline that an earlier release took of a landscape UI on an iOS simulator is sideways. Its key has the width and the height of the screen swapped. When Argent finds no baseline with the key of the upright capture, it compares against the sideways one, with the capture turned to match. The step has a warning. To store an upright baseline, run the e2e test with `--update-baselines`.
 
@@ -185,16 +206,16 @@ A selector finds an element on the screen. Write a selector as an explicit map:
 | `role` | Case-insensitive substring of the element role                  |
 | `any`  | Any element. Takes only `true`. Pair it with a relational scope |
 
-All fields in a selector must match. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
+All fields in a selector must match. A run of whitespace, including a no-break space, matches one space in `id` and `text`. An unqualified Android id also matches its qualified resource id. `identifier` is an alias of `id`. Use single quotes for a regex with a backslash. `any: true` is the only selector without its own `id`, `text` or `role`, so it needs a relational scope, for example `{ any: true, after: { text: Danger zone } }`.
 
 A bare string, for example `tap: Save`, is a loose selector. It tries `id` first, then `text`. Prefer the map form.
 
 When several elements match:
 
-| Directive type                                                                | Chosen element                                                                                                                     |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: exact text or id, then the smallest frame, then reading order                                     |
-| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match |
+| Directive type                                                                | Chosen element                                                                                                                                             |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Action (`tap`, `long-press`, `swipe`, `type`, `scroll-to`, `pinch`, `rotate`) | The most specific visible match: an app element before a key of the on-screen keyboard, then exact text or id, then the smallest frame, then reading order |
+| Condition (`await`, `assert`)                                                 | `exists` and `visible` hold when any match qualifies. `hidden` holds when no match qualifies. `text` reads the first visible match                         |
 
 ### Relational scopes
 
@@ -214,21 +235,73 @@ A selector can scope its matches by the frames of other elements:
 
 `within` uses the visual frame, not the source tree. Reading order is top to bottom, left to right, as the user sees the UI. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. `after`, `next`, `any: true` and a `text` condition use this reading order. Scopes nest, with at most six scope keys in one selector. The `await-ui-element` tool does not support scopes.
 
+When the agent records a tap and the selector alone matches more than one element, Argent adds a `within` or `next` scope to the step.
+
 ### Runner tree and discovery tree
 
-The runner resolves a selector against a different tree than the `describe` tool:
+The runner resolves a selector against the runner tree. On some platforms, the runner tree is different from the `describe` tree:
 
 | Platform        | Runner tree                                                                               | `describe` tree            |
 | --------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
-| iOS simulator   | Native UIView hierarchy                                                                   | Accessibility tree         |
+| iOS simulator   | Accessibility tree of `describe`, with the differences below                              | Accessibility tree         |
 | Physical iPhone | Accessibility snapshot of `describe`                                                      | Same snapshot              |
 | Android         | Full accessibility hierarchy                                                              | Trimmed interactable nodes |
-| Chromium        | DOM nodes with an id, label, value or handler                                             | Full DOM                   |
+| Chromium        | DOM nodes with an id, label, value or handler                                             | Shorter DOM walk           |
 | Vega            | Toolkit page source                                                                       | Same source                |
 | Mac app         | The elements of the app tree that have an id, a label, a value, a clickable role or focus | The full app tree, nested  |
 | HarmonyOS       | None                                                                                      | `uitest` layout dump       |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator, a version 1 e2e test resolves selectors on the native view hierarchy of the app. As a `run:` fragment, it uses the tree of the e2e test that runs it. See [File version](#file-version).
+
+On an iOS simulator and on a physical iPhone, the runner and `describe` read one tree. Copy ids, text and roles from `describe`. On an iOS simulator, a toggle has the role `AXSwitch` in e2e tests, `describe`, `await-ui-element` and `ui-tree`. The runner tree on an iOS simulator has these differences:
+
+- The runner removes the elements that are scrolled or clipped out of view.
+- The runner removes the elements under an alert, a sheet, a popover or a system alert. When one of these covers the target of a step, the reason of the failed step says that the target is covered.
+- The runner keeps the unlabeled scrolling containers that `describe` does not show.
+- The runner keeps the unlabeled containers that carry an id. `describe` does not show them.
+- A selector does not match a text field by the text in the field. `describe` shows that text as the field's `value`. After a step types `Paris`, `tap: { text: Paris }` taps the element that shows `Paris`, not the field. Select the field by its id, its label or its role. Select an empty field also by its placeholder. To check the text in the field, use a `text` condition on the field. The `into` of a `type` step can also select the field by the text in it.
+
+On Android and on Chromium, an id absent from `describe` can still resolve in an e2e test. Verify the id in a scratch fragment.
+
+On Android, a view that the user can tap is an element of the runner tree. When the view has no label of its own, it takes the text of its children as its label, as in `describe`. For example, a Settings row has the label `Network & internet / Mobile, Wi‑Fi, hotspot`. The runner leaves this text out of such a label:
+
+- The text that a user typed in a text field. A view that holds a text field or a list takes no text.
+- The text of a button or a switch inside the view.
+- The text of a child that is not on the screen.
+
+Thus a label copied from `describe` can miss in an e2e test. A `text` selector matches a part of a label, so `{ role: LinearLayout, text: Network & internet }` selects the row. A `text` condition and a `next` scope on the title of such a row take the title, not the row. A `within` scope can be the row, for example `{ role: Switch, within: { text: Airplane mode } }`. An `any: true` selector takes an element inside the row, such as its title, not the row.
+
+On Android, the runner tree does not hold the elements of the app under a dialog, a sheet or a permission window. A step can then miss its target. The reason of the failed step says that a dialog or a sheet is on top of the app. A dialog of the app can hold a list that scrolls, with the target further down. The reason then also suggests a `scroll-to` step, or `within` on a `scroll-to` step. A full-screen sheet of the app looks like a screen, so the reason does not mention it. The same holds for apps side by side, in split screen or in freeform windows.
+
+### On-screen keyboard
+
+When the on-screen keyboard shows, its elements are in the runner tree and in the `describe` tree. These elements are the keys, the prediction bar and the other buttons of the keyboard. On iOS, the input accessory view above the keys is part of the app, for example a toolbar with a `Done` button.
+
+The runner applies these rules to the elements of the keyboard:
+
+- An action takes an app element before a key, also when the key is an exact match and the app element is a substring match. Thus `tap: { text: Done }` taps the `Done` button of the app, not the return key `done`. And `tap: { text: Go }` taps a link `Google`, not the return key `go`.
+- An action targets a key only when no app element matches.
+- A bare string tries `text` when its `id` finds only keys. Thus on iOS, `tap: Delete` taps the `Delete` button of the app, not the delete key with the id `delete`.
+- A condition (`await`, `assert`, `when:`) does not see the keyboard. Thus `assert: { hidden: { text: Done } }` passes when only the return key shows `done`.
+- An action does not press an app element under the keyboard. An element is under the keyboard when its center is in the area of the keys, gaps included.
+- `tap`, `long-press`, `type`, `pinch`, `rotate` and the `from` end of `swipe` wait until the keyboard does not cover their element. When the keyboard still covers the element at the end of the wait, the step fails. It does not use a different match.
+- `scroll-to` does not stop on a key or on a covered target. It fails when its swipe point, the center of the screen or of `within`, is under the keyboard. It also fails when the scroll ends and the keyboard still covers the target.
+- `any: true` takes an app element before a key.
+
+To wait for the keyboard, use a `tool: await-ui-element` step. That tool reads the `describe` tree, which shows the keys.
+
+To act on an app element under the keyboard, close the keyboard in an earlier step, or move the element above the keyboard with `scroll-to`.
+
+To target a key, select it by its id:
+
+| Platform | Key id                                                                                                                                                                                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| iOS      | The return key has the id of its type, for example `Done` or `Go`. On the letter keyboard, the delete key has the id `delete`. The ids stay in English when the keyboard uses another language |
+| Android  | Gboard gives an id to some keys, for example `key_pos_ime_action` to the action key and `key_pos_del` to the delete key                                                                        |
+
+A key without an id, for example the delete key of a number pad, needs a scope. Record the tap: the recorder adds the scope.
+
+To enter text, use a `type` step, not taps on the letter keys. The `type` step also presses Enter, unless `submit: false`.
 
 ### Selectors on Mac apps
 
@@ -456,7 +529,7 @@ The `text` comparators:
 
 On Chromium, `matches` reads text in the letter case that the page shows. For example, the CSS `text-transform: uppercase` makes `Save` read as `SAVE`.
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: `matches` never reads an iOS text field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. A password field is the exception: Argent does not read its typed secret, so `matches` never reads a password field as empty. On a Mac app, each `text` comparator reads only the text in a text field. An empty field reads as empty, also when its placeholder is its label.
 
 On an iOS simulator, a `text` check reads a text field as follows:
 
@@ -464,6 +537,10 @@ On an iOS simulator, a `text` check reads a text field as follows:
 - An empty text field reads as its placeholder.
 - A text field with an accessibility label reads as the label, then a space, then the text or the placeholder. For example, an empty field with the label `Email` and the placeholder `Required` reads as `Email Required`.
 - Argent does not read the text in a secure text field.
+
+A version 1 e2e test on an iOS simulator reads the view hierarchy of the app, also in the `run:` fragments that it runs. There, these rules are different:
+
+- `matches` never reads a text field as empty.
 - The runner knows a text field by the class name of its view. The name must contain `TextField`, `TextView` or `SearchField`. Argent does not read the text in a text field of a different class, for example a `UITextField` subclass with the name `AmountField`. For such a field, `matches: '^$'` passes also when the field contains text.
 
 On an iOS simulator, Argent does not use the text in a text field as the selector of a recorded tap.

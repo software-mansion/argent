@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { InvokeToolOptions, Registry } from "@argent/registry";
-import type { NativeAppState, NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import type { AXServiceApi, AXTreeNode, AXTreeResponse } from "../../src/blueprints/ax-service";
 
 // The one seam under the `keyboard` tool: the keys that reach the simulator.
 // Everything above it is real, so the text arrives here resolved, as the app
@@ -38,9 +38,9 @@ import {
 // `text` check reads holds the value of a `{{secret:…}}` placeholder, in
 // whatever form the field gave it, and the reason of a failed check quotes the
 // text it read. Nothing between the runner and the screen is mocked: the real
-// `keyboard` tool resolves the placeholder, and the runner reads the simulator
-// hierarchy through the real fetchFlowTree and adapter. The app below is the
-// screen: a form of text fields.
+// `keyboard` tool resolves the placeholder, and the runner reads the simulator's
+// accessibility tree through the real fetchFlowTree and adapters. The app below
+// is the screen: a form of text fields.
 
 interface KeyParams {
   text?: string;
@@ -100,97 +100,85 @@ const app = {
   },
 };
 
-function appState(bundleId: string): NativeAppState {
+const SCREEN = { width: 400, height: 800 };
+
+/** A frame in the screen's points, normalized as the accessibility service sends it. */
+function at(x: number, y: number, width: number, height: number) {
   return {
-    bundleId,
-    applicationState: "active",
-    foregroundActiveSceneCount: 1,
-    foregroundInactiveSceneCount: 0,
-    backgroundSceneCount: 0,
-    unattachedSceneCount: 0,
-    isFrontmostCandidate: true,
+    x: x / SCREEN.width,
+    y: y / SCREEN.height,
+    width: width / SCREEN.width,
+    height: height / SCREEN.height,
   };
 }
 
-function label(text: string, identifier: string, y: number): unknown {
-  return {
-    className: "UILabel",
-    identifier,
-    label: text,
-    screenFrame: { x: 20, y, width: 360, height: 24 },
-    children: [],
+/** The accessibility tree the service serves for the app as it is now. */
+function axTree(): AXTreeResponse {
+  const nodes: AXTreeNode[] = [];
+  const add = (node: Omit<AXTreeNode, "index">): number => {
+    nodes.push({ index: nodes.length, ...node });
+    return nodes.length - 1;
   };
-}
-
-/** The hierarchy the framework serves for the app as it is now. */
-function hierarchy(): unknown {
-  const screen = { x: 0, y: 0, width: 400, height: 800 };
-  const fields = app.fields.map((field, i) => {
-    // UIKit reports the placeholder as the value of an empty field, and the
-    // framework serves no value for a secure one.
-    const value = field.secure ? undefined : field.text || field.placeholder;
-    const focused = app.focus === i;
+  const root = add({ label: "App", bundleId: APP });
+  const window = add({ parentIndex: root, elementType: 4, frame: at(0, 0, 400, 800) });
+  const label = (text: string, identifier: string, y: number) =>
+    add({
+      parentIndex: window,
+      identifier,
+      label: text,
+      traits: ["staticText"],
+      elementType: 48,
+      frame: at(20, y, 360, 24),
+    });
+  label(app.title, "title", 40);
+  const form = add({
+    parentIndex: window,
+    identifier: "form",
+    elementType: 1,
+    frame: at(0, 90, 400, 60 * app.fields.length),
+  });
+  app.fields.forEach((field, i) => {
     const y = 100 + i * 60;
-    return {
-      className: "UITextField",
-      screenFrame: { x: 20, y, width: 360, height: 44 },
-      // As in UIKit: the editor under a field that has focus says it is the
-      // first responder too, and holds none of its text.
-      children: [
-        ...(focused
-          ? [
-              {
-                className: "UIFieldEditor",
-                firstResponder: true,
-                screenFrame: { x: 27, y: y + 2, width: 346, height: 40 },
-                children: [],
-              },
-            ]
-          : []),
-        ...(field.under
-          ? [
-              {
-                className: "UILabel",
-                label: field.under,
-                screenFrame: { x: 300, y: y + 10, width: 70, height: 24 },
-                children: [],
-              },
-            ]
-          : []),
+    // An empty field answers its placeholder as its value, with `hintShowing`.
+    const shown = field.text || field.placeholder;
+    const fieldIndex = add({
+      parentIndex: form,
+      traits: [
+        "textEntry",
+        ...(field.secure ? ["secureTextEntry"] : []),
+        ...(app.focus === i ? ["isEditing"] : []),
       ],
-      ...(focused ? { firstResponder: true } : {}),
+      elementType: field.secure ? 50 : 49,
+      frame: at(20, y, 360, 44),
       ...(field.identifier ? { identifier: field.identifier } : {}),
       ...(field.label ? { label: field.label } : {}),
-      ...(value ? { value } : {}),
-    };
+      ...(shown ? { value: shown } : {}),
+      ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+      ...(!field.text && field.placeholder ? { hintShowing: true } : {}),
+    });
+    if (field.under) {
+      add({
+        parentIndex: fieldIndex,
+        label: field.under,
+        traits: ["staticText"],
+        elementType: 48,
+        frame: at(300, y + 10, 70, 24),
+      });
+    }
   });
+  if (app.status) label(app.status, "status", 600);
   return {
-    screen: { width: 400, height: 800 },
-    windows: [
-      {
-        className: "UIWindow",
-        screenFrame: screen,
-        children: [
-          label(app.title, "title", 40),
-          {
-            className: "UIView",
-            identifier: "form",
-            screenFrame: { x: 0, y: 90, width: 400, height: 60 * app.fields.length },
-            children: fields,
-          },
-          ...(app.status ? [label(app.status, "status", 600)] : []),
-        ],
-      },
-    ],
+    alertVisible: false,
+    screenFrame: SCREEN,
+    nodes,
+    truncated: false,
+    foregroundApp: APP,
+    interfaceOrientation: "portrait",
+    treeVersion: 3,
   };
 }
 
-const nativeApi = {
-  listConnectedBundleIds: () => [APP],
-  isConnected: () => true,
-  getAppState: async (id: string) => appState(id),
-  queryViewHierarchy: async () => hierarchy(),
-} as unknown as NativeDevtoolsApi;
+const axApi = { degraded: false, tree: async () => axTree() } as unknown as AXServiceApi;
 
 let tmpDir: string;
 let secrets: Map<string, string>;
@@ -199,7 +187,7 @@ let progress: StepReport[];
 /** One tool-server: the runs of a test share it, as the tests of a directory run do. */
 function toolServer() {
   const registry = {
-    resolveService: async () => nativeApi,
+    resolveService: async () => axApi,
     // The runner binds its device into each tool's device argument.
     getTool: (id: string) => ({
       inputSchema: { properties: id === "e2e-execute" ? { device: {} } : { udid: {} } },
@@ -607,7 +595,12 @@ describe("a typed value in text that is no text input's", () => {
       { kind: "assert", condition: "visible", selector: { identifier: "elsewhere" } },
     ]);
 
-    expect(reasonOf(result)).toBe('no element matched selector id="elsewhere"');
+    // The reason is the runner's wording alone, with every "e" kept.
+    const reason = reasonOf(result)!;
+    expect(reason).toMatch(
+      /^no visible element matched selector id="elsewhere", and no element with this id is in the accessibility tree right now/
+    );
+    expect(reason).not.toContain(PLACEHOLDER);
   });
 
   it("is named for both values of a name that resolved to a second one", async () => {

@@ -32,6 +32,23 @@ export interface DescribeNode {
   // The describe tool leaves it unset; the tree the await tools judge on a Mac
   // app carries the flow tree's value.
   subtreeText?: string;
+  // `value` is the text a text field holds, typed or set by the app, not the
+  // placeholder of an empty field. A selector does not match the field by this
+  // text, except a `type` step's `into`. Set by the iOS simulator flow adapter
+  // only; the describe tool leaves it unset.
+  typedValue?: boolean;
+  // `label` is not the element's own: a clickable view with no label took the
+  // text of the views inside it, as `describe` does. A `text` check, a
+  // `next` pick and a `next`/`after` anchor take a match inside it over it, and
+  // the recorder never names a scope by it. Set by the Android flow adapter
+  // only; the describe tool leaves it unset.
+  borrowedLabel?: boolean;
+  // An element only because it takes a tap: the view has no id, label of its
+  // own, role a selector names or focus (an Android row, a wrapper that closes
+  // the keyboard). Like `borrowedLabel`, and also in the pick of a selector
+  // with no field of its own (`any: true`), it gives way to a match inside it.
+  // Set by the Android flow adapter only; the describe tool leaves it unset.
+  tapOnly?: boolean;
   clickable?: boolean;
   longClickable?: boolean;
   scrollable?: boolean;
@@ -59,6 +76,11 @@ export interface DescribeNode {
   // attached over it, highest in an open menu, absent in a window. Of a
   // selector's matches, the frontmost layer wins.
   layer?: number;
+  // An element of the on-screen keyboard: a key, the prediction bar, a button
+  // or field of the keyboard. An e2e action takes an app element before it, and
+  // the e2e conditions do not see it. Set by the e2e runner's tree adapters only; the
+  // describe tool leaves it unset.
+  keyboard?: boolean;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -72,6 +94,9 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
+      typedValue: z.boolean().optional(),
+      borrowedLabel: z.boolean().optional(),
+      tapOnly: z.boolean().optional(),
       clickable: z.boolean().optional(),
       longClickable: z.boolean().optional(),
       scrollable: z.boolean().optional(),
@@ -88,6 +113,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
       layer: z.number().int().nonnegative().optional(),
+      keyboard: z.boolean().optional(),
     })
     .passthrough()
 );
@@ -145,7 +171,35 @@ export interface DescribeTreeData {
   // withheld, each typed value in a label named by its placeholder (see
   // `utils/typed-secrets`). Checks read `tree`; only a quote reads this.
   quotableTree?: DescribeNode;
+  // The source cut its walk short (a node, depth or time cap): what it found is
+  // real, but an element past the cut reads as absent. Set by the iOS
+  // simulator flow tree.
+  truncated?: boolean;
+  // What may hide a selector's target from `tree`, for the wording of a miss
+  // only: never matched, never quoted. Set by the iOS simulator and Android
+  // flow trees (see `FlowCover`).
+  cover?: FlowCover;
 }
+
+/**
+ * Why elements below a cover are not in a flow tree.
+ *
+ * `covered` (iOS simulator): the accessibility service marks what an alert,
+ * sheet or popover covers, and the app below a system alert. `leaves` are
+ * those elements, flattened as the flow tree flattens its own; `systemAlert` is
+ * the read's `alertVisible`. Absent when nothing is covered.
+ *
+ * `window` (Android): Android leaves the app's window out of the tree while
+ * one of these windows is on top. The topmost application window, when it is
+ * a system dialog or sheet (`system`, the test `alertVisible` uses) or a
+ * window that starts below the top. `scrolls`: that window of the app holds a
+ * view that scrolls on the screen, so the target may be further down its list.
+ * Absent otherwise, and while apps show side by side.
+ */
+export type FlowCover =
+  | { kind: "covered"; leaves: DescribeNode[]; systemAlert: boolean }
+  | { kind: "window"; system: true; package: string }
+  | { kind: "window"; system: false; package: string; scrolls: boolean };
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */
 export type UiOrientation = "portrait" | "landscapeLeft" | "landscapeRight" | "portraitUpsideDown";

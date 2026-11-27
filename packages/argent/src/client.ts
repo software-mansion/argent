@@ -95,6 +95,11 @@ export interface UiTree {
    */
   foregroundApp?: string;
   /**
+   * iOS: the interface orientation, as UIKit names it. The frames and `screen`
+   * are in the UI's upright space, as the user sees it.
+   */
+  interfaceOrientation?: "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight";
+  /**
    * Fields this source cannot report. On Android they depend on the API level:
    * `placeholder` and `hintShowing` need 26, `heading` 28.
    */

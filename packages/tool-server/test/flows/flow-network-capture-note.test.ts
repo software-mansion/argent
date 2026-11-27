@@ -233,8 +233,9 @@ const IOS_UDID = "00000000-0000-0000-0000-0000000000cd";
 /**
  * restart-app and launch-app answer like the iOS simulator tools do while
  * native network capture is on for APP, the pid changing with each launch;
- * the native devtools the iOS launch gate waits for are connected. Launch `n`
- * returns `notes[n]` when given, otherwise the note of an armed capture.
+ * the accessibility tree the iOS launch gate waits for names APP as the
+ * foreground app. Launch `n` returns `notes[n]` when given, otherwise the note
+ * of an armed capture.
  */
 function iosRegistry(notes?: string[]): { registry: Registry; launches: () => number } {
   let launches = 0;
@@ -257,12 +258,24 @@ function iosRegistry(notes?: string[]): { registry: Registry; launches: () => nu
       return { ok: true };
     }),
     getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
-    resolveService: vi.fn(async () => ({
-      isConnected: () => true,
-      listConnectedBundleIds: () => [APP],
-    })),
+    resolveService: vi.fn(async () => ({ degraded: false, tree: appInFront })),
   } as unknown as Registry;
   return { registry, launches: () => launches };
+}
+
+/** The accessibility tree with APP in front, which the launch gate on an iOS simulator waits for. */
+async function appInFront() {
+  return {
+    alertVisible: false,
+    nodes: [
+      { index: 0, label: "App", bundleId: APP },
+      { index: 1, parentIndex: 0, label: "Home", traits: ["staticText"] },
+    ],
+    truncated: false,
+    foregroundApp: APP,
+    interfaceOrientation: "portrait",
+    treeVersion: 3,
+  };
 }
 
 describe("flow-execute reports native network capture on iOS simulator launches", () => {
@@ -378,6 +391,8 @@ function captureRegistry(): Registry {
       isReady: () => true,
       isConnected: () => true,
       listConnectedBundleIds: () => [APP],
+      degraded: false,
+      tree: appInFront,
     })),
   } as unknown as Registry;
 }

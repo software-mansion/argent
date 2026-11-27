@@ -28,6 +28,12 @@ vi.mock("../../src/tools/flows/flow-actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-actions")>()),
   settleTree: vi.fn(async () => ({})),
 }));
+// These e2e tests have no `version: 2`, so on an iOS simulator they run on the
+// version 1 runner, whose snapshot settles through its own copy of `settleTree`.
+vi.mock("../../src/tools/flows/version-1/flow-actions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/version-1/flow-actions")>()),
+  settleTree: vi.fn(async () => ({})),
+}));
 
 const IOS_DEVICE = "00000000-0000-0000-0000-0000000000ab";
 

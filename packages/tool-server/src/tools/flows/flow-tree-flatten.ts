@@ -1,4 +1,5 @@
 import type { DescribeNode } from "../describe/contract";
+import { nodeText } from "../../utils/ui-tree-match";
 // Shared with the describe path's scroll-clip prune so the two trees can never
 // drift on what "scrolled out of a container's viewport" means.
 import { rectFullyOutside } from "../describe/platforms/android/uiautomator-parser";
@@ -67,7 +68,12 @@ export interface FlatNode<T> {
   shield: boolean;
 }
 
-type NodeProjection<T> = (node: T) => FlatNode<T>;
+/**
+ * `scrollClip` is the clip the node itself is checked against (see
+ * {@link flattenHoisting}); a projection that flattens a subtree on its own
+ * passes it on, so that subtree is clipped as it would be in place.
+ */
+type NodeProjection<T> = (node: T, scrollClip: ClipRect | null) => FlatNode<T>;
 
 // Intersection of a scroller's rect with the clip inherited from any outer
 // scrollers (null = unclipped).
@@ -116,7 +122,7 @@ export function flattenHoisting<T>(
   out: DescribeNode[],
   scrollClip: ClipRect | null = null
 ): string {
-  const view = project(node);
+  const view = project(node, scrollClip);
   if (view.skip) return "";
 
   // Scroll-clip prune — the flow-tree counterpart of the describe path's
@@ -178,7 +184,9 @@ export function flattenHoisting<T>(
     .filter(Boolean)
     .join(" ");
   if (view.leaf) {
-    if (subtree && subtree !== view.ownText) view.leaf.subtreeText = subtree;
+    // Against the leaf's own text, not `ownText`: a projection may leave part
+    // of it out (a toggle's 0/1), and the text check must then read the rest.
+    if (subtree && subtree !== nodeText(view.leaf)) view.leaf.subtreeText = subtree;
     out.push(view.leaf);
   }
   return view.shield ? "" : subtree;

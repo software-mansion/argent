@@ -315,16 +315,27 @@ describe("flow-execute chromium boot", () => {
     // launch names a phone as readily as a desktop app, so the hoist must stand
     // down and let device detection pick — booting Electron here would run the
     // wrong platform's app against a booted simulator.
+    // Version 2 gates the ios launch on the accessibility tree mocked below.
     const flowFile = await writeFlow(
-      "steps:\n  - launch: { ios: com.acme.app, chromium: ./app }\n"
+      "version: 2\nsteps:\n  - launch: { ios: com.acme.app, chromium: ./app }\n"
     );
     // A real UDID shape: the runner reads the platform off the id.
     const udid = "1A2B3C4D-5E6F-4A8B-9C0D-1E2F3A4B5C6D";
     const registry = makeRegistry(async (id: string) =>
       id === "list-devices" ? { devices: [{ platform: "ios", udid, state: "Booted" }] } : {}
     );
-    // The ios launch waits on native devtools; hand it a connected one.
-    (registry.resolveService as any).mockImplementation(async () => ({ isConnected: () => true }));
+    // The ios launch waits for the accessibility tree to name the app as the foreground app.
+    (registry.resolveService as any).mockImplementation(async () => ({
+      degraded: false,
+      tree: async () => ({
+        alertVisible: false,
+        nodes: [],
+        truncated: false,
+        foregroundApp: "com.acme.app",
+        interfaceOrientation: "portrait",
+        treeVersion: 3,
+      }),
+    }));
 
     const result = await runFlow(registry, {
       name: "ambiguous",

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { DescribeFrame, DescribeNode } from "../tools/describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeNode,
+} from "../tools/describe/contract";
 
 /**
  * Shared tree matching: `await-ui-element`, the flow directives (`tap`, `type`,
@@ -120,12 +124,19 @@ export function assertText(node: DescribeNode): string {
   return node.subtreeText ?? nodeText(node);
 }
 
+// Case-insensitive, with every run of whitespace read as one space: a label
+// joined with a no-break space ("Hubert\u00A0Gancarczyk") prints as a plain
+// space in `describe`, and a selector typed from that print must still match.
+function foldText(text: string): string {
+  return text.replace(/\s+/g, " ").toLowerCase();
+}
+
 function includesCI(haystack: string | undefined, needle: string): boolean {
-  return Boolean(haystack) && haystack!.toLowerCase().includes(needle.toLowerCase());
+  return Boolean(haystack) && foldText(haystack!).includes(foldText(needle));
 }
 
 function equalsCI(actual: string | undefined, expected: string): boolean {
-  return (actual ?? "").toLowerCase() === expected.toLowerCase();
+  return foldText(actual ?? "") === foldText(expected);
 }
 
 /**
@@ -423,14 +434,21 @@ function nearestAfter(candidates: DescribeNode[], anchors: DescribeNode[]): Desc
 // Every relation requires a DISTINCT node (`a within a` needs two nested
 // elements), and each nests: `within: { id: b, within: c }` resolves c's
 // containers first, then keeps only the b's sitting inside one of them.
-export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] {
+//
+// `matchFieldValues` is for a `type` step's `into` only (see
+// {@link resolveSelector}).
+export function findAll(
+  root: DescribeNode,
+  selector: Selector,
+  matchFieldValues = false
+): DescribeNode[] {
   const all: DescribeNode[] = [];
   const collect = (node: DescribeNode): void => {
     all.push(node);
     for (const child of node.children) collect(child);
   };
   for (const child of root.children) collect(child);
-  return resolveSelector(all, selector);
+  return resolveSelector(all, selector, matchFieldValues);
 }
 
 /**
@@ -442,6 +460,29 @@ export function findAll(root: DescribeNode, selector: Selector): DescribeNode[] 
 export const SELECTOR_RELATIONS = ["within", "after", "next"] as const;
 
 export type SelectorRelation = (typeof SELECTOR_RELATIONS)[number];
+
+// An Android leaf with no label of its own: a row that took the text of its
+// title and summary, or a view kept only for its tap.
+function labelNotOwn(n: DescribeNode): boolean {
+  return n.borrowedLabel === true || n.tapOnly === true;
+}
+
+/**
+ * `matches` less each leaf that `givesWay` marks and that holds another match it
+ * does not mark: the title, not the row around it, is what a `text` check reads,
+ * what `next`/`after` count from and what `next` picks. A `within` scope keeps
+ * the row, since a row as a scope is the point of it, and a tap with a field
+ * already takes the smaller exact match.
+ */
+function preferInner(
+  matches: DescribeNode[],
+  givesWay: (n: DescribeNode) => boolean = labelNotOwn
+): DescribeNode[] {
+  if (!matches.some(givesWay)) return matches;
+  return matches.filter(
+    (n) => !givesWay(n) || !matches.some((m) => !givesWay(m) && frameWithin(m.frame, n.frame))
+  );
+}
 
 /**
  * How each scope narrows a match set. `within` and `after` are per-node
@@ -457,14 +498,32 @@ const RELATION_RESOLVERS: Record<
   (matches: DescribeNode[], scope: DescribeNode[]) => DescribeNode[]
 > = {
   within: (matches, scope) => matches.filter(containmentTester(scope)),
-  after: (matches, scope) => matches.filter(afterTester(scope)),
-  next: (matches, scope) => nearestAfter(matches, scope),
+  after: (matches, scope) => matches.filter(afterTester(preferInner(scope))),
+  next: (matches, scope) => nearestAfter(preferInner(matches), preferInner(scope)),
 };
 
-/** Own-field matches from `all`, narrowed by every scope the selector carries. */
-function resolveSelector(all: DescribeNode[], selector: Selector): DescribeNode[] {
+/**
+ * Own-field matches from `all`, narrowed by every scope the selector carries.
+ *
+ * A text field that matches only by the text it holds (`typedValue`) is no
+ * match: after typing "Paris", `tap: { text: Paris }` means the result that
+ * shows it, not the field. The field still matches by its id, label or role.
+ * `matchFieldValues` keeps such a match for the selector itself, never for its
+ * scopes: a `type` step's `into` names the field it types into.
+ */
+function resolveSelector(
+  all: DescribeNode[],
+  selector: Selector,
+  matchFieldValues = false
+): DescribeNode[] {
   const regex = selectorTextRegex(selector);
-  let matches = all.filter((n) => matchNodeWithRegex(n, selector, regex));
+  let matches = all.filter(
+    (n) =>
+      matchNodeWithRegex(n, selector, regex) &&
+      (matchFieldValues ||
+        n.typedValue !== true ||
+        matchNodeWithRegex({ ...n, value: undefined }, selector, regex))
+  );
   for (const relation of SELECTOR_RELATIONS) {
     const scope = selector[relation];
     if (scope === undefined) continue;
@@ -524,10 +583,15 @@ export function macFieldText(node: DescribeNode, macos: boolean): string | undef
 const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
 
 // The match a `text` check reads: the first visible one in reading order (the
-// first overall if none is visible). On a Mac app, not a text area around a
+// first overall if none is visible), not a row with a borrowed label around
+// another match (see `preferInner`). On a Mac app, not a text area around a
 // matching text: a web editor's value is the text of the paragraphs inside it,
 // so a selector for a paragraph's text reads that paragraph.
-export function textCheckTarget(matches: DescribeNode[], macos: boolean): DescribeNode | undefined {
+export function textCheckTarget(
+  candidates: DescribeNode[],
+  macos: boolean
+): DescribeNode | undefined {
+  const matches = preferInner(candidates);
   const read = macos
     ? matches.filter(
         (n) =>
@@ -571,13 +635,12 @@ export function evaluateCondition(
       }
       // An element with no text at all reads as "", so `matches: '^$'` or a
       // negative lookahead can check an empty field. Selector matching still
-      // skips empty text, or `.*` would select every unlabeled view. Not an
-      // iOS text field: a secure field's text is never read, so a filled one
-      // reads "" there (an empty field reads its placeholder). Nor a Mac app's
-      // password field, whose text argent never reads.
+      // skips empty text, or `.*` would select every unlabeled view. Not a
+      // password field: the iOS tree drops a typed secret, so a filled one
+      // reads "" there, and argent never reads a Mac app's password text.
       if (
         textMatch === "matches" &&
-        (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&
+        first.password !== true &&
         !assertText(first) &&
         !nodeText(first) &&
         uiTreeMatchInternals.createRegExp(expectedText).test("")
@@ -642,27 +705,115 @@ function frameArea(frame: DescribeFrame): number {
  * Reverse lookup for recording: the smallest visible node of the frontmost
  * layer whose frame contains the tapped point: the most specific element (a
  * button over its container). Skips the synthetic root.
+ *
+ * The on-screen keyboard lies over the app, so a point where the keyboard
+ * draws (see {@link keyboardDrawsAt}) is a tap on the keyboard, also where an
+ * app element behind it (a list row's icon under a key) is smaller than the
+ * key: only the keyboard's own elements take part there, not the tall
+ * containers of its window. In a gap between them nothing is hit.
  */
 export function nodeAtPoint(
   root: DescribeNode,
   point: { x: number; y: number }
 ): DescribeNode | undefined {
-  let best: DescribeNode | undefined;
+  const hits: DescribeNode[] = [];
   const walk = (node: DescribeNode): void => {
-    if (isVisible(node) && frameContains(node.frame, point.x, point.y)) {
-      const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
-      if (
-        best === undefined ||
-        layerDelta > 0 ||
-        (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
-      ) {
-        best = node;
-      }
-    }
+    if (isVisible(node) && frameContains(node.frame, point.x, point.y)) hits.push(node);
     for (const child of node.children) walk(child);
   };
   for (const child of root.children) walk(child);
+  const drawn = drawnKeyboard(root);
+  const onKeyboard = drawsAt(drawn, point);
+  let best: DescribeNode | undefined;
+  for (const node of hits) {
+    if (onKeyboard && !drawn.includes(node)) continue;
+    const layerDelta = (node.layer ?? 0) - (best?.layer ?? 0);
+    if (
+      best === undefined ||
+      layerDelta > 0 ||
+      (layerDelta === 0 && frameArea(node.frame) < frameArea(best.frame))
+    ) {
+      best = node;
+    }
+  }
   return best;
+}
+
+/**
+ * The elements the on-screen keyboard draws: its visible ones, other than one
+ * whose frame holds every other. The input method's window on Android has
+ * containers as tall as the window (`android:id/parentPanel`), which pass a
+ * tap above the keys to the app. With gesture navigation, the window also
+ * draws its own navigation bar below these containers, so the containers are
+ * found by the other elements only. The navigation bar stays in the keyboard.
+ */
+function drawnKeyboard(root: DescribeNode): DescribeNode[] {
+  const keyboard: DescribeNode[] = [];
+  const walk = (node: DescribeNode): void => {
+    if (node.keyboard === true && isVisible(node)) keyboard.push(node);
+    for (const child of node.children) walk(child);
+  };
+  for (const child of root.children) walk(child);
+  const span =
+    boundingFrame(keyboard.filter((n) => !isImeNavigationBar(n)).map((n) => n.frame)) ??
+    boundingFrame(keyboard.map((n) => n.frame));
+  return span === undefined ? [] : keyboard.filter((n) => !frameWithin(span, n.frame));
+}
+
+/** An element of the navigation bar that the input method's window draws on Android. */
+function isImeNavigationBar(node: DescribeNode): boolean {
+  return node.identifier?.startsWith("android:id/input_method_nav") === true;
+}
+
+/**
+ * Whether the keyboard whose elements are `drawn` draws at `point`. The
+ * keyboard is docked at the bottom of the UI, and below its top edge it covers
+ * the screen also between its elements: the gaps between the keys and the free
+ * strip of the bottom row have no element of their own, and do not pass a
+ * touch to the app either. So a point counts when it lies in the smallest
+ * frame holding the elements, below the top of one of them in its column. A
+ * tip that pops up above the keys covers its own column, not the strip beside
+ * it. Frames are in the UI's upright space (see the module comment), where the
+ * keyboard's top is up.
+ */
+function drawsAt(drawn: readonly DescribeNode[], point: { x: number; y: number }): boolean {
+  const frames = drawn.map((n) => n.frame);
+  const area = boundingFrame(frames);
+  if (area === undefined) return false;
+  return (
+    frameContains(area, point.x, point.y) &&
+    frames.some((f) => f.x <= point.x && point.x <= f.x + f.width && f.y <= point.y)
+  );
+}
+
+/** Whether the on-screen keyboard draws at `point` (see {@link drawsAt}). */
+export function keyboardDrawsAt(root: DescribeNode, point: { x: number; y: number }): boolean {
+  return drawsAt(drawnKeyboard(root), point);
+}
+
+/**
+ * Whether the on-screen keyboard covers an app element where an action touches
+ * it, the centre of its frame: a tap there presses a key, not the element. An
+ * element of the keyboard is never covered.
+ */
+export function underKeyboard(root: DescribeNode, node: DescribeNode): boolean {
+  return node.keyboard !== true && keyboardDrawsAt(root, getDescribeTapPoint(node.frame));
+}
+
+/** The smallest frame holding every given frame; undefined for none. */
+function boundingFrame(frames: readonly DescribeFrame[]): DescribeFrame | undefined {
+  if (frames.length === 0) return undefined;
+  let x1 = 1;
+  let y1 = 1;
+  let x2 = 0;
+  let y2 = 0;
+  for (const f of frames) {
+    x1 = Math.min(x1, f.x);
+    y1 = Math.min(y1, f.y);
+    x2 = Math.max(x2, f.x + f.width);
+    y2 = Math.max(y2, f.y + f.height);
+  }
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
 }
 
 // Does the regex consume the WHOLE non-empty string? The regex analog of an
@@ -701,62 +852,104 @@ function exactFieldCount(
   return count;
 }
 
-/**
- * The best visible match of a selector — the element a `tap`/`type` action
- * targets. An accessible container (e.g. a Touchable on iOS) aggregates
- * its descendants' labels, so a substring text selector matches the container
- * as well as the leaf carrying the text, and the container's centre can sit
- * over a different child entirely. Matches are therefore ranked: exact field
- * matches beat substring hits, then the smallest frame (mirroring
- * {@link nodeAtPoint}), with reading order as the final tiebreak. Only the
- * matches of the frontmost layer take part.
- *
- * The universal selector (flow YAML's `any: true`) is the case ranking cannot
- * serve: with no field to be exact about, "smallest" degenerates to whatever
- * hairline spacer the scope contains. A field-less selector names a REGION, so
- * its matches are read the way conditions read a match set — first in reading
- * order — keeping an action's target the element an `assert` would quote.
- *
- * {@link compareBelowPick} rather than {@link firstInReadingOrder}: both order
- * by (y, x), but a bare reading order leaves an exact positional tie to adapter
- * emission order, and two frames with different extents are two different tap
- * centres, so the tie continues into "most specific" instead.
- */
-export function selectorToNode(root: DescribeNode, selector: Selector): DescribeNode | undefined {
-  const visible = frontmost(findAll(root, selector).filter(isVisible));
-  if (visible.length === 0) return undefined;
-  if (!hasOwnConstraint(selector)) {
-    let first: DescribeNode | undefined;
-    for (const n of visible) {
-      if (first === undefined || compareBelowPick(n.frame, first.frame) < 0) first = n;
-    }
-    return first;
-  }
-  const fullTextRegex = fullConsumptionRegex(selector);
-  let best: DescribeNode | undefined;
-  let bestExact = -1;
-  for (const n of visible) {
-    const exact = exactFieldCount(n, selector, fullTextRegex);
-    if (best === undefined || exact !== bestExact) {
-      if (exact > bestExact) {
-        best = n;
-        bestExact = exact;
-      }
-      continue;
-    }
-    const areaDelta = frameArea(n.frame) - frameArea(best.frame);
-    const nf = n.frame;
-    const bf = best.frame;
-    if (areaDelta < 0 || (areaDelta === 0 && (nf.y < bf.y || (nf.y === bf.y && nf.x < bf.x)))) {
-      best = n;
-    }
-  }
-  return best;
+/** A visible match of a selector, as the target ranking compares it. */
+interface TargetCandidate {
+  node: DescribeNode;
+  /** How many of the selector's fields it matches exactly (see {@link exactFieldCount}). */
+  exact: number;
 }
 
-/** The frame of {@link selectorToNode}'s match. */
-export function selectorToFrame(root: DescribeNode, selector: Selector): DescribeFrame | undefined {
-  return selectorToNode(root, selector)?.frame;
+/**
+ * One rule of the target ranking: negative when `a` ranks before `b`, positive
+ * after, 0 when this rule ties them and the next one decides. `byFields` is
+ * false for the universal selector (see {@link selectorToNode}).
+ */
+type TieBreak = (a: TargetCandidate, b: TargetCandidate, byFields: boolean) => number;
+
+/**
+ * The tie-breaks that pick an action's target among a selector's visible
+ * matches, in order: each one decides only between matches every earlier one
+ * left tied.
+ */
+const TARGET_TIE_BREAKS: readonly TieBreak[] = [
+  // A Mac app's front layer: a match in an open menu, sheet or alert beats a
+  // same-named control behind it.
+  (a, b) => (b.node.layer ?? 0) - (a.node.layer ?? 0),
+  // An app element before a key of the on-screen keyboard, also when the key
+  // matches more exactly: the app's "Done" button, not the return key "done",
+  // and a row "Google", not the return key "go". A test selects a key by its id.
+  (a, b) => Number(a.node.keyboard === true) - Number(b.node.keyboard === true),
+  // The most fields matched exactly, not as a substring: the leaf carrying the
+  // text beats the container whose aggregated label contains it.
+  (a, b) => b.exact - a.exact,
+  // The smallest frame: a labelled container and the leaf inside it match the
+  // same text, and the leaf is the one meant. Not for a field-less selector,
+  // where it would degenerate to a hairline spacer.
+  (a, b, byFields) => (byFields ? frameArea(a.node.frame) - frameArea(b.node.frame) : 0),
+  // Reading order. For a field-less selector, an exact positional tie goes on
+  // to the most specific frame (two different extents are two different tap
+  // centres), not to adapter emission order.
+  (a, b, byFields) =>
+    byFields
+      ? a.node.frame.y - b.node.frame.y || a.node.frame.x - b.node.frame.x
+      : compareBelowPick(a.node.frame, b.node.frame),
+];
+
+function compareTargets(a: TargetCandidate, b: TargetCandidate, byFields: boolean): number {
+  for (const tieBreak of TARGET_TIE_BREAKS) {
+    const order = tieBreak(a, b, byFields);
+    if (order !== 0) return order;
+  }
+  return 0;
+}
+
+/**
+ * A selector's best visible match — what a `tap`/`type` action targets —
+ * ranked by {@link TARGET_TIE_BREAKS}; matches every rule ties go to the first
+ * in tree order. An accessible container (e.g. a Touchable on iOS) aggregates
+ * its descendants' labels, so a substring text selector matches the container
+ * as well as the leaf carrying the text, and the container's centre can sit
+ * over a different child entirely: hence exact before smallest (mirroring
+ * {@link nodeAtPoint}) before reading order.
+ *
+ * The universal selector (flow YAML's `any: true`) is the case the field rules
+ * cannot serve: with no field to be exact about, "smallest" degenerates to
+ * whatever hairline spacer the scope contains. A field-less selector names a
+ * REGION, so its matches are read the way conditions read a match set — first
+ * in reading order — keeping an action's target the element an `assert` would
+ * quote. It still takes an app element before a key of the on-screen keyboard:
+ * a region that reaches under the keyboard names the app's elements there.
+ * And it takes a match inside an Android view kept only for its tap over that
+ * view (see `preferInner`): a wrapper or a row starts above what it holds.
+ *
+ * `matchFieldValues` is as in {@link findAll}.
+ */
+export function selectorToNode(
+  root: DescribeNode,
+  selector: Selector,
+  matchFieldValues = false
+): DescribeNode | undefined {
+  const byFields = hasOwnConstraint(selector);
+  const fullTextRegex = fullConsumptionRegex(selector);
+  let best: TargetCandidate | undefined;
+  const visible = findAll(root, selector, matchFieldValues).filter(isVisible);
+  for (const node of byFields ? visible : preferInner(visible, (n) => n.tapOnly === true)) {
+    const candidate = {
+      node,
+      exact: byFields ? exactFieldCount(node, selector, fullTextRegex) : 0,
+    };
+    if (best === undefined || compareTargets(candidate, best, byFields) < 0) best = candidate;
+  }
+  return best?.node;
+}
+
+/** The frame of {@link selectorToNode}'s match. `matchFieldValues` is as in {@link findAll}. */
+export function selectorToFrame(
+  root: DescribeNode,
+  selector: Selector,
+  matchFieldValues = false
+): DescribeFrame | undefined {
+  return selectorToNode(root, selector, matchFieldValues)?.frame;
 }
 
 const GENERIC_ROLES = new Set([
@@ -778,15 +971,176 @@ const GENERIC_ROLES = new Set([
  * on — the caller then keeps coordinates.
  */
 export function deriveSelector(node: DescribeNode): Selector | null {
-  if (node.identifier && node.identifier.trim()) return { identifier: node.identifier };
-  // Label OR value individually — never nodeText's joined form: matchNode
-  // compares a text selector against label and value separately, so a joined
-  // "Volume 50%" would match nothing, not even the node it came from. Label
-  // first: a value like "50%" is the volatile part of a control. Icon-font
-  // labels are invisible in YAML (see hasVisibleText), so a node carrying only
-  // those falls through to role/coordinates.
-  const text = [node.label, node.value].map((t) => t?.trim()).find((t) => t && hasVisibleText(t));
-  if (text) return { text };
-  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) return { role: node.role };
+  return ownSelectors(node)[0] ?? null;
+}
+
+// The own fields the recorder tries for a node, most stable first: an id,
+// then visible text (whitespace folded, so the YAML holds plain spaces), then
+// that text with a non-generic role (a slider labelled like its row title),
+// then the role alone. Label OR value individually — never
+// nodeText's joined form: matchNode compares a text selector against label
+// and value separately, so a joined "Volume 50%" would match nothing, not
+// even the node it came from. Label first: a value like "50%" is the volatile
+// part of a control. Icon-font labels are invisible in YAML (see
+// hasVisibleText), so a node carrying only those falls through to role. A
+// toggle's "0"/"1" is its state and flips with the tap, a password's value is
+// the secret, and a selector does not match a text field by the text it holds
+// (see resolveSelector), so none of these values names the node.
+function ownSelectors(node: DescribeNode): Selector[] {
+  const out: Selector[] = [];
+  if (node.identifier && node.identifier.trim()) out.push({ identifier: node.identifier });
+  const skipValue =
+    node.password === true ||
+    node.typedValue === true ||
+    (node.checked !== undefined && (node.value === "0" || node.value === "1"));
+  const text = [node.label, skipValue ? undefined : node.value]
+    .map((t) => t?.replace(/\s+/g, " ").trim())
+    .find((t) => t && hasVisibleText(t));
+  if (text) out.push({ text });
+  if (node.role && !GENERIC_ROLES.has(node.role.toLowerCase())) {
+    if (text) out.push({ text, role: node.role });
+    out.push({ role: node.role });
+  }
+  return out;
+}
+
+/**
+ * Does `selector` replay on the tapped node? The ranking replay uses
+ * ({@link selectorToNode}) must pick the node on this screen: an app element
+ * with a key's text, behind the keyboard under the tapped key, would win that
+ * tie at replay. And every other visible match must sit over `point`: the
+ * matches are one nested stack around the tapped element (a labelled container
+ * and the leaf inside it rendering the same text), not the same label on
+ * another row, which a slightly different screen at replay could rank first.
+ * A key elsewhere does not count against an app element: the node matches its
+ * own field exactly, and replay takes an app element before any key.
+ */
+function resolvesAt(
+  root: DescribeNode,
+  selector: Selector,
+  node: DescribeNode,
+  point: { x: number; y: number }
+): boolean {
+  if (selectorToNode(root, selector) !== node) return false;
+  return findAll(root, selector).every(
+    (n) =>
+      !isVisible(n) ||
+      frameContains(n.frame, point.x, point.y) ||
+      (n.keyboard === true && node.keyboard !== true)
+  );
+}
+
+// Roles of an editable text field on any platform: iOS AXTextField /
+// AXSearchField / AXTextArea, Android EditText / TextField, Chromium input,
+// textarea, textbox and searchbox.
+const EDITABLE_ROLE = /text.?field|text.?area|textbox|search.?(field|box)|edittext|^input$/i;
+
+// How many preceding elements the recorder tries as `next` anchors.
+const MAX_ANCHORS = 12;
+
+/**
+ * The selector the recorder writes for a tapped node: the first of
+ * {@link ownSelectors} that {@link resolvesAt} the tapped point on its own;
+ * else that own selector scoped `within` the smallest labelled or identified
+ * container holding the node; else `next` the nearest preceding element with
+ * an id or label that is itself unique on screen. Null when no form resolves
+ * to the tapped element — the caller then keeps coordinates.
+ *
+ * `after` is never emitted: with a unique anchor it keeps every candidate that
+ * follows it, a superset of what `next` keeps, so it cannot single out what
+ * `next` could not.
+ *
+ * Scopes are geometric, exactly as replay resolves them, and each candidate is
+ * checked through the replay engine, so a selector returned here is one the
+ * runner resolves to the tapped element on this screen.
+ */
+export function deriveUniqueSelector(
+  root: DescribeNode,
+  node: DescribeNode,
+  point: { x: number; y: number }
+): Selector | null {
+  const own = ownSelectors(node);
+  if (own.length === 0) return null;
+  const unique = (s: Selector): boolean => resolvesAt(root, s, node, point);
+  for (const s of own) if (unique(s)) return s;
+
+  const others: DescribeNode[] = [];
+  const collect = (n: DescribeNode): void => {
+    if (n !== node && isVisible(n) && ownSelectors(n).length > 0) others.push(n);
+    for (const child of n.children) collect(child);
+  };
+  for (const child of root.children) collect(child);
+  // An anchor or container is named by its id or text, never by role alone,
+  // never by an editable field's value: that is what was typed into it, and
+  // never by a label it took from the views inside it: the title inside names
+  // the place, and the summary that comes with it changes. Other values stay:
+  // a Chromium text element carries its text only as value.
+  const nameOf = (n: DescribeNode): Selector | undefined =>
+    ownSelectors({
+      ...n,
+      label: n.borrowedLabel === true ? undefined : n.label,
+      value: EDITABLE_ROLE.test(n.role) ? undefined : n.value,
+    }).find((s) => s.role === undefined);
+
+  // Containers, tightest first; a container with the node's own frame is the
+  // node again, not a scope.
+  const containers = others
+    .filter((c) => frameWithin(node.frame, c.frame) && !sameFrame(node.frame, c.frame))
+    .sort((a, b) => frameArea(a.frame) - frameArea(b.frame));
+  for (const c of containers) {
+    const within = nameOf(c);
+    if (!within) continue;
+    for (const s of own) {
+      const scoped = { ...s, within };
+      if (unique(scoped)) return scoped;
+    }
+  }
+
+  // Anchors: elements the node follows in reading order, nearest first, whose
+  // own name resolves to exactly one place on screen. Labelled elements come
+  // before id-only containers: a reader finds the anchor in `describe`, which
+  // prints the first and not the second. A borrowed label is not the view's
+  // own, so a row named by it sorts with the id-only views it was before.
+  const nf = node.frame;
+  const unlabelled = (n: DescribeNode): number =>
+    n.borrowedLabel !== true && ownSelectors(n).some((s) => s.text) ? 0 : 1;
+  const anchors = others
+    .filter((a) => followKind(nf, a.frame) !== "no")
+    .map((a) => ({ a, d: distance(nf, a.frame), u: unlabelled(a) }))
+    .sort((p, q) => p.u - q.u || p.d - q.d)
+    .slice(0, MAX_ANCHORS)
+    .map(({ a }) => a);
+  for (const a of anchors) {
+    const next = nameOf(a);
+    if (!next || !uniqueOnScreen(root, next, a)) continue;
+    for (const s of own) {
+      const scoped = { ...s, next };
+      if (unique(scoped)) return scoped;
+    }
+  }
   return null;
+}
+
+function sameFrame(a: DescribeFrame, b: DescribeFrame): boolean {
+  return (
+    Math.abs(a.x - b.x) <= WITHIN_EPS &&
+    Math.abs(a.y - b.y) <= WITHIN_EPS &&
+    Math.abs(a.width - b.width) <= WITHIN_EPS &&
+    Math.abs(a.height - b.height) <= WITHIN_EPS
+  );
+}
+
+// Reading-order distance between two frames: rows apart first, then columns.
+function distance(a: DescribeFrame, b: DescribeFrame): number {
+  const dy = Math.max(0, a.y - (b.y + b.height), b.y - (a.y + a.height));
+  const dx = Math.max(0, a.x - (b.x + b.width), b.x - (a.x + a.width));
+  return dy * 4 + dx;
+}
+
+// Does `selector` match `node` and nothing else visible on screen? A row that
+// took the node's text as its label does not count: as a `next` scope it gives
+// way to the node (see preferInner).
+function uniqueOnScreen(root: DescribeNode, selector: Selector, node: DescribeNode): boolean {
+  const visible = preferInner(findAll(root, selector).filter(isVisible));
+  return visible.length === 1 && visible[0] === node;
 }

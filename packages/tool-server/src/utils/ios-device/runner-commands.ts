@@ -303,6 +303,8 @@ export interface RunnerSnapshotNode {
   selected: boolean | null;
   depth: number;
   parentIndex: number | null;
+  /** In a window that holds the on-screen keyboard; absent elsewhere. */
+  keyboard?: boolean | null;
 }
 
 interface RunnerSnapshotQuality {

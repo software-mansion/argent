@@ -137,6 +137,7 @@ describe("ui-tree Android adapter", () => {
       "keyboardVisible",
       "foregroundApp",
       "alertVisible",
+      "interfaceOrientation",
     ]);
   });
 
@@ -187,7 +188,7 @@ describe("ui-tree Android adapter", () => {
     expect(title!.hidden).toBeUndefined();
     expect(row).toMatchObject({ hidden: true });
     expect(clipped).toMatchObject({ hidden: true });
-    expect(tree.unsupportedFields).toEqual([]);
+    expect(tree.unsupportedFields).toEqual(["interfaceOrientation"]);
   });
 
   it("takes editable from the helper, and keeps a disabled field a text input", () => {
@@ -333,11 +334,13 @@ describe("ui-tree Android adapter", () => {
 
   it("lists what an old API level or the active-window fallback cannot report", () => {
     expect(adapt(dump(), false, SCREEN, { ...V2, sdkInt: 25 }).unsupportedFields).toEqual([
+      "interfaceOrientation",
       "placeholder",
       "hintShowing",
       "heading",
     ]);
     expect(adapt(dump(), false, SCREEN, { ...V2, sdkInt: 27 }).unsupportedFields).toEqual([
+      "interfaceOrientation",
       "heading",
     ]);
     const fallback = adapt(dump(node({ package: "com.example" })), false, SCREEN, {
@@ -345,6 +348,7 @@ describe("ui-tree Android adapter", () => {
       captureMode: "active-window",
     });
     expect(fallback.unsupportedFields).toEqual([
+      "interfaceOrientation",
       "keyboardVisible",
       "foregroundApp",
       "alertVisible",

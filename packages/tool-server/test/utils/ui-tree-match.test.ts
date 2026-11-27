@@ -7,10 +7,14 @@ import {
   evaluateCondition,
   findAll,
   identifierMatches,
+  keyboardDrawsAt,
   matchNode,
+  selectorToNode,
+  textCheckTarget,
   textMatches,
   treeFingerprint,
   uiTreeMatchInternals,
+  underKeyboard,
   type Selector,
 } from "../../src/utils/ui-tree-match";
 
@@ -40,6 +44,20 @@ const root = node({
       children: [],
     }),
   ],
+});
+
+describe("whitespace folding", () => {
+  const node = {
+    role: "AXStaticText",
+    frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    children: [],
+    label: "Hubert\u00A0Gancarczyk",
+  };
+  it("matches a label joined with a no-break space from a plain-space selector", () => {
+    expect(matchNode(node, { text: "Hubert Gancarczyk" })).toBe(true);
+    expect(textMatches(node.label, "hubert gancarczyk", "equals")).toBe(true);
+    expect(textMatches(node.label, "Hubert  Gancarczyk", "contains")).toBe(true);
+  });
 });
 
 describe("ui-tree-match", () => {
@@ -153,6 +171,36 @@ describe("ui-tree-match", () => {
     ).toEqual({ role: "AXButton" });
   });
 
+  it("deriveSelector takes no text from a toggle's state or a password's value", () => {
+    const frame = { x: 0, y: 0, width: 0.1, height: 0.1 };
+    // A switch's "0"/"1" flips with every tap: it names no element.
+    expect(deriveSelector(node({ role: "AXSwitch", value: "0", checked: false, frame }))).toEqual({
+      role: "AXSwitch",
+    });
+    expect(deriveSelector(node({ role: "AXSwitch", value: "1", checked: true, frame }))).toEqual({
+      role: "AXSwitch",
+    });
+    // Its label still names it.
+    expect(
+      deriveSelector(node({ role: "AXSwitch", label: "Wi-Fi", value: "1", checked: true, frame }))
+    ).toEqual({ text: "Wi-Fi" });
+    expect(
+      deriveSelector(node({ role: "AXTextField", value: "hunter2", password: true, frame }))
+    ).toEqual({ role: "AXTextField" });
+    expect(
+      deriveSelector(
+        node({ role: "AXTextField", label: "Password", value: "•••", password: true, frame })
+      )
+    ).toEqual({ text: "Password" });
+    // A value that is no state stays text: Chromium puts a button's own text there.
+    expect(deriveSelector(node({ role: "button", value: "Edit", frame }))).toEqual({
+      text: "Edit",
+    });
+    expect(deriveSelector(node({ role: "AXStaticText", value: "0", frame }))).toEqual({
+      text: "0",
+    });
+  });
+
   it("deriveSelector refuses invisible-only text (icon-font PUA glyphs, zero-width chars)", () => {
     const frame = { x: 0, y: 0, width: 0.1, height: 0.1 };
     // The QA repro: an expo-router tab-bar icon whose accessibility label is
@@ -234,17 +282,38 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
   });
 
-  it("a regex text condition does not read an iOS text field with no text as empty", () => {
-    // The text of a secure field is never read: one that holds "Rex" reads "",
-    // as an empty field without a placeholder does.
+  it("a regex text condition reads an empty iOS text field as an empty string", () => {
+    // The iOS tree carries typed text and an empty field's placeholder, so a
+    // field with neither is empty.
     const field = node({
       role: "AXTextField",
       identifier: "name",
       frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
     });
 
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(true);
+  });
+
+  it("a regex text condition does not read a password field with no text as empty", () => {
+    // The iOS tree drops a typed secret: a field holding one reads "".
+    const field = node({
+      role: "AXTextField",
+      identifier: "password",
+      password: true,
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
     expect(evaluateCondition("text", "^$", [field], "matches")).toBe(false);
-    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*hunter2)", [field], "matches")).toBe(false);
+  });
+
+  it("a regex text condition on a Mac app reads a field's value, never a password's", () => {
+    const field = node({
+      role: "AXTextField",
+      identifier: "name",
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
     // A Mac app's fields report their text, so there an empty field reads as empty,
     // but a password field never does: argent never reads its text.
     expect(evaluateCondition("text", "^$", [field], "matches", true)).toBe(true);
@@ -1693,6 +1762,225 @@ describe("after / next (sibling) scoping", () => {
     expect(picked.size).toBeGreaterThan(0);
     expect(ids(findAll(tree, { text: "leaf", next: { role: "AXAnchor" } }))).toEqual(
       ids([...picked])
+    );
+  });
+});
+
+describe("on-screen keyboard", () => {
+  // Portrait: two rows of keys (gap at y 0.82-0.86), a tip above the left keys,
+  // and a full-height input method container like Android's parentPanel.
+  const f = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h });
+  const key = (label: string, frame: ReturnType<typeof f>) =>
+    node({ label, keyboard: true, frame });
+  const panel = node({ identifier: "parentPanel", keyboard: true, frame: f(0, 0, 1, 1) });
+  const tip = key("See more features", f(0.02, 0.6, 0.28, 0.08));
+  const keyQ = key("q", f(0.02, 0.72, 0.2, 0.1));
+  const keyGo = key("go", f(0.5, 0.72, 0.2, 0.1));
+  const keyShift = key("shift", f(0.26, 0.72, 0.2, 0.1));
+  const keys = [panel, tip, keyQ, keyShift, keyGo, key("done", f(0.74, 0.72, 0.24, 0.1))];
+  const done = node({ role: "AXButton", label: "Done", frame: f(0.7, 0.05, 0.28, 0.1) });
+  const google = node({ label: "Google", frame: f(0, 0.15, 1, 0.08) });
+  const field = node({ identifier: "field", frame: f(0.1, 0.3, 0.8, 0.08) });
+  const search = node({ label: "Search", frame: f(0.6, 0.6, 0.2, 0.08) });
+  const icon = node({ identifier: "icon", frame: f(0.05, 0.75, 0.05, 0.04) });
+  const row = node({ label: "Hearing devices", frame: f(0, 0.8, 1, 0.1) });
+  const app = [done, google, field, search, icon, row];
+  const screen = node({
+    frame: f(0, 0, 1, 1),
+    children: [...keys, key("space", f(0.2, 0.86, 0.6, 0.12)), ...app],
+  });
+
+  it("selectorToNode takes an app element over any key, and a key when no app element matches", () => {
+    // The key "done" has the smaller frame, which used to win the tie.
+    expect(selectorToNode(screen, { text: "Done" })).toBe(done);
+    // The key "go" matches exactly, the row "Google" only as a substring.
+    expect(selectorToNode(screen, { text: "Go" })).toBe(google);
+    expect(selectorToNode(screen, { text: "shift" })).toBe(keyShift);
+  });
+
+  it("nodeAtPoint takes the key over a smaller app element behind it, and nothing between keys", () => {
+    expect(nodeAtPoint(screen, { x: 0.075, y: 0.77 })).toBe(keyQ);
+    expect(nodeAtPoint(screen, { x: 0.4, y: 0.84 })).toBeUndefined();
+  });
+
+  it("nodeAtPoint passes a point above the keys to the app through the full-height container", () => {
+    expect(nodeAtPoint(screen, { x: 0.5, y: 0.34 })).toBe(field);
+    expect(nodeAtPoint(screen, { x: 0.7, y: 0.64 })).toBe(search);
+  });
+
+  it("underKeyboard covers an app element centred under a key or between keys, never a key", () => {
+    expect(underKeyboard(screen, icon)).toBe(true);
+    expect(underKeyboard(screen, row)).toBe(true);
+    expect(underKeyboard(screen, keyQ)).toBe(false);
+    expect(underKeyboard(screen, field)).toBe(false);
+  });
+
+  it("lets a tip above the keys cover only its own column", () => {
+    expect(keyboardDrawsAt(screen, { x: 0.16, y: 0.64 })).toBe(true);
+    expect(underKeyboard(screen, search)).toBe(false);
+  });
+
+  it("passes a point above the keys to the app when the input method draws its own navigation bar", () => {
+    // Gboard with gesture navigation, as the helper dumps it on a Pixel (API 35):
+    // the containers start under the status bar and end at the navigation bar
+    // that the input method's window draws below them.
+    const imeWindow = [
+      node({ identifier: "android:id/parentPanel", keyboard: true, frame: f(0, 0.057, 1, 0.891) }),
+      node({ identifier: "android:id/inputArea", keyboard: true, frame: f(0, 0.057, 1, 0.891) }),
+      key("q", f(0.005, 0.689, 0.099, 0.064)),
+      key("Search", f(0.846, 0.882, 0.149, 0.066)),
+      node({
+        identifier: "android:id/input_method_navigation_bar_view",
+        keyboard: true,
+        frame: f(0, 0.948, 1, 0.052),
+      }),
+      node({
+        identifier: "android:id/input_method_nav_back",
+        label: "Back",
+        keyboard: true,
+        frame: f(0.019, 0.948, 0.17, 0.052),
+      }),
+    ];
+    const back = node({ role: "Button", label: "Back", frame: f(0, 0.057, 0.117, 0.079) });
+    const list = node({ label: "Battery", frame: f(0.02, 0.7, 0.06, 0.04) });
+    const gesture = node({ frame: f(0, 0, 1, 1), children: [...imeWindow, back, list] });
+    expect(underKeyboard(gesture, back)).toBe(false);
+    expect(nodeAtPoint(gesture, { x: 0.05, y: 0.1 })).toBe(back);
+    expect(underKeyboard(gesture, list)).toBe(true);
+    // The navigation bar covers the app below the keys.
+    expect(keyboardDrawsAt(gesture, { x: 0.5, y: 0.97 })).toBe(true);
+  });
+});
+
+// An Android row that took its children's text (`borrowedLabel`), as the e2e
+// runner's Android tree emits it: the row, then the title and summary inside it.
+describe("a leaf with a borrowed label", () => {
+  const row = (y: number, title: string, summary: string, borrowed = true): DescribeNode[] => [
+    node({
+      role: "LinearLayout",
+      label: `${title} / ${summary}`,
+      ...(borrowed ? { borrowedLabel: true } : {}),
+      clickable: true,
+      frame: { x: 0, y, width: 1, height: 0.1 },
+    }),
+    node({
+      role: "StaticText",
+      label: title,
+      frame: { x: 0.2, y: y + 0.02, width: 0.4, height: 0.03 },
+    }),
+    node({
+      role: "StaticText",
+      label: summary,
+      frame: { x: 0.2, y: y + 0.05, width: 0.4, height: 0.03 },
+    }),
+  ];
+  const screen = (...children: DescribeNode[]) =>
+    node({ role: "Screen", frame: { x: 0, y: 0, width: 1, height: 1 }, children });
+  const rows = (borrowed = true) =>
+    screen(
+      ...row(0.2, "Network & internet", "Mobile, Wi-Fi, hotspot", borrowed),
+      ...row(0.3, "Connected devices", "Bluetooth, pairing", borrowed),
+      node({ role: "Switch", frame: { x: 0.85, y: 0.32, width: 0.1, height: 0.05 } })
+    );
+
+  it("gives way to the title inside it in a text check", () => {
+    const matches = findAll(rows(), { text: "Network & internet" });
+    expect(matches).toHaveLength(2);
+    expect(textCheckTarget(matches, false)?.role).toBe("StaticText");
+    expect(evaluateCondition("text", "Network & internet", matches, "equals")).toBe(true);
+    // A row whose label is its own is read first: it starts above its title.
+    const own = findAll(rows(false), { text: "Network & internet" });
+    expect(textCheckTarget(own, false)?.role).toBe("LinearLayout");
+    expect(evaluateCondition("text", "Network & internet", own, "equals")).toBe(false);
+  });
+
+  it("is read when no match with a label of its own lies inside it", () => {
+    const tree = screen(
+      node({
+        role: "StaticText",
+        label: "Network & internet",
+        frame: { x: 0.2, y: 0.9, width: 0.4, height: 0.03 },
+      }),
+      ...row(0.2, "Network & internet", "Mobile, Wi-Fi, hotspot").slice(0, 1)
+    );
+    const matches = findAll(tree, { text: "Network & internet" });
+    expect(textCheckTarget(matches, false)?.role).toBe("LinearLayout");
+    expect(evaluateCondition("text", "hotspot", matches)).toBe(true);
+  });
+
+  it("counts `next` from the title inside it, not from the row", () => {
+    expect(
+      findAll(rows(), { role: "StaticText", next: { text: "Network & internet" } }).map(
+        (n) => n.label
+      )
+    ).toEqual(["Mobile, Wi-Fi, hotspot"]);
+  });
+
+  it("counts `after` from the title inside it, not from the tile", () => {
+    // Two tiles side by side: the left tile's title sits at its bottom, the
+    // right tile's at its top. The right title is in the left TILE's band but
+    // above the left TITLE.
+    const tree = screen(
+      node({
+        role: "LinearLayout",
+        label: "Photos",
+        borrowedLabel: true,
+        clickable: true,
+        frame: { x: 0, y: 0.2, width: 0.5, height: 0.2 },
+      }),
+      node({
+        role: "StaticText",
+        label: "Photos",
+        frame: { x: 0.05, y: 0.35, width: 0.4, height: 0.03 },
+      }),
+      node({
+        role: "LinearLayout",
+        label: "Videos",
+        borrowedLabel: true,
+        clickable: true,
+        frame: { x: 0.5, y: 0.2, width: 0.5, height: 0.2 },
+      }),
+      node({
+        role: "StaticText",
+        label: "Videos",
+        frame: { x: 0.55, y: 0.21, width: 0.4, height: 0.03 },
+      })
+    );
+    expect(findAll(tree, { role: "StaticText", after: { text: "Photos" } })).toEqual([]);
+  });
+
+  it("gives way to a match inside it in a field-less pick only when kept for its tap", () => {
+    const wrapped = (mark: Partial<DescribeNode>) =>
+      screen(
+        node({ role: "ViewGroup", identifier: "form", frame: { x: 0, y: 0, width: 1, height: 1 } }),
+        node({
+          role: "ViewGroup",
+          clickable: true,
+          ...mark,
+          frame: { x: 0, y: 0.1, width: 1, height: 0.5 },
+        }),
+        node({
+          role: "StaticText",
+          label: "Hi",
+          frame: { x: 0.1, y: 0.3, width: 0.3, height: 0.03 },
+        })
+      );
+    const anyInForm: Selector = { within: { identifier: "form" } };
+    expect(selectorToNode(wrapped({ tapOnly: true }), anyInForm)?.label).toBe("Hi");
+    // The text check reads the text, not the wrapper.
+    const matches = findAll(wrapped({ tapOnly: true }), anyInForm);
+    expect(textCheckTarget(matches, false)?.label).toBe("Hi");
+    // A view with a mark of its own stays first in reading order.
+    expect(selectorToNode(wrapped({ identifier: "card" }), anyInForm)?.identifier).toBe("card");
+    // A borrowed label alone does not change the field-less pick.
+    expect(selectorToNode(wrapped({ label: "Hi", borrowedLabel: true }), anyInForm)?.role).toBe(
+      "ViewGroup"
+    );
+  });
+
+  it("stays a `within` scope", () => {
+    expect(findAll(rows(), { role: "Switch", within: { text: "Connected devices" } })).toHaveLength(
+      1
     );
   });
 });

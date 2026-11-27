@@ -41,7 +41,7 @@ When the agent has recorded the last step, the agent finishes the recording. Arg
 
 `argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls of the agent to a tool-server. Both are a link. Over a link, Argent writes the e2e test file into the project on the computer of the agent. This is also true when the tool-server runs on the same computer, or when its computer has a directory at the same path.
 
-Argent makes a recorded tap portable. When the tapped element has a stable text or identifier, Argent records the element instead of the coordinates. During a replay, Argent finds the element on the screen again. When the element has no stable text or identifier, Argent records the coordinates and adds a warning.
+Argent makes a recorded tap portable. When the tapped element has a stable text or identifier, Argent records the element instead of the coordinates. When the same text appears more than once on the screen, Argent also records a container or a neighbor that makes the element unique. During a replay, Argent finds the element on the screen again. When no text, identifier, container or neighbor identifies the element, Argent records the coordinates and adds a warning.
 
 <a id="the-flow-file" />
 
@@ -69,6 +69,8 @@ A script can return a value, such as the ID of a user it creates. Later steps ca
 Use shutdown steps to clean up data the e2e test creates, such as a test user. Argent runs them after the main steps pass or fail. Cancelling the run skips any remaining cleanup. Ask the agent to record cleanup after the main steps. See [Shutdown](/docs/reference/e2e-yaml#shutdown).
 
 The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
+
+The file also states the version of its format. On an iOS simulator, Argent replays an e2e test from an older Argent release on the view hierarchy of the app, as that release did.
 
 <a id="replaying-a-flow" />
 
@@ -106,7 +108,7 @@ The e2e tests in a directory without a `suite.config.yaml` file are independent.
 - An e2e test does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the e2e test with a launch of the app or with a step that restores a known state.
 - The agent records a launch step for iOS, Android, Vega and [Mac](/docs/features/mac-apps) apps. For a Chromium or Electron app, add the launch step to the file by hand.
 - On Android, an e2e test resolves each selector with the Argent Android helper, an instrumentation app that Argent installs over `adb`. Argent installs the helper again when the device reports that the helper is absent, for example after a wipe. When the helper still does not start, the error message contains the error that the device reports.
-- A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
+- On an iOS simulator, a replay needs the app on the simulator and a simulator that Argent booted. On Android, a replay needs the Argent Android helper. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on. On an iOS simulator, the reason of the failed step tells you how to fix the problem.
 - Native capture can miss startup requests. Add a step that sends the request again before checking the log. Android and local iOS launch warnings can show whether capture followed the app. Stop native capture before replay if you need to measure timings without it.
 - Over a link, the agent cannot record a local script, and a replay rejects an e2e test with a local script. Record and replay such an e2e test without a link.
 - Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different e2e test when that e2e test fails. In both cases, Argent records no step.
