@@ -255,22 +255,23 @@ On a physical iPhone, `describe` includes a web sign-in sheet or an in-app Safar
 
 ## Interacting
 
-| Tool                     | Description                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------- |
-| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                    |
-| `gesture-swipe`          | Smooth swipe or drag between two points                                            |
-| `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app  |
-| `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                  |
-| `gesture-pinch`          | Pinch to zoom around a center point                                                |
-| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content                             |
-| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                    |
-| `keyboard`               | Type text or press special keys                                                    |
-| `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app |
-| `run-sequence`           | Execute several interaction steps in a single call                                 |
-| `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
-| `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
+| Tool                     | Description                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                     |
+| `gesture-swipe`          | Smooth swipe or drag between two points                                             |
+| `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app   |
+| `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                   |
+| `gesture-hover`          | Move the pointer to a point in a Mac app, or out of its window. See [Hover](#hover) |
+| `gesture-pinch`          | Pinch to zoom around a center point                                                 |
+| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content                              |
+| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                     |
+| `keyboard`               | Type text or press special keys                                                     |
+| `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app  |
+| `run-sequence`           | Execute several interaction steps in a single call                                  |
+| `screen-recording-start` | Start recording the screen to an h264 mp4                                           |
+| `screen-recording-stop`  | Stop the recording and retrieve the video                                           |
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-hover`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. On a local iOS simulator, `gesture-custom` accepts `edge` for a system gesture. Use `top`, `right`, `bottom`, or `left` in upright screen coordinates. Send one finger with `Down`, optional `Move` events, and `Up`. After a simulator-server restart, the first `Down` can take up to 35 seconds. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
 In `run-sequence`, Argent waits for the element tree to stop changing after some steps:
 
@@ -673,9 +674,10 @@ Coordinates use the app window, including its title bar, with the origin at the 
 | `gesture-tap`                           | Click, double-click (`clickCount: 2`), open a context menu (`button: "right"`), or [hold keys](#clicks-with-modifier-keys). |
 | `gesture-drag`                          | Drags with the left button. Equal start and end points produce a long press.                                                |
 | `gesture-scroll`                        | Scrolls the content under the point, like a mouse wheel. `durationMs` has no effect.                                        |
+| `gesture-hover`                         | Moves the pointer over a point, or out of the window. See [Hover](#hover).                                                  |
 | `keyboard`                              | Types Unicode text or sends keys and shortcuts, such as `command+a` or `shift+tab`.                                         |
 | `paste`                                 | Inserts text into the focused editable control. Leaves the clipboard unchanged and does not invoke app paste handlers.      |
-| `run-sequence`                          | Runs tap, scroll, drag, keyboard, paste, and await steps.                                                                   |
+| `run-sequence`                          | Runs tap, scroll, drag, hover, keyboard, paste, and await steps.                                                            |
 | Native view tools                       | Require the device's `bundleId`. Their `x` and `y` use points, rather than fractions of the window.                         |
 | `native-network-logs`                   | Lists native HTTP requests. See [native capture on iOS and Mac apps](#native-network-capture-on-ios-and-mac-apps).          |
 
@@ -684,6 +686,32 @@ Coordinates use the app window, including its title bar, with the origin at the 
 On a Mac app, pass `modifiers` to `gesture-tap` as a list of keys from `control`, `option`, `shift`, and `command`. For example, `["command"]` can toggle a row in a selection. The effect depends on the control. The keys are held for the entire gesture, including both clicks of a double-click. An empty list leaves the click unmodified. Other targets reject nonempty lists.
 
 `MACOS_APP_LIBRARY_OUTDATED` means the app's loaded Argent library lacks modifier-click support. The tool stops before clicking. Run `restart-app` to reload the library, then retry. If the error persists, use an Argent build that includes modifier-click support.
+
+#### Hover
+
+`gesture-hover` moves the pointer of Argent in a Mac app. Use it to check hover effects, such as a highlighted row or a button that shows only on hover. Other targets reject the tool.
+
+| Parameter    | Description                                                                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`       | Mac app device ID.                                                                                                                                          |
+| `x`, `y`     | The point, as fractions from 0 to 1 of the area that `describe` reports. Required unless `leave` is `true`.                                                 |
+| `durationMs` | The time in milliseconds that the pointer takes to move from its last position, from 0 to 2000. The default is 150. With 0, the pointer jumps to the point. |
+| `leave`      | `true` moves the pointer out of the window. Then no element shows its hover state. Do not send `x`, `y`, or `durationMs` with it.                           |
+
+The pointer moves along a path, as a real mouse does. Thus a menu that reacts to the route of the pointer behaves as with a real mouse. After the move, Argent waits a short time. Then the result contains the screenshot and the element tree, as for `gesture-tap`.
+
+Argent has one pointer in the app. The pointer stays at the point of the last `gesture-hover`, `gesture-tap`, `gesture-drag`, or `gesture-scroll`. The app shows the hover state of the element under the pointer.
+
+- To hover over a different element, send `gesture-hover` with its point. The element at the old point loses its hover state.
+- To remove all hover states, send `gesture-hover` with `leave: true`.
+
+`gesture-tap`, `gesture-drag`, and `gesture-scroll` move the pointer before they click, drag, or scroll. Thus the app sees the pointer arrive, as with a real mouse. To use a control that shows only on hover, such as the delete button of a row, hover over the row, then tap the control.
+
+While Argent holds the pointer, the app ignores the movement of the real mouse over the window. Thus the movement of the user does not end the hover of Argent. The clicks, scrolls, and keys of the user always work. The first of them gives the pointer back to the user. Then `describe` contains a hint that the user took the pointer back. The element tree of a later result contains it too, until the next pointer action of Argent. After a tap or a drag, the hint does not appear.
+
+Tooltips do not appear on hover.
+
+`MACOS_APP_LIBRARY_OUTDATED` means that the app has an older Argent library that cannot hover. Run `restart-app` to load the current library, then retry.
 
 #### Screenshots and scrolling
 
@@ -938,7 +966,7 @@ See [Mac app limits](/docs/features/mac-apps#limits) for unsupported app types a
 | Menus                     | Context and pop-up menus can bring the window forward temporarily. Only one menu can stay open on the Mac; another click can close it.                                                                                         |
 | Title-bar document menu   | Unavailable while the app runs in the background.                                                                                                                                                                              |
 | Drag and drop             | Cannot cross app boundaries or transfer file promises.                                                                                                                                                                         |
-| Gestures                  | Use `gesture-drag` and `gesture-scroll`. Hover, `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                                                              |
+| Gestures                  | Use `gesture-drag`, `gesture-scroll`, and `gesture-hover`. Tooltips do not appear on hover. `gesture-swipe`, custom touch sequences, pinch, and rotate tools are unsupported.                                                  |
 | Keyboard layout           | Mac Catalyst uses the current keyboard layout for the key codes of typed characters. Other Mac apps receive US-layout codes.                                                                                                   |
 | SwiftUI disclosure groups | Click the chevron. Clicking the group's center may do nothing.                                                                                                                                                                 |
 | SwiftUI focused commands  | Commands using `@FocusedValue` can target the wrong window after a second window opens. Restart the app to recover.                                                                                                            |

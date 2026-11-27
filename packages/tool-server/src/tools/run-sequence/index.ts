@@ -31,6 +31,7 @@ export const ALLOWED_TOOLS = new Set([
   "gesture-swipe",
   "gesture-scroll",
   "gesture-drag",
+  "gesture-hover",
   "gesture-custom",
   "gesture-pinch",
   "gesture-rotate",
@@ -181,7 +182,8 @@ Allowed tools, args (? = optional) and targets. Positions and distances are 0–
   gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-scroll: x, y, deltaX?, deltaY? (positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?  [ios/android]
+<flag:macos-apps>  gesture-hover: x, y, durationMs? (or leave: true alone)  [macos]
+</flag:macos-apps>  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?  [ios/android]
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]

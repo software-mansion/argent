@@ -202,7 +202,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     // A Mac app has no touch gestures at all.
     header.push(
       "Coordinates: normalized [0,1] app window (title bar + overhanging sheets/alerts/menus; x,y,w,h), not pixels. " +
-        "Mouse input only: pass to gesture-tap / gesture-drag / gesture-scroll; tap centre = (x+w/2, y+h/2). " +
+        "Mouse input only: pass to gesture-tap / gesture-drag / gesture-scroll / gesture-hover; tap centre = (x+w/2, y+h/2). " +
         "Menu bar not in tree: use menu-bar."
     );
   } else {

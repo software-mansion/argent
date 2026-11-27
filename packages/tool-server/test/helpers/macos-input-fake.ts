@@ -67,6 +67,9 @@ export function fakeMacosApp(handlers: Handlers = {}) {
     bundleId: MAC_BUNDLE_ID,
     call: vi.fn(call),
     connect: vi.fn(async () => connection),
+    handshake: vi.fn(() =>
+      open ? { bundleId: MAC_BUNDLE_ID, pid: MAC_PID, platform: "macos", protocol: 1 } : null
+    ),
   } as unknown as MacosAppApi;
   return {
     app,
