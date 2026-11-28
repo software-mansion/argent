@@ -111,6 +111,9 @@ describe("tool interaction messages", () => {
     expect(
       completed({ params: { udid: "d", text: "hi" }, result: { verified: false, warning: "w" } })
     ).toBe("Entered text");
+    expect(
+      completed({ params: { udid: "d", text: "hi", clear: true }, result: { verified: false } })
+    ).toBe("Cleared field and entered text (text did not land)");
   });
 
   it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {

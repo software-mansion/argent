@@ -15,7 +15,7 @@ You can opt out at any time:
 argent telemetry disable   # check status with: argent telemetry status
 ```
 
-This writes `telemetry.enabled: false` to `~/.argent/config.json` and applies to every project on this machine.
+This writes `telemetry.enabled: false` to `~/.argent/config.json` and applies to every project on this machine. The opt-out also applies to an install that sets [`ARGENT_HOME_DIR`](/docs/reference/configuration#argent-home). With `ARGENT_HOME_DIR` set, the command writes `$ARGENT_HOME_DIR/config.json` instead, and the opt-out applies only to that directory.
 
 ## Opt out for a whole repository
 

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import semver from "semver";
-import { getConfigValueByKey } from "@argent/configuration-core";
+import { isAutoUpdateEnabled } from "@argent/configuration-core";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
@@ -515,7 +515,7 @@ export async function update(args: string[]): Promise<void> {
         !globallyInstalled ||
         !globalRoot ||
         fs.realpathSync(globalRoot) !== projectRoot ||
-        getConfigValueByKey("autoUpdate.enabled") !== true ||
+        !isAutoUpdateEnabled() ||
         !ownsGlobalInstall(pm, projectRoot)
       ) {
         spinner.stop("Could not confirm an automatic update for this installation.");

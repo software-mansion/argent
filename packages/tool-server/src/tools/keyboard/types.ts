@@ -6,12 +6,18 @@ export interface KeyboardParams {
    * the two. Not valid on TV targets.
    */
   key?: string;
+  /** Clear the focused field before typing `text` (or alone). Rejected alongside `key` in ./index.ts. */
+  clear?: boolean;
+  /** Number of times to press `key` (1–100, default 1). Rejected without `key` in ./index.ts. */
+  repeat?: number;
   delayMs?: number;
 }
 
 export interface KeyboardResult {
   typed: string;
   keys: number;
+  /** Set when `clear: true` emptied the focused field. */
+  cleared?: true;
   /**
    * Physical iOS only: the target app was backgrounded and the runner
    * re-fronted it to deliver this input, so the foreground screen changed as

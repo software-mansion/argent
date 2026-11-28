@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
 import { assertTypeableAndroidText, injectAndroidNamedKey } from "../../../utils/android-input";
+import { fillAndroid } from "../../fill/android";
 import type { KeyboardParams, KeyboardResult, KeyboardVerification } from "../types";
 import { typeAndroidTextVerified } from "./android-verify";
 import { typeTv } from "./tv";
@@ -15,23 +16,31 @@ async function typeAndroidPhone(
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
+  // Before clearing the field or resolving the read-back's helper (which may
+  // `adb install` it), so un-typeable text fails with nothing changed.
+  if (params.text) assertTypeableAndroidText(params.text);
+  if (params.clear) await fillAndroid(registry, device, "");
   let keysPressed = 0;
   let verification: KeyboardVerification = {};
   // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
   // branch runs and there is no ordering to get right.
   if (params.text) {
-    // Before the read-back, which may `adb install` its helper.
-    assertTypeableAndroidText(params.text);
     verification = await typeAndroidTextVerified(registry, device, params.text);
     // Non-ASCII is rejected above, so `.length` is the codepoint count
     // (matching the tv / simulator-server backends).
     keysPressed += params.text.length;
   }
   if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
-    keysPressed++;
+    const count = params.repeat ?? 1;
+    await injectAndroidNamedKey(device.id, params.key, count);
+    keysPressed += count;
   }
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed, ...verification };
+  return {
+    typed: params.text ?? params.key ?? "",
+    keys: keysPressed,
+    ...(params.clear ? { cleared: true as const } : {}),
+    ...verification,
+  };
 }
 
 // An Android TV emulator classifies as platform "android" by serial shape, and TV

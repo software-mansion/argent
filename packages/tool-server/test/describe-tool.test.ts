@@ -163,7 +163,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.description).toContain("ROOT  AXGroup");
+    expect(result.description).toContain("Source: ax-service | Mode: flat");
     expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
@@ -206,8 +206,11 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.description).toContain("ROOT  AXGroup");
+    expect(result.description).toContain("Source: ax-service | Mode: flat");
     expect(elementLineCount(result.description)).toBe(0);
+
+    const raw = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", raw: true });
+    expect(raw.description).toContain("ROOT AXGroup (0,0,1,1)");
   });
 
   it("uses bundleId for native-devtools fallback when AX returns empty", async () => {

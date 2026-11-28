@@ -197,6 +197,26 @@ describe("resolveTelemetryConsent", () => {
     expect(p.select).not.toHaveBeenCalled();
   });
 
+  it("does not prompt a fresh ARGENT_HOME_DIR when ~/.argent opted out", async () => {
+    const savedArgentHome = process.env.ARGENT_HOME_DIR;
+    try {
+      fs.mkdirSync(path.join(tmp, ".argent"));
+      fs.writeFileSync(
+        path.join(tmp, ".argent", "config.json"),
+        JSON.stringify({ telemetry: { enabled: false } })
+      );
+      process.env.ARGENT_HOME_DIR = path.join(tmp, "moved-home");
+      vi.mocked(p.select).mockResolvedValue("enabled");
+      const result = await resolveTelemetryConsent({ nonInteractive: false, disableFlag: false });
+      expect(result).toEqual({ kind: "skipped" });
+      expect(p.select).not.toHaveBeenCalled();
+      expect(isEnabled()).toBe(false);
+    } finally {
+      if (savedArgentHome === undefined) delete process.env.ARGENT_HOME_DIR;
+      else process.env.ARGENT_HOME_DIR = savedArgentHome;
+    }
+  });
+
   it("an interactive Enabled choice is effective immediately but only persists on commit", async () => {
     vi.mocked(p.select).mockResolvedValue("enabled");
     const result = await resolveTelemetryConsent({ nonInteractive: false, disableFlag: false });

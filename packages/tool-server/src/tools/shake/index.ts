@@ -26,11 +26,9 @@ const capability: ToolCapability = {
 
 export const shakeTool: ToolDefinition<ShakeParams, ShakeResult> = {
   id: "shake",
-  description: `Send a shake gesture to the device (iOS simulator or Android emulator).
-Use when you need to trigger anything bound to the shake gesture: iOS's "Undo Typing" / "Redo Typing" prompt in a text field, React Native's developer menu in a debug build, or an app's own shake-to-report handler.
-iOS delivers one discrete shake per gesture (the same motion event a physical device raises). Android has no OS-level shake event: the accelerometer is driven through a burst of hard direction changes so app-side detectors fire, and the resting orientation is restored afterwards.
-Returns { shaken: true, count }.
-Works on local and remote (sim-remote) iOS simulators. Fails on a physical device or a TV: only phone/tablet simulators and emulators are supported.`,
+  description: `Send a shake gesture to an iOS simulator or Android emulator.
+Use when triggering shake-bound actions (iOS Undo/Redo Typing, React Native dev menu, shake-to-report).
+Returns \`{ shaken: true, count }\`. Fails on physical devices or TVs.`,
   zodSchema: shakeZodSchema,
   searchHint: "shake motion accelerometer undo typing dev menu gesture",
   interaction: {

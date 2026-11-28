@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { killStaleRunnersForDevice } from "../src/utils/ios-device/runner-sweep";
 
 const STALE_UDID = "00008120-000000000000001E";
@@ -69,9 +69,14 @@ function sweep(psLines: string[]): Promise<number> {
   return killStaleRunnersForDevice(STALE_UDID, async () => psLines.join("\n"));
 }
 
+beforeEach(() => {
+  vi.stubEnv("ARGENT_HOME_DIR", "/Users/dev/.argent");
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe("killStaleRunnersForDevice", () => {
@@ -144,6 +149,22 @@ describe("killStaleRunnersForDevice", () => {
         }),
       ])
     ).toBe(0);
+    expect(table.kills).toEqual([]);
+  });
+
+  it("spares a runner of a home whose path ends with this home's path", async () => {
+    vi.stubEnv("ARGENT_HOME_DIR", "/dev/.argent");
+    const table = fakeProcessTable({});
+
+    expect(await sweep([runnerPsLine({ pid: 101, ppid: 1 })])).toBe(0);
+    expect(table.kills).toEqual([]);
+  });
+
+  it("spares a runner from the cache of another Argent home", async () => {
+    vi.stubEnv("ARGENT_HOME_DIR", "/Users/dev/ci-argent");
+    const table = fakeProcessTable({});
+
+    expect(await sweep([runnerPsLine({ pid: 101, ppid: 1 })])).toBe(0);
     expect(table.kills).toEqual([]);
   });
 

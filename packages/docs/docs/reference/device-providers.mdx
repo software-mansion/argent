@@ -13,7 +13,7 @@ The application that offers the device is a **provider**. A provider is usually 
 
 ## How a provider offers a device
 
-A provider writes one JSON file into `~/.argent/providers/`. The file lists the devices and the mechanisms that Argent may use on each device.
+A provider writes one JSON file into `~/.argent/providers/`. With [`ARGENT_HOME_DIR`](/docs/reference/configuration#argent-home), Argent reads `$ARGENT_HOME_DIR/providers/` instead. The file lists the devices and the mechanisms that Argent may use on each device.
 
 ```jsonc
 {
