@@ -27,6 +27,7 @@ import {
 } from "./device-info";
 import { trackedMacosAppsFile, type MacosAppKind } from "./macos-app-kind";
 import { PS_BIN } from "./vega-process";
+import { argentHomeDir } from "@argent/configuration-core";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +88,7 @@ export function assertLaunchTargetsDevice(bundleId: string, device: DeviceInfo):
 
 /** `~/.argent/macos`: listening sockets, app logs and the staged library. Private to the user (0700). */
 function macosArgentDir(): string {
-  return path.join(os.homedir(), ".argent", "macos");
+  return path.join(argentHomeDir(), "macos");
 }
 
 export function macosAppLogPath(bundleId: string): string {

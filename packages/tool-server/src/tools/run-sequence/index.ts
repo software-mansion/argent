@@ -1,11 +1,26 @@
 import { z } from "zod";
 
-import type { Registry, ToolCapability, ToolContext, ToolDefinition } from "@argent/registry";
+import type {
+  DeviceInfo,
+  Registry,
+  ToolCapability,
+  ToolContext,
+  ToolDefinition,
+} from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
-import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { sleepOrAbort, settleWithin, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { treeFingerprint } from "../../utils/ui-tree-match";
+import type { DescribeNode, DescribeTreeData } from "../describe/contract";
+import { describeIos } from "../describe/platforms/ios";
+import { queryAndroidFullHierarchy } from "../flows/flow-android-tree";
+import { queryChromiumTree } from "../flows/flow-chromium-tree";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
-import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import {
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
+  AWAIT_UI_ELEMENT_TOOL_ID,
+  isUnmetWaitResult,
+} from "../../utils/wait-result";
 import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
@@ -34,7 +49,15 @@ export const ALLOWED_TOOLS = new Set([
   "fold",
   "tv-remote",
   AWAIT_UI_ELEMENT_TOOL_ID,
+  // Returns its match or near misses, never an image: after network-capture-start, an
+  // action and its wait run as one sequence, and an unmet wait stops it.
+  AWAIT_NETWORK_REQUEST_TOOL_ID,
 ]);
+
+const SETTLE_TIMEOUT_MS = 1000;
+const SETTLE_POLL_MS = 50;
+const TOOLS_THAT_SETTLE = new Set(["gesture-tap", "button", AWAIT_UI_ELEMENT_TOOL_ID]);
+const KEYS_THAT_SETTLE = new Set(["enter", "return", "escape", "esc"]);
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
 
@@ -63,61 +86,106 @@ const capability: ToolCapability = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id), shared across all steps."
-    ),
+  udid: z.string().describe("Target device id from `list-devices`, shared across all steps."),
   steps: z
     .array(
       z.object({
-        tool: z.string().describe("Tool name: one of the allowed tools listed in the description."),
+        tool: z.string().describe("Allowed tool name (see description)."),
         args: z
           .record(z.string(), z.unknown())
-          .describe("Tool arguments (excluding udid, which is injected automatically)"),
+          .describe("Tool arguments (omit `udid`, injected automatically)."),
         delayMs: z
           .number()
           .optional()
           .describe(
-            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
+            `Extra pause in ms after step settle (default ${DEFAULT_INTER_STEP_DELAY_MS}).`
           ),
       })
     )
     .min(1)
-    .describe("Ordered list of interaction steps to execute sequentially"),
+    .describe("Ordered steps to execute."),
+  settle: z
+    .boolean()
+    .optional()
+    .describe(
+      `Wait up to ${SETTLE_TIMEOUT_MS}ms for tree settle between screen-changing steps (default true).`
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
+type Step = Params["steps"][number];
+type ReadTree = () => Promise<DescribeTreeData>;
+
+function mayStartTransition(step: Step): boolean {
+  if (TOOLS_THAT_SETTLE.has(step.tool)) return true;
+  if (step.tool !== "keyboard") return false;
+  const { key, text } = step.args;
+  if (typeof key === "string") return KEYS_THAT_SETTLE.has(key.toLowerCase());
+  return typeof text === "string" && /[\r\n]/.test(text);
+}
+
+function repeatsTap(step: Step, next: Step): boolean {
+  return (
+    step.tool === "gesture-tap" &&
+    next.tool === "gesture-tap" &&
+    step.args.x === next.args.x &&
+    step.args.y === next.args.y
+  );
+}
+
+function settleTreeReader(registry: Registry, device: DeviceInfo): ReadTree | undefined {
+  if (device.platform === "ios" && device.kind === "simulator") {
+    return () => describeIos(registry, device, {});
+  }
+  if (device.platform === "android") {
+    return () => queryAndroidFullHierarchy(registry, device, { waitForIdleMs: 0 });
+  }
+  if (device.platform === "chromium") return () => queryChromiumTree(registry, device);
+  return undefined;
+}
+
+function settleFingerprint(root: DescribeNode): string {
+  return `${treeFingerprint(root)}\nfocus:${treeFingerprint(root, (node) => node.focused === true)}`;
+}
+
+async function waitForStillTree(readTree: ReadTree, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+  let previous: string | undefined;
+  while (Date.now() < deadline) {
+    const read = await settleWithin(readTree(), deadline - Date.now(), signal);
+    if (read.type !== "value") return;
+    const fingerprint = settleFingerprint(read.value.tree);
+    if (fingerprint === previous) return;
+    previous = fingerprint;
+    if (!(await sleepOrAbort(SETTLE_POLL_MS, signal))) return;
+  }
+}
 
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute several device interaction steps in one call.
-Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
-Steps run in order. If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element that returns success=false), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
-One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
-On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
+    description: `Run multiple interaction steps in one call, with one screenshot + tree captured after the last step.
+Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Stops at the first error or unmet wait (\`success=false\`) and returns \`{ completed, total, steps }\` normally; compare \`completed\` with \`total\` to check for partial failure. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
 
-Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
-  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right" (macos), modifiers? array of "control"|"option"|"shift"|"command" (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+Allowed tools (coords are [0,1] screen fractions; ? = optional):
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button?, modifiers?</flag:macos-apps>
+  gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?
+  gesture-scroll: x, y, deltaX?, deltaY?, durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge? (local iOS simulator system gesture)  [ios/android]
-  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
-  button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
-  keyboard: text? or key? (one per step; key e.g. "enter"), delayMs?  [all; Apple TV / Android TV: text only<flag:harmonyos>; harmony keys: enter/return, backspace/delete, space, arrow-left, arrow-right</flag:harmonyos>]
-    text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file (over a forward-secrets link, the client's first), so a credential never enters your context
-  paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
-  rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
-  shake: count?  [ios sim/android emu]
-  fold: posture? "closed"|"half-open"|"open", or angle? 0–180, exactly one (later steps land on the new panel, whose coordinates differ)  [foldable ios sim/android emu]
-  tv-remote: button (one button, or an array run as a path in one step), repeat?  [apple tv/android tv/vega]
-    buttons: up/down/left/right/select/back/home/menu/playPause; rewind/fastForward/next/previous/volumeUp/volumeDown/mute on Android TV and Vega only
-  await-ui-element: condition: "exists"|"visible"|"hidden"|"text", selector: { text?, identifier?, role? }, expectedText? (for "text"), textMatch?, timeoutMs?, pollIntervalMs?  [all]`,
+  gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?, edge?
+  gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?
+  gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX+radiusY), durationMs?
+  button: button ("home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton")<flag:harmonyos>  [harmony: home/back/power]</flag:harmonyos>
+  keyboard: text? or key? (one per step), clear?, repeat?, delayMs?
+  paste: text (real paste flows only)
+  rotate: orientation ("Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown")
+  shake: count?
+  fold: posture? ("closed"|"half-open"|"open") or angle? (0–180)
+  tv-remote: button (string or string[]), repeat?
+  await-ui-element: condition ("exists"|"visible"|"hidden"|"text"), selector, expectedText?, textMatch?, timeoutMs?, pollIntervalMs?
+  await-network-request: bundleId, url, plus optional args (start capture first)`,
     zodSchema,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
@@ -137,6 +205,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
     async execute(_services, params, ctx?: ToolContext) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
+      const readSettleTree =
+        params.settle === false ? undefined : settleTreeReader(registry, device);
       const results: StepResult[] = [];
       // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
       // drops the MCP adapter's own fetch timeout — so honour the signal between
@@ -144,7 +214,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
       // sequence at the device.
       const signal = ctx?.signal;
 
-      for (const step of steps) {
+      for (const [index, step] of steps.entries()) {
         if (signal?.aborted) break;
 
         if (!ALLOWED_TOOLS.has(step.tool)) {
@@ -176,8 +246,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
-          if (isUnmetUiWaitResult(step.tool, result)) {
-            results.push({ tool: step.tool, error: unmetWaitReason(result) });
+          if (isUnmetWaitResult(step.tool, result)) {
+            results.push({ tool: step.tool, error: unmetWaitReason(step.tool, result) });
             break;
           }
           results.push({ tool: step.tool, result });
@@ -194,6 +264,17 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
             error: reframed ?? (err instanceof Error ? err.message : String(err)),
           });
           break;
+        }
+
+        const next = steps[index + 1];
+        if (
+          readSettleTree &&
+          next &&
+          next.tool !== AWAIT_UI_ELEMENT_TOOL_ID &&
+          !repeatsTap(step, next) &&
+          mayStartTransition(step)
+        ) {
+          await waitForStillTree(readSettleTree, signal);
         }
 
         const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;

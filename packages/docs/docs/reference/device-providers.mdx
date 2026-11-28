@@ -13,7 +13,7 @@ The application that offers the device is a **provider**. A provider is usually 
 
 ## How a provider offers a device
 
-A provider writes one JSON file into `~/.argent/providers/`. The file lists the devices and the mechanisms that Argent may use on each device.
+A provider writes one JSON file into `~/.argent/providers/`. With [`ARGENT_HOME_DIR`](/docs/reference/configuration#argent-home), Argent reads `$ARGENT_HOME_DIR/providers/` instead. The file lists the devices and the mechanisms that Argent may use on each device.
 
 ```jsonc
 {
@@ -84,7 +84,9 @@ Argent ignores an unknown token. Thus a provider can declare a capability of a n
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
 
-On Android, native network capture needs only the `adb` token. With `adb`, `network-capture-start` attaches an in-app agent to a debuggable app on the device. It also adds an `adb reverse` port forward to the device for the in-app agent. `network-capture-stop` keeps the port forward. Argent removes it when it stops the services of the device: at `stop-all-simulator-servers`, or at a stop of the tool-server. A provider that withholds `adb` also withholds native network capture.
+JavaScript capture needs the `js-debugger` grant. On Android, [native network capture](/docs/reference/tools#native-network-capture-on-android) needs the `adb` token and a debuggable app.
+
+If Argent uses the provider's native devtools connection on iOS, the provider controls [native network capture](/docs/reference/tools#native-network-capture-on-ios-and-mac-apps).
 
 ### One grant, both names of the device
 

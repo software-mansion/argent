@@ -29,6 +29,7 @@ import {
   type ValidationReport,
 } from "./run-validation.js";
 import { exitAfterFlush } from "./e2e.js";
+import { applyDeviceFromEnv } from "./run-device-env.js";
 
 export interface RunCommandOptions {
   paths: ToolsServerPaths;
@@ -191,12 +192,16 @@ Examples:
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
 
+Set ARGENT_UDID to use that device when a tool needs --udid or --device_id
+and the call does not pass one.
+
 Exits 1 when the tool fails. Also exits 1 when the result reports that the
 call did not do its job: an e2e test that does not pass, an await-ui-element
-wait with success=false, a run-sequence that a step stopped, a debugger tool
-with no connection or an error, a native-devtools precheck that stopped the
-tool, a native-profiler-analyze with status analysis_failed, an e2e recording
-call that recorded nothing, or a baseline that was not written on this client.
+or await-network-request wait with success=false, a run-sequence that a step
+stopped, a debugger tool with no connection or an error, a native-devtools
+precheck that stopped the tool, a native-profiler-analyze with status
+analysis_failed, an e2e recording call that recorded nothing, or a baseline
+that was not written on this client.
 Other results exit 0, also a negative answer such as await-screen-idle's
 settled=false or debugger-status's not_connected.
 `);
@@ -344,6 +349,7 @@ settled=false or debugger-status's not_connected.
   for (const [k, v] of Object.entries(parsed.args)) {
     payload[k] = v;
   }
+  applyDeviceFromEnv(payload, schema);
 
   // Checked against the merged payload, so a required field supplied through `--args` or
   // `--<field>-json` counts. Answering here spares a round trip — and, for a tool that takes

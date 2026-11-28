@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 const client = vi.hoisted(() => ({
   readToolsServerState: vi.fn(),
@@ -9,6 +11,9 @@ const client = vi.hoisted(() => ({
   killToolServer: vi.fn(async () => true),
   isToolsServerProcessAlive: vi.fn(() => true),
   isToolsServerHealthy: vi.fn(async () => true),
+  spawnToolsServer: vi.fn(async () => ({ port: 51234, pid: 777 })),
+  writeToolsServerState: vi.fn(async () => {}),
+  writeToolsServerStateSync: vi.fn(),
 }));
 
 vi.mock("@argent/tools-client", async (importOriginal) => ({
@@ -23,7 +28,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...childProcess,
 }));
 
-// LOG_FILE reads homedir() at import, so HOME is set first.
+// LOG_FILE reads the Argent home at import, so HOME is set first.
 let server: typeof import("../src/server.js").server;
 let home: string;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
@@ -176,5 +181,82 @@ describe("argent server status / stop / logs", () => {
     }
 
     expect(childProcess.spawn).toHaveBeenCalledWith("tail", ["-f", logFile], { stdio: "inherit" });
+  });
+});
+
+describe("argent server start --json", () => {
+  const paths = {
+    bundlePath: "/bundle/tool-server.cjs",
+    simulatorServerDir: "/bin",
+    nativeDevtoolsDir: "/bin",
+  };
+  const BANNER = "Tools server listening on http://127.0.0.1:51234";
+
+  function fakeChild(): EventEmitter & { pid: number; stdout: PassThrough; kill: () => void } {
+    return Object.assign(new EventEmitter(), { pid: 777, stdout: new PassThrough(), kill() {} });
+  }
+
+  beforeEach(() => {
+    client.readToolsServerState.mockResolvedValue(null);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  it("prints one JSON line with url, port, pid and token for --detach", async () => {
+    await server(["start", "--detach", "--port", "0", "--json"], { paths });
+
+    const ready = JSON.parse(output());
+    expect(ready).toMatchObject({ url: "http://127.0.0.1:51234", port: 51234, pid: 777 });
+    expect(ready.token).toMatch(/^[0-9a-f]+$/);
+  });
+
+  it.each([
+    ["0.0.0.0", "http://127.0.0.1:51234"],
+    ["::", "http://[::1]:51234"],
+  ])("gives a loopback url for the wildcard host %s", async (host, url) => {
+    await server(["start", "--detach", "--json", "--host", host], { paths });
+
+    expect(JSON.parse(output()).url).toBe(url);
+  });
+
+  it("leaves the token out with --no-auth", async () => {
+    await server(["start", "--detach", "--json", "--no-auth"], { paths });
+
+    expect(JSON.parse(output())).toEqual({ url: "http://127.0.0.1:51234", port: 51234, pid: 777 });
+  });
+
+  it("prints the ready line in the foreground once the server is listening", async () => {
+    const child = fakeChild();
+    childProcess.spawn.mockReturnValueOnce(child as never);
+    void server(["start", "--json", "--port", "51234"], { paths });
+    await vi.waitFor(() => expect(childProcess.spawn).toHaveBeenCalled());
+
+    expect(output()).toBe("");
+    child.stdout.write(`${BANNER}\n`);
+
+    await vi.waitFor(() =>
+      expect(JSON.parse(output())).toMatchObject({ url: "http://127.0.0.1:51234", pid: 777 })
+    );
+    expect(process.stderr.write).toHaveBeenCalledWith(`${BANNER}\n`);
+
+    vi.mocked(process.exit).mockImplementation((() => {}) as never);
+    child.emit("exit", 0, null);
+    expect(process.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits 1 when the foreground server exits before it is listening", async () => {
+    const exits: unknown[] = [];
+    vi.mocked(process.exit).mockImplementation(((code?: number) => {
+      exits.push(code);
+    }) as never);
+    const child = fakeChild();
+    childProcess.spawn.mockReturnValueOnce(child as never);
+    void server(["start", "--json"], { paths });
+    await vi.waitFor(() => expect(childProcess.spawn).toHaveBeenCalled());
+
+    child.emit("exit", 0, null);
+
+    expect(exits).toEqual([1]);
+    expect(output()).toBe("");
+    expect(errors()).toContain("exited before it was listening");
   });
 });

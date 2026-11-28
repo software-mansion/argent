@@ -482,14 +482,8 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
-  description: `List the targets argent can drive or start: iOS simulators and iPhones, Android emulators, AVDs and phones, Chromium (CDP) apps, Vega (Fire TV) devices, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos><flag:macos-apps>Mac apps argent started, </flag:macos-apps>and iOS simulators hosted on Argent Cloud.
-Returns { devices, notes? }. Each device has a 'platform', a 'kind' and a 'state'. Pass its 'udid' (iOS<flag:harmonyos>, HarmonyOS</flag:harmonyos>), 'serial' (Android, Vega) or 'id' (Chromium<flag:macos-apps>, Mac app</flag:macos-apps>) to the other tools. Ready devices come first.
-Start a stopped device with boot-device: an iOS simulator by 'udid', an Android AVD (kind 'avd', no serial until it runs) by 'avdName', a Vega VVD by 'vvdImage'. A physical phone (kind 'device') needs no boot; use one only when the user asks for it. A physical iPhone is usable only in state 'connected'.
-<flag:harmonyos>HarmonyOS kind 'device' is an \`hdc\` target that the tools drive; kind 'emulator' is a DevEco Studio instance that boot-device starts, and a running one is listed as both.
-</flag:harmonyos>platform 'ios-remote' is an iOS simulator hosted on Argent Cloud, usable from Linux too (https://argent.swmansion.com/cloud/); drive it with the same tools by its 'remote:' udid. A 'deviceSet' simulator (e.g. from Radon IDE) runs headless.
-runtimeKind 'tv' marks a focus-driven TV target: use describe, tv-remote and keyboard, not gestures. 'foldable: true' marks a device the fold tool folds.
-Chromium apps are found on CDP port 9222 (more via ARGENT_CHROMIUM_PORTS); boot-device with electronAppPath or browser (an installed Chrome/Chromium/Edge/Brave) launches one.
-'notes' says which platform this machine cannot reach and what would change that; tell the user when their task needs that platform.`,
+  description: `List available targets (ready devices first): iOS simulators/iPhones, Android emulators/AVDs/phones, Chromium apps, Vega devices, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>Mac apps, </flag:macos-apps>and Argent Cloud simulators (\`ios-remote\`).
+Use when starting a session to discover target ids. Returns { devices, notes? }. Pass a ready device's \`udid\`, \`serial\`, or \`id\` to other tools; start stopped targets via \`boot-device\`. Use physical phones (\`kind: 'device'\`) only when asked. \`runtimeKind: 'tv'\` uses \`tv-remote\`, not gestures. Fails if device discovery errors; surface \`notes\` if a needed platform is unavailable.`,
   zodSchema,
   alwaysLoad: true,
   searchHint:

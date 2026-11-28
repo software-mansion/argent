@@ -318,7 +318,7 @@ const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["stat
  * Flow integration: a blocked precheck is a RESOLVED tool result, so a recorded
  * step that runs one of these tools would otherwise report `pass` for a call
  * that never reached its work. Mirrors `isDebuggerNotConnectedResult` and
- * `isUnmetUiWaitResult`.
+ * `isUnmetWaitResult`.
  *
  * Keyed on the tool id as well as the shape: the four status strings are
  * unremarkable words, and an unrelated tool that happens to answer
@@ -1322,12 +1322,20 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
+          if (socket.destroyed) return;
           const msg = parsed as { type: string; payload: any };
 
           // Handshake: must be the first message.
           if (bundleId === null) {
             if (msg.type !== "Control") return;
-            bundleId = msg.payload.bundleId as string;
+            const id = msg.payload?.bundleId;
+            // Simulator launchd can inject the agent into Apple apps too. They
+            // aren't targets, and a suspended one won't answer app-state reads.
+            if (typeof id !== "string" || !isInjectableBundleId(id)) {
+              socket.destroy();
+              return;
+            }
+            bundleId = id;
 
             // The same app reconnecting (fast restart) supersedes the old socket.
             const existing = connections.get(bundleId);

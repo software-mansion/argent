@@ -34,10 +34,7 @@ export const metroPortField = z.coerce
    * session. "Omit it" is also safer, an agent told the default is 8081 passes
    * 8081, which counts as explicit and beats a provider's port.
    */
-  .describe(
-    "Metro port. Omit it to use this device's port (8081 by default). " +
-      "Ignored for Chromium, whose CDP port is in device_id."
-  );
+  .describe("Metro port (omit to use this device's port, default 8081; ignored on Chromium).");
 
 /**
  * The Metro port this call should use: caller, then provider, then the React

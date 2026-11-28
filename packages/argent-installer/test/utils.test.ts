@@ -66,7 +66,6 @@ import {
   listArgentSkillsInLock,
   isNewerVersion,
   isOnline,
-  isSkillsCliAvailable,
   npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
@@ -1383,8 +1382,6 @@ describe("isOnline", () => {
   });
 });
 
-// ── isSkillsCliAvailable ─────────────────────────────────────────────────────
-
 describe("npxChildEnv", () => {
   const SKIP_SUBMODULE_CONFIG = {
     GIT_CONFIG_COUNT: "1",
@@ -1443,79 +1440,6 @@ describe("npxChildEnv", () => {
     npxChildEnv(source);
 
     expect(source).toEqual({ npm_config_package: "@swmansion/argent" });
-  });
-});
-
-describe("isSkillsCliAvailable", () => {
-  beforeEach(() => {
-    execSyncMock.mockReset();
-  });
-
-  it("probes `npx --force --no-install skills --version` and returns true on success", () => {
-    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
-
-    expect(isSkillsCliAvailable()).toBe(true);
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-    const [cmd] = execSyncMock.mock.calls[0]!;
-    // `--force` softens the host project's npm engine gate so the probe can't
-    // hard-fail with EBADDEVENGINES in a devEngines-pinned repo (#298).
-    expect(cmd).toBe("npx --force --no-install skills --version");
-  });
-
-  it("runs the probe without an inherited npm_config_package", () => {
-    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
-    const original = process.env.npm_config_package;
-    process.env.npm_config_package = "@swmansion/argent@latest";
-    try {
-      isSkillsCliAvailable();
-    } finally {
-      if (original === undefined) delete process.env.npm_config_package;
-      else process.env.npm_config_package = original;
-    }
-
-    const opts = execSyncMock.mock.calls[0]![1] as { env?: NodeJS.ProcessEnv };
-    expect(opts.env).toBeDefined();
-    expect(opts.env).not.toHaveProperty("npm_config_package");
-  });
-
-  it("returns false when the probe throws (skills CLI not in npx cache)", () => {
-    execSyncMock.mockImplementation(() => {
-      throw new Error("command failed");
-    });
-
-    expect(isSkillsCliAvailable()).toBe(false);
-  });
-
-  it("fully silences stdio so nothing leaks to the terminal", () => {
-    execSyncMock.mockReturnValue(Buffer.from(""));
-
-    isSkillsCliAvailable();
-
-    const opts = execSyncMock.mock.calls[0]![1] as
-      { stdio?: [unknown, unknown, unknown] } | undefined;
-    expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
-  });
-
-  it("passes a timeout so a wedged npx cannot hang init forever", () => {
-    execSyncMock.mockReturnValue(Buffer.from(""));
-
-    isSkillsCliAvailable();
-
-    const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
-    expect(typeof opts?.timeout).toBe("number");
-    expect(opts!.timeout!).toBeGreaterThan(0);
-  });
-
-  it("probes from the given cwd, where the `skills` command will run", () => {
-    execSyncMock.mockReturnValue(Buffer.from(""));
-
-    isSkillsCliAvailable("/work/repo");
-    isSkillsCliAvailable();
-
-    const pinned = execSyncMock.mock.calls[0]![1] as { cwd?: string };
-    const unpinned = execSyncMock.mock.calls[1]![1] as { cwd?: string };
-    expect(pinned.cwd).toBe("/work/repo");
-    expect(unpinned).not.toHaveProperty("cwd");
   });
 });
 

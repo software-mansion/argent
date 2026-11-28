@@ -33,6 +33,7 @@ import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
+import { isUpdatingAutomatically } from "./tools/system/update-argent";
 import { buildUpdateNote } from "./update-utils";
 import {
   buildScreenRecordingNote,
@@ -74,6 +75,7 @@ import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 import { directCallFailure } from "./utils/tool-result-verdict";
+import { ARGENT_HOME_HEADER, argentHomeId, isLocalConnection } from "./utils/argent-home-id";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -360,6 +362,8 @@ export interface HttpAppHandle {
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
+  /** Tool calls that have started and not yet finished. */
+  getToolCallsInFlight: () => number;
   /** Attach the per-Chromium-device WebSocket upgrade handler to the live
    * http.Server, once it is bound. Split out of `createHttpApp` so construction
    * stays synchronous — the WS upgrade is the only part needing the Node server
@@ -476,6 +480,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   uploadSweeper.unref();
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
+  let toolCallsInFlight = 0;
 
   // A non-loopback bind host is added so its legitimate clients pass the guard;
   // a wildcard bind disables the guard.
@@ -485,6 +490,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   if (!isLoopbackHost(bindHost) && !isWildcardHost(bindHost)) {
     allowedHostnames.add(bindHost);
   }
+
+  const homeId = argentHomeId();
+  app.use((req, res, next) => {
+    if (isLocalConnection(req.socket)) res.setHeader(ARGENT_HOME_HEADER, homeId);
+    next();
+  });
 
   // Closes the DNS-rebinding bypass, where a public origin's hostname briefly
   // resolves to 127.0.0.1 and the browser forwards that origin's cookies/CSRF
@@ -1058,6 +1069,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         });
       }
 
+      toolCallsInFlight++;
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
@@ -1081,7 +1093,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // Gate on `updateInstallable`, not `updateAvailable`, and advertise the
         // version the resolver would install: both honour the release-age policy.
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
-        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
+        const shouldNotify =
+          updateInstallable &&
+          !isUpdatingAutomatically(installableVersion) &&
+          !isUpdateNoteSuppressed();
         if (shouldNotify) {
           suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
@@ -1223,6 +1238,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           .status(500)
           .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
+        toolCallsInFlight--;
+        idleTimer.touch();
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();
       }
@@ -1246,6 +1263,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       uploads.clear();
     },
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
+    getToolCallsInFlight: () => toolCallsInFlight,
     attachChromiumWebsockets: (httpServer: HttpServer) => {
       attachChromiumServerWebsocket(
         httpServer,

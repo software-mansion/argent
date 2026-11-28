@@ -1,6 +1,6 @@
 ---
 name: argent-ios-simulator-setup
-description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting an iOS simulator, getting an iOS UDID, or before any iOS simulator interaction task.
+description: Boot an iOS simulator and find its UDID with Argent. Use when no simulator is booted yet or you need to pick and boot one.
 ---
 
 ## 1. Setup Steps

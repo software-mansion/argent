@@ -104,7 +104,7 @@ vi.mock("../../src/utils/ios-host", async () => {
     pickIosHost: () => ({
       kind: hostKind,
       requiresTcp: hostRequiresTcp,
-      bootstrapAx: async () => ({ entitlementBypassActive: bootedThroughArgent }),
+      bootstrapAx: async () => ({ accessibilityPrefsEnabled: bootedThroughArgent }),
       spawnAxDaemon: (_udid: string, endpoint: IosEndpoint) => {
         if (spawnError) throw spawnError;
         return fakeDaemon(endpoint);
@@ -745,7 +745,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
       expect(result.tree.children).toHaveLength(0);
       expect(result.hint).toContain("The accessibility service (ax-service) crashed with SIGSEGV");
       expect(result.hint).toContain("will not fix it");
-      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("pre-boot accessibility settings");
       expect(result.hint).not.toMatch(/call boot-device/);
       expect(result.should_restart).toBeUndefined();
     }
@@ -771,7 +771,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
       behavior = how;
       const result = await describeIos(registryWithAx(), device, {}, { isTvOs: false });
       expect(result.hint).toContain("crashed with SIGSEGV");
-      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("pre-boot accessibility settings");
       expect(result.hint).not.toMatch(/call boot-device/);
     }
   });
@@ -805,7 +805,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
           UDID +
           "] ax-service exited with code 111 before connecting)."
       );
-      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("pre-boot accessibility settings");
       expect(result.hint).not.toMatch(/boot-device/);
       expect(result.hint).not.toContain("crashed");
     });
@@ -837,7 +837,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
         `The accessibility service failed to start ([AXService:${UDID}] ax-service binary not ` +
           "found: /nowhere/bin/darwin/ax-service)."
       );
-      expect(result.hint).not.toContain("not booted through argent");
+      expect(result.hint).not.toContain("pre-boot accessibility settings");
       expect(result.hint).not.toMatch(/boot-device/);
     });
 
@@ -960,7 +960,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
     }
 
     it("is not re-armed by a failed start on a sim measured as not booted through argent", async () => {
-      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+      expect((await toolRead(degradedAx)).hint).toContain("pre-boot accessibility settings");
 
       const failed = await toolRead(await failedStart(false));
       expect(failed.hint).toContain("ax-service exited with code 1 before connecting");
@@ -973,13 +973,13 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
     it("is re-armed by a failed start on a sim measured as booted through argent", async () => {
       // That read found the sim off the state the caveat describes, so a later
       // external boot of the same udid has not been told.
-      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+      expect((await toolRead(degradedAx)).hint).toContain("pre-boot accessibility settings");
 
       const failed = await toolRead(await failedStart(true));
       expect(failed.hint).toContain("ax-service exited with code 1 before connecting).");
       expect(failed.hint).not.toMatch(/boot-device/);
 
-      expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+      expect((await toolRead(degradedAx)).hint).toContain("pre-boot accessibility settings");
     });
 
     it.each([true, false])(
@@ -988,7 +988,7 @@ describe("describeIos over a daemon that crashes (issue #800)", () => {
         expect((await toolRead(await failedStart(throughArgent))).hint).toContain(
           "The accessibility service failed to start"
         );
-        expect((await toolRead(degradedAx)).hint).toMatch(/^This simulator was not booted through/);
+        expect((await toolRead(degradedAx)).hint).toContain("pre-boot accessibility settings");
         expect((await toolRead(degradedAx)).hint).toBeUndefined();
       }
     );

@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-optimization
-description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup / TTI (including iOS launch time). Delegates to argent-react-native-profiler for measurement.
+description: Entry-point for React Native performance optimization; profiles first via `argent-react-native-profiler`. Use when the app feels slow, fixing re-renders or jank, or improving startup/TTI.
 ---
 
 ## Rules
@@ -44,7 +44,7 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 ### Phase 4: Verify no regressions
 
-Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for warnings and errors (`Grep` its log file). Argent hides LogBox toasts once a `debugger-*` tool connects, so screenshots catch only full-screen red errors. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.
+Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for warnings and errors (`levels: ["warning", "error"]` with `tail: 100`). If the `byLevel` warning and error counts exceed the entries shown, `Grep` its log file for the rest. Argent hides LogBox toasts once a `debugger-*` tool connects, so screenshots catch only full-screen red errors. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.
 
 ## Startup time (TTI)
 

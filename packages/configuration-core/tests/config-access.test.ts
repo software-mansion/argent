@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -14,6 +14,7 @@ import {
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
   getAndroidAdbServerPort,
+  isAutoUpdateEnabled,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
@@ -186,6 +187,32 @@ describe("setConfigValue — return value", () => {
     // asString trims, so the stored/returned value is the trimmed form.
     expect(setConfigValue("lens.agent", "  codex  ", "global", opts())).toBe("codex");
     expect(getConfigValueByKey("lens.agent", opts())).toBe("codex");
+  });
+});
+
+describe("autoUpdate.enabled", () => {
+  it("defaults on and accepts a machine-wide opt-out", () => {
+    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(true);
+    setConfigValue("autoUpdate.enabled", false, "global", opts());
+    expect(getConfigValueByKey("autoUpdate.enabled", opts())).toBe(false);
+    expect(() => setConfigValue("autoUpdate.enabled", true, "project", opts())).toThrow(
+      ConfigScopeError
+    );
+  });
+
+  it("keeps a ~/.argent opt-out when ARGENT_HOME_DIR moves the home", () => {
+    const movedHome = path.join(homeDir, "moved-home");
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("USERPROFILE", homeDir);
+    vi.stubEnv("ARGENT_HOME_DIR", movedHome);
+    try {
+      setConfigValue("autoUpdate.enabled", true, "global");
+      expect(isAutoUpdateEnabled()).toBe(true);
+      setConfigValue("autoUpdate.enabled", false, "global", { homeDir });
+      expect(isAutoUpdateEnabled()).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

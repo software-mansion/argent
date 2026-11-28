@@ -35,6 +35,13 @@ describe("buildToolsServerEnv — host and idle options", () => {
     expect(disabled.ARGENT_IDLE_TIMEOUT_MINUTES).toBe("0");
   });
 
+  it("marks a server as autospawned unless the CLI started it, never inheriting the mark", () => {
+    const inherited = { ARGENT_SERVER_MANAGED: "cli" };
+    expect(buildToolsServerEnv(paths, 3001, inherited).ARGENT_SERVER_MANAGED).toBe("autospawn");
+    const cli = buildToolsServerEnv(paths, 3001, {}, { managed: "cli" });
+    expect(cli.ARGENT_SERVER_MANAGED).toBe("cli");
+  });
+
   it("preserves base env variables unchanged", () => {
     const env = buildToolsServerEnv(paths, 3001, { FOO: "bar", PATH: "/usr/bin" });
     expect(env.FOO).toBe("bar");

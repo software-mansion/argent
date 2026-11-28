@@ -8,10 +8,13 @@ import type { RegistryInfo } from "@argent/update-core";
 // (with their own low-level tests there). The checker only orchestrates them,
 // so we mock that boundary and keep the real, pure pickInstallableTarget.
 // vi.hoisted keeps the same fn instances across the vi.resetModules() below.
-const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMs } = vi.hoisted(() => ({
-  mockFetchRegistryInfo: vi.fn<() => Promise<RegistryInfo | null>>(),
-  mockDetectMinReleaseAgeMs: vi.fn<() => Promise<number>>(),
-}));
+const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMs, mockIsAutoUpdateEnabled } = vi.hoisted(
+  () => ({
+    mockFetchRegistryInfo: vi.fn<() => Promise<RegistryInfo | null>>(),
+    mockDetectMinReleaseAgeMs: vi.fn<() => Promise<number>>(),
+    mockIsAutoUpdateEnabled: vi.fn<() => boolean>(),
+  })
+);
 vi.mock("@argent/update-core", async (importActual) => {
   const actual = await importActual<typeof import("@argent/update-core")>();
   return {
@@ -20,6 +23,10 @@ vi.mock("@argent/update-core", async (importActual) => {
     detectMinReleaseAgeMs: mockDetectMinReleaseAgeMs,
   };
 });
+vi.mock("@argent/configuration-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/configuration-core")>()),
+  isAutoUpdateEnabled: mockIsAutoUpdateEnabled,
+}));
 
 let getUpdateState: typeof import("../src/utils/update-checker").getUpdateState;
 let startUpdateChecker: typeof import("../src/utils/update-checker").startUpdateChecker;
@@ -43,9 +50,12 @@ describe("update-checker", () => {
     vi.setSystemTime(NOW);
     vi.resetModules();
     vi.clearAllMocks();
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", undefined);
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
+    mockIsAutoUpdateEnabled.mockReset();
+    mockIsAutoUpdateEnabled.mockReturnValue(false);
 
     // Re-import after module reset so each test gets fresh state.
     const mod = await import("../src/utils/update-checker");
@@ -56,6 +66,7 @@ describe("update-checker", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("detects an available, installable update on startup", async () => {
@@ -119,6 +130,30 @@ describe("update-checker", () => {
     handle.dispose();
   });
 
+  it("requests the existing updater when autoUpdate.enabled is true", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onAutoUpdate).toHaveBeenCalledOnce();
+    expect(onAutoUpdate).toHaveBeenCalledWith("99.0.0");
+    handle.dispose();
+  });
+
+  it("does not request an automatic update while autoUpdate.enabled is false", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    handle.dispose();
+  });
+
   it("stops checking after dispose", async () => {
     mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
 
@@ -130,6 +165,54 @@ describe("update-checker", () => {
 
     await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect(mockFetchRegistryInfo).toHaveBeenCalledTimes(1); // No additional calls after dispose.
+  });
+
+  it("ignores an in-flight check after dispose", async () => {
+    let resolveFetch!: (info: RegistryInfo | null) => void;
+    mockFetchRegistryInfo.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    handle.dispose();
+
+    resolveFetch(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockDetectMinReleaseAgeMs).not.toHaveBeenCalled();
+    expect(mockIsAutoUpdateEnabled).not.toHaveBeenCalled();
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateState().updateAvailable).toBe(false);
+  });
+
+  it("does not finish a check disposed during the release-age probe", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    let resolveReleaseAge!: (ageMs: number) => void;
+    mockDetectMinReleaseAgeMs.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveReleaseAge = resolve;
+        })
+    );
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockDetectMinReleaseAgeMs).toHaveBeenCalledOnce();
+
+    handle.dispose();
+    resolveReleaseAge(0);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mockIsAutoUpdateEnabled).not.toHaveBeenCalled();
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+    expect(getUpdateState().updateAvailable).toBe(false);
   });
 
   // ── Semver comparison ─────────────────────────────────────────────
@@ -256,6 +339,22 @@ describe("update-checker", () => {
 
     handle1.dispose();
     handle2.dispose();
+  });
+
+  it("never queries the registry or updates automatically when ARGENT_DISABLE_UPDATE_CHECK is set", async () => {
+    vi.stubEnv("ARGENT_DISABLE_UPDATE_CHECK", "1");
+    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
+    mockIsAutoUpdateEnabled.mockReturnValue(true);
+    const onAutoUpdate = vi.fn();
+
+    const handle = startUpdateChecker({ onAutoUpdate });
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24 * 2);
+
+    expect(mockFetchRegistryInfo).not.toHaveBeenCalled();
+    expect(getUpdateState().updateInstallable).toBe(false);
+    expect(onAutoUpdate).not.toHaveBeenCalled();
+
+    handle.dispose();
   });
 });
 

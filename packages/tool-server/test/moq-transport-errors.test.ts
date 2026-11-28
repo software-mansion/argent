@@ -20,6 +20,7 @@ import {
   type SimulatorServerTransport,
 } from "../src/utils/simulator-client";
 import type { MoqClient } from "../src/utils/moq-client";
+import type { InputMessage } from "@swmansion/argent-cloud-sdk";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 
 vi.mock("../src/utils/moq-client", () => ({
@@ -49,7 +50,7 @@ const TOUCH = {
   second_y: null,
 } as const;
 
-/** What `MoqClient.sendControl` and `MoqClient.key` throw once the session is closed. */
+/** What `MoqClient.sendInput` throws once the session is closed. */
 const CLOSED = () => new Error("MoQ session is closed");
 
 function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
@@ -61,11 +62,27 @@ function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
   };
 }
 
+/** A transport over a live `MoqClient` that records what the SDK would send. */
+function recordingTransport() {
+  const sent: InputMessage[] = [];
+  const transport = createMoqTransport(
+    {
+      sendInput: (message) => {
+        sent.push(message);
+        return Promise.resolve();
+      },
+      screenshot: () => Promise.reject(new Error("not used")),
+      close: () => Promise.resolve(),
+    },
+    { pasteText: () => Promise.resolve() }
+  );
+  return { transport, sent };
+}
+
 /** A `MoqClient` whose session is closed, as after the machine is released. */
 function closedMoqClient(): MoqClient {
   return {
-    sendControl: () => Promise.reject(CLOSED()),
-    key: () => Promise.reject(CLOSED()),
+    sendInput: () => Promise.reject(CLOSED()),
     screenshot: () => Promise.reject(new Error("unexpected end of stream")),
     close: () => Promise.resolve(),
   };
@@ -135,19 +152,7 @@ describe("sendCommand over a MoQ transport", () => {
   });
 
   it("resolves when the send goes out", async () => {
-    const sent: Uint8Array[] = [];
-    const transport = createMoqTransport(
-      {
-        sendControl: (payload) => {
-          sent.push(payload);
-          return Promise.resolve();
-        },
-        key: () => Promise.reject(new Error("not used")),
-        screenshot: () => Promise.reject(new Error("not used")),
-        close: () => Promise.resolve(),
-      },
-      { pasteText: () => Promise.resolve() }
-    );
+    const { transport, sent } = recordingTransport();
 
     await expect(sendCommand(apiWith(transport), { ...TOUCH })).resolves.toEqual({});
     expect(sent).toHaveLength(1);
@@ -194,40 +199,35 @@ describe("sendCommand over a MoQ transport", () => {
   });
 });
 
-/**
- * `sendControl` is one MoQ group per frame, read latest-wins: a Down overtaken
- * by its Up loses the letter. Keys go through the SDK's ordered "keys" track.
- */
-describe("keys ride the ordered keys track", () => {
-  it("pressKey calls key, never sendControl", async () => {
-    const keys: [string, number][] = [];
-    let controlSends = 0;
-    const transport = createMoqTransport(
-      {
-        sendControl: () => {
-          controlSends++;
-          return Promise.resolve();
-        },
-        key: (action, code) => {
-          keys.push([action, code]);
-          return Promise.resolve();
-        },
-        screenshot: () => Promise.reject(new Error("not used")),
-        close: () => Promise.resolve(),
-      },
-      { pasteText: () => Promise.resolve() }
-    );
+/** The SDK owns track selection, so the transport hands over typed messages and never encodes a frame. */
+describe("every input reaches the SDK as an InputMessage", () => {
+  it("maps touch, button, rotate and key commands", async () => {
+    const { transport, sent } = recordingTransport();
 
-    await expect(
-      sendCommand(apiWith(transport), { cmd: "key", direction: "Down", code: 4 })
-    ).resolves.toEqual({});
+    await sendCommand(apiWith(transport), { ...TOUCH });
+    await sendCommand(apiWith(transport), { cmd: "touch", type: "Up", x: 0.5, y: 0.5 });
+    await sendCommand(apiWith(transport), {
+      cmd: "touch",
+      type: "Down",
+      x: 0.2,
+      y: 0.3,
+      second_x: 0.7,
+      second_y: 0.8,
+    });
+    await sendCommand(apiWith(transport), { cmd: "button", direction: "Down", button: "home" });
+    await sendCommand(apiWith(transport), { cmd: "rotate", direction: "LandscapeLeft" });
+    await sendCommand(apiWith(transport), { cmd: "key", direction: "Down", code: 4 });
     await transport.pressKey("Up", 4);
 
-    expect(keys).toEqual([
-      ["Down", 4],
-      ["Up", 4],
+    expect(sent).toStrictEqual([
+      { type: "touch", action: "Down", x: 0.5, y: 0.5, secondX: undefined, secondY: undefined },
+      { type: "touch", action: "Up", x: 0.5, y: 0.5, secondX: undefined, secondY: undefined },
+      { type: "touch", action: "Down", x: 0.2, y: 0.3, secondX: 0.7, secondY: 0.8 },
+      { type: "button", action: "Down", button: "home" },
+      { type: "rotate", direction: "LandscapeLeft" },
+      { type: "key", action: "Down", code: 4 },
+      { type: "key", action: "Up", code: 4 },
     ]);
-    expect(controlSends).toBe(0);
   });
 });
 
@@ -269,9 +269,8 @@ describe("gesture-tap on a dead cloud session", () => {
 });
 
 /**
- * The remote instance builds its own `pressKey`, so it is the one input that
- * can miss `sendCommand` entirely. It did: it called `moq.sendControl` direct,
- * which left `keyboard` on a dead cloud session throwing a bare SDK error
+ * The remote instance builds its own `pressKey`, so it can miss `sendCommand`.
+ * It did once: a dead cloud session threw a bare SDK error from `keyboard`
  * while a tap on the same session reported a classified failure.
  */
 describe("the remote instance routes its keys like every other input", () => {
@@ -309,7 +308,7 @@ describe("the remote paste chord", () => {
     let sends = 0;
     vi.mocked(openMoqClient).mockResolvedValueOnce({
       ...closedMoqClient(),
-      key: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
+      sendInput: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
     });
     const instance = await simulatorServerBlueprint.factory(
       {} as never,
