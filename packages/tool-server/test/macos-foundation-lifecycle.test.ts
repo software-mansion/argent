@@ -3541,7 +3541,7 @@ describe("code signature rules", () => {
     expect(chromiumRefusal({ ...app, chromium: "electron" })).toContain(
       "boot-device with electronAppPath"
     );
-    expect(chromiumRefusal({ ...app, chromium: "browser" })).toContain("--remote-debugging-port");
+    expect(chromiumRefusal({ ...app, chromium: "browser" })).toContain("boot-device with browser");
     expect(chromiumRefusal(app)).toBeNull();
   });
 

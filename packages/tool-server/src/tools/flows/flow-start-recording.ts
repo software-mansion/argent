@@ -46,7 +46,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Fragments only: entry state assumed. Omit for standalone tests (Chromium records as a fragment, then add `launch: { chromium: <app path> }` and remove this)."
+      "Fragments only: entry state assumed. Omit for standalone tests (Chromium records as a fragment: for an Electron app, then add `launch: { chromium: <app path> }` and remove this). A browser booted with `browser` has no launch form and stays a fragment; never point `chromium:` at a browser binary."
     ),
   requires: z
     .object({

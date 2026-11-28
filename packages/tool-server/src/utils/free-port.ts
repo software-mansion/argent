@@ -27,3 +27,20 @@ export async function pickFreePort(): Promise<number> {
     });
   });
 }
+
+/**
+ * Whether something already accepts TCP connections on loopback `port`. A
+ * connect that is neither accepted nor refused within `timeoutMs` counts as free.
+ */
+export function isLoopbackPortAnswering(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port });
+    const settle = (answering: boolean) => {
+      socket.destroy();
+      resolve(answering);
+    };
+    socket.setTimeout(timeoutMs, () => settle(false));
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+  });
+}

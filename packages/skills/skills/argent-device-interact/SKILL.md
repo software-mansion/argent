@@ -7,7 +7,7 @@ Each tool's description carries its parameters, defaults, and return shape. This
 
 ## Target Routing
 
-- Get a `udid` from `list-devices` (or `boot-device` if none is ready). Full setup: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`.
+- Get a `udid` from `list-devices` (or `boot-device` if none is ready). For a web app, `boot-device` with `browser` (`chrome`/`chromium`/`edge`/`brave`) launches that installed browser on a fresh profile as a `chromium` target; then `open-url` to the app. Full setup: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`.
 - Before driving a specialized target, read the matching instructions below:
   - Physical iPhone (`kind: "device"`): `argent-ios-device-setup` and `argent-ios-device-interact`
   - Mac app (`platform: "macos"`): `argent-macos-app-interact`

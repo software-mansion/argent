@@ -12,7 +12,11 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 // Each boot lands on its own port, as the real launcher does — and the device
 // id IS the port, so every boot is a new device id.
 let bootCount = 0;
-const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
+const defaultBoot = async (opts: {
+  appPath: string;
+  extraArgs?: string[];
+  signal?: AbortSignal;
+}) => {
   const n = bootCount++;
   return {
     platform: "chromium" as const,
@@ -56,10 +60,10 @@ vi.mock("../../src/blueprints/chromium-cdp", async () => {
 });
 
 // The exact failure shape a second copy losing to a single-instance lock
-// produces: early exit, clean code 0 (see bootElectronApp's onExit).
-function lockShapedBootError(port: number): FailureError {
+// produces: early exit, clean code 0 (see bootOnce's early-exit failure).
+function lockShapedBootError(): FailureError {
   return new FailureError(
-    `Electron boot: child process exited with code 0 before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`,
+    "Electron boot: child process exited with code 0 before CDP was ready. Its stderr ended with:\nquitting: another instance is running",
     {
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
       failure_stage: "electron_early_exit",
@@ -782,6 +786,38 @@ describe("flow-execute chromium boot", () => {
     ]);
   });
 
+  it("hands the run's signal to every boot, so a cancel stops one in flight", async () => {
+    const controller = new AbortController();
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n  - echo: after\n"
+    );
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(defaultBoot);
+    // The second boot never comes up on its own: only the signal ends it.
+    bootElectronApp.mockImplementationOnce(
+      (opts) =>
+        new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener("abort", () =>
+            reject(new Error("Electron boot was cancelled."))
+          );
+          controller.abort();
+        })
+    );
+
+    const result = await runFlow(
+      registry,
+      { name: "cancel-in-flight", project_root: PROJECT_ROOT, e2e_test_file: parent },
+      controller.signal
+    );
+
+    expect(bootElectronApp.mock.calls.map((c) => c[0].signal)).toEqual([
+      controller.signal,
+      controller.signal,
+    ]);
+    expect(result.aborted).toBe(true);
+    expect(result.steps[1]).toMatchObject({ kind: "launch", status: "skip" });
+  });
+
   it("boots for a fragment whose first step run:s a chromium standalone flow", async () => {
     // The run begins with a launch even though the TOP-LEVEL flow doesn't: the
     // runner needs a device before step 1, so the leading `run:` chain is
@@ -1359,7 +1395,7 @@ describe("flow-execute chromium boot", () => {
       cdp: { send: vi.fn(async () => ({})) },
     }));
     bootElectronApp.mockImplementationOnce(async () => {
-      throw lockShapedBootError(12345);
+      throw lockShapedBootError();
     });
 
     const result = await runFlow(registry, {
@@ -1375,8 +1411,8 @@ describe("flow-execute chromium boot", () => {
     expect(failed.reason).toContain("exited with code 0 before CDP was ready");
     expect(failed.reason).toMatch(/single-instance lock/i);
     expect(failed.reason).toContain("chromium-cdp-9999");
-    // The hint joins as its own sentence — never run into the base error's tail.
-    expect(failed.reason).toMatch(/for the cause\. A clean exit/);
+    // The hint starts its own line, never run into the app's last stderr line.
+    expect(failed.reason).toMatch(/another instance is running\nA clean exit/);
     // "is running" was verified, not assumed: the attached port got re-probed.
     expect(ensureCdpReachable).toHaveBeenCalledWith(9999, expect.anything());
     // Nothing was booted, so nothing is torn down — least of all the pinned one.
@@ -1397,7 +1433,7 @@ describe("flow-execute chromium boot", () => {
       cdp: { send: vi.fn(async () => ({})) },
     }));
     bootElectronApp.mockImplementationOnce(async () => {
-      throw lockShapedBootError(12345);
+      throw lockShapedBootError();
     });
     ensureCdpReachable.mockImplementationOnce(async () => {
       throw new Error("connect ECONNREFUSED 127.0.0.1:9999");
@@ -1430,7 +1466,7 @@ describe("flow-execute chromium boot", () => {
     }));
     // app-b's boot succeeds (moving the run onto an owned instance); app-lock's fails.
     bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
-      throw lockShapedBootError(12346);
+      throw lockShapedBootError();
     });
 
     const result = await runFlow(registry, {
@@ -1468,7 +1504,7 @@ describe("flow-execute chromium boot", () => {
     const registry = makeRegistry();
     // The hoisted boot succeeds; app-b's fails lock-shaped.
     bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
-      throw lockShapedBootError(12346);
+      throw lockShapedBootError();
     });
 
     const result = await runFlow(registry, {
@@ -1514,7 +1550,7 @@ describe("flow-execute chromium boot", () => {
       .mockImplementationOnce(defaultBoot)
       .mockImplementationOnce(defaultBoot)
       .mockImplementationOnce(async () => {
-        throw lockShapedBootError(12347);
+        throw lockShapedBootError();
       });
 
     const result = await runFlow(registry, {
@@ -1539,7 +1575,7 @@ describe("flow-execute chromium boot", () => {
     );
     const registry = makeRegistry();
     bootElectronApp.mockImplementationOnce(defaultBoot).mockImplementationOnce(async () => {
-      throw lockShapedBootError(12346);
+      throw lockShapedBootError();
     });
     // Keyed on the port, not call order: the suspects are probed in parallel, so
     // a `once` handler would attach to whichever probe happened to run first.
@@ -1605,7 +1641,7 @@ describe("flow-execute chromium boot", () => {
     }));
     bootElectronApp.mockImplementationOnce(async () => {
       throw new FailureError(
-        "Electron boot: child process exited with code 1 before CDP was ready. Inspect [chromium-cdp-12345] stderr above for the cause.",
+        "Electron boot: child process exited with code 1 before CDP was ready. Its stderr ended with:\nError: boom",
         {
           error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
           failure_stage: "electron_early_exit",
@@ -1639,7 +1675,7 @@ describe("flow-execute chromium boot", () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
     const registry = makeRegistry();
     bootElectronApp.mockImplementationOnce(async () => {
-      throw lockShapedBootError(12345);
+      throw lockShapedBootError();
     });
 
     const rejection = runFlow(registry, {
@@ -1651,6 +1687,7 @@ describe("flow-execute chromium boot", () => {
     // The underlying error survives the rewording; the hint follows it.
     await expect(rejection).rejects.toThrow(/exited with code 0 before CDP was ready/);
     await expect(rejection).rejects.toThrow(/single-instance lock/i);
+    await expect(rejection).rejects.toThrow(/another instance is running\nA clean exit/);
     // A hoisted run attached to nothing, so no instance is named as the holder
     // (and none is probed for liveness).
     await expect(rejection).rejects.toThrow(/close it and rerun/);
@@ -1693,7 +1730,7 @@ describe("flow-execute chromium boot", () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n");
     const registry = makeRegistry();
     const raw = new FailureError(
-      "Electron boot: child process exited with code 1 before CDP was ready. Inspect [chromium-cdp-12345] stderr above for the cause.",
+      "Electron boot: child process exited with code 1 before CDP was ready. Its stderr ended with:\nError: boom",
       {
         error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
         failure_stage: "electron_early_exit",

@@ -177,9 +177,9 @@ export class CDPClient {
     this.awaitPromisesInApp = options?.awaitPromisesInApp === true;
   }
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
     if (!this.sendOrigin) {
-      await this.open(undefined);
+      await this.open(undefined, timeoutMs);
       return;
     }
 
@@ -193,7 +193,7 @@ export class CDPClient {
     const attempt = async (origin: string | undefined) => {
       if (!origin || tried.includes(origin)) return false;
       tried.push(origin);
-      if ((await this.open(origin)) === "rejected") return false;
+      if ((await this.open(origin, timeoutMs)) === "rejected") return false;
       acceptedOrigins.set(metro, origin);
       return true;
     };
@@ -235,7 +235,7 @@ export class CDPClient {
    * close frame, is not about the Origin: the socket counts as opened and then
    * lost, as it would without the window.
    */
-  private open(origin: string | undefined): Promise<"open" | "rejected"> {
+  private open(origin: string | undefined, timeoutMs: number): Promise<"open" | "rejected"> {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.wsUrl, origin ? { headers: { Origin: origin } } : undefined);
       this.ws = ws;
@@ -301,7 +301,7 @@ export class CDPClient {
         reject(
           new FailureError(
             `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
-              `${DEFAULT_TIMEOUT_MS}ms. The host may be unreachable, or the target frozen ` +
+              `${timeoutMs}ms. The host may be unreachable, or the target frozen ` +
               `or not a CDP endpoint.`,
             {
               error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
@@ -312,7 +312,7 @@ export class CDPClient {
             }
           )
         );
-      }, DEFAULT_TIMEOUT_MS);
+      }, timeoutMs);
       const cleanup = () => {
         clearTimeout(timer);
         clearTimeout(settle);

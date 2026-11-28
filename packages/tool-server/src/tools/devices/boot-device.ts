@@ -119,6 +119,7 @@ import { HARMONY_FLAG } from "../../utils/harmony-flag";
 import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { UITEST_TIMEOUT_MS, harmonyDisplay, harmonyDumpLayout } from "../../utils/harmony-uitest";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
+import { BROWSER_NAMES, bootBrowser } from "./boot-browser";
 import { bootMacosApp, type MacosBootResult } from "./boot-macos";
 
 const execFileAsync = promisify(execFile);
@@ -147,12 +148,13 @@ type BootDeviceResult =
 
 function bootTarget(params: BootDeviceParams): string {
   return (
-    params.udid ??
-    params.avdName ??
-    params.vvdImage ??
-    params.harmonyInstance ??
-    params.electronAppPath ??
-    params.macosAppPath ??
+    params.udid ||
+    params.avdName ||
+    params.vvdImage ||
+    params.harmonyInstance ||
+    params.electronAppPath ||
+    params.browser ||
+    params.macosAppPath ||
     "device"
   );
 }
@@ -2756,7 +2758,7 @@ function bootHarmony(params: {
 const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
   android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
   chromium:
-    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`.",
+    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`, or a web browser, `browser`.",
   vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
 };
 
@@ -2802,7 +2804,7 @@ const capability: ToolCapability = {
 };
 
 // The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`/
-// `macosAppPath` lives in `execute`; the tool description states the constraint for MCP clients.
+// `browser`/`macosAppPath` lives in `execute`; the tool description states the constraint for MCP clients.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -2840,7 +2842,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Shut down and reboot even if already running.<flag:harmonyos> On HarmonyOS, also ties a running instance to its `hdc` connect key.</flag:harmonyos><flag:macos-apps> On a Mac app, quits and restarts the same .app build, including a copy running without the argent library (losing its unsaved changes); fails if the app shows a save prompt.</flag:macos-apps> Ignored for Electron."
+      "Shut down and reboot even if already running.<flag:harmonyos> On HarmonyOS, also ties a running instance to its `hdc` connect key.</flag:harmonyos><flag:macos-apps> On a Mac app, quits and restarts the same .app build, including a copy running without the argent library (losing its unsaved changes); fails if the app shows a save prompt.</flag:macos-apps> Ignored for Electron and browsers; an `electronPort` already in use fails the boot."
     ),
   sound: z
     .boolean()
@@ -2880,13 +2882,19 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot simulator core without opening Simulator.app (`ARGENT_SIMULATOR_NO_WINDOW=1` forces host-wide)."
+      "iOS only: boot simulator core without opening Simulator.app (`ARGENT_SIMULATOR_NO_WINDOW=1` forces host-wide). For a browser, pass `--headless=new` in `electronArgs`."
     ),
   electronAppPath: z
     .string()
     .optional()
     .describe(
       "Electron: path to `.app` bundle, executable, or project directory with `package.json`."
+    ),
+  browser: z
+    .enum(BROWSER_NAMES)
+    .optional()
+    .describe(
+      "Web: installed Chromium-family browser to launch with a fresh, throwaway profile, on `about:blank` unless `electronArgs` carries a start URL; navigate with `open-url`. Fails naming the installed ones if it is missing. `electronPort` and `electronArgs` apply (e.g. `--headless=new` for a host without a display)."
     ),
   electronPort: z
     .number()
@@ -2895,12 +2903,12 @@ const zodSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      "Electron only: CDP remote-debugging port (default: free port; id `chromium-cdp-<port>`)."
+      "Electron/browser only: CDP remote-debugging port (default: free port; id `chromium-cdp-<port>`)."
     ),
   electronArgs: z
     .array(z.string())
     .optional()
-    .describe("Electron only: extra CLI args forwarded to the Electron binary."),
+    .describe("Electron/browser only: extra CLI args forwarded to the Electron or browser binary."),
   macosAppPath: z
     .string()
     .optional()
@@ -2922,13 +2930,13 @@ export function createBootDeviceTool(
     id: "boot-device",
     // Boots routinely run past the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Start a target device or app and wait until ready: iOS simulator, Android emulator, Vega VVD, <flag:harmonyos>HarmonyOS emulator, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Electron app.
-Use when starting a stopped target; pass exactly one target key (\`udid\`, \`avdName\`, \`vvdImage\`, <flag:harmonyos>\`harmonyInstance\`, </flag:harmonyos><flag:macos-apps>\`macosAppPath\`, </flag:macos-apps>or \`electronAppPath\`).
-Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`id\`), \`booted\`, and optional \`note\`.<flag:harmonyos> HarmonyOS starts the instance via DevEco Studio's Emulator manager and waits for its \`hdc\` connect key as \`udid\` (images are served only in mainland China; \`note\` explains any unproven key/readiness).</flag:harmonyos> Fails if the target is missing or cannot boot (failed Android/Electron spawns are cleaned up automatically).`,
+    description: `Start a target device or app and wait until ready: iOS simulator, Android emulator, Vega VVD, <flag:harmonyos>HarmonyOS emulator, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>Electron app, or web browser.
+Use when starting a stopped target or when a web app needs a browser; pass exactly one target key (\`udid\`, \`avdName\`, \`vvdImage\`, <flag:harmonyos>\`harmonyInstance\`, </flag:harmonyos><flag:macos-apps>\`macosAppPath\`, </flag:macos-apps>\`electronAppPath\`, or \`browser\`).
+Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`id\`), \`booted\`, and optional \`note\`.<flag:harmonyos> HarmonyOS starts the instance via DevEco Studio's Emulator manager and waits for its \`hdc\` connect key as \`udid\` (images are served only in mainland China; \`note\` explains any unproven key/readiness).</flag:harmonyos> Fails if the target is missing or cannot boot (failed Android/Electron/browser spawns are cleaned up automatically).`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
-      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot electron browser chrome chromium edge brave web",
     interaction: {
       startedMsg: ({ params }) =>
         `${params.prepareOnly ? "Preparing" : "Starting"} ${bootTarget(params)}`,
@@ -2939,20 +2947,27 @@ Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`
     },
     capability,
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const hasUdid = Boolean(params.udid);
       const hasAvd = Boolean(params.avdName);
       const hasVega = Boolean(params.vvdImage);
       const hasHarmony = Boolean(params.harmonyInstance);
       const hasElectron = Boolean(params.electronAppPath);
+      const hasBrowser = Boolean(params.browser);
       const hasMacos = Boolean(params.macosAppPath);
-      const provided = [hasUdid, hasAvd, hasVega, hasHarmony, hasElectron, hasMacos].filter(
-        Boolean
-      ).length;
+      const provided = [
+        hasUdid,
+        hasAvd,
+        hasVega,
+        hasHarmony,
+        hasElectron,
+        hasBrowser,
+        hasMacos,
+      ].filter(Boolean).length;
       if (provided !== 1) {
         throw new InvalidToolInputError(
           renderFlagGated(
-            "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos><flag:macos-apps>`macosAppPath` (Mac app), </flag:macos-apps>or `electronAppPath` (Electron).",
+            "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos><flag:macos-apps>`macosAppPath` (Mac app), </flag:macos-apps>`electronAppPath` (Electron), or `browser` (web browser).",
             isFlagOffered
           ),
           {
@@ -3082,9 +3097,18 @@ Returns a platform-tagged payload with the target id (\`udid\` / \`serial\` / \`
           force: params.force,
         });
       }
+      if (hasBrowser) {
+        return bootBrowser({
+          browser: params.browser!,
+          port: params.electronPort,
+          extraArgs: params.electronArgs,
+          signal: ctx?.signal,
+        });
+      }
       return bootElectronApp({
         appPath: params.electronAppPath!,
         port: params.electronPort,
+        signal: ctx?.signal,
         extraArgs: params.electronArgs,
       });
     },

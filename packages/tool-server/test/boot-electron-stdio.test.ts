@@ -10,11 +10,11 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { StdioOptions } from "node:child_process";
 import { scopeTempHome } from "./helpers/temp-home";
+import { createCdpStub } from "./helpers/cdp-stub";
 
 scopeTempHome("argent-boot-electron-stdio-home-");
 
@@ -72,26 +72,14 @@ beforeEach(() => {
   spawnMock.mockReset();
 });
 
-/** Minimal CDP stub: only /json/version, which is all waitForCdpReady probes. */
-async function startCdpStub(): Promise<{ port: number; close: () => void }> {
-  const srv = http.createServer((req, res) => {
-    res.setHeader("content-type", "application/json");
-    if (req.url === "/json/version") {
-      res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
-      return;
-    }
-    res.statusCode = 404;
-    res.end();
-  });
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const { port } = srv.address() as { port: number };
-  return { port, close: () => srv.close() };
-}
-
 /** Boot once against a stub CDP endpoint and return the stdio it spawned with. */
 async function bootAndCaptureStdio(): Promise<StdioOptions> {
-  spawnMock.mockReturnValue(makeFakeChild());
-  const { port, close } = await startCdpStub();
+  const child = makeFakeChild();
+  const { port, listen, close } = await createCdpStub();
+  spawnMock.mockImplementation(() => {
+    listen();
+    return child;
+  });
   try {
     await bootElectronApp({ appPath: appDir, port, readyTimeoutMs: 5000 });
   } finally {
