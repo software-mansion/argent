@@ -16,7 +16,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -482,37 +482,27 @@ const profilerLoadAction = {
 const zodSchema = z.object({
   mode: z
     .enum(["list", "load_react", "load_native"])
-    .describe("What to do; see Modes in the tool description."),
+    .describe("`list`, `load_react`, or `load_native`."),
   session_id: z
     .string()
     .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
     .optional()
-    .describe("Timestamp-based session identifier (e.g. '20250313-143022') from the list output."),
+    .describe("Session ID from `list` (required for `load_*`)."),
   port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
-  ),
+  device_id: metroDeviceIdParam("Device id from `list-devices` to bind the loaded session to."),
   app_process: z
     .string()
     .optional()
-    .describe(
-      "Android package name to pass when restoring an older load_native .pftrace session that has no metadata sidecar."
-    ),
+    .describe("Android package name for legacy `.pftrace` sessions without metadata."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 export const profilerLoadTool: ToolDefinition<Params, string> = {
   id: "profiler-load",
-  description: `Fetch and restore a profiling session that react-profiler-stop or native-profiler-stop saved to disk, so the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query) can read it.
-Use when you need to revisit past session data without capturing a new recording.
-Modes:
-- list: Show all available profiling sessions in the project's debug directory.
-- load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_native: Restore native trace data (xctrace XML on iOS<flag:macos-apps> and Mac apps</flag:macos-apps>, .pftrace on Android). Requires session_id.
-Loading replaces the session in memory for this device_id (and Metro port, for React): the one the query tools and react-profiler-analyze read. The replaced session stays on disk; load it again by its session_id.
-Returns a summary of the loaded session or a session list for the list mode.
-Fails if the session_id is not found or the session's trace files are missing from disk.`,
+  description: `List or restore saved React/native profiling sessions from disk into memory for \`profiler-*-query\` / \`react-profiler-analyze\` (\`load_react\` loads CPU+commits; \`load_native\` loads xctrace on iOS<flag:macos-apps>/Mac apps</flag:macos-apps> or \`.pftrace\` on Android).
+Use when revisiting past sessions without re-recording (replaces the in-memory session for \`device_id\` without deleting disk files).
+Returns a session list or loaded summary. Fails if \`session_id\` or its files are missing.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
@@ -523,7 +513,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
   // Physical iPhones load the xctrace sessions native-profiler-launch-analysis writes.
-  capability: { ...REACT_PROFILER_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
+  capability: { ...RN_ONLY_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

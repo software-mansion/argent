@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { getFailureSignal, type DeviceInfo } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  Registry,
+  getFailureSignal,
+  type DeviceInfo,
+} from "@argent/registry";
 import { toSimulatorNetworkError } from "../src/utils/format-error";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
@@ -77,6 +83,17 @@ vi.mock("../src/tools/screen-recording/mjpeg-stream", () => ({
   openMjpegStream: (url: string) => openMjpegStreamMock(url),
 }));
 
+// Only `runAdb` is replaced; the physical-phone path probes `adb reverse` and
+// reaps the screen-sharing agent through it (#1161).
+const runAdbMock = vi.fn(async (_args: string[], _options?: { timeoutMs?: number }) => ({
+  stdout: "",
+  stderr: "",
+}));
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  runAdb: (args: string[], options?: { timeoutMs?: number }) => runAdbMock(args, options),
+}));
+
 function makeFakeProc() {
   const proc = new EventEmitter() as EventEmitter & {
     stdout: Readable;
@@ -139,6 +156,7 @@ async function startAdbFallback(serial: string, port: number, discoveryStderr: s
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
+    runAdbMock.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
     androidSdkRootMock.mockReturnValue(null);
     clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
@@ -257,6 +275,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
   it.each([
     'Error: emulator "emulator-5570" not found among running emulators\n',
+    'Error: emulator "emulator-5570" did not answer on gRPC port 8570 within 20s\n',
     "Error: Failed to find any running emulator\n",
     "Error: transport error\nCaused by:\n    0: tcp connect error: Connection refused (os error 61)\n",
     "Error: transport error\nCaused by:\n    0: tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)\n",
@@ -386,7 +405,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
   });
 
-  it("pressKey writes the shared stdin command protocol regardless of platform", async () => {
+  it("pressKey sends the key over the acknowledged websocket, not stdin (#2030)", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
@@ -399,8 +418,28 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await instance.api.pressKey("Down", 0x29);
     await instance.api.pressKey("Up", 0x29);
 
-    expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
-    expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
+    // With the longer key budget: a key that times out loses its Up (#2030).
+    const { KEY_ACK_TIMEOUT_MS } = await import("../src/utils/simulator-client");
+    const budget = { ackTimeoutMs: KEY_ACK_TIMEOUT_MS };
+    expect(sendCommandMock.mock.calls).toEqual([
+      [instance.api, { cmd: "key", code: 0x29, direction: "Down" }, budget],
+      [instance.api, { cmd: "key", code: 0x29, direction: "Up" }, budget],
+    ]);
+    expect(fakeProc.stdin.write).not.toHaveBeenCalled();
+  });
+
+  it("pressKey rejects when the server does not acknowledge the key", async () => {
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55559);
+    const instance = await factoryPromise;
+
+    sendCommandMock.mockRejectedValueOnce(new Error("no ack"));
+    await expect(instance.api.pressKey("Down", 0x04)).rejects.toThrow("no ack");
   });
 
   it("sends capture_on_demand while a profiler records, and nothing once disposed", async () => {
@@ -729,5 +768,245 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
     expect(fetchMock).not.toHaveBeenCalled();
     expect(instance.api.display).toBeUndefined();
     await instance.dispose();
+  });
+});
+
+describe("simulatorServerBlueprint — reaps the on-device screen-sharing agent (#1161)", () => {
+  // Pins the argv: a broader pattern would also kill Android Studio's device
+  // mirror, which runs the same class from the same path.
+  const SERIAL = "HT82A0203045";
+  const SOCKET = "screen-sharing-agent-46527";
+  const PKILL = ["-s", SERIAL, "shell", `pkill -f 'screensharing[.]Main.*--socket=${SOCKET}'`];
+  const UNREVERSE = ["-s", SERIAL, "reverse", "--remove", `localabstract:${SOCKET}`];
+
+  const physicalDevice = (): DeviceInfo => ({ id: SERIAL, platform: "android", kind: "device" });
+  const listed = (socket: string) =>
+    `${SERIAL} localabstract:${socket} tcp:${socket.split("-").pop()}\n`;
+
+  /** `adb reverse --list` answers in order, the last repeating; an Error fails the probe. */
+  function reverseListReturns(...outputs: (string | Error)[]) {
+    let call = 0;
+    runAdbMock.mockImplementation(async (args: string[]) => {
+      if (args[args.length - 1] !== "--list") return { stdout: "", stderr: "" };
+      const answer = outputs[Math.min(call++, outputs.length - 1)]!;
+      if (answer instanceof Error) throw answer;
+      return { stdout: answer, stderr: "" };
+    });
+  }
+
+  const reapCalls = () =>
+    runAdbMock.mock.calls.map(([args]) => args).filter((a) => a[a.length - 1] !== "--list");
+
+  /** A fake that exits on SIGTERM, as the real binary does, unless told not to. */
+  function exitingProc({ exitOnKill = true } = {}) {
+    const proc = makeFakeProc();
+    proc.kill = vi.fn(() => {
+      if (exitOnKill) setImmediate(() => proc.emit("exit", 0, null));
+      return true;
+    });
+    return proc;
+  }
+
+  async function startPhone(proc: ReturnType<typeof makeFakeProc>) {
+    spawnMock.mockReturnValue(proc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = physicalDevice();
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(proc, 55560);
+    return factoryPromise;
+  }
+
+  async function settle() {
+    const { settleAgentReaps } = await import("../src/utils/android-agent-reap");
+    await settleAgentReaps(10_000);
+  }
+
+  beforeEach(async () => {
+    spawnMock.mockReset();
+    runAdbMock.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    const { __resetDepCacheForTests, __primeDepCacheForTests } =
+      await import("../src/utils/check-deps");
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("kills only this session's agent and drops its reverse mapping, once", async () => {
+    reverseListReturns("", listed(SOCKET));
+    const proc = exitingProc();
+    const instance = await startPhone(proc);
+
+    await instance.dispose();
+    await settle();
+    expect(reapCalls()).toEqual([PKILL, UNREVERSE]);
+
+    await instance.dispose();
+    await settle();
+    expect(reapCalls()).toHaveLength(2);
+    expect(proc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("reaps when the process exits on its own, through a real Registry teardown", async () => {
+    reverseListReturns("", listed(SOCKET));
+    const proc = exitingProc();
+    spawnMock.mockReturnValue(proc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const registry = new Registry();
+    registry.registerBlueprint(simulatorServerBlueprint);
+    const resolved = registry.resolveService(`SimulatorServer:${SERIAL}`, {
+      device: physicalDevice(),
+    });
+    signalReady(proc, 55561);
+    await resolved;
+
+    proc.emit("exit", 137, "SIGKILL");
+    await vi.waitFor(() => expect(reapCalls()).toEqual([PKILL, UNREVERSE]));
+    await registry.dispose();
+    await settle();
+    expect(reapCalls()).toHaveLength(2);
+  });
+
+  it("still sees an exit that happens while the post-ready probe is in flight", async () => {
+    // The probe is not awaited before the exit listener is attached, so the
+    // registry learns about the exit and the agent is still reaped.
+    let releaseProbe: (() => void) | undefined;
+    let listCalls = 0;
+    runAdbMock.mockImplementation(async (args: string[]) => {
+      if (args[args.length - 1] !== "--list") return { stdout: "", stderr: "" };
+      if (listCalls++ === 0) return { stdout: "", stderr: "" };
+      await new Promise<void>((resolve) => (releaseProbe = resolve));
+      return { stdout: listed(SOCKET), stderr: "" };
+    });
+    const proc = exitingProc();
+    spawnMock.mockReturnValue(proc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const registry = new Registry();
+    registry.registerBlueprint(simulatorServerBlueprint);
+    const urn = `SimulatorServer:${SERIAL}`;
+    const resolved = registry.resolveService(urn, { device: physicalDevice() });
+    signalReady(proc, 55562);
+    await resolved;
+
+    const states: string[] = [];
+    registry.events.on("serviceStateChange", (u, _from, to) => {
+      if (u === urn) states.push(String(to));
+    });
+    proc.emit("exit", 7, null);
+    await vi.waitFor(() => expect(states.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(releaseProbe).toBeDefined());
+    releaseProbe!();
+    await vi.waitFor(() => expect(reapCalls()).toEqual([PKILL, UNREVERSE]));
+  });
+
+  it("does not hold dispose on a phone that stopped answering", async () => {
+    reverseListReturns("", listed(SOCKET));
+    const instance = await startPhone(exitingProc());
+    const hung: (() => void)[] = [];
+    runAdbMock.mockImplementation(
+      () => new Promise((resolve) => hung.push(() => resolve({ stdout: "", stderr: "" })))
+    );
+
+    // Resolves at once: the services after this one still get their SIGTERM.
+    await expect(instance.dispose()).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(hung).toHaveLength(2));
+    hung.forEach((release) => release());
+    await settle();
+  });
+
+  it("touches no adb for an emulator", async () => {
+    const proc = exitingProc();
+    spawnMock.mockReturnValue(proc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(proc, 55563);
+    await (await factoryPromise).dispose();
+    await settle();
+    expect(runAdbMock).not.toHaveBeenCalled();
+  });
+
+  it("reaps nothing when the spawn fails before ready, even if a new socket appeared", async () => {
+    // With no live binary to own it, the new entry may be an Android Studio
+    // mirror that started in the same window.
+    reverseListReturns("", listed(SOCKET));
+    const proc = makeFakeProc();
+    spawnMock.mockReturnValue(proc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = physicalDevice();
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    setImmediate(() => proc.emit("exit", 1, null));
+    await expect(factoryPromise).rejects.toThrow();
+    await settle();
+    expect(runAdbMock.mock.calls).toHaveLength(1);
+    expect(reapCalls()).toEqual([]);
+  });
+
+  it("kills nothing when the diff is empty, ambiguous, or the baseline probe failed", async () => {
+    const foreign = listed("screen-sharing-agent-41111");
+    const offline = new Error("adb: error: device offline");
+    const cases: [string | Error, string][] = [
+      ["", ""],
+      [foreign, foreign + listed(SOCKET) + listed("screen-sharing-agent-42222")],
+      [offline, foreign],
+    ];
+    for (const [before, after] of cases) {
+      spawnMock.mockReset();
+      runAdbMock.mockReset();
+      reverseListReturns(before, after);
+      const instance = await startPhone(exitingProc());
+      await instance.dispose();
+      await settle();
+      expect(reapCalls()).toEqual([]);
+    }
+  });
+
+  it("lets the binary exit first, and reaps anyway when it does not within the grace", async () => {
+    reverseListReturns("", listed(SOCKET));
+    const proc = exitingProc({ exitOnKill: false });
+    const instance = await startPhone(proc);
+
+    vi.useFakeTimers();
+    await instance.dispose();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(reapCalls()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.useRealTimers();
+    await settle();
+    expect(reapCalls()).toEqual([PKILL, UNREVERSE]);
+  });
+
+  it("logs only an agent it really stopped, not one that was already gone", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const lines = () => stderr.mock.calls.map(([l]) => String(l)).join("");
+    try {
+      reverseListReturns("", listed(SOCKET));
+      const instance = await startPhone(exitingProc());
+      runAdbMock.mockRejectedValue(
+        new FailureError("adb exited 1", {
+          error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+          failure_stage: "android_adb_command",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_exit_code: 1,
+        })
+      );
+      await instance.dispose();
+      await settle();
+      expect(lines()).not.toMatch(/screen-sharing agent/);
+
+      spawnMock.mockReset();
+      runAdbMock.mockReset();
+      reverseListReturns("", listed(SOCKET));
+      const second = await startPhone(exitingProc());
+      await second.dispose();
+      await settle();
+      expect(lines()).toMatch(/stopped a leftover screen-sharing agent on HT82A0203045/);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

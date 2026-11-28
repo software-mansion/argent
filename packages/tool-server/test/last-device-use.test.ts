@@ -72,6 +72,8 @@ describe("lastDeviceUse", () => {
       [`NativeProfilerSession:${UDID}`]: { lastUsedAt: 200 },
       "AndroidTvControl:emulator-5554": { lastUsedAt: 300 },
       "AndroidNetworkInspector:emulator-5554:com.example": { lastUsedAt: 400 },
+      "AndroidNetworkShaper:emulator-5554": { lastUsedAt: 500 },
+      "AndroidChromeCdp:emulator-5554": { lastUsedAt: 600 },
     });
 
     expect(lastDeviceUse(services, [UDID, "emulator-5554"]).size).toBe(0);

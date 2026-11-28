@@ -8,8 +8,17 @@ import { settleWithin, sleepOrAbort } from "./timing";
  * this loop owns timing, cancellation, and the fetch lifecycle.
  */
 
-/** Verdict from evaluating one successfully-fetched tree. */
-type PollVerdict<R> = { done: true; result: R } | { done: false };
+const UNWAITABLE_FAILURES: ReadonlySet<string> = new Set([
+  FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
+  FAILURE_CODES.VEGA_MULTIPLE_DEVICES,
+]);
+
+/**
+ * Verdict from evaluating one successfully-fetched tree. `waitMs` replaces the
+ * poll interval before the next fetch, for a predicate that knows when a fetch
+ * can end the wait.
+ */
+type PollVerdict<R> = { done: true; result: R } | { done: false; waitMs?: number };
 
 interface PollDescribeTreeArgs<R> {
   /**
@@ -74,6 +83,7 @@ export async function pollDescribeTree<R>(
     const remaining = Math.max(0, deadline - Date.now());
     const settled = await settleWithin(fetchTree(remaining), remaining, signal);
     polls += 1;
+    let waitMs = pollIntervalMs;
 
     if (settled.type === "aborted") return outcome(undefined, true);
     lastAttempt =
@@ -88,23 +98,20 @@ export async function pollDescribeTree<R>(
       break;
     }
     if (settled.type === "error") {
-      // Waiting cannot end this one, and a timeout result would hide what to do.
-      if (
-        getFailureSignal(settled.cause)?.error_code ===
-        FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
-      ) {
-        throw settled.cause;
-      }
+      // Waiting cannot end these, and a timeout result would hide what to do.
+      const code = getFailureSignal(settled.cause)?.error_code;
+      if (code && UNWAITABLE_FAILURES.has(code)) throw settled.cause;
       lastError = settled.error;
     } else {
       lastData = settled.value;
       lastError = undefined;
       const verdict = onSample(settled.value, Date.now());
       if (verdict.done) return outcome(verdict.result, false);
+      waitMs = verdict.waitMs ?? pollIntervalMs;
     }
 
     if (Date.now() >= deadline) break;
-    const sleepMs = Math.min(pollIntervalMs, Math.max(0, deadline - Date.now()));
+    const sleepMs = Math.min(waitMs, Math.max(0, deadline - Date.now()));
     if (!(await sleepOrAbort(sleepMs, signal))) return outcome(undefined, true);
   }
 

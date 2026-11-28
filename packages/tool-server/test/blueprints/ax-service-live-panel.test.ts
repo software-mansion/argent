@@ -71,7 +71,7 @@ vi.mock("../../src/utils/ios-host", async () => {
     pickIosHost: () => ({
       kind: "local",
       requiresTcp: false,
-      bootstrapAx: async () => ({ entitlementBypassActive: true }),
+      bootstrapAx: async () => ({ accessibilityPrefsEnabled: true }),
       spawnAxDaemon: (_udid: string, endpoint: IosEndpoint) => fakeDaemon(endpoint),
       startProxy: async () => {},
       stopProxy: async () => {},

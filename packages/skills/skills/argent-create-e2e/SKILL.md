@@ -1,6 +1,6 @@
 ---
 name: argent-create-e2e
-description: Create, record, edit, replay, or repair reusable Argent e2e test YAML files. Use when the user asks to record, replay, or run an e2e test or a repeatable device path, set up profiling or an A/B comparison, or invoke the authoring engine behind argent-qa-e2e. Also use before repeating three or more interactions. For one-off UI checks, acceptance-driven regression tests, or screen video, use argent-test-ui-flow, argent-qa-e2e, or argent-screen-recording respectively.
+description: Create, record, edit, replay, or repair reusable Argent e2e test YAML files. Use when the user asks to record, replay, or run an e2e test or repeatable path, set up profiling/A-B comparison, or before repeating 3+ interactions. For one-off UI checks, writing QA regression tests, or screen video, use argent-test-ui-flow, argent-qa-e2e, or argent-screen-recording.
 ---
 
 # Create an Argent e2e test
@@ -39,6 +39,9 @@ During polish, use `within`, `after`, and `next` to disambiguate repeated elemen
 1. Choose the e2e test type:
    - **standalone:** the first step that is not `echo:` or `script:` is `launch:`. The test controls process start.
    - **fragment:** there is no leading launch. Declare a precise `executionPrerequisite`.
+
+   When a test needs the state that an earlier test leaves, put both in a [suite](references/e2e-yaml.md#suites).
+
 2. Follow [Live authoring](references/live-authoring.md): start, record one verified step at a time, finish, polish, audit, and replay.
 3. Report the file, replay command, result, prerequisite or side effects, and every coordinate or raw-gesture exception.
 

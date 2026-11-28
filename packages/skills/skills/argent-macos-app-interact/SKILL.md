@@ -1,6 +1,6 @@
 ---
 name: argent-macos-app-interact
-description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Mac Catalyst) through argent. Use when a list-devices entry has platform "macos", or the user names a Mac app, a macOS app or a native desktop app. Never for an iOS simulator, an iPhone, or an Electron or Chromium app (platform "chromium").
+description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos, Catalyst) with Argent. Use when targeting platform "macos" or a native macOS app, never iOS or Electron/Chromium.
 ---
 
 `argent-device-interact` still applies for everything not listed here (`run-sequence`, `await-ui-element`, secrets).
@@ -55,4 +55,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## React Native
 
-For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Inspect the UI with `describe`. The JavaScript debugger tools are unavailable for Mac apps.
+For React Native Debug builds on macOS, including Mac Catalyst, start Metro before `boot-device` (see `argent-react-native-app-workflow`). Use `describe` for UI targets. For JavaScript debugging and network capture, load `argent-metro-debugger` and follow [React Native Mac apps](../argent-metro-debugger/SKILL.md#react-native-mac-apps) and [Inspect network requests](../argent-metro-debugger/SKILL.md#inspect-network-requests).

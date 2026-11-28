@@ -292,7 +292,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
+      "Device ID from `list-devices` (or `logicalDeviceId` if shared Metro capture used it)<flag:macos-apps>; Mac app: Mac app id `macos-app-<bundle id>`</flag:macos-apps>."
     ),
   // `.default` covers only an omitted param, and `z.coerce.number()` reads null as 0, so
   // null would return the oldest page. Agents send null for "not set": read it as "latest".
@@ -301,20 +301,14 @@ const zodSchema = z.object({
     .nullable()
     .default("latest")
     .transform((value) => value ?? "latest")
-    .describe(
-      'Page index (0-based) or "latest" for the most recent page. Each page contains up to 50 entries.'
-    ),
+    .describe('0-based page index, or `"latest"`/null for newest (50 entries/page).'),
 });
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `Retrieve captured network (HTTP) requests from the running app.
-Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
-A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
-Pass an entry's requestId to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) an interceptor injected into the JS runtime records each request once, from XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and, in a Metro development build, a fetch library that sends through React Native's network module itself, such as react-native-fetch-api. On iOS and Android this tool only reads: call network-capture-start first, then repeat the action; until then it says capture is not started. A reload clears the requests and stops recording until network-capture-start runs again, which the answer says. On Vega capture starts at the first network-tool call. On Chromium it reads the CDP Network domain of the active tab (all request types).
-Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
-Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
+  description: `List captured JS HTTP requests (React Native) or active-tab requests (Chromium). Call \`network-capture-start\` first on iOS<flag:macos-apps>/Mac apps</flag:macos-apps>/Android (on Vega, reading starts capture). Use \`native-network-logs\` for native traffic.
+Use when finding requests or comparing API calls (pass an ID to \`view-network-request-details\` for headers/bodies).
+Returns a paginated list of request IDs, status, size, and timing. Fails if Chromium or the JS debugger is unreachable.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -330,7 +324,7 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       return { chromium: chromiumCdpRef(device) };
     }
     const payload = jsCapturePayload(jsReadPort(params), canonicalDeviceId(params.device_id)!);
-    // Vega has no network-capture-start, so its read still installs the interceptor.
+    // JS capture starts on read for Vega, which network-capture-start does not cover.
     if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
     // A read never starts capture: before a start it reaches nothing in the app.
     const capture = jsCapture(payload);

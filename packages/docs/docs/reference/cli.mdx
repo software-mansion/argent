@@ -2,6 +2,7 @@
 sidebar_position: 1
 sidebar_label: CLI
 title: CLI reference
+description: "Reference for the argent command-line tool: init, update, tools, run, e2e, config, secrets, telemetry and the other commands."
 sidebar_custom_props:
   icon: terminal
 ---
@@ -13,6 +14,7 @@ sidebar_custom_props:
 | `argent update`    | Pull the latest version and refresh workspace configuration. Acts on the present install; `--global` and `--local` select explicitly when both coexist.                                                                                                                     |
 | `argent uninstall` | Unregister the MCP server and uninstall the package. `--global` and `--local` choose which install is removed; non-interactive runs never remove a coexisting global install.                                                                                               |
 | `argent remove`    | Alias for `uninstall`                                                                                                                                                                                                                                                       |
+| `argent doctor`    | Check the install, the editor MCP entries, the skills and rules, and the Xcode and `adb` toolchains. It prints advice for each failed check (`--verbose` also lists the passed checks) and exits with code `1` on an error (`✖`), `0` when there are only warnings (`⚠`)    |
 | `argent mcp`       | Start an MCP server instance, used internally by the agent                                                                                                                                                                                                                  |
 | `argent tools`     | List tools exposed by the tool-server (`describe <name>` for details)                                                                                                                                                                                                       |
 | `argent run`       | Invoke a tool by name. The command exits with status 1 when the tool fails or when the result reports a failure (see [Tool-server API](/docs/reference/tool-server-api#failure-in-the-response))                                                                            |
@@ -36,11 +38,37 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 
 `argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
 
+Global installations support [automatic updates](/docs/features/automatic-updates). Project-local installations, and a tool server started with `argent server start`, require confirmation.
+
+After an update, the agent tells you the main changes once, on its first Argent tool call (`argent disable whats-new` turns this off).
+
 `argent uninstall` exits with code `1` when a package removal fails, or when a global `argent` is still on `PATH` after the removal.
 
 When you pass `--commit_index` or `--hang_index` to `argent run`, supply an integer.
 The CLI rejects empty or whitespace-only values.
 To send JSON `null`, use `--commit_index-json null` or `--hang_index-json null`.
 
+Set the `ARGENT_UDID` environment variable to give `argent run` a default device.
+When a tool requires `--udid` or `--device_id` and the call does not pass it, `argent run` uses the value of `ARGENT_UDID`.
+The value is a device ID from `list-devices`, for example an iOS simulator UDID or an Android serial.
+A flag or a field in `--args` takes precedence over the variable.
+`argent run` does not use the variable for an optional device field, for example `--udid` of `boot-device`, or for a tool without a device field.
+`argent e2e` does not read `ARGENT_UDID`.
+
+```bash
+export ARGENT_UDID=emulator-5554
+argent run screenshot --out ./screen.png
+argent run gesture-tap --x 0.5 --y 0.5
+argent run describe --udid <OTHER_UDID>
+```
+
 `argent server start` uses the same Node.js executable as the CLI in both foreground and detached mode.
 If that executable no longer exists, or the CLI runs under Bun, Deno or Electron, Argent uses `node` from `PATH`.
+
+`argent server start --json` prints one JSON line on stdout when the tool-server listens: `url`, `port`, `pid` and `token`. With `--no-auth`, the line has no `token`. For a wildcard host such as `0.0.0.0`, the `url` uses the loopback address. In the foreground, the output of the tool-server goes to stderr. The command exits with a non-zero code when the tool-server stops before it listens. To start a tool-server for a script, run this command:
+
+```bash
+ARGENT_HOME_DIR=/tmp/argent-ci argent server start --port 0 --detach --json
+```
+
+See [`ARGENT_HOME_DIR`](/docs/reference/configuration#argent-home) to keep the state of that tool-server apart from the global install.

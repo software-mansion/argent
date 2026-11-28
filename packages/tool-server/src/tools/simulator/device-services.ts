@@ -2,6 +2,8 @@ import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../blueprints/ios-device-runner";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
+import { ANDROID_NETWORK_SHAPER_NAMESPACE } from "../../blueprints/android-network-shaper";
+import { ANDROID_CHROME_CDP_NAMESPACE } from "../../blueprints/android-chrome-cdp";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 import { CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/chromium-js-runtime-debugger";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
@@ -9,6 +11,7 @@ import { ANDROID_TV_CONTROL_NAMESPACE } from "../../blueprints/android-tv-contro
 import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import { SCREEN_RECORDING_SESSION_NAMESPACE } from "../../blueprints/screen-recording-session";
 import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
+import { IOS_REMOTE_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-remote-audio-session";
 import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
@@ -97,6 +100,8 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   IOS_DEVICE_RUNNER_NAMESPACE,
   NATIVE_DEVTOOLS_NAMESPACE,
   ANDROID_DEVTOOLS_NAMESPACE,
+  ANDROID_NETWORK_SHAPER_NAMESPACE,
+  ANDROID_CHROME_CDP_NAMESPACE,
   CHROMIUM_CDP_NAMESPACE,
   CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
   TV_CONTROL_NAMESPACE,
@@ -104,6 +109,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
   IOS_AUDIO_SESSION_NAMESPACE,
+  IOS_REMOTE_AUDIO_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
   MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
@@ -234,9 +240,9 @@ export function isProviderOwnedUrn(urn: string): boolean {
  * Of `urns`, the port-keyed sessions no device-scoped teardown could ever name,
  * whatever ids it was given.
  *
- * On a Metro serving two or more devices, `selectTarget` refuses a serial, or a
- * simulator udid it cannot match to one Metro device by name, and makes the
- * caller re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
+ * On a Metro serving two or more devices, `selectTarget` refuses a udid or
+ * serial it cannot match to one Metro device by name, and makes the caller
+ * re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
  * loopback server and a log file handle, while the caller's serial still
@@ -261,7 +267,9 @@ const DEVICE_USE_NAMESPACES = DEVICE_OWNED_NAMESPACES.filter(
     namespace !== SCREEN_RECORDING_SESSION_NAMESPACE &&
     namespace !== NATIVE_PROFILER_SESSION_NAMESPACE &&
     namespace !== ANDROID_TV_CONTROL_NAMESPACE &&
-    namespace !== ANDROID_NETWORK_INSPECTOR_NAMESPACE
+    namespace !== ANDROID_NETWORK_INSPECTOR_NAMESPACE &&
+    namespace !== ANDROID_NETWORK_SHAPER_NAMESPACE &&
+    namespace !== ANDROID_CHROME_CDP_NAMESPACE
 );
 
 /**

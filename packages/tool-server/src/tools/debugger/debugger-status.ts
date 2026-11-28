@@ -30,7 +30,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID, Android serial, Vega serial, or Chromium device id). The logicalDeviceId debugger-connect returns also resolves here, but prefer the stable list-devices id."
+      "Device id from `debugger-connect`<flag:macos-apps> (macOS: Mac app id)</flag:macos-apps>."
     ),
 });
 
@@ -39,10 +39,9 @@ export function createDebuggerStatusTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, DebuggerConnectedStatus | DebuggerNotConnectedResult> {
   return {
     id: "debugger-status",
-    description: `Get JS runtime debugger connection status and diagnostic info.
-Use when you need to verify connectivity before using other debugger tools. Never fails when the runtime is simply unreachable: it returns a discriminated result instead:
-- { status: "connected", ... } with port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), isNewDebugger (false on the legacy inspector), connected flag, loadedScripts count, and sourceMapReady (always true: waits for pending source maps before returning).
-- { status: "not_connected", connected: false, reason, detail, guidance } (port omitted on Chromium), with reason one of metro_not_running, no_app_connected, device_mismatch, cdp_unreachable, runtime_unresponsive, stale_connection, reconnecting. Follow the guidance field; do not retry in a loop.`,
+    description: `Check JS runtime debugger connectivity and diagnostics.
+Use when verifying debugger health before other \`debugger-*\` tools.
+Returns \`{ status: "connected", port, projectRoot, deviceName, appName, logicalDeviceId, isNewDebugger, loadedScripts, sourceMapReady }\` or \`{ status: "not_connected", reason, detail, guidance }\` (follow \`guidance\`; don't retry in a loop). Never fails when the runtime is simply unreachable.`,
     zodSchema,
     readOnly: true,
     interaction: {

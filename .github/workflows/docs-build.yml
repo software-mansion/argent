@@ -57,21 +57,25 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: packages/docs/package-lock.json
 
-      # packages/docs is excluded from the root npm workspaces and carries its
+      - name: Set up Bun
+        if: needs.changes.outputs.relevant == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      # packages/docs is excluded from the root workspaces and carries its
       # own lockfile, so it installs on its own.
       - name: Install dependencies
         if: needs.changes.outputs.relevant == 'true'
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
         if: needs.changes.outputs.relevant == 'true'
-        run: npm run typecheck
+        run: bun run typecheck
 
       # Docusaurus is configured with onBrokenLinks/onBrokenAnchors: "throw",
       # so the build is what catches links left dangling by a moved page.
       - name: Build
         if: needs.changes.outputs.relevant == 'true'
-        run: npm run build
+        run: bun run build

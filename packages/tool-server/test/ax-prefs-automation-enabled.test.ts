@@ -119,11 +119,28 @@ describe("AutomationEnabled, which leaves Full Keyboard Access unable to move fo
       failures.set("delete", defaultsError(deleteStderr));
 
       await expect(localIosHost.bootstrapAx("UDID-10")).resolves.toEqual({
-        entitlementBypassActive: false,
+        accessibilityPrefsEnabled: false,
       });
       expect(defaultsCalls().map((c) => c[1])).not.toContain("delete");
     }
   );
+
+  it("detects missing or disabled accessibility settings even when the entitlement preference is enabled", async () => {
+    for (const value of ["", "<key>ApplicationAccessibilityEnabled</key><false/>"]) {
+      exportedPlist = accessibilityPlist([
+        "IgnoreAXServerEntitlements",
+        "AccessibilityEnabled",
+      ]).replace("</dict>", `${value}</dict>`);
+      expect((await localIosHost.bootstrapAx("UDID-10")).accessibilityPrefsEnabled).toBe(false);
+    }
+
+    exportedPlist = accessibilityPlist([
+      "IgnoreAXServerEntitlements",
+      "AccessibilityEnabled",
+      "ApplicationAccessibilityEnabled",
+    ]);
+    expect((await localIosHost.bootstrapAx("UDID-10")).accessibilityPrefsEnabled).toBe(true);
+  });
 
   it("clearAutomationEnabled surfaces simctl's error for a missing device set", async () => {
     failures.set("export", defaultsError("Provided set path does not exist: /x"));

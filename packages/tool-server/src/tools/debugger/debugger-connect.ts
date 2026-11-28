@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
+import {
+  DEBUGGER_TOOL_CAPABILITY,
+  debuggerServiceRef,
+  reapedDebuggerKind,
+} from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
 
@@ -10,7 +14,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: iOS simulator UDID, Android serial, Vega serial (amazon-...), or Chromium device id (chromium-cdp-<port>). Pass this SAME id as device_id to every subsequent debugger-* call to pin them to this device. The returned logicalDeviceId is informational (Metro's own per-connection handle, absent on Vega); you do not switch to it. Forwarding it still resolves here, but the list-devices id is the stable one."
+      "Device id from `list-devices`: iOS UDID, Android/Vega serial, <flag:macos-apps>Mac app id (`macos-app-<bundle id>`), </flag:macos-apps>or Chromium id (`chromium-cdp-<port>`). Reuse this same id on subsequent `debugger-*` calls (or pass the error's `logicalDeviceId` if shared Metro is ambiguous)."
     ),
 });
 
@@ -28,10 +32,9 @@ export const debuggerConnectTool: ToolDefinition<
   }
 > = {
   id: "debugger-connect",
-  description: `Connect to a JS runtime CDP debugger.
-iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device.
-Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId, and isNewDebugger, plus a note when the previous session ended because the app crashed, naming its kept log file if it had one. If already connected, returns the existing connection.
-Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
+  description: `Connect to an app's JS debugger (React Native via Metro, or Chromium CDP) and start capturing console logs; reuses existing connections.<flag:macos-apps> Mac apps need a Debug build loading JS from Metro (react-native-macos 0.76+ or Mac Catalyst launched via Argent).</flag:macos-apps>
+Use when starting a debug session or before other \`debugger-*\` tools (keep the same \`device_id\`; retry with \`logicalDeviceId\` only if shared Metro reports ambiguity<flag:macos-apps>; Mac apps always keep the Mac app id</flag:macos-apps>).
+Returns connection info (plus \`note\` with prior log path after a crash). Fails if the runtime is unreachable.`,
   zodSchema,
   interaction: {
     startedMsg: () => "Connecting JavaScript debugger",
@@ -46,16 +49,13 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Take this device's breadcrumb: `debugger-log-registry` reads it only on
-    // an empty or not-connected read, so one left here outlives every read that
-    // finds entries and later pins an unrelated empty read on the old session.
-    // An explicit connect makes it wrong anyway — from here the capture is this
-    // session's.
+    // Take this device's breadcrumb: from an explicit connect on, the capture is
+    // this session's, so a later read must not blame the old session.
     //
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
     // breadcrumb just before the read that exists to report it.
-    const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
+    const reaped = takeReapedSessionAnyId(reapedDebuggerKind(params), [
       params.device_id,
       api.logicalDeviceId,
     ]);

@@ -22,6 +22,9 @@ vi.mock("../../src/tools/flows/flow-tree", () => ({
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { describeWhenCondition, summarizeStep } from "../../src/tools/flows/flow-step-definitions";
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";
+import { useAutoAdvancingClock } from "../helpers/auto-clock";
+
+useAutoAdvancingClock();
 
 const DEVICE = "00000000-0000-0000-0000-0000000000ab"; // iOS UDID shape
 let tmpDir: string;
@@ -155,7 +158,7 @@ describe("when: parse/serialize", () => {
 
   it("requires exactly one condition key and no timeout", () => {
     expect(() => parseFlow("steps:\n  - when: {}\n    steps: [{ tap: A }]\n")).toThrow(
-      /exactly one condition key \(exists, visible, hidden, text, platform\)/i
+      /exactly one condition key \(exists, visible, hidden, text, platform, output\)/i
     );
     expect(() =>
       parseFlow("steps:\n  - when: { visible: X, hidden: Y }\n    steps: [{ tap: A }]\n")

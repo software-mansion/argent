@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FAILURE_CODES } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../utils/capability";
@@ -36,42 +36,45 @@ const capability: ToolCapability = {
 // only as prose: both fields' `.describe()` restate it, so a caller reading
 // either parameter alone still sees it.
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices`."),
   text: z
     .string()
     .optional()
     .describe(
-      "Text to type character by character; handles uppercase, digits and common punctuation. " +
-        "Cannot be combined with `key`: to type and then press a key, send two `keyboard` steps in one " +
-        '`run-sequence` ({ text: "hello" } then { key: "enter" }). ' +
-        "To type a credential without its plaintext ever entering your context, use a secret placeholder " +
-        '`{{secret:<NAME>}}`, e.g. "{{secret:APP_PASSWORD}}", alone or inside longer text. It is resolved on the machine ' +
-        "running the tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment " +
-        "variable, `.argent/secrets.env` in the project, the project's `.env.local` / `.env` (only their " +
-        "`ARGENT_SECRET_`-prefixed keys), then `~/.argent/secrets.env`. Nothing else on the host is reachable. " +
-        "Over a link with the `forward-secrets` flag on, the client's own sources are checked first. " +
-        "The result echoes the placeholder, never the value, and the auto-screenshot after typing is skipped. " +
-        "To submit after a secret, put both steps in ONE `run-sequence`: that keeps the skip covering the Enter, " +
-        "which a second bare `keyboard` call would not. " +
-        "If the secret is not set, the failure lists the available names and the sources it checked; ask the user " +
-        "to add it to one of them (a secrets file applies immediately, an env var needs a restart). NEVER ask the " +
-        "user to paste the secret value into the conversation."
+      "Text to type. Cannot be combined with `key` (use two steps in `run-sequence` to type then press enter). " +
+        "Supports `{{secret:<NAME>}}` placeholders resolved server-side from `ARGENT_SECRET_<NAME>` / `.argent/secrets.env` " +
+        "(auto-screenshot is skipped; combine with submit in one `run-sequence` to keep the skip; never ask the user for plaintext)."
     ),
   key: z
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
+      "Named key. Cannot be combined with `text` or `clear` (use two steps in `run-sequence`). Values: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. " +
+        "Not supported on Apple TV / Android TV (use `tv-remote`). Physical iOS: enter/backspace only.<flag:harmonyos> HarmonyOS: enter, backspace, space, arrow-left/right.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up/down, and modifier shortcuts (e.g. command+a).</flag:macos-apps>"
+    ),
+  clear: z
+    .boolean()
+    .optional()
+    .describe(
+      "Clear the focused text field before typing `text` (or alone when `text` is omitted). " +
+        "Cannot be combined with `key`. Fails if nothing editable has focus. " +
+        "On physical iOS, deletes up to 100 characters before the caret, unverified, and returns no `cleared`. " +
+        "Not supported on <flag:macos-apps>Mac apps, </flag:macos-apps><flag:harmonyos>HarmonyOS, </flag:harmonyos>Apple TV, Android TV, or Vega."
+    ),
+  repeat: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Press `key` this many times in one call, e.g. `{ key: "backspace", repeat: 12 }`. Only valid with `key`.'
     ),
   delayMs: z
     .number()
     .optional()
     .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega, Apple TV / Android TV and physical iOS, which type the whole string in one shot or at their own cadence."
+      "Delay in ms between key presses (default 50; ignored on platforms that type in one shot)."
     ),
 });
 
@@ -109,12 +112,9 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
   });
   return {
     id: "keyboard",
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, <flag:macos-apps>Mac app, </flag:macos-apps>Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
-Tap the field first: with no focus the text is dropped and the call still succeeds.
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
-A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
-React Native: after typing, the next tap outside the field may only close the keyboard. If only the keyboard closed, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
+    description: `Type text or press a named key on the focused field (tap or focus the field first; with no focus input is silently dropped).
+Use when entering text or triggering named keys (enter, escape, backspace, arrows).
+Returns { typed, keys, cleared?, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
@@ -128,11 +128,24 @@ React Native: after typing, the next tap outside the field may only close the ke
       // rejects (text+key, `{ key: "" }`), while `completedMsg` runs only after
       // a success and sees neither. Both see the empty request, a no-op.
       startedMsg: ({ params }) => {
-        if (params.text === undefined) return "Pressing a key";
+        if (params.clear && params.key === undefined) {
+          return params.text !== undefined ? "Clearing field and entering text" : "Clearing field";
+        }
+        if (params.text === undefined) {
+          return (params.repeat ?? 1) > 1
+            ? `Pressing a key ${params.repeat} times`
+            : "Pressing a key";
+        }
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params }) => {
+        if (params.clear) {
+          return params.text !== undefined ? "Cleared field and entered text" : "Cleared field";
+        }
+        if (params.text !== undefined) return "Entered text";
+        return (params.repeat ?? 1) > 1 ? `Pressed a key ${params.repeat} times` : "Pressed a key";
+      },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
@@ -207,19 +220,55 @@ React Native: after typing, the next tap outside the field may only close the ke
           }
         );
       }
+      if (params.clear && params.key !== undefined) {
+        throw new InvalidToolInputError(
+          "keyboard `clear: true` cannot be combined with `key`, so nothing was changed. " +
+            "Pass `clear: true` alone to empty the field, or with `text` to replace its contents.",
+          {
+            failure_stage: "keyboard_clear_and_key_combined",
+          }
+        );
+      }
+      if (params.repeat !== undefined && params.key === undefined) {
+        throw new InvalidToolInputError(
+          "`repeat` only applies to `key`, not `text` or an empty request — nothing was typed. " +
+            'Pass a named `key` (e.g. { key: "backspace", repeat: 5 }), or omit `repeat`.',
+          {
+            failure_stage: "keyboard_repeat_without_key",
+          }
+        );
+      }
+      const runDispatch = async (callParams: KeyboardParams) => {
+        try {
+          return await dispatch(services, callParams, options);
+        } catch (err) {
+          // `clear: true` reuses the hidden `fill` clearing primitives; avoid telling an
+          // MCP agent to retry a tool name (`fill`) that is not in its catalog.
+          if (
+            callParams.clear &&
+            err instanceof Error &&
+            getFailureSignal(err)?.error_code?.startsWith("FILL_")
+          ) {
+            err.message = err.message
+              .replace(/\bthe fill\b/g, "clearing the field")
+              .replace(/\bfill\b/g, "keyboard");
+          }
+          throw err;
+        }
+      };
       // Resolve inside `execute`: after every logging boundary (agent
       // transcript, mcp-calls.log, the event log and recorded flow YAMLs all
       // see only the placeholder) and before the dispatch, so run-sequence and
       // flow `type` steps are covered for free.
-      if (params.text === undefined) return dispatch(services, params, options);
+      if (params.text === undefined) return runDispatch(params);
       const { text, secrets } = resolveSecretPlaceholders(params.text, {
         clientSecrets: options?.clientSecrets,
       });
-      if (secrets.length === 0) return dispatch(services, params, options);
+      if (secrets.length === 0) return runDispatch(params);
       // Before the keys go out: a failure partway leaves part of a value typed.
       noteTypedSecrets(params.udid, secrets);
       try {
-        const result = await dispatch(services, { ...params, text }, options);
+        const result = await runDispatch({ ...params, text });
         // Echo the placeholder form, never the resolved value.
         return { ...result, typed: params.text };
       } catch (err) {

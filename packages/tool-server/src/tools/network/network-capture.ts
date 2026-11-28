@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { isLiveServiceState, type Registry, type ToolCapability } from "@argent/registry";
+import {
+  isLiveServiceState,
+  type DeviceInfo,
+  type Registry,
+  type ToolCapability,
+} from "@argent/registry";
 import type { DebuggerNotConnectedReason } from "@argent/telemetry";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { deviceKeyOf } from "../../utils/native-network-record";
@@ -9,35 +14,35 @@ import { settleWithin } from "../../utils/timing";
 import { classifyDevice } from "../../utils/device-info";
 import { proxyStart } from "../../utils/sim-remote";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
 import { resolveDebuggerService } from "../debugger/not-connected";
+import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 
 export const captureSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+      "Device ID from `list-devices`<flag:macos-apps> (external Mac builds: `macos-app-<bundle id>`)</flag:macos-apps>."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+      "Bundle ID (iOS) / package (Android)<flag:macos-apps> / Mac bundle ID</flag:macos-apps> / placeholder on Chromium (e.g. `argent.capture`)."
     ),
   port: metroPortField.describe(
-    "The app's Metro port: the JS layer is reached through it, and the native layers leave its requests out. Omit it to use this device's port, 8081 by default."
+    "Metro port for JS capture and native filtering (omit for device default, usually 8081; ignored on Chromium)."
   ),
   layer: z
     .enum(["js", "native"])
     .optional()
-    .describe(
-      "The layer to act on: js (the app's JS runtime, read with view-network-logs) or native (NSURLProtocol on iOS, OkHttp on Android, read with native-network-logs). Omit it to act on both. The other layer stays as it is.<flag:macos-apps> A Mac app has only the native layer.</flag:macos-apps>"
-    ),
+    .describe("Control one layer only (default: both; ignored on Chromium)."),
   logicalDeviceId: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Only when several devices share the Metro port: this device's logicalDeviceId, which the JS layer's reason lists. The JS layer connects to that runtime, and view-network-logs then takes it as device_id. The native layer always uses udid."
+      "Shared-Metro logical ID for iOS/Android if requested (reuse for start/stop/JS reads)<flag:macos-apps>; omit on Mac apps</flag:macos-apps>."
     ),
 });
 
@@ -48,9 +53,26 @@ export function requestedLayers(layer: CaptureParams["layer"]): { js: boolean; n
   return { js: layer !== "native", native: layer !== "js" };
 }
 
-/** Why a call with layer js reaches nothing on a Mac app. */
-export const MACOS_NO_JS =
-  'a Mac app has no JS layer that argent captures: its network capture is native only, so omit layer or pass layer "native"';
+/** The Mac app a start or stop names; the bundle id must be the one the device id names. */
+export async function macosAppOfCall(
+  registry: Registry,
+  device: DeviceInfo,
+  toolId: string,
+  bundleId: string
+): Promise<MacosAppApi> {
+  const ref = macosAppRef(device);
+  return requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    toolId,
+    bundleId
+  );
+}
+
+/** Why an Apple app has no JS layer: Apple builds load no React Native JS. */
+export function appleAppNoJs(bundleId: string, macos: boolean): string {
+  return `${bundleId} is an Apple ${macos ? "app" : "system app"}, which runs no React Native JS`;
+}
 
 /** The capture a call acts on, as its interaction messages name it. */
 export function captureName(layer: CaptureParams["layer"]): string {
@@ -84,15 +106,19 @@ export function withLayerInRetries<L extends { reason?: string }>(
   );
 }
 
-/** The devices native-network-logs reads, where every layer start covers can run. */
+/**
+ * The devices native-network-logs reads, where every layer start covers can run, and
+ * Chromium, whose one layer a start marks.
+ */
 export const CAPTURE_CAPABILITY: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true },
   macos: { app: true, catalyst: true },
+  chromium: { app: true },
 };
 
-type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native";
+type CaptureLayer = "js" | "ios-native" | "android-native" | "macos-native" | "chromium";
 
 export interface StartedLayer {
   layer: CaptureLayer;
@@ -142,19 +168,49 @@ function lockDevice(udid: string): string {
  */
 const nativeUnavailable = new Map<string, string>();
 
-function nativeUnavailableKey(udid: string, bundleId: string): string {
+function appKey(udid: string, bundleId: string): string {
   return `${lockDevice(udid)}:${bundleId}`;
 }
 
 /** Keeps why a start found the app's native layer unavailable, or drops it without a reason. */
 export function setNativeUnavailable(udid: string, bundleId: string, reason?: string): void {
-  if (reason === undefined) nativeUnavailable.delete(nativeUnavailableKey(udid, bundleId));
-  else nativeUnavailable.set(nativeUnavailableKey(udid, bundleId), reason);
+  if (reason === undefined) nativeUnavailable.delete(appKey(udid, bundleId));
+  else nativeUnavailable.set(appKey(udid, bundleId), reason);
 }
 
 /** Why the last start of the app found its native layer unavailable, if it did. */
 export function nativeUnavailableReason(udid: string, bundleId: string): string | undefined {
-  return nativeUnavailable.get(nativeUnavailableKey(udid, bundleId));
+  return nativeUnavailable.get(appKey(udid, bundleId));
+}
+
+/**
+ * What the last network-capture-start of an app that did not fail marked, by device and app:
+ * the layers it started, and the native record number when it began. await-network-request
+ * reads the JS layer only when that start named it, and a native layer only after that number,
+ * so a layer the start left as it was gives no request from before it.
+ */
+export interface CaptureStart {
+  layers: ReadonlySet<CaptureLayer>;
+  nativeFloor: number;
+}
+
+const lastStarts = new Map<string, CaptureStart>();
+
+export function noteCaptureStart(
+  udid: string,
+  bundleId: string,
+  layers: readonly StartedLayer[],
+  nativeFloor: number
+): void {
+  lastStarts.set(appKey(udid, bundleId), {
+    layers: new Set(layers.filter((entry) => !entry.unavailable).map((entry) => entry.layer)),
+    nativeFloor,
+  });
+}
+
+/** What the last start of the app marked, or undefined before its first start. */
+export function lastCaptureStart(udid: string, bundleId: string): CaptureStart | undefined {
+  return lastStarts.get(appKey(udid, bundleId));
 }
 
 /** Forgets why a start found the native layer unavailable on the devices, or on every device. */
@@ -164,6 +220,12 @@ export function forgetNativeUnavailableOf(devices?: readonly string[]): void {
     // A key is `<device>:<bundleId>`, and a bundle id has no colon.
     if (!covered || covered.has(key.slice(0, key.lastIndexOf(":")))) nativeUnavailable.delete(key);
   }
+}
+
+/** A stop-all-simulator-servers teardown that covers the device is under way. */
+export function captureSweepUnderWay(udid: string): boolean {
+  const device = lockDevice(udid);
+  return [...captureSweeps].some((sweep) => !sweep.devices || sweep.devices.has(device));
 }
 
 export function withCaptureLock<T>(

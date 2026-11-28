@@ -7,6 +7,7 @@ import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface InspectItem {
   name: string;
@@ -121,37 +122,34 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id from `debugger-connect`<flag:macos-apps> (macOS: Mac app id)</flag:macos-apps>."
     ),
   x: z.coerce
     .number()
-    .describe("X coordinate on device screen, in logical pixels (not normalized 0–1)"),
+    .describe(
+      "X in logical pixels from screen left<flag:macos-apps> (or Mac app window left, title bar included)</flag:macos-apps>."
+    ),
   y: z.coerce
     .number()
-    .describe("Y coordinate on device screen, in logical pixels (not normalized 0–1)"),
+    .describe(
+      "Y in logical pixels from screen top<flag:macos-apps> (or Mac app window top, title bar included)</flag:macos-apps>."
+    ),
   contextLines: z.coerce
     .number()
     .default(3)
-    .describe("Lines of source context to include around the component definition"),
+    .describe("Source context lines around each component."),
   resolveSourceMaps: z
     .boolean()
     .default(true)
-    .describe(
-      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without a code fragment."
-    ),
+    .describe("Symbolicate via Metro and include code snippets (false = raw bundle frames)."),
   maxItems: z.coerce
     .number()
     .default(35)
-    .describe(
-      "Maximum number of hierarchy items to return, most specific first. The default covers all app-specific code; increase to 70+ to also see the navigation/screen structure."
-    ),
+    .describe("Max hierarchy items, most specific first (default 35)."),
   includeSkipped: z
     .boolean()
     .default(false)
-    .describe(
-      "When true, items that would normally be filtered are kept in the response " +
-        "with skipped=true and a skipReason."
-    ),
+    .describe("Keep normally filtered items marked `skipped: true`."),
 });
 
 export const debuggerInspectElementTool: ToolDefinition<
@@ -170,12 +168,9 @@ export const debuggerInspectElementTool: ToolDefinition<
   | { error: string }
 > = {
   id: "debugger-inspect-element",
-  description: `Inspect the React component hierarchy at a screen coordinate (x, y).
-Returns components from the tapped element upward through its parent hierarchy,
-each with its source file:line and a code fragment.
-The first items (lowest indices) are the most specific: the exact component under
-the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
+  description: `Inspect the React component hierarchy at logical pixel (x, y), from the tapped leaf upward with source file:line and code snippets.
+Use when finding the source file/line for a React Native element (multiply \`debugger-component-tree\` fractions by its Screen dimensions).
+Returns \`{ x, y, items, truncated?, hiddenCount? }\`. Fails if disconnected or (x, y) is off-screen.<flag:macos-apps> Mac apps: uses the window root with the most components; on Paper, native views can offset hits.</flag:macos-apps>`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -193,7 +188,9 @@ Use when you need the source file and line for a component at a tap coordinate. 
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const requestId = crypto.randomUUID();
-    const script = makeInspectScript(params.x, params.y, requestId);
+    const script = makeInspectScript(params.x, params.y, requestId, {
+      subtractRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
+    });
 
     const raw = await api.cdp.evaluateWithBinding(script, requestId, {
       timeout: 8000,

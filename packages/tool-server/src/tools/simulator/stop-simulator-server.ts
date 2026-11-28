@@ -22,7 +22,9 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
-    description: `Stop the transport session for a specific device (iOS simulator / Android: simulator-server process; physical iOS: the on-device runner; Chromium: CDP WebSocket) and free its resources; on a TV target it also reaps that device's TV-control daemons. Use to restart a wedged transport, or when the user is done with one device but wants to keep others running - not just because a task on it finished, since the next task on that device would start cold again. On iOS / Android / TV it deliberately leaves this device's native-devtools, accessibility, profiler and debugger services running - to drain those as well, use stop-all-simulator-servers with \`devices\`. On CHROMIUM, stopping the transport also ends the JS-runtime debugger session and its captured console history - reconnect with debugger-connect afterwards.<flag:macos-apps> On a Mac app it also ends the network capture and drops the requests it recorded; call network-capture-start to capture again.</flag:macos-apps> Returns { stopped, udid }; \`stopped\` is false, not an error, when no session is open for the id.`,
+    description: `Stop the transport session for one device (simulator-server, physical iOS runner, Chromium CDP, or TV daemons).
+Use when restarting a wedged transport or freeing one device without affecting others (not routinely after every task; use \`stop-all-simulator-servers\` with \`devices\` to also stop devtools/profilers/debuggers). On Chromium, also ends the JS debugger session.<flag:macos-apps> On Mac apps, also stops native capture (discarding records) and screen recording.</flag:macos-apps>
+Returns \`{ stopped, udid }\` (\`stopped: false\` if none was running). Fails only on invalid input.`,
     zodSchema,
     interaction: {
       startedMsg: ({ params }) => `Stopping simulator server for ${params.udid}`,

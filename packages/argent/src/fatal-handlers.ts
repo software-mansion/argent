@@ -23,7 +23,14 @@ import * as path from "node:path";
 
 let installed = false;
 
-const FATAL_LOG_PATH = path.join(os.homedir(), ".argent", "mcp-fatal.log");
+// A copy of `@argent/configuration-core`'s `argentHomeDir`: the dispatcher's
+// runtime files import only node builtins.
+function argentHomeDir(): string {
+  const override = process.env.ARGENT_HOME_DIR?.trim();
+  return override ? path.resolve(override) : path.join(os.homedir(), ".argent");
+}
+
+const FATAL_LOG_PATH = path.join(argentHomeDir(), "mcp-fatal.log");
 
 function appendFatalLog(label: string, detail: string): void {
   try {

@@ -10,6 +10,7 @@ describe("parseStartFlags", () => {
       detach: false,
       force: false,
       noAuth: false,
+      json: false,
       help: false,
     });
   });
@@ -67,6 +68,7 @@ describe("parseStartFlags", () => {
       detach: true,
       force: true,
       noAuth: false,
+      json: false,
       help: false,
     });
   });

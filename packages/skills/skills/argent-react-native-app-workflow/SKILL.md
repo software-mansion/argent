@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-app-workflow
-description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
+description: Develop and debug React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
 Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator. Exception: measure and profile app launch on the iPhone with `native-profiler-launch-analysis` (`argent-native-profiler` §4).
@@ -64,7 +64,7 @@ When a build fails (e.g. xcodebuild exit code 65), try the simplest fix first: c
 
 | Problem type                      | Where to look                                                                                                    |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the log file path, then `Grep` the file                                |
+| **JavaScript errors / logs**      | `debugger-log-registry` for a summary and the newest entries, then `Grep` its log file for more                  |
 | **React component hierarchy**     | `debugger-component-tree`, or `debugger-inspect-element` at logical pixel coordinates (not normalized 0-1)       |
 | **App state**                     | `debugger-evaluate` to run JavaScript in the app's runtime                                                       |
 | **Native crashes / native stack** | iOS: `~/Library/Logs/DiagnosticReports/`. Android: `adb -s <serial> logcat -d`, with `-b crash` for crashes only |

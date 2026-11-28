@@ -28,7 +28,7 @@ import {
   readTakeover,
   STOP_IN_PROGRESS_NOTE,
 } from "../../../utils/react-profiler/session-ownership";
-import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import {
@@ -195,12 +195,9 @@ export function createReactProfilerStopTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
-    description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Stores the results for react-profiler-analyze, profiler-commit-query and profiler-cpu-query.
-Call react-profiler-start first, then exercise the app, then call this.
-Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, react_render_ms, react_render_share_pct, react_render_peak_1s_pct }.
-If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
-Fails if no active profiling session exists, another stop is running, the CDP connection was lost during recording, or another session took the run over.`,
+    description: `Stop React profiling and store CPU samples + commit tree for \`react-profiler-analyze\`, \`profiler-commit-query\`, and \`profiler-cpu-query\`.
+Use when finishing an interaction recorded after \`react-profiler-start\`.
+Returns \`{ duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, react_render_ms, react_render_share_pct, react_render_peak_1s_pct, unattributed_*? }\`. Fails if no active session exists, CDP disconnected, or another session took over.`,
     zodSchema,
     // Collection can outlast the MCP client's 30 s abort. The client would then
     // resend the call, and the resend fails on the stop still collecting.
@@ -211,7 +208,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       failedMsg: ({ failureSignal }) =>
         `Failed to stop React profiler: ${failureSignal.error_code}`,
     },
-    capability: REACT_PROFILER_TOOL_CAPABILITY,
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const port = metroPort(params);

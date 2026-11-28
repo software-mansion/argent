@@ -6,6 +6,7 @@ import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { MACOS_APP_ID_PREFIX } from "../../utils/device-info";
 
 export interface RawEntry {
   id: number;
@@ -465,31 +466,20 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id from `debugger-connect`<flag:macos-apps> (macOS: Mac app id)</flag:macos-apps>."
     ),
   onScreenOnly: z
     .boolean()
     .default(true)
-    .describe(
-      "When true, only components visible on screen are returned. " +
-        "Set to false to include all mounted components, including those scrolled " +
-        "off-screen, e.g. to understand the full page structure."
-    ),
+    .describe("Only on-screen components (default true; false includes off-screen mounted nodes)."),
   maxNodes: z.coerce
     .number()
     .optional()
-    .describe(
-      "Maximum total nodes to include. When exceeded, intermediate single-child " +
-        "wrapper chains are collapsed to preserve both root structure and leaf elements. " +
-        "Default: no limit."
-    ),
+    .describe("Max nodes to return (collapses single-child wrappers when exceeded)."),
   includeSkipped: z
     .boolean()
     .default(false)
-    .describe(
-      "When true, appends a summary of all filtered components: total fiber count " +
-        "and skip counts by component name and by filter."
-    ),
+    .describe("Append filtered/skipped fiber counts summary."),
 });
 
 export function createDebuggerComponentTreeTool(): ToolDefinition<
@@ -498,17 +488,9 @@ export function createDebuggerComponentTreeTool(): ToolDefinition<
 > {
   return {
     id: "debugger-component-tree",
-    description: `Fetch the current screen of a running React Native app as a compact tree of React components.
-Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
-text), [testID=…] and normalized (tap: x,y) centre in [0,1] (fractions of the screen, not pixels).
-Full-screen transparent wrappers and implementation-detail components are pruned. Wrappers the size
-of their parent are pruned too, so a missing name proves nothing: check with debugger-inspect-element.
-
-Use when you need what describe does not show: a testID for a selector (on Android, describe omits
-the testID of a view that has no label and is not tappable), or the component names and nesting
-behind the screen before editing code. To find what to tap, use describe.
-
-Returns a compact text tree; call again after navigation. Fails if the Metro debugger is not connected.`,
+    description: `Fetch a compact React Native component tree with text/accessibilityLabel, \`[testID=…]\`, and normalized \`(tap: x,y)\`<flag:macos-apps> (Mac app window incl. title bar)</flag:macos-apps>.
+Use when you need React component names/nesting or missing Android \`testID\`s (use \`describe\` for tap targets; verify pruned wrappers with \`debugger-inspect-element\`).
+Returns a text tree. Fails if the Metro debugger is disconnected.<flag:macos-apps> Mac apps: uses the root with the most components; on Paper, use \`describe\` for tap points.</flag:macos-apps>`,
     zodSchema,
     searchHint: "react native component tree testID testIDs selector component names hierarchy",
     readOnly: true,
@@ -530,6 +512,7 @@ Returns a compact text tree; call again after navigation. Fails if the Metro deb
       const script = makeComponentTreeScript({
         includeSkipped: params.includeSkipped,
         requestId,
+        addRootOffset: !!canonicalDeviceId(params.device_id)?.startsWith(MACOS_APP_ID_PREFIX),
       });
       const response = await api.cdp.evaluateWithBinding(script, requestId, {
         timeout: 15_000,

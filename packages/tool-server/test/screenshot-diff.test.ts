@@ -4,7 +4,12 @@ import path from "path";
 import { PNG } from "pngjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import { diffPngFiles, type Rgb } from "../src/tools/screenshot-diff/screenshot-diff";
+import {
+  compareScreenshots,
+  diffPngFiles,
+  writeContextDiff,
+  type Rgb,
+} from "../src/tools/screenshot-diff/screenshot-diff";
 
 const analyzeScreenshotTextChangesMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -38,12 +43,14 @@ describe("diffPngFiles", () => {
     });
   });
 
-  it("reports matching PNGs and writes full-size and context diff artifacts", async () => {
+  it("reports matching PNGs without writing diff images or reading text", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
     await writePng(baselinePath, 10, 10, { r: 100, g: 120, b: 140 });
-    await writePng(currentPath, 10, 10, { r: 100, g: 120, b: 140 });
+    await writePng(currentPath, 10, 10, { r: 100, g: 120, b: 140 }, [
+      { x: 5, y: 5, rgb: { r: 101, g: 120, b: 140 } },
+    ]);
 
     const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
 
@@ -51,10 +58,66 @@ describe("diffPngFiles", () => {
       totalPixels: 100,
       differentPixels: 0,
       mismatchPercentage: 0,
-      summary: expect.stringContaining("Screenshot diff summary"),
+      summary: expect.stringContaining("- status: unchanged"),
       imageSize: { width: 10, height: 10 },
       regions: [],
+      textAnalysis: { status: "skipped", provider: "ocr", changes: [] },
     });
+    expect(result.diffPath).toBeUndefined();
+    expect(result.contextDiffPath).toBeUndefined();
+    expect(await fs.readdir(dir)).toEqual(["baseline.png", "current.png"]);
+    expect(analyzeScreenshotTextChangesMock).not.toHaveBeenCalled();
+  });
+
+  it("passes byte-identical PNGs without decoding them", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 10, 20, { r: 100, g: 120, b: 140 });
+    await fs.copyFile(baselinePath, currentPath);
+    const decode = vi.spyOn(PNG.sync, "read");
+
+    try {
+      const result = await compareScreenshots({ baselinePath, currentPath });
+      expect(result).toEqual({
+        totalPixels: 200,
+        differentPixels: 0,
+        mismatchPercentage: 0,
+        imageSize: { width: 10, height: 20 },
+      });
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
+  it("still decodes, and rejects, identical files that are not a complete PNG", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 10, 20, { r: 100, g: 120, b: 140 });
+    const whole = await fs.readFile(baselinePath);
+    const truncated = whole.subarray(0, whole.length - 1);
+    await fs.writeFile(baselinePath, truncated);
+    await fs.writeFile(currentPath, truncated);
+
+    await expect(compareScreenshots({ baselinePath, currentPath })).rejects.toThrow(
+      `Could not read PNG at ${baselinePath}`
+    );
+  });
+
+  it("writes full-size and context diff images when a pixel differs", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 10, 10, { r: 100, g: 120, b: 140 });
+    await writePng(currentPath, 10, 10, { r: 100, g: 120, b: 140 }, [
+      { x: 9, y: 9, rgb: { r: 255, g: 255, b: 255 } },
+    ]);
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(result.differentPixels).toBe(1);
     expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
     expect(result.contextDiffPath).toBe(path.join(dir, "current-context-diff.png"));
 
@@ -66,6 +129,30 @@ describe("diffPngFiles", () => {
     const contextDiff = PNG.sync.read(await fs.readFile(result.contextDiffPath!));
     expect(contextDiff.width).toBe(3);
     expect(contextDiff.height).toBe(3);
+  });
+
+  it("writes only the context diff for a compare that differs, and nothing for one that matches", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const changedPath = path.join(dir, "changed.png");
+    await writePng(baselinePath, 10, 20, { r: 0, g: 0, b: 0 });
+    await writePng(changedPath, 10, 20, { r: 0, g: 0, b: 0 }, [
+      ...rectPixels(2, 10, 4, 4, { r: 255, g: 255, b: 255 }),
+    ]);
+
+    const changed = await compareScreenshots({ baselinePath, currentPath: changedPath });
+    const changedDiff = path.join(dir, "changed-diff.png");
+    await expect(writeContextDiff(changed, changedDiff)).resolves.toBe(true);
+    const contextDiff = PNG.sync.read(await fs.readFile(changedDiff));
+    expect({ width: contextDiff.width, height: contextDiff.height }).toEqual({
+      width: 3,
+      height: 6,
+    });
+
+    const matched = await compareScreenshots({ baselinePath, currentPath: baselinePath });
+    const matchedDiff = path.join(dir, "matched-diff.png");
+    await expect(writeContextDiff(matched, matchedDiff)).resolves.toBe(false);
+    await expect(fs.stat(matchedDiff)).rejects.toThrow();
   });
 
   it("uses the hardcoded normalized threshold", async () => {
@@ -429,17 +516,11 @@ describe("diffPngFiles", () => {
     expect(readRgb(options.currentImage!, 1, 10)).toEqual({ r: 255, g: 0, b: 0 });
   });
 
-  // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
-  // found any changes via hasPixelDiff; the pass uses that to skip text analysis when
-  // nothing moved. Pin the wiring in both directions -- identical images -> false, a
-  // real pixel change -> true -- so hardcoding the source (e.g. to false, which would
-  // silently disable text analysis for every real diff) fails here instead of staying
-  // green.
   it.each([
     { name: "no pixel diff", changePixel: false, expected: false },
     { name: "a pixel diff", changePixel: true, expected: true },
   ])(
-    "tells OCR whether the pixel diff found changes ($name -> hasPixelDiff=$expected)",
+    "runs OCR only when a pixel differs ($name -> called=$expected)",
     async ({ changePixel, expected }) => {
       const dir = await makeTempDir();
       const baselinePath = path.join(dir, "baseline.png");
@@ -455,9 +536,7 @@ describe("diffPngFiles", () => {
 
       await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
 
-      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
-        expect.objectContaining({ hasPixelDiff: expected })
-      );
+      expect(analyzeScreenshotTextChangesMock.mock.calls.length > 0).toBe(expected);
     }
   );
 });

@@ -1,5 +1,8 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { withKeyedLock } from "../utils/keyed-lock";
 import {
   attachNdjsonReader,
   createNdjsonCdpRequester,
@@ -315,7 +318,7 @@ const NATIVE_DEVTOOLS_BLOCK_STATUSES = new Set<NativeDevtoolsPrecheckBlock["stat
  * Flow integration: a blocked precheck is a RESOLVED tool result, so a recorded
  * step that runs one of these tools would otherwise report `pass` for a call
  * that never reached its work. Mirrors `isDebuggerNotConnectedResult` and
- * `isUnmetUiWaitResult`.
+ * `isUnmetWaitResult`.
  *
  * Keyed on the tool id as well as the shape: the four status strings are
  * unremarkable words, and an unrelated tool that happens to answer
@@ -807,6 +810,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const networkConditions = new Map<string, NetworkThrottle>();
     /** Attach mode: whether the provider's capture was on before Argent first throttled the app. */
     const providerCapture = new Map<string, boolean>();
+    const conditionCalls = new Map<string, Promise<unknown>>();
     /** Apps that a failed call may have left partly throttled, so a reset still clears them. */
     const unconfirmedThrottles = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -1132,18 +1136,71 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const keepsCapture = (bundleId: string): boolean =>
       lentSocketPath ? providerCapture.get(bundleId) === true : activatedBundleIds.has(bundleId);
 
+    /** Attach mode: outlives a crashed tool-server, so a later reset clears only a throttle Argent set. */
+    const ownedThrottlePath = (bundleId: string): string =>
+      path.join(
+        os.tmpdir(),
+        `argent-throttle-${encodeURIComponent(deviceKeyOf(udid))}-${encodeURIComponent(bundleId)}`
+      );
+
+    /** The conditions as the agent reports them back: offline drops the rest, throughput is whole bytes/s. */
+    const conditionsKey = (state: Record<string, unknown> | null): string => {
+      if (state?.offline === true) return "offline";
+      const amount = (key: string) => Math.max(0, Number(state?.[key]) || 0);
+      return JSON.stringify([
+        Math.round(amount("latency")),
+        Math.trunc(amount("downloadThroughput")),
+        Math.trunc(amount("uploadThroughput")),
+      ]);
+    };
+
+    /** Until the agent confirms a change, either the earlier or the new conditions may be live. */
+    const readOwnedKeys = (bundleId: string): string[] =>
+      fs.existsSync(ownedThrottlePath(bundleId))
+        ? fs.readFileSync(ownedThrottlePath(bundleId), "utf8").split("\n")
+        : [];
+
+    const recordOwnedKeys = (bundleId: string, keys: string[]): void => {
+      if (lentSocketPath) fs.writeFileSync(ownedThrottlePath(bundleId), keys.join("\n"));
+    };
+
     const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
       await noteProviderCapture(bundleId);
+      const key = conditionsKey(throttle.conditions);
+      recordOwnedKeys(bundleId, [...readOwnedKeys(bundleId), key]);
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
         bypassPorts: [throttle.metroPort],
       });
       await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...throttle.conditions });
+      recordOwnedKeys(bundleId, [key]);
     };
 
     const clearThrottle = async (bundleId: string): Promise<void> => {
       await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", { bypassPorts: [] });
       await sendCdpRpc(bundleId, keepsCapture(bundleId) ? "Network.enable" : "Network.disable");
       providerCapture.delete(bundleId);
+      fs.rmSync(ownedThrottlePath(bundleId), { force: true });
+    };
+
+    const isEmulating = (state: Record<string, unknown> | null): boolean =>
+      state?.offline === true ||
+      ["latency", "downloadThroughput", "uploadThroughput"].some((key) => Number(state?.[key]) > 0);
+
+    /** A crashed tool-server leaves its throttle and loses its record of the provider's capture, so keep capture on. */
+    const clearLeftoverThrottle = async (bundleId: string): Promise<void> => {
+      if (!lentSocketPath || !fs.existsSync(ownedThrottlePath(bundleId))) return;
+      const method = "NativeDevtoolsIos.getConditions";
+      const state = (await sendCdpRpc(bundleId, method).catch((err: unknown) => {
+        if (err instanceof Error && err.message.endsWith(`Unsupported method: ${method}`))
+          return null;
+        throw err;
+      })) as Record<string, unknown> | null;
+      if (!isEmulating(state) || !readOwnedKeys(bundleId).includes(conditionsKey(state))) {
+        fs.rmSync(ownedThrottlePath(bundleId), { force: true });
+        return;
+      }
+      providerCapture.set(bundleId, true);
+      await clearThrottle(bundleId);
     };
 
     /**
@@ -1205,6 +1262,30 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       ]);
     };
 
+    const updateNetworkConditions = async (
+      bundleId: string,
+      throttle: NetworkThrottle | null
+    ): Promise<void> => {
+      const previous = networkConditions.get(bundleId) ?? null;
+      storeThrottle(bundleId, throttle);
+      if (!connections.has(bundleId)) return;
+      if (!throttle && !previous && !unconfirmedThrottles.has(bundleId)) {
+        await clearLeftoverThrottle(bundleId);
+        return;
+      }
+      try {
+        if (throttle) await applyThrottle(bundleId, throttle);
+        else await clearThrottle(bundleId);
+        unconfirmedThrottles.delete(bundleId);
+      } catch (err) {
+        if (throttle) unconfirmedThrottles.add(bundleId);
+        if ((networkConditions.get(bundleId) ?? null) === throttle) {
+          storeThrottle(bundleId, previous);
+        }
+        throw err;
+      }
+    };
+
     const settleRpc = (payload: { id: number; result?: unknown; error?: { message: string } }) => {
       const pending = pendingRpc.get(payload.id);
       if (!pending) return;
@@ -1241,12 +1322,20 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
+          if (socket.destroyed) return;
           const msg = parsed as { type: string; payload: any };
 
           // Handshake: must be the first message.
           if (bundleId === null) {
             if (msg.type !== "Control") return;
-            bundleId = msg.payload.bundleId as string;
+            const id = msg.payload?.bundleId;
+            // Simulator launchd can inject the agent into Apple apps too. They
+            // aren't targets, and a suspended one won't answer app-state reads.
+            if (typeof id !== "string" || !isInjectableBundleId(id)) {
+              socket.destroy();
+              return;
+            }
+            bundleId = id;
 
             // The same app reconnecting (fast restart) supersedes the old socket.
             const existing = connections.get(bundleId);
@@ -1610,23 +1699,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (conn) await enableOn(bundleId, conn);
       },
 
-      async setNetworkConditions(bundleId, throttle) {
-        const previous = networkConditions.get(bundleId) ?? null;
-        storeThrottle(bundleId, throttle);
-        if (!connections.has(bundleId)) return;
-        if (!throttle && !previous && !unconfirmedThrottles.has(bundleId)) return;
-        try {
-          if (throttle) await applyThrottle(bundleId, throttle);
-          else await clearThrottle(bundleId);
-          unconfirmedThrottles.delete(bundleId);
-        } catch (err) {
-          if (throttle) unconfirmedThrottles.add(bundleId);
-          if ((networkConditions.get(bundleId) ?? null) === throttle) {
-            storeThrottle(bundleId, previous);
-          }
-          throw err;
-        }
-      },
+      setNetworkConditions: (bundleId, throttle) =>
+        withKeyedLock(conditionCalls, bundleId, () => updateNetworkConditions(bundleId, throttle)),
 
       takeCaptureGap: (bundleId) => captureGaps.delete(bundleId),
 
