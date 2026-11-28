@@ -1,6 +1,7 @@
 import { canonicalToolId } from "@argent/registry";
 import { unmetUiWaitCause } from "../tools/await-ui-element";
 import { isDebuggerNotConnectedResult } from "../tools/debugger/not-connected";
+import { isUnlandedKeyboardTextResult } from "../tools/keyboard";
 import { nestedOrchestratorOutcome } from "../tools/flows/flow-nested-outcome";
 import { isNativeDevtoolsBlockResult } from "../blueprints/native-devtools";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetWaitResult, type UnmetWaitCause } from "./wait-result";
@@ -32,9 +33,11 @@ export interface ToolResultVerdict {
 
 /**
  * The failure a tool reports in a result it returns rather than throws: an
- * unmet wait (`await-ui-element`, `await-network-request`), an `e2e-execute` or `run-sequence` that did not
- * pass, a debugger tool with no connection, a native-devtools precheck that
- * stopped the tool before its work, a recording tool that recorded nothing.
+ * unmet wait (`await-ui-element`, `await-network-request`), a `keyboard`
+ * read-back that found the text did not land, an `e2e-execute` or
+ * `run-sequence` that did not pass, a debugger tool with no connection, a
+ * native-devtools precheck that stopped the tool before its work, a recording
+ * tool that recorded nothing.
  * `undefined` for any other result.
  *
  * The e2e runner scores a `tool:` step by it. A direct call is judged by
@@ -43,6 +46,12 @@ export interface ToolResultVerdict {
 export function toolResultVerdict(tool: string, result: unknown): ToolResultVerdict | undefined {
   if (isUnmetWaitResult(tool, result)) {
     return { status: "fail", reason: unmetWaitReason(tool, result) };
+  }
+  if (isUnlandedKeyboardTextResult(tool, result)) {
+    return {
+      status: "fail",
+      reason: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
+    };
   }
   const nested = nestedOrchestratorOutcome(tool, result);
   if (nested) return nested;

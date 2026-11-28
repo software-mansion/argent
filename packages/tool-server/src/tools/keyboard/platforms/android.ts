@@ -1,13 +1,10 @@
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { isAndroidTv } from "../../../utils/adb";
-import {
-  assertTypeableAndroidText,
-  injectAndroidNamedKey,
-  injectAndroidText,
-} from "../../../utils/android-input";
+import { assertTypeableAndroidText, injectAndroidNamedKey } from "../../../utils/android-input";
 import { fillAndroid } from "../../fill/android";
-import type { KeyboardParams, KeyboardResult } from "../types";
+import type { KeyboardParams, KeyboardResult, KeyboardVerification } from "../types";
+import { typeAndroidTextVerified } from "./android-verify";
 import { typeTv } from "./tv";
 
 // Phones / tablets inject over `adb shell input`, not the simulator-server's HID
@@ -19,17 +16,17 @@ async function typeAndroidPhone(
   device: DeviceInfo,
   params: KeyboardParams
 ): Promise<KeyboardResult> {
-  if (params.clear) {
-    // Validate text up front so un-typeable text does not clear the field before failing.
-    if (params.text) assertTypeableAndroidText(params.text);
-    await fillAndroid(registry, device, "");
-  }
+  // Before clearing the field or resolving the read-back's helper (which may
+  // `adb install` it), so un-typeable text fails with nothing changed.
+  if (params.text) assertTypeableAndroidText(params.text);
+  if (params.clear) await fillAndroid(registry, device, "");
   let keysPressed = 0;
+  let verification: KeyboardVerification = {};
   // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
   // branch runs and there is no ordering to get right.
   if (params.text) {
-    await injectAndroidText(device.id, params.text);
-    // `injectAndroidText` rejects non-ASCII, so `.length` is the codepoint count
+    verification = await typeAndroidTextVerified(registry, device, params.text);
+    // Non-ASCII is rejected above, so `.length` is the codepoint count
     // (matching the tv / simulator-server backends).
     keysPressed += params.text.length;
   }
@@ -42,6 +39,7 @@ async function typeAndroidPhone(
     typed: params.text ?? params.key ?? "",
     keys: keysPressed,
     ...(params.clear ? { cleared: true as const } : {}),
+    ...verification,
   };
 }
 

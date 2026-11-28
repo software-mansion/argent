@@ -21,6 +21,7 @@ import {
   AWAIT_UI_ELEMENT_TOOL_ID,
   isUnmetWaitResult,
 } from "../../utils/wait-result";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
@@ -167,7 +168,7 @@ export function createRunSequenceTool(
   return {
     id: "run-sequence",
     description: `Run multiple interaction steps in one call, with one screenshot + tree captured after the last step.
-Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Stops at the first error or unmet wait (\`success=false\`) and returns \`{ completed, total, steps }\` normally; compare \`completed\` with \`total\` to check for partial failure. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
+Use when every consecutive step is known in advance (scroll sweeps, type + enter, form fill). Stops at the first error, unmet wait (\`success=false\`) or Android keyboard step with \`verified=false\`, and returns \`{ completed, total, steps }\` normally; compare \`completed\` with \`total\` to check for partial failure. Any \`{{secret:...}}\` skips the final capture, so type + submit secrets in one sequence.
 
 Allowed tools (coords are [0,1] screen fractions; ? = optional):
   gesture-tap: x, y, clickCount?<flag:macos-apps>, button?, modifiers?</flag:macos-apps>
@@ -248,6 +249,13 @@ Allowed tools (coords are [0,1] screen fractions; ? = optional):
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetWaitResult(step.tool, result)) {
             results.push({ tool: step.tool, error: unmetWaitReason(step.tool, result) });
+            break;
+          }
+          if (isUnlandedKeyboardTextResult(step.tool, result)) {
+            results.push({
+              tool: step.tool,
+              error: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
+            });
             break;
           }
           results.push({ tool: step.tool, result });

@@ -80,6 +80,23 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+/**
+ * An Android read-back that proved the text did not land. Absent `verified` is not a failure,
+ * nor is `verified: false` with a `warning`: an iOS simulator's mismatch (./ios-readback.ts).
+ */
+export function isUnlandedKeyboardTextResult(
+  toolId: string,
+  result: unknown
+): result is { verified: false; note?: string } {
+  return (
+    toolId === "keyboard" &&
+    typeof result === "object" &&
+    result !== null &&
+    (result as { verified?: unknown }).verified === false &&
+    (result as { warning?: unknown }).warning === undefined
+  );
+}
+
 // TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
 // an Android TV as "android" by id shape — so those two branches probe the kind
 // at runtime and route a TV target to the focus-driven backend. A non-TV target
@@ -114,7 +131,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     id: "keyboard",
     description: `Type text or press a named key on the focused field (tap or focus the field first; with no focus input is silently dropped).
 Use when entering text or triggering named keys (enter, escape, backspace, arrows).
-Returns { typed, keys, cleared?, verified?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
+Returns { typed, keys, cleared?, verified?, note?, warning?, reactivated? }. Fails if an unsupported key is passed or the input backend is unreachable (partial typing is not rolled back; re-read before retrying). On iOS simulators, typing into an empty field verifies readback (\`verified: false\` warns). On Android phones/tablets, typing reads the field back: \`verified: false\` means the text did not land (\`note\` gives counts) and stops a \`run-sequence\` and fails an e2e step; no \`verified\` means it could not tell (\`note\` says why). React Native: after typing, the next tap outside may only close the keyboard (tap again if so); where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
@@ -139,18 +156,24 @@ Returns { typed, keys, cleared?, verified?, warning?, reactivated? }. Fails if a
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => {
+      completedMsg: ({ params, result }) => {
+        const unlanded = isUnlandedKeyboardTextResult("keyboard", result)
+          ? " (text did not land)"
+          : "";
         if (params.clear) {
-          return params.text !== undefined ? "Cleared field and entered text" : "Cleared field";
+          return params.text !== undefined
+            ? `Cleared field and entered text${unlanded}`
+            : "Cleared field";
         }
-        if (params.text !== undefined) return "Entered text";
+        if (params.text !== undefined) return `Entered text${unlanded}`;
         return (params.repeat ?? 1) > 1 ? `Pressed a key ${params.repeat} times` : "Pressed a key";
       },
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
-    // Typing time grows with text length on several backends and can outlast the MCP
-    // fetch timeout, whose abort replays the call: the text would be typed twice.
+    // Typing time grows with text length on several backends, and the Android read-back
+    // can first resolve its helper (an APK install, up to a 30 s READY timeout). Either can
+    // outlast the MCP fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
     services: () => ({}),
     execute: async (services, params, options) => {

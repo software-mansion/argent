@@ -51,6 +51,7 @@ import {
   type UnmetWaitCause,
 } from "../../utils/wait-result";
 import { unmetWaitCause } from "../../utils/tool-result-verdict";
+import { isUnlandedKeyboardTextResult } from "../keyboard";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
 import {
   UPLOAD_STAGE_BY_KIND,
@@ -519,6 +520,10 @@ function unmetNetworkWaitWarningFor(cause: UnmetWaitCause): string {
   if (cause === "cancelled") return CANCELLED_NETWORK_WAIT_WARNING;
   return UNMET_NETWORK_WAIT_WARNING;
 }
+
+const unlandedTextWarning = (block: RecordedBlock): string =>
+  "recorded, but the text did not land in the field (`toolResult.note` says how). At replay " +
+  `this step FAILS ${block === "shutdown" ? "the run" : "and stops the run"}, so re-record it once the text lands`;
 
 // The indeterminate reason is quoted verbatim, and it carries whatever recovery
 // fits: on iOS `queryFullHierarchyTree` writes one per failure branch, having
@@ -1853,10 +1858,10 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
       //
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
-      let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
+      let stepWarning: { warning: string; kind: "conversion" | "wait" | "text" } | undefined;
       if (isUnmetWaitResult(command, toolResult)) {
         const cause = unmetWaitCause(command, toolResult);
-        waitWarning = {
+        stepWarning = {
           warning:
             command === AWAIT_NETWORK_REQUEST_TOOL_ID
               ? unmetNetworkWaitWarningFor(cause)
@@ -1865,7 +1870,9 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
         };
       } else if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
         const probed = (await probeAgainstRunnerTree(registry, ctx, args)).warning;
-        if (probed) waitWarning = { warning: probed, kind: "conversion" };
+        if (probed) stepWarning = { warning: probed, kind: "conversion" };
+      } else if (isUnlandedKeyboardTextResult(command, toolResult)) {
+        stepWarning = { warning: unlandedTextWarning(block), kind: "text" };
       }
 
       // A recorded `restart-app` is captured as the portable `launch` directive
@@ -1936,7 +1943,7 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
           ),
           delayMs: params.delayMs,
         };
-        warning = waitWarning?.warning;
+        warning = stepWarning?.warning;
       } else if (captured?.selector) {
         step = {
           kind: "tap",
@@ -1973,7 +1980,7 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {
-        warning = waitWarning?.warning ?? runTarget?.warning;
+        warning = stepWarning?.warning ?? runTarget?.warning;
         // The step ran live with the full args (incl. the device id), but the
         // recorded form drops it so the flow stays portable — the runner injects
         // whatever device it resolves at replay.
@@ -2038,14 +2045,13 @@ Returns \`{ message, toolResult, stepCount, recorded?, savedTo }\`. Fails if no 
       // the verdict to whatever inherits that number (see
       // {@link RecordedStepWarning}).
       //
-      // Only this warning is carried. The finish summary already shows the
-      // other two by rendering what was written: kept coordinates read as
-      // `N. tap: (x, y)`, and a kept raw step reads as `N. tool: flow-execute`.
-      // A step that breaks on conversion renders like one that does not.
-      if (waitWarning) {
+      // The tap and e2e-execute warnings are not carried: the finish summary
+      // shows them by rendering what was written (`N. tap: (x, y)`,
+      // `N. tool: e2e-execute`).
+      if (stepWarning) {
         const verdicts = block === "shutdown" ? "shutdownStepWarnings" : "stepWarnings";
         (session[verdicts] ??= new Map()).set(stepCount, {
-          ...waitWarning,
+          ...stepWarning,
           step: stepAnchor(step),
         });
       }

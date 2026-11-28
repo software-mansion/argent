@@ -48,17 +48,16 @@ function attachStepWarnings(
  * What `message` says about the warnings the summary carries, by KIND — and
  * about the ones it does NOT carry.
  *
- * The two kinds are different news, and only one is about conversion. A wait
- * that came back `success: false` was never probed: it failed live, and at
- * replay it stops the run. Counting it as a conversion warning states the
- * opposite of the actionable fact.
+ * Only `conversion` is about converting a wait; `wait` and `text` are live
+ * failures (see `RecordedStepWarning.kind`). Counting them as conversion
+ * warnings states the opposite of the actionable fact.
  *
  * `discarded` is what the anchor checks threw away. Dropping is the right
  * answer, but reporting it as a pass is not: a recording where every wait
  * diverged would otherwise return the same payload as a clean one.
  */
 function warningHeadline(warnings: Iterable<RecordedStepWarning>, discarded: number): string {
-  const counts = { conversion: 0, wait: 0 };
+  const counts = { conversion: 0, wait: 0, text: 0 };
   for (const { kind } of warnings) counts[kind] += 1;
   const clauses: string[] = [];
   if (counts.conversion > 0) {
@@ -72,6 +71,11 @@ function warningHeadline(warnings: Iterable<RecordedStepWarning>, discarded: num
       `${counts.wait} ${counts.wait === 1 ? "step" : "steps"} recorded a wait that did not pass`
     );
   }
+  if (counts.text > 0) {
+    clauses.push(
+      `${counts.text} ${counts.text === 1 ? "step" : "steps"} recorded text that did not land`
+    );
+  }
   const carried =
     clauses.length === 0
       ? ""
@@ -82,7 +86,7 @@ function warningHeadline(warnings: Iterable<RecordedStepWarning>, discarded: num
     `${discarded} ${one ? "warning" : "warnings"} raised during this recording ${one ? "is" : "are"} ` +
     `NOT in \`summary\`: a hand edit to the .yaml moved the ${one ? "step it judged" : "steps they judged"}, ` +
     `so which step ${one ? "it belongs" : "they belong"} to is no longer knowable — re-record ` +
-    `${one ? "that wait" : "those waits"} to see ${one ? "it" : "them"} again`;
+    `${one ? "that step" : "those steps"} to see ${one ? "it" : "them"} again`;
   return carried === "" ? ` — ${drop}` : `${carried}. ${drop}`;
 }
 
@@ -150,7 +154,7 @@ export const flowFinishRecordingTool: ToolDefinition<
 > = {
   id: "e2e-finish-recording",
   description: `Finalize an open e2e recording (runs pending fragment cleanup first).
-Use when all steps have been recorded and you are ready to polish or replay the YAML (check any \`warning:\` lines in \`summary\` for recorded waits).
+Use when all steps have been recorded and you are ready to polish or replay the YAML (check any \`warning:\` lines in \`summary\` for recorded waits, and for \`keyboard\` steps whose text did not land, which fail at replay).
 Returns \`{ message, path, steps, shutdownSteps?, fragmentShutdown?, summary, e2eTestFile, savedTo }\`. Fails if no recording is open for \`name\` + \`project_root\`.`,
   zodSchema,
   fileInputs: PROJECT_ROOT_INPUT,

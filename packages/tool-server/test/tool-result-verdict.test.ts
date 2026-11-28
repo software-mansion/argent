@@ -31,6 +31,26 @@ describe("toolResultVerdict", () => {
     );
   });
 
+  it("fails a keyboard call whose read-back found the text did not land", () => {
+    expect(
+      toolResultVerdict("keyboard", { typed: "hello", keys: 5, verified: false, note: "3 of 5" })
+    ).toEqual({ status: "fail", reason: "typed text did not land: 3 of 5" });
+    expect(toolResultVerdict("keyboard", { typed: "hello", keys: 5, verified: false })).toEqual({
+      status: "fail",
+      reason: "typed text did not land",
+    });
+    expect(
+      toolResultVerdict("keyboard", { typed: "hello", keys: 5, verified: true })
+    ).toBeUndefined();
+    expect(
+      toolResultVerdict("keyboard", { typed: "hello", keys: 5, note: "not verified" })
+    ).toBeUndefined();
+    // An iOS simulator's mismatch is advisory.
+    expect(
+      toolResultVerdict("keyboard", { typed: "hello", keys: 5, verified: false, warning: "w" })
+    ).toBeUndefined();
+  });
+
   it("fails a run-sequence that stopped on an error", () => {
     expect(
       toolResultVerdict("run-sequence", {
@@ -218,6 +238,9 @@ describe("directCallFailure", () => {
     );
     expect(directCallFailure("await-ui-element", { success: false, note: "x" })).toBe(
       "await-ui-element condition not met: x"
+    );
+    expect(directCallFailure("keyboard", { verified: false, note: "x" })).toBe(
+      "typed text did not land: x"
     );
   });
 });

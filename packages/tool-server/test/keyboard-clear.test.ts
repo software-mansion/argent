@@ -95,11 +95,21 @@ const MACOS = "macos-app-com.example.App";
 
 const pressKey = vi.fn((_direction: "Down" | "Up", _keyCode: number) => {});
 const dispatchKeyEvent = vi.fn(async (_event: { type: string; key?: string }) => {});
+const getHierarchy = vi.fn(async (_opts: unknown) => ({ xml: "" }));
+
+function focusedAndroidField(text: string): string {
+  return (
+    `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+    `<node text="${text}" class="android.widget.EditText" focused="true" bounds="[0,100][1080,200]" />` +
+    `</node></hierarchy>`
+  );
+}
 
 function registry(): Registry {
   const r = new Registry();
   vi.spyOn(r, "resolveService").mockImplementation(async (urn: string) => {
     if (urn.startsWith("AXService:")) return { degraded: true } as never;
+    if (urn.startsWith("AndroidDevtools:")) return { getHierarchy } as never;
     return { pressKey, dispatchKeyEvent } as never;
   });
   return r;
@@ -161,10 +171,17 @@ describe("keyboard — clear option", () => {
     expect(fillIos).toHaveBeenCalledTimes(1);
     expect(pressKey.mock.calls.filter((c) => c[0] === "Down")).toHaveLength(2);
 
+    getHierarchy
+      .mockResolvedValueOnce({ xml: focusedAndroidField("") })
+      .mockResolvedValueOnce({ xml: focusedAndroidField("hi") });
     const androidRes = await tool.execute({}, { udid: ANDROID, clear: true, text: "hi" });
-    expect(androidRes).toEqual({ typed: "hi", keys: 2, cleared: true });
+    expect(androidRes).toEqual({ typed: "hi", keys: 2, cleared: true, verified: true });
     expect(fillAndroid).toHaveBeenCalledTimes(1);
     expect(adbShell).toHaveBeenCalledWith(ANDROID, "input text 'hi'", expect.any(Object));
+    // The read-back's "before" is the cleared field, not the old contents.
+    expect(vi.mocked(fillAndroid).mock.invocationCallOrder[0]).toBeLessThan(
+      getHierarchy.mock.invocationCallOrder[0]!
+    );
 
     const chromiumRes = await tool.execute(
       {},

@@ -334,6 +334,31 @@ A `screenshot` call always returns the full image, with its `Screenshot id` (unl
 
 Call `screenshot` or `describe` to read the screen again.
 
+### Typed text on Android
+
+On an Android phone or tablet, `keyboard` reads the focused field before and after it types. Android sends the text as one burst of key events. A field that redraws on each keystroke can drop part of that burst, and `adb` still reports success.
+
+The result carries `verified`:
+
+| Value   | Meaning                                                             |
+| ------- | ------------------------------------------------------------------- |
+| `true`  | The field holds the text                                            |
+| `false` | The field does not hold the text. `note` gives the character counts |
+| absent  | Argent could not tell. On Android, `note` gives the reason          |
+
+`verified` is absent on Android TV and on every other platform except an iOS simulator. On an iOS simulator, a `false` value comes with a `warning` and does not fail a step. The `keyboard` item in [SDK-only tools](#sdk-only-tools) gives the iOS rules.
+
+On an Android phone or tablet, `verified` is absent in these cases:
+
+- The android-devtools helper is not available.
+- No text field has focus, or more than one window has a focused text field.
+- The field is a password field.
+- Argent cannot read the field back.
+- Focus moves to a different field.
+- The contents of the field fit both a full and a partial landing. A field that formats a phone number is an example.
+
+A `false` value stops a `run-sequence` at that step. It also fails an e2e `type` step, an e2e `tool: keyboard` step and an e2e `tool: run-sequence` step that holds one. Argent does not press Enter after a failed `type` step. `e2e-add-step` records such a `keyboard` step with a warning, and `e2e-finish-recording` repeats it.
+
 ## Audio
 
 | Tool          | Description                                                                               |
@@ -1150,7 +1175,7 @@ Some agent tools do not always give the same result as the hidden tool:
 
 - `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
-- `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` reads the field back only on an iOS simulator, and only when the field is empty before it types. Then `verified: true` tells that the field contains the typed text. A capital that iOS put at the start of a word, and its smart punctuation (curly quotes, guillemets and apostrophes, a dash for two hyphens), still count as the typed text: both are on by default. `verified` is left out when Argent does not check the field: the field contains text before typing, the text contains Return or Tab, focus moves to another field while typing (as on a code screen that advances one box per digit), or Argent cannot read the field in time, for example because the app is busy. `verified: false` comes with a `warning`, and the tool does not fail. The field can contain different text for two reasons: the simulator dropped or repeated a key, or the app or iOS changed the text.
+- `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` reads the field back on an Android phone or tablet, as [Typed text on Android](#typed-text-on-android) tells. On an iOS simulator, `keyboard` reads the field back only when the field is empty before it types. Then `verified: true` tells that the field contains the typed text. A capital that iOS put at the start of a word, and its smart punctuation (curly quotes, guillemets and apostrophes, a dash for two hyphens), still count as the typed text: both are on by default. `verified` is left out when Argent does not check the field: the field contains text before typing, the text contains Return or Tab, focus moves to another field while typing (as on a code screen that advances one box per digit), or Argent cannot read the field in time, for example because the app is busy. `verified: false` comes with a `warning`, and the tool does not fail. The field can contain different text for two reasons: the simulator dropped or repeated a key, or the app or iOS changed the text.
 - `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS after `network-capture-start`, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
 - `describe` shows the disabled and selected states and the VoiceOver hint on an iOS simulator. `describe` does not show the frames in points, the view class or some traits, such as `toggleButton`. `native-describe-screen` returns them.
 - `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
