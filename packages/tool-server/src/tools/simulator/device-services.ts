@@ -18,8 +18,10 @@ import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector"
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
 import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
+import type { ServiceSnapshot } from "@argent/registry";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 import {
+  externalClaimForAnyId,
   externalClaimForNativeId,
   externalNativeId,
   isExternalDeviceUrn,
@@ -71,20 +73,9 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
  * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
  * Android package name cannot contain one, while a wireless adb serial
  * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can. Their device
- * id is the adb serial even when the service was asked for with an `ext:` id,
- * so either spelling of the device matches.
+ * id is the adb serial even when the service was asked for with an `ext:` id.
  */
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
-
-/**
- * Namespaces whose URN holds the device's native id (udid or adb serial) also
- * when the service was asked for with its `ext:` id, so either spelling of the
- * device matches.
- */
-const NATIVE_ID_KEYED_NAMESPACES: readonly string[] = [
-  ...APP_KEYED_NAMESPACES,
-  NATIVE_DEVTOOLS_NAMESPACE,
-];
 
 /**
  * Every namespace whose service belongs to exactly one device. Membership is
@@ -171,7 +162,8 @@ function deviceIdPortion(urn: string, namespace: string): string | undefined {
  * Which entry of `deviceIds` owns `urn` within `namespaces`, if any, in the
  * caller's own spelling — so a tool can report which of the ids it was given
  * matched nothing. The device id is compared whole (never split on ":", see
- * {@link URN_SUFFIXES}).
+ * {@link URN_SUFFIXES}). An `ext:` id also owns the URNs keyed by its raw udid /
+ * serial: a caller handed that spelling opens services under it.
  *
  * Matching is case-insensitive: iOS UDIDs are conventionally upper-case but
  * agents pass through whatever they were given, and a case mismatch must not
@@ -190,10 +182,7 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const spellings = NATIVE_ID_KEYED_NAMESPACES.includes(namespace)
-        ? [id, externalNativeId(id)]
-        : [id];
-      return spellings.some((spelling) => {
+      return [id, externalNativeId(id)].some((spelling) => {
         const lower = spelling.toLowerCase();
         return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
       });
@@ -203,6 +192,15 @@ export function deviceIdOwningUrn(
     return owner;
   }
   return undefined;
+}
+
+/**
+ * Whether `urn` is a simulator-server attached to a provider's own server (a
+ * claimed device, under either of its ids), whose `dispose()` is a no-op.
+ */
+export function isAttachedSimulatorServerUrn(urn: string): boolean {
+  const deviceId = deviceIdPortion(urn, SIMULATOR_SERVER_NAMESPACE);
+  return deviceId !== undefined && externalClaimForAnyId(deviceId) !== undefined;
 }
 
 /** Whether `urn` belongs to any of `namespaces`, regardless of which device. */
@@ -225,12 +223,13 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
 
 /**
  * Whether `urn` is a device provider's service, which a teardown drops without
- * shutting anything down. An `ext:`-keyed URN is one. A native devtools URN holds
- * the udid under both of the device's names, and on a device a provider claims,
- * that service only attaches to the agent the provider lends.
+ * shutting anything down. An `ext:`-keyed URN is one, and so is a claimed
+ * device's attached simulator-server under its raw udid. A native devtools URN
+ * holds the udid under both of the device's names, and on a device a provider
+ * claims, that service only attaches to the agent the provider lends.
  */
 export function isProviderOwnedUrn(urn: string): boolean {
-  if (isExternalDeviceUrn(urn)) return true;
+  if (isExternalDeviceUrn(urn) || isAttachedSimulatorServerUrn(urn)) return true;
   const portion = deviceIdOfUrn(urn, [NATIVE_DEVTOOLS_NAMESPACE]);
   if (portion === undefined) return false;
   const suffix = URN_SUFFIXES.find((s) => s !== "" && portion.endsWith(s)) ?? "";
@@ -256,4 +255,38 @@ export function isProviderOwnedUrn(urn: string): boolean {
  */
 export function unnameableSessionUrns(urns: readonly string[]): string[] {
   return urns.filter((urn) => isLogicalKeyedDevice(deviceIdOfUrn(urn, PORT_KEYED_NAMESPACES)));
+}
+
+/**
+ * Device-owned services whose use marks the device. The excluded ones stay
+ * RUNNING after their device goes away, so their stamp would carry over to the
+ * next device that gets the same serial.
+ */
+const DEVICE_USE_NAMESPACES = DEVICE_OWNED_NAMESPACES.filter(
+  (namespace) =>
+    namespace !== SCREEN_RECORDING_SESSION_NAMESPACE &&
+    namespace !== NATIVE_PROFILER_SESSION_NAMESPACE &&
+    namespace !== ANDROID_TV_CONTROL_NAMESPACE &&
+    namespace !== ANDROID_NETWORK_INSPECTOR_NAMESPACE &&
+    namespace !== ANDROID_NETWORK_SHAPER_NAMESPACE &&
+    namespace !== ANDROID_CHROME_CDP_NAMESPACE
+);
+
+/**
+ * When a tool last used each of `deviceIds` through a service that is still live
+ * or that a call is using now, keyed in the caller's spelling. The simulator
+ * watcher's own attach is not use.
+ */
+export function lastDeviceUse(
+  services: ReadonlyMap<string, ServiceSnapshot>,
+  deviceIds: readonly string[]
+): Map<string, number> {
+  const lastUse = new Map<string, number>();
+  for (const [urn, { lastUsedAt }] of services) {
+    if (lastUsedAt === undefined) continue;
+    const owner = deviceIdOwningUrn(urn, DEVICE_USE_NAMESPACES, deviceIds);
+    if (owner === undefined) continue;
+    lastUse.set(owner, Math.max(lastUse.get(owner) ?? 0, lastUsedAt));
+  }
+  return lastUse;
 }

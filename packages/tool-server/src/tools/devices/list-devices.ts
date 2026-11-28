@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { Registry, ToolDefinition } from "@argent/registry";
 import {
   listAndroidDevices,
   isFoldableAvd,
@@ -43,6 +43,7 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import { lastDeviceUse } from "../simulator/device-services";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -173,8 +174,10 @@ type ListedDevice =
   | MacosAppDevice
   | VegaDevice;
 
+type DeviceUsage = { inUse?: true; idleSeconds?: number };
+
 type ListDevicesResult = {
-  devices: ListedDevice[];
+  devices: Array<ListedDevice & DeviceUsage>;
   /**
    * Present only when one applies, unlike the description, which is read once
    * per session: a platform this machine cannot reach and what would change
@@ -478,234 +481,266 @@ function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
   return new Set(external.map((device) => device.nativeId));
 }
 
+/** The id interaction tools accept for this entry; null for a stopped VVD or AVD. */
+function listedDeviceId(d: ListedDevice): string | null {
+  return "id" in d ? d.id : "udid" in d ? d.udid : "serial" in d ? d.serial : null;
+}
+
+function withUsage(
+  devices: readonly ListedDevice[],
+  registry: Registry
+): Array<ListedDevice & DeviceUsage> {
+  const ids = devices.map(listedDeviceId).filter((id): id is string => id !== null);
+  const lastUse = lastDeviceUse(registry.getSnapshot().services, ids);
+  const now = Date.now();
+  return devices.map((d) => {
+    // A shut-down device can still hold a session that outlived it, e.g. TvControl.
+    if (readinessRank(d) !== 0) return d;
+    const id = listedDeviceId(d);
+    const used = id === null ? undefined : lastUse.get(id);
+    if (used === undefined) return d;
+    const idleSeconds = Math.max(0, Math.floor((now - used) / 1000));
+    return { ...d, inUse: true, idleSeconds };
+  });
+}
+
 const zodSchema = z.object({});
 
-export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
-  id: "list-devices",
-  description: `List available targets (ready devices first): iOS simulators/iPhones, Android emulators/AVDs/phones, Chromium apps, Vega devices, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>Mac apps, </flag:macos-apps>and Argent Cloud simulators (\`ios-remote\`).
-Use when starting a session to discover target ids. Returns { devices, notes? }. Pass a ready device's \`udid\`, \`serial\`, or \`id\` to other tools; start stopped targets via \`boot-device\`. Use physical phones (\`kind: 'device'\`) only when asked. \`runtimeKind: 'tv'\` uses \`tv-remote\`, not gestures. Fails if device discovery errors; surface \`notes\` if a needed platform is unavailable.`,
-  zodSchema,
-  alwaysLoad: true,
-  searchHint:
-    "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
-  readOnly: true,
-  interaction: {
-    startedMsg: () => "Listing devices",
-    completedMsg: ({ result }) =>
-      `Listed ${result.devices.length} ${result.devices.length === 1 ? "device" : "devices"}`,
-    failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
-  },
-  services: () => ({}),
-  async execute(_services, _params) {
-    const harmonyEnabled = isHarmonyEnabled();
-    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
-    // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
-    // the "no branch can hang the fan-out" guarantee universal. The deadline only
-    // substitutes a fallback on *slowness*; a rejection still propagates, so the
-    // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
-    const [
-      ios,
-      iosPhysical,
-      iosRemote,
-      android,
-      avds,
-      chromium,
-      vega,
-      harmony,
-      harmonyTargets,
-      external,
-      macos,
-    ] = await Promise.all([
-      xcodeInstallPending.includes("simctl")
-        ? { simulators: [], timedOut: false }
-        : withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
-      withDeadline(
-        listIosPhysicalDevices().catch(() => []),
-        [],
-        "ios-physical"
-      ),
-      withDeadline(
-        listRemoteIosSimulators(),
-        { devices: [], cloud: "unknown" as CloudState },
-        "ios-remote"
-      ),
-      withDeadline(
-        // list-devices is the one caller that surfaces TV vs mobile, so it pays for
-        // runtimeKind's extra per-device probe. The explicit `adb devices` bound
-        // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
-        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS })
-          .then(nameBootingEmulators)
-          .catch(() => []),
-        [],
-        "android"
-      ),
-      withDeadline(listAvds(), [], "avds"),
-      withDeadline(
-        discoverChromiumDevices().catch(() => []),
-        [],
-        "chromium"
-      ),
-      withDeadline(
-        listVegaDevices().catch(() => []),
-        [],
-        "vega"
-      ),
-      harmonyEnabled
-        ? withDeadline(
-            listHarmonyInstances().catch(() => []),
-            [],
-            "harmony"
+export const LIST_DEVICES_TOOL_ID = "list-devices";
+
+export function createListDevicesTool(
+  registry: Registry
+): ToolDefinition<Record<string, never>, ListDevicesResult> {
+  return {
+    id: LIST_DEVICES_TOOL_ID,
+    description: `List available targets (ready devices first): iOS simulators/iPhones, Android emulators/AVDs/phones, Chromium apps, Vega devices, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>Mac apps, </flag:macos-apps>and Argent Cloud simulators (\`ios-remote\`).
+Use when starting a session to discover target ids. Returns { devices, notes? }. Pass a ready device's \`udid\`, \`serial\`, or \`id\` to other tools; start stopped targets via \`boot-device\`. Use physical phones (\`kind: 'device'\`) only when asked. \`runtimeKind: 'tv'\` uses \`tv-remote\`, not gestures. Fails if device discovery errors; surface \`notes\` if a needed platform is unavailable.
+\`inUse: true\` marks a device that a tool call used through a session that is still open on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; \`idleSeconds\` is the time since a tool last used it, and a large value suggests a forgotten session. A device that is not running never carries them. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. \`reinstall-app\`, native profiling<flag:macos-apps> past \`native-profiler-start\` on a Mac app</flag:macos-apps>, \`native-network-logs\` and \`network-conditions\` on Android, screen recording past \`screen-recording-start\` on a local device, \`keyboard\` on Android and \`describe\` there without its helper app, \`tv-remote\` on Android TV, or \`boot-device\` while the device boots), a debugger session connected with a \`logicalDeviceId\`, <flag:harmonyos>HarmonyOS, </flag:harmonyos>and every Vega tool except the debugger and network tools.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
+    readOnly: true,
+    interaction: {
+      startedMsg: () => "Listing devices",
+      completedMsg: ({ result }) =>
+        `Listed ${result.devices.length} ${result.devices.length === 1 ? "device" : "devices"}`,
+      failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
+    },
+    services: () => ({}),
+    async execute(_services, _params) {
+      const harmonyEnabled = isHarmonyEnabled();
+      const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(
+        xcodeFirstLaunchPending
+      );
+      // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
+      // the "no branch can hang the fan-out" guarantee universal. The deadline only
+      // substitutes a fallback on *slowness*; a rejection still propagates, so the
+      // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
+      const [
+        ios,
+        iosPhysical,
+        iosRemote,
+        android,
+        avds,
+        chromium,
+        vega,
+        harmony,
+        harmonyTargets,
+        external,
+        macos,
+      ] = await Promise.all([
+        xcodeInstallPending.includes("simctl")
+          ? { simulators: [], timedOut: false }
+          : withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
+        withDeadline(
+          listIosPhysicalDevices().catch(() => []),
+          [],
+          "ios-physical"
+        ),
+        withDeadline(
+          listRemoteIosSimulators(),
+          { devices: [], cloud: "unknown" as CloudState },
+          "ios-remote"
+        ),
+        withDeadline(
+          // list-devices is the one caller that surfaces TV vs mobile, so it pays for
+          // runtimeKind's extra per-device probe. The explicit `adb devices` bound
+          // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
+          listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS })
+            .then(nameBootingEmulators)
+            .catch(() => []),
+          [],
+          "android"
+        ),
+        withDeadline(listAvds(), [], "avds"),
+        withDeadline(
+          discoverChromiumDevices().catch(() => []),
+          [],
+          "chromium"
+        ),
+        withDeadline(
+          listVegaDevices().catch(() => []),
+          [],
+          "vega"
+        ),
+        harmonyEnabled
+          ? withDeadline(
+              listHarmonyInstances().catch(() => []),
+              [],
+              "harmony"
+            )
+          : [],
+        harmonyEnabled
+          ? withDeadline(
+              listHarmonyHdcTargets().catch(() => []),
+              [],
+              "harmony-hdc"
+            )
+          : [],
+        /**
+         * One directory stat when no provider is registered (the common case)
+         * and a short HTTP probe per provider otherwise.
+         */
+        withDeadline(
+          listExternalDevices().catch(() => []),
+          [],
+          "external"
+        ),
+        withDeadline(
+          listMacosApps().catch(() => []),
+          [],
+          "macos"
+        ),
+      ]);
+
+      const externalShadows = externalShadowIds(external);
+
+      const iosTagged: IosDevice[] = ios.simulators
+        .filter((simulator) => !externalShadows.has(simulator.udid))
+        .map((simulator) => ({ platform: "ios", kind: "simulator", ...simulator }));
+
+      iosTagged.sort(sortIos);
+      const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical
+        .filter((d) => !externalShadows.has(d.udid))
+        .map((d) => ({
+          platform: "ios",
+          kind: "device",
+          udid: d.udid,
+          name: d.name,
+          state:
+            d.transportType === "wired" || d.transportType === "localNetwork"
+              ? "connected"
+              : "paired",
+          runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
+          model: d.model,
+          developerModeEnabled: d.developerModeEnabled,
+          pairingState: d.pairingState,
+          transportType: d.transportType,
+          tunnelState: d.tunnelState,
+        }));
+      const iosRemoteSorted = [...iosRemote.devices].sort(sortIosRemote);
+      // One config.ini read per AVD name, shared by the running emulators and the AVD list.
+      const foldableAvds = new Set(
+        (
+          await Promise.all(
+            [...new Set([...avds.map((a) => a.name), ...android.map((d) => d.avdName)])]
+              .filter((name): name is string => name !== null)
+              .map(async (name) => ((await isFoldableAvd(name)) ? name : null))
           )
-        : [],
-      harmonyEnabled
-        ? withDeadline(
-            listHarmonyHdcTargets().catch(() => []),
-            [],
-            "harmony-hdc"
-          )
-        : [],
-      /**
-       * One directory stat when no provider is registered (the common case)
-       * and a short HTTP probe per provider otherwise.
-       */
-      withDeadline(
-        listExternalDevices().catch(() => []),
-        [],
-        "external"
-      ),
-      withDeadline(
-        listMacosApps().catch(() => []),
-        [],
-        "macos"
-      ),
-    ]);
-
-    const externalShadows = externalShadowIds(external);
-
-    const iosTagged: IosDevice[] = ios.simulators
-      .filter((simulator) => !externalShadows.has(simulator.udid))
-      .map((simulator) => ({ platform: "ios", kind: "simulator", ...simulator }));
-
-    iosTagged.sort(sortIos);
-    const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical
-      .filter((d) => !externalShadows.has(d.udid))
-      .map((d) => ({
-        platform: "ios",
-        kind: "device",
-        udid: d.udid,
-        name: d.name,
-        state:
-          d.transportType === "wired" || d.transportType === "localNetwork"
-            ? "connected"
-            : "paired",
-        runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
-        model: d.model,
-        developerModeEnabled: d.developerModeEnabled,
-        pairingState: d.pairingState,
-        transportType: d.transportType,
-        tunnelState: d.tunnelState,
-      }));
-    const iosRemoteSorted = [...iosRemote.devices].sort(sortIosRemote);
-    // One config.ini read per AVD name, shared by the running emulators and the AVD list.
-    const foldableAvds = new Set(
-      (
-        await Promise.all(
-          [...new Set([...avds.map((a) => a.name), ...android.map((d) => d.avdName)])]
-            .filter((name): name is string => name !== null)
-            .map(async (name) => ((await isFoldableAvd(name)) ? name : null))
-        )
-      ).filter((name): name is string => name !== null)
-    );
-    const androidTagged: AndroidDevice[] = android.map((d) => ({
-      platform: "android",
-      serial: d.serial,
-      state: d.state,
-      isEmulator: d.isEmulator,
-      kind: d.isEmulator ? "emulator" : "device",
-      model: d.model,
-      avdName: d.avdName,
-      sdkLevel: d.sdkLevel,
-      runtimeKind: d.runtimeKind,
-      ...(d.avdName !== null && foldableAvds.has(d.avdName) ? { foldable: true as const } : {}),
-    }));
-    // Drop a running VVD's adb shadow row so it appears only once (as vega),
-    // and likewise any serial an external provider has claimed.
-    const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
-    const shadowSerials = new Set([...vvdShadowSerials, ...externalShadows]);
-    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, shadowSerials);
-    // A running AVD is listed once, as its emulator; the rest can be booted by name.
-    const runningAvds = new Set(android.map((d) => d.avdName).filter((n) => n !== null));
-    const avdEntries: AndroidAvdEntry[] = avds
-      .filter((a) => !runningAvds.has(a.name))
-      .map((a) => ({
+        ).filter((name): name is string => name !== null)
+      );
+      const androidTagged: AndroidDevice[] = android.map((d) => ({
         platform: "android",
-        kind: "avd",
-        avdName: a.name,
-        state: "stopped",
-        ...(foldableAvds.has(a.name) ? { foldable: true as const } : {}),
+        serial: d.serial,
+        state: d.state,
+        isEmulator: d.isEmulator,
+        kind: d.isEmulator ? "emulator" : "device",
+        model: d.model,
+        avdName: d.avdName,
+        sdkLevel: d.sdkLevel,
+        runtimeKind: d.runtimeKind,
+        ...(d.avdName !== null && foldableAvds.has(d.avdName) ? { foldable: true as const } : {}),
       }));
-    const androidListed: Array<AndroidDevice | AndroidAvdEntry> = [
-      ...androidDeduped,
-      ...avdEntries,
-    ];
-    androidListed.sort(sortAndroid);
+      // Drop a running VVD's adb shadow row so it appears only once (as vega),
+      // and likewise any serial an external provider has claimed.
+      const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
+      const shadowSerials = new Set([...vvdShadowSerials, ...externalShadows]);
+      const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, shadowSerials);
+      // A running AVD is listed once, as its emulator; the rest can be booted by name.
+      const runningAvds = new Set(android.map((d) => d.avdName).filter((n) => n !== null));
+      const avdEntries: AndroidAvdEntry[] = avds
+        .filter((a) => !runningAvds.has(a.name))
+        .map((a) => ({
+          platform: "android",
+          kind: "avd",
+          avdName: a.name,
+          state: "stopped",
+          ...(foldableAvds.has(a.name) ? { foldable: true as const } : {}),
+        }));
+      const androidListed: Array<AndroidDevice | AndroidAvdEntry> = [
+        ...androidDeduped,
+        ...avdEntries,
+      ];
+      androidListed.sort(sortAndroid);
 
-    const harmonyTagged: HarmonyDevice[] = [
-      ...harmonyTargets.map((t): HarmonyDevice => ({
-        platform: "harmony",
-        udid: harmonyDeviceId(t.connectKey),
-        name: t.connectKey,
-        kind: "device",
-        state: t.state,
-        connection: t.connection,
-      })),
-      ...harmony.map((h): HarmonyDevice => ({
-        platform: "harmony",
-        udid: harmonyEmulatorId(h.name),
-        name: h.name,
-        kind: "emulator",
-        state: h.running ? "running" : "stopped",
-        deviceType: h.deviceType,
-        osVersion: h.osVersion,
-      })),
-    ];
+      const harmonyTagged: HarmonyDevice[] = [
+        ...harmonyTargets.map((t): HarmonyDevice => ({
+          platform: "harmony",
+          udid: harmonyDeviceId(t.connectKey),
+          name: t.connectKey,
+          kind: "device",
+          state: t.state,
+          connection: t.connection,
+        })),
+        ...harmony.map((h): HarmonyDevice => ({
+          platform: "harmony",
+          udid: harmonyEmulatorId(h.name),
+          name: h.name,
+          kind: "emulator",
+          state: h.running ? "running" : "stopped",
+          deviceType: h.deviceType,
+          osVersion: h.osVersion,
+        })),
+      ];
 
-    const devices: ListedDevice[] = [
-      ...iosTagged,
-      ...iosPhysicalTagged,
-      ...iosRemoteSorted,
-      ...androidListed,
-      ...chromium.map(({ platform, ...rest }): ChromiumListedDevice => ({
-        platform,
-        kind: "app",
-        ...rest,
-      })),
-      ...macos,
-      ...vega,
-      ...harmonyTagged,
-      ...external.map(toListedExternal),
-    ];
-    devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+      const devices: ListedDevice[] = [
+        ...iosTagged,
+        ...iosPhysicalTagged,
+        ...iosRemoteSorted,
+        ...androidListed,
+        ...chromium.map(({ platform, ...rest }): ChromiumListedDevice => ({
+          platform,
+          kind: "app",
+          ...rest,
+        })),
+        ...macos,
+        ...vega,
+        ...harmonyTagged,
+        ...external.map(toListedExternal),
+      ];
+      devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    const [localIos, androidSdk] = await Promise.all([
-      xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
-      android.length > 0 || avds.length > 0 ? true : androidSdkFound(),
-    ]);
-    const iosNote = iosReachNote(
-      { localIos, darwin: process.platform === "darwin" },
-      iosRemote.cloud
-    );
+      const [localIos, androidSdk] = await Promise.all([
+        xcodeInstallPending.includes("simctl") ? true : canRunLocalIos(ios.simulators.length > 0),
+        android.length > 0 || avds.length > 0 ? true : androidSdkFound(),
+      ]);
+      const iosNote = iosReachNote(
+        { localIos, darwin: process.platform === "darwin" },
+        iosRemote.cloud
+      );
 
-    const adbPrefix = adbCommandPrefix(process.env);
-    const notes = [
-      ...(iosNote ? [iosNote] : []),
-      ...(androidSdk ? [] : [ANDROID_SDK_MISSING_NOTE]),
-      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
-      ...(ios.timedOut ? [iosListTimedOutHint()] : []),
-      ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
-      ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
-    ];
+      const adbPrefix = adbCommandPrefix(process.env);
+      const notes = [
+        ...(iosNote ? [iosNote] : []),
+        ...(androidSdk ? [] : [ANDROID_SDK_MISSING_NOTE]),
+        ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
+        ...(ios.timedOut ? [iosListTimedOutHint()] : []),
+        ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+        ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
+      ];
 
-    return { devices, ...(notes.length > 0 ? { notes } : {}) };
-  },
-};
+      return { devices: withUsage(devices, registry), ...(notes.length > 0 ? { notes } : {}) };
+    },
+  };
+}

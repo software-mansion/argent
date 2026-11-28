@@ -19,7 +19,8 @@ vi.mock("../src/utils/ios-devices", () => ({
   scanIosSimulators: vi.fn(async () => ({ simulators: [], timedOut: false })),
   simctlListTimeoutAdvice: () => "",
 }));
-vi.mock("../src/utils/sim-remote", () => ({
+vi.mock("../src/utils/sim-remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/sim-remote")>()),
   simctlListDevices: vi.fn(async () => ({ devices: {} })),
 }));
 vi.mock("../src/utils/chromium-discovery", async (importOriginal) => {
@@ -35,8 +36,11 @@ vi.mock("../src/utils/harmony-devices", () => ({
   listHarmonyHdcTargets: vi.fn(async () => []),
 }));
 
-import { BRANCH_DEADLINE_MS, listDevicesTool } from "../src/tools/devices/list-devices";
+import { Registry } from "@argent/registry";
+import { BRANCH_DEADLINE_MS, createListDevicesTool } from "../src/tools/devices/list-devices";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../src/utils/harmony-devices";
+
+const listDevicesTool = createListDevicesTool(new Registry());
 
 const instances = vi.mocked(listHarmonyInstances);
 const hdcTargets = vi.mocked(listHarmonyHdcTargets);

@@ -165,6 +165,15 @@ For network access, CoreDevice must report `transportType: localNetwork`. Argent
 
 See [Physical iOS devices](/docs/features/physical-ios-devices) for signing requirements and the app-scoped interaction contract.
 
+`list-devices` adds two fields to a device when a tool call used a service of the device and that service is still open:
+
+- `inUse` is `true`.
+- `idleSeconds` is the time in seconds since a tool last used the device. It is `0` while a tool call is using the device.
+
+A device that is not running does not get the fields.
+
+All agents that use the same Argent installation share one tool-server. Thus, a different agent can be the agent that uses the device. The fields are for information only, and Argent does not refuse a device because of them. The fields do not show devices that other Argent installations or other programs use. Tools that only run a platform command, such as `reinstall-app`, do not count as use. Native profiling, `native-network-logs` and `network-conditions` on Android, and screen recording do not count as use. On a Mac app, `native-profiler-start` counts as use. On Android, `keyboard` does not count as use, and `describe` counts only when the Argent helper app reads the screen. On Android TV, `tv-remote` does not count as use. On a local device, `screen-recording-start` counts as use. `boot-device` does not count as use while the device boots. A debugger session does not count as use when the agent connects it with a `logicalDeviceId`. This occurs when two or more devices share one Metro server. A HarmonyOS device never gets the fields. On a Vega device, only debugger tools and network tools count as use.
+
 With `macos-apps` enabled, `list-devices` includes Mac apps that Argent started and that are still running. See [Mac app IDs and kinds](#start-and-restart-an-app).
 
 ### Accessibility on a pre-booted iOS simulator

@@ -3,7 +3,11 @@ import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { isExternalId } from "../../utils/external-devices";
-import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
+import {
+  deviceIdOwningUrn,
+  isAttachedSimulatorServerUrn,
+  transportNamespacesForPlatform,
+} from "./device-services";
 
 const zodSchema = z.object({
   udid: z
@@ -59,7 +63,7 @@ Returns \`{ stopped, udid }\` (\`stopped: false\` if none was running). Fails on
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
 
-        if (external) {
+        if (external || isAttachedSimulatorServerUrn(urn)) {
           await registry.disposeService(urn);
           continue;
         }
