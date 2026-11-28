@@ -20,6 +20,8 @@ The first matching row wins.
 
 **Rule of thumb:** if a human tester could flip it _inside the app_, do that. Reach for `settings-permissions` only for a change a human would otherwise make in the **system Settings app**.
 
+Device-wide settings (dark mode, text size, accessibility toggles, Android radios) are not permissions: use `system-settings`.
+
 ## Gotchas
 
 - **iOS simulator only on Apple platforms.** A physical iPhone has no host-side TCC switch, so the tool does not apply there.

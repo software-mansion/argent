@@ -11,6 +11,8 @@ Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `la
 
 ## 1. Workflow
 
+**Setup:** to pin device state (dark mode, text size, an accessibility toggle, Android radios), call `system-settings` before the baseline screenshot.
+
 For implementation tasks that modify visible UI, this workflow also serves as a visual acceptance path.
 
 1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.

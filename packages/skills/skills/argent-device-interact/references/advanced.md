@@ -16,6 +16,7 @@
 | Fold device                 | `fold`                                   | Foldables only (`references/foldables.md`)                              |
 | Type text / press named key | `keyboard`                               | Every platform; text or one key per call                                |
 | Paste text                  | `paste`                                  | Only where a user would paste; sim/emu, Mac app                         |
+| Device-wide setting         | `system-settings`                        | Dark mode, text size, a11y toggles, Android radios                      |
 | Slow or offline network     | `network-conditions`                     | iOS sim app, Android emu, or Chromium tab                               |
 | Wait for UI / idle          | `await-ui-element` / `await-screen-idle` | Server-side waits                                                       |
 

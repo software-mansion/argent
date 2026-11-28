@@ -32,7 +32,8 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { waitForBootCompleted } from "../src/utils/adb";
+import { isAdbTransportFailure, waitForBootCompleted } from "../src/utils/adb";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -72,4 +73,41 @@ describe("isTerminalAdbError matches adb's real `device 'X' not found` format", 
     // Anything ≥ 3 s on the 4 s budget proves the bug.
     expect(elapsed).toBeLessThan(2_500);
   }, 8_000);
+});
+
+describe("isAdbTransportFailure", () => {
+  it.each([
+    "protocol fault (couldn't read status)",
+    "adb: error: failed to read response from server: Connection reset by peer",
+    "adb: error: failed to get feature set: cannot connect to daemon",
+    "error: device still connecting",
+    "error: device still authorizing",
+    "error: device 'emulator-5554' offline",
+    "error: device unauthorized.",
+    "error: device 'emulator-5554' not found",
+    "error: no devices/emulators found",
+  ])("is true for %s", (message) => {
+    expect(isAdbTransportFailure(new Error(message))).toBe(true);
+  });
+
+  it("is true for a timeout", () => {
+    expect(
+      isAdbTransportFailure(
+        new FailureError("adb -s emulator-5554 shell true failed: timed out", {
+          error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+          failure_stage: "android_adb_command",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        })
+      )
+    ).toBe(true);
+  });
+
+  it.each([
+    "settings: Can't find service: settings",
+    "Error: java.lang.SecurityException: Permission denial",
+    "",
+  ])("is false for the device's own answer %j", (message) => {
+    expect(isAdbTransportFailure(new Error(message))).toBe(false);
+  });
 });
