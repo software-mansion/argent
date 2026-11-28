@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
+description: Autonomously verify one-off mobile UI flows (iOS/Android) with interact-screenshot-verify loops. Use when testing navigation, login, manual QA steps, or visible UI changes.
 ---
 
 ## Before testing
@@ -18,7 +18,7 @@ For implementation tasks that modify visible UI, this workflow also serves as a 
 1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: get element coordinates from a discovery tool before tapping:
    - **App screens (React Native included), in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
-3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot and element tree automatically (an identical earlier tree is named by its `Tree id`, not repeated).
+3. **Interact**: perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...); you receive a screenshot and element tree automatically (an unchanged screenshot or identical/slightly changed tree references the earlier `Screenshot id` / `Tree id` with a note or `-`/`+` line diff instead of repeating it).
 4. **Verify**: check the returned screenshot. If it shows a loading/transitional state, block with `await-ui-element` (expected element `visible`, or a spinner `hidden`) rather than a guessed delay (its result carries the new screenshot and element tree), but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the step 1 baseline: it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to inspecting the auto-screenshot only when a stable baseline isn't available.
    - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe` or `debugger-component-tree`.

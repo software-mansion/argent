@@ -11,7 +11,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
-import { unchangedTreeNote } from "../src/unchanged-tree.js";
+import { treeDiffHeader, unchangedTreeNote } from "../src/unchanged-tree.js";
+import { screenshotIdLine, unchangedScreenshotNote } from "../src/unchanged-screenshot.js";
 import {
   getWhatsNewSeenVersion,
   setFlag,
@@ -560,9 +561,7 @@ describe("startMcpServer tool calls", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    const content = result.content as Array<{ type: string; text?: string }>;
-    expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok":true');
+    expect(result.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
   });
 
   it("tells the agent what is new on the first call after an update, and only then", async () => {
@@ -572,14 +571,43 @@ describe("startMcpServer tool calls", () => {
       const first = await client.callTool({ name: "noted", arguments: {} });
       const second = await client.callTool({ name: "noted", arguments: {} });
 
-      const firstContent = first.content as Array<{ type: string; text?: string }>;
-      expect(firstContent.at(-1)?.text).toMatch(
-        new RegExp(`^Argent was updated to v${version} before this session\\.`)
-      );
-      expect(textOf(second)).not.toContain("Argent was updated");
+      expect(first.content).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `a note\n{"ok":true}\nArgent was updated to v${version} before this session.`
+          ),
+        },
+      ]);
+      expect(second.content).toEqual([{ type: "text", text: 'a note\n{"ok":true}' }]);
       expect(getWhatsNewSeenVersion()).toBe(version);
     } finally {
       setWhatsNewSeenVersion(version);
+    }
+  });
+
+  it("leaves a newer installed version's highlights for the adapter that ships them", async () => {
+    const previous = "0.33.0";
+    vi.stubGlobal("ARGENT_CLI_VERSION", previous);
+    setWhatsNewSeenVersion(previous);
+    try {
+      const old = await connect({
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      });
+      try {
+        expect(old.getServerVersion()?.version).toBe(getInstalledVersion());
+        expect(textOf(await old.callTool({ name: "noted", arguments: {} }))).not.toContain(
+          "Argent was updated"
+        );
+        expect(getWhatsNewSeenVersion()).toBe(previous);
+      } finally {
+        await old.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      setWhatsNewSeenVersion(getInstalledVersion());
     }
   });
 
@@ -673,6 +701,7 @@ describe("startMcpServer tool listing per client", () => {
 
 describe("startMcpServer screen capture after an interaction", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const PNG_CHANGED = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 1]);
   const CAPTURE_LISTING = {
     tools: [
       "gesture-tap",
@@ -685,6 +714,7 @@ describe("startMcpServer screen capture after an interaction", () => {
       name,
       description: name,
       inputSchema: { type: "object", properties: {} },
+      ...(name === "screenshot" ? { outputHint: "image" } : {}),
     })),
   };
   // Short, so a capture call that never answers ends the test in about a second.
@@ -703,6 +733,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   let describeHangs: boolean;
   // The screenshot answers with an artifact handle, which the adapter downloads.
   let shotAsArtifact: boolean;
+  let screenshotPng: Buffer;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -728,6 +759,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     idleHangs = false;
     describeHangs = false;
     shotAsArtifact = false;
+    screenshotPng = PNG;
     const describeRoute = slow("describe", (res) =>
       send(res, 200, {
         data: { description: describeText, hint: describeHint },
@@ -761,7 +793,7 @@ describe("startMcpServer screen capture after an interaction", () => {
         "/tools/describe": (res) => (describeHangs ? undefined : describeRoute(res)),
         "/shot.png": (res) => {
           res.writeHead(200, { "Content-Type": "image/png" });
-          res.end(PNG);
+          res.end(screenshotPng);
         },
         ...Object.fromEntries(
           ["screen-recording-stop", "native-profiler-stop"].map((name): [string, Route] => [
@@ -813,12 +845,22 @@ describe("startMcpServer screen capture after an interaction", () => {
       arguments: { udid, condition: "visible", selector: { text: "Settings" } },
     });
   const describeScreen = (udid = "u") => client.callTool({ name: "describe", arguments: { udid } });
-  /** The last text block: the element tree after an action, or the note. */
-  const lastText = (result: Result) =>
-    (result.content as Array<{ type: string; text?: string }>).at(-1)!.text!;
+  /** The end of the text, from its header on: the element tree after an action, or the note. */
+  const lastText = (result: Result) => {
+    const text = textOf(result);
+    const header = text.lastIndexOf(AUTO_DESCRIBE_HEADER);
+    expect(header).toBeGreaterThanOrEqual(0);
+    return text.slice(header);
+  };
   /** The id the result gives its full tree, as the agent reads it. */
   const treeId = (result: Result) => {
     const id = /^Tree id: (\S+)$/m.exec(textOf(result))?.[1];
+    expect(id).toMatch(/^[0-9a-z]{3}-\d+$/);
+    return id!;
+  };
+  /** The id the result gives its full screenshot, as the agent reads it. */
+  const screenshotId = (result: Result) => {
+    const id = /^Screenshot id: (\S+)$/m.exec(textOf(result))?.[1];
     expect(id).toMatch(/^[0-9a-z]{3}-\d+$/);
     return id!;
   };
@@ -890,7 +932,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(lastText(result)).toBe(fullTree(result, describeText));
   });
 
-  it("sends a note in place of a tree identical to the last one, and the screenshot still", async () => {
+  it("sends a note in place of an identical tree and an identical screenshot", async () => {
     const first = await tap();
 
     const second = await wait();
@@ -898,10 +940,92 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(lastText(second)).toBe(note(treeId(first), "gesture-tap"));
     expect(textOf(second)).not.toContain("button Done");
     const content = second.content as Array<{ type: string; text?: string }>;
-    expect(content.some((c) => c.type === "image")).toBe(true);
+    expect(content.some((c) => c.type === "image")).toBe(false);
+    expect(textOf(second)).toContain(unchangedScreenshotNote(screenshotId(first), "gesture-tap"));
   });
 
-  it("sends a changed tree in full, under a new id", async () => {
+  it("sends a result without an image as one text block, one part per line", async () => {
+    const tapped = await tap();
+    const shotNote = unchangedScreenshotNote(screenshotId(tapped), "gesture-tap");
+
+    const described = await describeScreen();
+    const waited = await wait();
+
+    // Claude Code shows the blocks of such a result with nothing between them.
+    expect(described.content).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
+          `Tree id: ${treeId(described)}`,
+          "--- Screen after action ---",
+          shotNote,
+        ].join("\n"),
+      },
+    ]);
+    expect(waited.content).toEqual([
+      {
+        type: "text",
+        text: [
+          '{"success":true,"elapsed":120}',
+          "--- Screen after action ---",
+          shotNote,
+          note(treeId(described), "describe"),
+        ].join("\n"),
+      },
+    ]);
+  });
+
+  it("skips tree memory on describe({ raw: true }) so later pruned auto-describes keep the last pruned base", async () => {
+    const pruned = await describeScreen();
+    const prunedId = treeId(pruned);
+
+    describeText = "ROOT AXGroup (0,0,1,1)\n  button Done (0.1,0.2,0.3,0.1)";
+    const raw = await client.callTool({ name: "describe", arguments: { udid: "u", raw: true } });
+    expect(textOf(raw)).not.toContain("Tree id:");
+
+    describeText = "button Done (0.1,0.2,0.3,0.1)";
+    const followUp = await wait();
+    expect(lastText(followUp)).toBe(note(prunedId, "describe"));
+  });
+
+  it("still sends a changed screenshot when the tree is identical", async () => {
+    const first = await tap();
+    screenshotPng = PNG_CHANGED;
+
+    const second = await wait();
+
+    expect(lastText(second)).toBe(note(treeId(first), "gesture-tap"));
+    const content = second.content as Array<{ type: string; text?: string }>;
+    expect(content.some((c) => c.type === "image")).toBe(true);
+    expect(screenshotId(second)).not.toBe(screenshotId(first));
+  });
+
+  it("gives an explicit screenshot call an id and compares later auto-screenshots with it, unless includeImageInContext is false", async () => {
+    const hidden = await client.callTool({
+      name: "screenshot",
+      arguments: { udid: "u", includeImageInContext: false },
+    });
+    expect(textOf(hidden)).not.toContain("Screenshot id:");
+    // Agent never saw the hidden screenshot, so the next tap still sends the image.
+    const afterHidden = await tap();
+    expect((afterHidden.content as Array<{ type: string }>).some((c) => c.type === "image")).toBe(
+      true
+    );
+
+    screenshotPng = PNG_CHANGED;
+    const explicit = await client.callTool({ name: "screenshot", arguments: { udid: "u" } });
+    const id = screenshotId(explicit);
+    expect(textOf(explicit)).toContain(screenshotIdLine(id));
+
+    const followUp = await wait();
+    expect((followUp.content as Array<{ type: string }>).some((c) => c.type === "image")).toBe(
+      false
+    );
+    expect(textOf(followUp)).toContain(unchangedScreenshotNote(id, "screenshot"));
+  });
+
+  it("sends a changed tree in full, under a new id, when the diff is not short enough", async () => {
     const first = await tap();
     describeText = "button Save (0.1,0.2,0.3,0.1)";
 
@@ -909,6 +1033,31 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(lastText(second)).toBe(fullTree(second, describeText));
     expect(treeId(second)).not.toBe(treeId(first));
+  });
+
+  it("sends a cumulative diff against the last full tree when only a few lines change", async () => {
+    const list = Array.from(
+      { length: 20 },
+      (_, i) => `  AXButton "Row ${i}" (0.000,${(i * 0.04).toFixed(3)},1.000,0.040)`
+    ).join("\n");
+    describeText = list;
+    const first = await tap();
+    const id = treeId(first);
+
+    describeText = list.replace('"Row 2"', '"Row 2" value="on"');
+    const second = await tap();
+
+    expect(lastText(second)).toBe(
+      [
+        AUTO_DESCRIBE_HEADER,
+        treeDiffHeader(id, "gesture-tap"),
+        '    AXButton "Row 1" (0.000,0.040,1.000,0.040)',
+        '-   AXButton "Row 2" (0.000,0.080,1.000,0.040)',
+        '+   AXButton "Row 2" value="on" (0.000,0.080,1.000,0.040)',
+        '    AXButton "Row 3" (0.000,0.120,1.000,0.040)',
+      ].join("\n")
+    );
+    expect(loggedTrees().at(-1)).toMatchObject({ mode: "diff", identical: false, note: false });
   });
 
   it("gives the tree of the agent's describe call an id, and names it in the next note", async () => {
@@ -919,10 +1068,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     const described = await describeScreen();
 
     // Right after the tree, before the screenshot of the describe call.
-    const blocks = (described.content as Array<{ type: string; text?: string }>).map((c) =>
-      c.type === "image" ? "image" : c.text!.split("\n")[0]
-    );
-    expect(blocks.slice(0, 3)).toEqual([
+    expect(textOf(described).split("\n").slice(0, 3)).toEqual([
       '{"description":"button Done (0.1,0.2,0.3,0.1)"}',
       `Tree id: ${treeId(described)}`,
       "--- Screen after action ---",

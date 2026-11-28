@@ -89,6 +89,20 @@ export async function toMcpContent(
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
+type TextBlock = Extract<ContentBlock, { type: "text" }>;
+
+/**
+ * Joins the blocks of a result that has no image into one text block, each
+ * starting on a new line. Claude Code shows such a result as one string with
+ * nothing between its blocks, which ran the tool result, the
+ * unchanged-screenshot note, the element tree and its `Tree id` together. A
+ * result with an image keeps its blocks, which reach the agent apart.
+ */
+export function joinTextOnlyContent(blocks: ContentBlock[]): ContentBlock[] {
+  if (blocks.length < 2 || !blocks.every((b): b is TextBlock => b.type === "text")) return blocks;
+  return [{ type: "text", text: blocks.map((b) => b.text).join("\n") }];
+}
+
 /**
  * Inline length past which containers break their entries onto separate lines
  * (without indentation), keeping lists and nested trees scannable without the
@@ -428,6 +442,8 @@ type FlowStepResult = {
   scriptLog?: string;
   scriptLogTruncated?: boolean;
   durationMs?: number;
+  /** The step is from a `shutdown:` block, which runs after the test's steps. */
+  shutdown?: boolean;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
@@ -439,6 +455,8 @@ export type FlowExecuteResult = {
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
+  /** A `shutdown:` step failed, so the run cleaned up only partly. */
+  shutdownFailed?: boolean;
   passed?: number;
   failed?: number;
   skipped?: number;
@@ -519,8 +537,13 @@ export async function flowRunToMcpContent(
   if (typeof result.warning === "string")
     blocks.push({ type: "text", text: `⚠ ${result.warning}` });
 
+  let inShutdown = false;
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
+    if (step.shutdown === true && !inShutdown) {
+      inShutdown = true;
+      blocks.push({ type: "text", text: "shutdown:" });
+    }
     const num = step.index !== undefined ? step.index + 1 : i + 1;
     // Status-less results (older tool-servers) render without a glyph.
     const glyph = step.status ? `${STATUS_GLYPH[step.status] ?? "•"} ` : "";
@@ -560,6 +583,13 @@ export async function flowRunToMcpContent(
     if (typeof path === "string" && typeof error === "string") {
       blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
     }
+  }
+
+  if (result.shutdownFailed === true) {
+    blocks.push({
+      type: "text",
+      text: "⚠ shutdown did not finish: a shutdown step failed, so the run may have left state behind.",
+    });
   }
 
   if (result.ok !== undefined) {

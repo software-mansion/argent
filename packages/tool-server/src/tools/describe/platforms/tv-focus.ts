@@ -145,17 +145,22 @@ export function tvFocusTree(
   hierarchy: TvHierarchyResponse | null = null
 ): DescribeTreeData {
   const elements = [...res.focusable];
-  // Some reads report a focused element that is absent from the focusable list;
-  // it still has to be matchable, and it is the single most useful node here.
+  // Some reads report a focused element that is absent from the focusable list
+  // (mid-transition, see `hasTvCursor`); it still has to be matchable, and it is
+  // the single most useful node here.
   //
   // Detect that by looking for a focusable already MARKED focused, not by object
   // identity: the two arrive as separate objects from the same JSON payload, so
   // an identity check would append a duplicate of an element that is already
   // there — and the cursor would then match twice. It is the cursor whatever the
   // read marked on it, so mark it here or `role: "focused"` cannot match it.
-  if (res.focused && !res.focusable.some((e) => e.isFocused)) {
+  const cursorNotListed = !!res.focused && !res.focusable.some((e) => e.isFocused);
+  if (cursorNotListed) {
     elements.push({ ...res.focused, isFocused: true });
   }
+  const cursorNotLanded =
+    cursorNotListed && cursorLeftBehind(res.focused!, res.focusable, hierarchy);
+  const flags = cursorNotLanded ? { cursorNotLanded } : {};
 
   // A focusable's label and value also appear as its own children in the hierarchy.
   const focusText = new Set<string>();
@@ -170,8 +175,69 @@ export function tvFocusTree(
   }
   // The daemon stops walking past its node cap, so text beyond it is missing.
   return (hierarchy?.nodeCount ?? 0) > TV_HIERARCHY_NODE_CAP
-    ? { tree: root, source: "tv-focus", partial: true, hint: TV_HIERARCHY_CAPPED_HINT }
-    : { tree: root, source: "tv-focus" };
+    ? { tree: root, source: "tv-focus", ...flags, partial: true, hint: TV_HIERARCHY_CAPPED_HINT }
+    : { tree: root, source: "tv-focus", ...flags };
+}
+
+/** UIKit's text-entry accessibility trait bit. */
+const TEXT_ENTRY_TRAIT = 0x40000n;
+
+/**
+ * Whether a focused element that is absent from the focusable list belongs to
+ * the screen that is going away. While the keyboard opens, the text field keeps
+ * focus while only the keyboard is listed. While it closes, `done` keeps focus
+ * after the keyboard has left the hierarchy. A focusable control inside an
+ * element that accessibility treats as one item (a card, a SwiftUI `.combine`
+ * stack) is never listed either, but that element is on screen around it.
+ */
+function cursorLeftBehind(
+  focused: TvElement,
+  focusable: TvElement[],
+  hierarchy: TvHierarchyResponse | null
+): boolean {
+  const isTextEntry = (element: TvElement | TvHierarchyNode) =>
+    !!element._traitsHex && (BigInt(element._traitsHex) & TEXT_ENTRY_TRAIT) !== 0n;
+  if (isTextEntry(focused)) return true;
+  const screen = hierarchy?.screenFrame;
+  const f = focused.frame;
+  if (!hierarchy?.tree || !screen?.width || !screen.height || !f) return true;
+  // On close the form is already back in the hierarchy but no control is
+  // listed yet. Even a card behind the old keyboard key is not proof of focus.
+  const containsField = (node: TvHierarchyNode): boolean =>
+    isTextEntry(node) || (node.children ?? []).some(containsField);
+  if (focusable.length === 0 && containsField(hierarchy.tree)) return true;
+  const x = f.x * screen.width;
+  const y = f.y * screen.height;
+  const right = x + f.width * screen.width;
+  const bottom = y + f.height * screen.height;
+  const area = (right - x) * (bottom - y);
+  // Half a point absorbs the rounding between the two reads' frames.
+  const EPS = 0.5;
+  const encloses = (node: TvHierarchyNode): boolean => {
+    const g = node.frame;
+    // A grouped accessibility item is a named leaf. Layout ancestors and
+    // static labels can cover the old cursor without containing its control.
+    if (
+      g &&
+      !node.children?.length &&
+      (node.label || node.value) &&
+      !node.traits?.includes("staticText")
+    ) {
+      const gArea = g.width * g.height;
+      if (
+        gArea < screen.width * screen.height &&
+        gArea > area &&
+        g.x - EPS <= x &&
+        g.y - EPS <= y &&
+        right <= g.x + g.width + EPS &&
+        bottom <= g.y + g.height + EPS
+      ) {
+        return true;
+      }
+    }
+    return (node.children ?? []).some(encloses);
+  };
+  return !encloses(hierarchy.tree);
 }
 
 /** `walkTree` in the tvOS ax daemon stops once it has visited this many nodes. */
@@ -179,9 +245,14 @@ const TV_HIERARCHY_NODE_CAP = 800;
 const TV_HIERARCHY_CAPPED_HINT =
   "The Apple TV hierarchy stopped at its 800-element cap, so text past it was not read.";
 
-/** Whether the focus engine has placed its cursor, on a tree from {@link tvFocusTree}. */
-export function hasTvCursor(tree: DescribeNode): boolean {
-  return tree.children.some((n) => n.focused);
+/**
+ * Whether the focus engine has placed its cursor on the screen a read from
+ * {@link tvFocusTree} shows. While the keyboard opens or closes, the element that
+ * had focus keeps it for about half a second after the new screen's focusable
+ * elements are listed (none when it closes).
+ */
+export function hasTvCursor(data: DescribeTreeData): boolean {
+  return !data.cursorNotLanded && data.tree.children.some((n) => n.focused);
 }
 
 /**

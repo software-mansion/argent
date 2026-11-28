@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { argentHomeDir } from "@argent/configuration-core";
 
 /**
  * The two kinds of native Mac app. A Mac Catalyst app (`catalyst`) is an iPad
@@ -12,7 +12,7 @@ export type MacosAppKind = "app" | "catalyst";
 
 /** `~/.argent/macos-apps.json`: the record of each app argent started (macos-apps.ts). */
 export function trackedMacosAppsFile(): string {
-  return path.join(os.homedir(), ".argent", "macos-apps.json");
+  return path.join(argentHomeDir(), "macos-apps.json");
 }
 
 /**

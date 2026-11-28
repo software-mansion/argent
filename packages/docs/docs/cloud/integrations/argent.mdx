@@ -47,6 +47,6 @@ When the agent connects the debugger or starts Metro, Argent opens a reverse tun
 
 - Argent supports iOS simulators on Argent Cloud. There are no hosted Android devices at this moment.
 - The idle release of the machine also applies to the agent. See [Manage machines](/docs/cloud/guides/machines).
-- Argent does not mock audio on hosted simulators. The audio tools fail on a remote simulator.
+- Argent mocks the microphone of hosted simulators with `audio-input`. A helper process in the simulator feeds the input, so an app hears silence for a few seconds after the tool server stops, until that helper gives the input back. The helper decodes audio files in the simulator, so a tool server on Linux can also play files. A hosted Mac has no microphone, so `source: "microphone"` gives silence.
 
 The [tools reference](/docs/reference/tools) lists the Argent tools. The [CLI reference](/docs/cloud/reference/cli) lists the `sim-remote` commands.

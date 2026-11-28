@@ -3,11 +3,11 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, subprocessFailureMetadata, withFailureSignal } from "@argent/registry";
 import { withKeyedLock } from "../keyed-lock";
 import { resolveSigningHint, type RunnerSigningConfig } from "./runner-signing";
+import { argentHomeDir } from "@argent/configuration-core";
 
 /**
  * Build the on-device runner and cache the build under one stamped dir.
@@ -123,7 +123,7 @@ export interface RunnerArtifact {
 }
 
 function derivedRoot(): string {
-  return path.join(os.homedir(), ".argent", "ios-device-runner", "derived");
+  return path.join(argentHomeDir(), "ios-device-runner", "derived");
 }
 
 /**

@@ -39,25 +39,28 @@ const DISABLE_ENV = "ARGENT_DISABLE_DEVICE_PROVIDERS";
 const OVERRIDE_ENV = "ARGENT_DEVICE_PROVIDERS";
 
 /**
- * Resolved at call time, honoring `HOME` / `USERPROFILE`, so a test can sandbox
- * the feature by moving the home directory.
+ * Resolved at call time, honoring `ARGENT_HOME_DIR`, then `HOME` /
+ * `USERPROFILE`, so a test can sandbox the feature by moving either.
  *
- * A deliberate copy of `@argent/configuration-core`'s `resolveHomeDir`, so that
+ * A deliberate copy of `@argent/configuration-core`'s `argentHomeDir`, so that
  * zod is the only dependency. That package stays the source of truth. A
  * tool-server test asserts the two agree, so drift fails the build rather than
  * silently pointing the writer and the reader at different directories.
  */
-function resolveHomeDir(): string {
+function argentHomeDir(): string {
+  const override = process.env.ARGENT_HOME_DIR?.trim();
+  if (override) return path.resolve(override);
   const raw = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
   const trimmed = raw?.trim();
-  return trimmed ? raw! : os.homedir();
+  return path.join(trimmed ? raw! : os.homedir(), ".argent");
 }
 
 /**
- * `~/.argent/providers`: machine-global, shared by every tool-server install.
+ * `~/.argent/providers` (or `$ARGENT_HOME_DIR/providers`): shared by every
+ * tool-server install that uses the same directory.
  */
 export function providersDirectory(): string {
-  return path.join(resolveHomeDir(), ".argent", "providers");
+  return path.join(argentHomeDir(), "providers");
 }
 
 function discoveryDisabled(): boolean {

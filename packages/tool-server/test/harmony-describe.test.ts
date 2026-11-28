@@ -95,14 +95,14 @@ describe("describeHarmony", () => {
     expect(out).toContain("04:39");
   });
 
-  it("offers exactly the gestures this platform has a backend for", async () => {
+  it("omits unsupported gesture names from the HarmonyOS header", async () => {
     vi.mocked(harmonyDisplay).mockResolvedValue({ width: 1216, height: 2688, screenOn: true });
     vi.mocked(harmonyDumpLayout).mockResolvedValue(lockScreenDump());
 
     const { tree, source } = await describeHarmony(CONNECT_KEY);
     const out = formatDescribeTree(tree, { source });
 
-    expect(out).toContain("gesture-tap / gesture-swipe / gesture-pinch");
+    expect(out).toContain("Source: harmony-uitest | Mode: nested | Frame: (x,y,w,h) [0,1]");
     expect(out).not.toContain("gesture-rotate");
     expect(out).not.toContain("gesture-custom");
   });

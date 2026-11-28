@@ -62,7 +62,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id used with debugger-connect<flag:macos-apps>. For macOS, use the Mac app id</flag:macos-apps>."
+      "Device id from `debugger-connect`<flag:macos-apps> (macOS: Mac app id)</flag:macos-apps>."
     ),
   tail: z.coerce
     .number()
@@ -70,14 +70,12 @@ const zodSchema = z.object({
     .min(1)
     .max(RECENT_PER_LEVEL)
     .optional()
-    .describe("How many of the newest entries to return in `entries`. Default 20."),
+    .describe("Newest entries to inline (default 20)."),
   levels: z
     .array(z.enum(CONSOLE_LEVELS))
     .min(1)
     .optional()
-    .describe(
-      'Return only these levels in `entries`, e.g. ["warning", "error"]. Stats and clusters stay unfiltered.'
-    ),
+    .describe('Filter inline `entries` by level (e.g. ["warning", "error"]).'),
 });
 
 export function createDebuggerLogRegistryTool(
@@ -85,10 +83,9 @@ export function createDebuggerLogRegistryTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, LogRegistryResponse | DebuggerNotConnectedResult> {
   return {
     id: "debugger-log-registry",
-    description: `Get a summary of all console logs captured from the app's JS runtime, with the newest entries inline in { entries } (oldest first, messages cut to 300 characters).
-Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Supports React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> and Chromium.
-Use when investigating warnings, errors, or unexpected output. Read { entries } first; Grep the returned file only for older lines or full messages, and never Read it whole: capture stops at 50,000 lines per session. Returns empty stats if no log data has been captured yet. Check { note }, which is present when { file } does not exist or holds fewer entries than totalEntries counts (failed writes, e.g. a full disk), or when the previous debugger session ended: torn down (its log file deleted) or cut off by an app crash (the note names its kept log file, if it had one). With a note about the previous session, the stats and { entries } hold only what the runtime replayed or logged since. Without a note, empty means the app has logged nothing.
-When the debugger cannot be reached, it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Grep a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
+    description: `Get a summary of JS console logs captured from React Native<flag:macos-apps> (including Mac apps)</flag:macos-apps> or Chromium, with newest \`entries\` inline (truncated to 300 chars).
+Use when investigating warnings, errors, or console output. Check \`entries\` first; Grep \`file\` for older/full lines (never Read it whole; up to 50k lines). Use \`debugger-status\` to check connection health.
+Returns \`{ status: "connected", file, entries, clusters, note? }\` (\`note\` flags missing/crashed prior sessions), or \`{ status: "not_connected", reason, guidance }\` (follow guidance; don't retry in a loop). Never fails when the runtime is simply unreachable.`,
     zodSchema,
     readOnly: true,
     interaction: {

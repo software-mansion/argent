@@ -25,7 +25,10 @@ export interface NetworkRequestRecord {
   durationMs?: number;
   fromCache?: boolean;
   encodedDataLength?: number;
-  /** Network.loadingFinished arrived: the whole response was received. */
+  /**
+   * The whole response was received: Network.loadingFinished arrived, or the
+   * page got every byte of a no-store fetch() body that the response declared.
+   */
   finished?: boolean;
   failed?: boolean;
   errorText?: string;
@@ -66,6 +69,29 @@ const MAX_RECORDS = 1000;
 const shapesTraffic = (c: CdpNetworkConditions): boolean =>
   c.offline || c.latency > 0 || c.downloadThroughput >= 0 || c.uploadThroughput >= 0;
 
+/**
+ * The length of a body that Chrome may never report the end of, as the page gets it.
+ * Chrome sends loadingFinished for a no-store response only once the page reads its
+ * body. The length is the Content-Length, unless a Transfer-Encoding frames the body
+ * instead or a Content-Encoding makes the page get it decoded, in another length.
+ */
+function unreadBodyLength(headers: Record<string, string> | undefined): number | undefined {
+  let length: string | undefined;
+  let noStore = false;
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    const header = name.toLowerCase();
+    if (header === "transfer-encoding") return undefined;
+    if (header === "content-encoding" && value.trim().toLowerCase() !== "identity") {
+      return undefined;
+    }
+    if (header === "content-length") length = value.trim();
+    if (header === "cache-control") {
+      noStore ||= value.split(/[,\n]/).some((d) => d.trim().toLowerCase() === "no-store");
+    }
+  }
+  return noStore && length !== undefined && /^\d+$/.test(length) ? Number(length) : undefined;
+}
+
 export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   const { cdp } = deps;
   const order: string[] = [];
@@ -75,6 +101,8 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
   let lastSeq = 0;
   let mark: ChromiumCaptureMark | undefined;
   let conditions: CdpNetworkConditions | null = null;
+  /** The bytes of each declared body that the page has not got yet. */
+  const bodyBytesLeft = new WeakMap<NetworkRequestRecord, number>();
 
   function record(requestId: string): NetworkRequestRecord {
     let rec = byId.get(requestId);
@@ -133,6 +161,28 @@ export function createNetworkManager(deps: { cdp: CDPClient }): NetworkManager {
         if (resp.headers) rec.responseHeaders = { ...(rec.responseHeaders ?? {}), ...resp.headers };
         rec.fromCache = resp.fromDiskCache;
         rec.resourceType = (params.type as string) ?? rec.resourceType;
+        // Only a fetch(): Chrome reads the body of any other request itself.
+        const length = params.type === "Fetch" ? unreadBodyLength(resp.headers) : undefined;
+        if (length !== undefined) bodyBytesLeft.set(rec, length);
+        break;
+      }
+      // For a fetch() whose response is not stored (Cache-Control: no-store), Chrome
+      // sends loadingFinished only once the page reads the body to its end, and never
+      // for a body the page leaves unread. Such a body ended once the page got all of it.
+      case "Network.dataReceived": {
+        const rec = byId.get(params.requestId as string);
+        const left = rec ? bodyBytesLeft.get(rec) : undefined;
+        if (rec && left !== undefined) {
+          const after = left - (params.dataLength as number);
+          bodyBytesLeft.set(rec, after);
+          if (after <= 0 && !rec.finished) {
+            rec.finished = true;
+            // Chrome stamps the loadingFinished of a body read later with when its
+            // last byte arrived, so this is the duration it reports then.
+            const at = params.timestamp as number | undefined;
+            if (rec.startTs && at !== undefined) rec.durationMs = (at - rec.startTs) * 1000;
+          }
+        }
         break;
       }
       // The *ExtraInfo events carry on-the-wire headers (Authorization, Set-Cookie, …)

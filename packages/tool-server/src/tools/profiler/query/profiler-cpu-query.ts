@@ -531,8 +531,8 @@ function nodesNestedInSameName(
 }
 
 const timeWindowSchema = z.object({
-  start: z.coerce.number().describe("Start of window in ms"),
-  end: z.coerce.number().describe("End of window in ms"),
+  start: z.coerce.number().describe("Start ms."),
+  end: z.coerce.number().describe("End ms."),
 });
 
 const zodSchema = z.object({
@@ -542,39 +542,22 @@ const zodSchema = z.object({
   ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
-    .describe("Query mode; see Modes in the tool description."),
+    .describe("Query mode."),
   time_window_ms: timeWindowSchema
     .optional()
-    .describe(
-      "Time window in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-  component_name: z.string().optional().describe("Component name"),
-  function_name: z.string().optional().describe("Function name"),
-  top_n: z.coerce.number().int().positive().default(15).describe("Number of results to return"),
-  include_callers: z.boolean().default(false).describe("Also show callers of the function"),
-  react_only: z
-    .boolean()
-    .default(false)
-    .describe(
-      "top_functions and time_window: list only React component functions (PascalCase names)"
-    ),
+    .describe("Window in ms since profiling started (same clock as `profiler-commit-query`)."),
+  component_name: z.string().optional().describe("Component name."),
+  function_name: z.string().optional().describe("Function name."),
+  top_n: z.coerce.number().int().positive().default(15).describe("Max rows (default 15)."),
+  include_callers: z.boolean().default(false).describe("Include callers (`call_tree`)."),
+  react_only: z.boolean().default(false).describe("Only PascalCase React components."),
 });
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
-  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
-Modes:
-- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
-- time_window: CPU breakdown for time_window_ms (e.g. during a slow commit or hang).
-- call_tree: For a given function_name, show its callees, and its callers with include_callers.
-- component_cpu: For a given component_name, aggregate CPU activity across its stored commits.
-In top_functions and time_window, self-times are the summed sampling intervals of the samples that
-landed in the window, so they measure sampled coverage rather than the window's width and do not
-change if you widen the query. Their tables state how many samples they cover and how much was idle.
-Each row is one call path, so a function can have several rows and top_n counts rows.
-Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
-Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
-Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-profiler-analyze) first.`,
+  description: `Query Hermes CPU samples by mode: \`top_functions\` (global hotspots, optional \`time_window_ms\`), \`time_window\` (breakdown during \`time_window_ms\`), \`call_tree\` (callees/callers for \`function_name\`), or \`component_cpu\` (CPU across \`component_name\` commits).
+Use when drilling into JS CPU hotspots after \`react-profiler-analyze\`. Self-times measure sampled coverage per call path.
+Returns a markdown table or call tree. Fails if no CPU profile is stored (run \`react-profiler-stop\` first).`,
   zodSchema,
   readOnly: true,
   interaction: {

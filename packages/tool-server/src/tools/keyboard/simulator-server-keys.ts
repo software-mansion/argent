@@ -82,7 +82,11 @@ export async function typeSimulatorServer(
         }
       );
     }
-    await pressKeyCode(namedKeyCode);
+    const count = params.repeat ?? 1;
+    for (let i = 0; i < count; i++) {
+      await pressKeyCode(namedKeyCode);
+      if (i < count - 1) await sleep(delay);
+    }
   }
 
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };

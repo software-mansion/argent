@@ -1,6 +1,6 @@
 ---
 name: argent-screenshot-diff
-description: Compare saved or live app screenshots with the argent screenshot-diff tool. Use when testing visual regressions, before/after UI comparisons, screenshot diff checks, visible layout, spacing, color, typography, clipping, overflow, text rendering, or image/icon rendering changes.
+description: Compare saved or live app screenshots via `screenshot-diff`. Use when checking visual regressions, before/after UI diffs, layout, typography, or rendering changes.
 ---
 
 ## 1. Role
